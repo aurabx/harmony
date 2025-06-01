@@ -1,0 +1,59 @@
+# Rust build directory
+/target/
+
+# Cargo lock file (uncomment this if this is a library)
+# Cargo.lock
+
+# IDE specific files
+.idea/
+.vscode/
+*.iml
+.rustc_info.json
+
+# Debug files
+**/*.rs.bk
+*.pdb
+
+# Binary files
+*.exe
+*.dll
+*.so
+*.dylib
+
+# Log files
+*.log
+/logs/
+
+# Environment files
+.env
+.env.local
+.env.*.local
+
+# Temporary directories
+/tmp/
+.tmp/
+
+# Database files
+*.db
+*.db-wal
+*.db-shm
+/sled_db/
+
+# OS specific files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+
+# Backup files
+*.bak
+*.swp
+*.swo
+*~
+
+# Project specific
+/store_dir/
+harmony.log

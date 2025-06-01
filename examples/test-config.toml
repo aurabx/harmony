@@ -1,0 +1,25 @@
+[proxy]
+id = "harmony-test"
+log_level = "info"
+store_dir = "/tmp/harmony"
+
+[network]
+enable_wireguard = false
+interface = "wg0"
+
+[network.http]
+bind_address = "0.0.0.0"  # Listen on all interfaces
+bind_port = 8080          # Use port 8080
+
+[endpoints.test]
+type = "basic"
+path_prefix = "/test"
+middleware = []
+group = "test_group"
+
+[groups.test_group]
+description = "Test group"
+
+[logging]
+log_to_file = true
+log_file_path = "/tmp/harmony.log"

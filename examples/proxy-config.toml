@@ -1,0 +1,83 @@
+# -------------------------
+# Defines the proxy
+#-------------------------
+[proxy]
+id = "jmix-clinic-a"
+log_level = "info"
+store_dir = "/var/lib/jmix/studies"
+
+# -------------------------
+# Wireguard settings
+#-------------------------
+[network]
+enable_wireguard = true
+interface = "wg0"
+
+# -------------------------
+# Wireguard peers
+#-------------------------
+[[network.peers]]
+id = "jmix-hospital-b"
+ip = "10.6.0.2"
+public_key = "PUBKEY_HOSPITAL_B"
+
+[[network.peers]]
+id = "jmix-lab-c"
+ip = "10.6.0.3"
+public_key = "PUBKEY_LAB_C"
+
+# -------------------------
+# Endpoint groups
+#-------------------------
+[groups.external_fhir]
+description = "FHIR endpoints exposed to external clients"
+
+[groups.internal_dicom]
+description = "DICOM PACS systems within the network"
+
+[groups.external_jmix]
+description = "Exposed JMIX routes"
+
+# -------------------------
+# Public endpoints
+#-------------------------
+[endpoints.fhir_partner_a]
+type = "fhir"
+path_prefix = "/fhir/partner-a"
+middleware = ["jwt_auth"]
+group = "external_fhir"
+
+[endpoints.jmix_clinic_b]
+type = "jmix"
+path_prefix = "/jmix/clinic-b"
+middleware = ["jwt_auth"]
+group = "external_jmix"
+
+# -------------------------
+# Internal services
+#-------------------------
+[internal_services.pacs_a]
+type = "dicom"
+aet = "PACSCLINIC"
+host = "127.0.0.1"
+port = 104
+group = "internal_dicom"
+
+[internal_services.fhir_local]
+type = "fhir"
+url = "http://localhost:8081/fhir"
+group = "internal_fhir"
+
+# -------------------------
+# Transform rules between endpoints and services
+#-------------------------
+[transform_rules.fhir_to_dicom]
+from_group = "external_fhir"
+to_group = "internal_dicom"
+transform_chain = ["fhir_to_dicom_find"]
+
+[transform_rules.dicom_to_jmix]
+from_group = "internal_dicom"
+to_group = "external_jmix"
+transform_chain = ["dicom_to_jmix"]
+
