@@ -92,7 +92,7 @@ fn test_missing_endpoint_group_fails() {
     "#;
 
     let result = load_config_from_str(toml);
-    assert!(matches!(result, Err(ConfigError::InvalidEndpointGroup(_))));
+    assert!(matches!(result, Err(ConfigError::InvalidGroup(_))));
 }
 
 #[test]

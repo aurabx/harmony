@@ -1,6 +1,10 @@
 pub mod config;
 pub mod endpoints;
-pub mod middleware; // We'll create this next
+pub mod backends;
+pub mod middleware;
+pub mod network;
+pub mod groups;
+mod router;
 
 use std::net::SocketAddr;
 use crate::config::Config;
@@ -36,21 +40,29 @@ pub async fn run(config: Config) {
 
     tracing::info!("🔧 Starting Harmony '{}'", config.proxy.id);
 
-    // Build the router once for all endpoints
-    let app = endpoints::build_router(&config).await;
-    
-    // Parse the bind address from config
-    let addr: SocketAddr = format!("{}:{}",
-                                   config.network.http.bind_address,
-                                   config.network.http.bind_port
-    ).parse()
-        .expect("Invalid bind address or port");
+    // Create a vector to store all server tasks
+    let mut server_tasks = Vec::new();
 
-    tracing::info!("🚀 Starting HTTP server on {}", addr);
-    
-    // Create and run the server using axum-server
-    axum_server::bind(addr)
-        .serve(app.into_make_service())
-        .await
-        .unwrap();
+    // Build routers for each network
+    for (network_name, network) in &config.network {
+        // Build a router specific to this network
+        let app = router::build_network_router(&config, network_name).await;
+
+        // Parse the bind address from network config
+        let addr: SocketAddr = format!("{}:{}",
+                                       network.http.bind_address,
+                                       network.http.bind_port
+        ).parse().unwrap_or_else(|_| {
+            panic!("Invalid bind address or port for network {}", network_name)
+        });
+
+        tracing::info!("🚀 Starting HTTP server for network {} on {}", network_name, addr);
+
+        // Create the server task
+        let server = axum_server::bind(addr).serve(app.into_make_service());
+        server_tasks.push(server);
+    }
+
+    // Wait for all servers to complete (they run indefinitely unless there's an error)
+    futures::future::join_all(server_tasks).await;
 }

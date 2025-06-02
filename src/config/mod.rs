@@ -1,11 +1,21 @@
+mod config;
+
 use clap::Parser;
 use serde::Deserialize;
+use std::collections::{HashMap};
 use std::fs;
-use std::collections::{HashMap, HashSet};
+
+use crate::endpoints::config::Endpoint;
+use crate::backends::config::Backend;
+use crate::network::config::NetworkConfig;
+use crate::middleware::config::MiddlewareConfig;
+use crate::groups::config::Group;
+
+use crate::config::config::*;
 
 #[derive(Parser, Debug)]
 #[command(name = "harmony")]
-#[command(about = "JSON DICOM Exchange Proxy", long_about = None)]
+#[command(about = "Harmony proxy", long_about = None)]
 pub struct Cli {
     #[arg(short, long, default_value = "/etc/harmony/harmony-config.toml")]
     pub config: String,
@@ -14,20 +24,22 @@ pub struct Cli {
 #[derive(Debug, Deserialize, Default)]
 pub struct Config {
     pub proxy: ProxyConfig,
-    pub network: NetworkConfig,
+    pub network: HashMap<String, NetworkConfig>,
+    #[serde(default)]
+    pub groups: HashMap<String, Group>,
     #[serde(default)]
     pub endpoints: HashMap<String, Endpoint>,
     #[serde(default)]
-    pub internal_services: HashMap<String, InternalService>,
-    #[serde(default)]
-    pub transform_rules: HashMap<String, TransformRule>,
+    pub backends: HashMap<String, Backend>,
     #[serde(default)]
     pub middleware: MiddlewareConfig,
     #[serde(default)]
     pub logging: LoggingConfig,
 }
 
+
 impl Config {
+
     pub fn from_args() -> Self {
         let args = Cli::parse();
         let contents = fs::read_to_string(args.config).expect("Failed to read config file");
@@ -35,237 +47,216 @@ impl Config {
         config.validate().expect("Invalid configuration");
         config
     }
-
+    
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.proxy.validate()?;
-        // self.network.validate()?;
+        self.validate_networks()?;
+        self.validate_groups()?;
+        self.validate_references()?;
+        Ok(())
+    }
 
-        // if self.endpoints.is_empty() {
-        //     return Err(ConfigError::MissingEndpoints);
-        // }
-        // if self.internal_services.is_empty() {
-        //     return Err(ConfigError::MissingInternalServices);
-        // }
-
-        let mut group_set = HashSet::new();
-
-        for (name, endpoint) in &self.endpoints {
-            if endpoint.group.trim().is_empty() {
-                return Err(ConfigError::InvalidEndpointGroup(name.clone()));
-            }
-            group_set.insert(endpoint.group.clone());
+    fn validate_networks(&self) -> Result<(), ConfigError> {
+        if self.network.is_empty() {
+            return Err(ConfigError::MissingNetworks);
         }
 
-        for (name, service) in &self.internal_services {
-            if service.group.trim().is_empty() {
-                return Err(ConfigError::InvalidServiceGroup(name.clone()));
+        for (network_name, network) in &self.network {
+            if network.enable_wireguard {
+                if network.interface.trim().is_empty() {
+                    return Err(ConfigError::InvalidNetwork {
+                        name: network_name.clone(),
+                        reason: "WireGuard enabled but interface not specified".to_string(),
+                    });
+                }
             }
-            group_set.insert(service.group.clone());
-        }
 
-        for (rule_name, rule) in &self.transform_rules {
-            if !group_set.contains(&rule.from_group) {
-                return Err(ConfigError::UnknownGroup {
-                    rule: rule_name.clone(),
-                    kind: "from_group".to_string(),
-                    value: rule.from_group.clone(),
+            // Validate HTTP config
+            if network.http.bind_address.trim().is_empty() {
+                return Err(ConfigError::InvalidNetwork {
+                    name: network_name.clone(),
+                    reason: "HTTP bind address not specified".to_string(),
                 });
             }
-            if !group_set.contains(&rule.to_group) {
-                return Err(ConfigError::UnknownGroup {
-                    rule: rule_name.clone(),
-                    kind: "to_group".to_string(),
-                    value: rule.to_group.clone(),
+
+            if network.http.bind_port == 0 {
+                return Err(ConfigError::InvalidNetwork {
+                    name: network_name.clone(),
+                    reason: "HTTP bind port must be non-zero".to_string(),
                 });
             }
-            if rule.transform_chain.is_empty() {
-                return Err(ConfigError::EmptyTransformChain(rule_name.clone()));
+        }
+        Ok(())
+    }
+
+
+    fn validate_groups(&self) -> Result<(), ConfigError> {
+        if self.groups.is_empty() {
+            return Err(ConfigError::MissingGroups);
+        }
+
+        for (group_name, group) in &self.groups {
+            // Ensure group has at least one network
+            if group.networks.is_empty() {
+                return Err(ConfigError::InvalidGroup {
+                    name: group_name.clone(),
+                    reason: "Group must have at least one network".to_string(),
+                });
+            }
+
+            // Validate network references
+            for network in &group.networks {
+                if !self.network.contains_key(network) {
+                    return Err(ConfigError::UnknownReference {
+                        group: group_name.clone(),
+                        kind: "network".to_string(),
+                        value: network.clone(),
+                    });
+                }
             }
         }
-
         Ok(())
     }
-}
 
-#[derive(Debug, Deserialize, Default)]
-pub struct ProxyConfig {
-    pub id: String,
-    pub log_level: String,
-    pub store_dir: String,
-}
+    fn validate_references(&self) -> Result<(), ConfigError> {
+        for (group_name, group) in &self.groups {
+            // Validate network references
+            if group.networks.is_empty() {
+                return Err(ConfigError::InvalidGroup {
+                    name: group_name.clone(),
+                    reason: "Group must have at least one network".to_string(),
+                });
+            }
 
-impl ProxyConfig {
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.id.trim().is_empty() {
-            return Err(ConfigError::InvalidProxyID);
-        }
-        Ok(())
-    }
-}
+            for network in &group.networks {
+                if !self.network.contains_key(network) {
+                    return Err(ConfigError::UnknownReference {
+                        group: group_name.clone(),
+                        kind: "network".to_string(),
+                        value: network.clone(),
+                    });
+                }
+            }
 
-#[derive(Debug, Deserialize, Default)]
-pub struct NetworkConfig {
-    pub enable_wireguard: bool,
-    pub interface: String,
-    #[serde(default)]
-    pub http: HttpConfig,
-}
+            // Validate endpoints
+            for endpoint_name in &group.endpoints {
+                let endpoint = self.endpoints.get(endpoint_name).ok_or_else(|| {
+                    ConfigError::UnknownReference {
+                        group: group_name.clone(),
+                        kind: "endpoint".to_string(),
+                        value: endpoint_name.clone(),
+                    }
+                })?;
 
-#[derive(Debug, Deserialize)]
-#[serde(default)]
-pub struct HttpConfig {
-    pub bind_address: String,
-    pub bind_port: u16,
-}
+                validate_dicom_endpoint(endpoint)?;
+            }
 
-impl Default for HttpConfig {
-    fn default() -> Self {
-        Self {
-            bind_address: "127.0.0.1".to_string(),
-            bind_port: 3000,
-        }
-    }
-}
+            // Validate backends
+            for backend_name in &group.backends {
+                let backend = self.backends.get(backend_name).ok_or_else(|| {
+                    ConfigError::UnknownReference {
+                        group: group_name.clone(),
+                        kind: "backend".to_string(),
+                        value: backend_name.clone(),
+                    }
+                })?;
 
-// impl NetworkConfig {
-//     pub fn validate(&self) -> Result<(), ConfigError> {
-//         if self.enable_wireguard {
-//             match &self.peers {
-//                 Some(peers) if !peers.is_empty() => {
-//                     for peer in peers {
-//                         peer.validate()?;
-//                     }
-//                 }
-//                 _ => return Err(ConfigError::MissingPeers),
-//             }
-//         }
-//         Ok(())
-//     }
-// }
+                validate_dicom_backend(backend)?;
+            }
 
-#[derive(Debug, Deserialize)]
-pub struct PeerConfig {
-    pub id: String,
-    pub ip: String,
-    pub public_key: String,
-}
-
-impl PeerConfig {
-    pub fn validate(&self) -> Result<(), ConfigError> {
-        if self.id.trim().is_empty() || self.ip.trim().is_empty() || self.public_key.trim().is_empty() {
-            return Err(ConfigError::InvalidPeer(self.id.clone()));
+            // Validate middleware references
+            self.validate_middleware_references(group_name, &group.middleware.incoming, "incoming")?;
+            self.validate_middleware_references(group_name, &group.middleware.outgoing, "outgoing")?;
         }
         Ok(())
     }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct Endpoint {
-    pub group: String,
-    pub path_prefix: String,
-    #[serde(default)]
-    pub middleware: Option<Vec<String>>,
-    #[serde(flatten)]
-    pub kind: EndpointKind,
-}
 
 
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum EndpointKind {
-    Dicom {
-        #[serde(default)]
-        aet: Option<String>,
-        #[serde(default)]
-        host: Option<String>,
-        #[serde(default)]
-        port: Option<u16>,
-    },
-    Fhir,
-    Jdx,
-    Basic,
-    Deadletter,
-    Custom {
-        handler_path: String
-    },
-}
-
-
-impl Default for EndpointKind {
-    fn default() -> Self {
-        EndpointKind::Deadletter {
+    fn validate_middleware_references(&self, group_name: &str, middleware_list: &[String], direction: &str) -> Result<(), ConfigError> {
+        for middleware_name in middleware_list {
+            match middleware_name.as_str() {
+                "jwt_auth" => {
+                    if self.middleware.jwt_auth.is_none() {
+                        return Err(ConfigError::MissingMiddlewareConfig {
+                            group: group_name.to_string(),
+                            middleware: middleware_name.clone(),
+                            direction: direction.to_string(),
+                        });
+                    }
+                }
+                "auth_sidecar" => {
+                    if self.middleware.auth_sidecar.is_none() {
+                        return Err(ConfigError::MissingMiddlewareConfig {
+                            group: group_name.to_string(),
+                            middleware: middleware_name.clone(),
+                            direction: direction.to_string(),
+                        });
+                    }
+                }
+                "aurabox_connect" => {
+                    if self.middleware.aurabox_connect.is_none() {
+                        return Err(ConfigError::MissingMiddlewareConfig {
+                            group: group_name.to_string(),
+                            middleware: middleware_name.clone(),
+                            direction: direction.to_string(),
+                        });
+                    }
+                }
+                _ => {
+                    return Err(ConfigError::UnknownMiddleware {
+                        group: group_name.to_string(),
+                        middleware: middleware_name.clone(),
+                        direction: direction.to_string(),
+                    });
+                }
+            }
         }
+        Ok(())
     }
-}
-
-#[derive(Debug, Deserialize)]
-pub struct InternalService {
-    pub group: String,
-    #[serde(flatten,rename = "type")]
-    pub kind: InternalServiceKind,
-    #[serde(default)]
-    pub middleware: Option<Vec<String>>,
-}
-
-#[derive(Debug, Deserialize)]
-#[serde(tag = "type", rename_all = "lowercase")]
-pub enum InternalServiceKind {
-    Dicom {
-        aet: String,
-        host: String,
-        port: u16,
-    },
-    Fhir {
-        url: String,
-    },
-}
-
-#[derive(Debug, Deserialize)]
-pub struct TransformRule {
-    pub from_group: String,
-    pub to_group: String,
-    pub transform_chain: Vec<String>,
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct MiddlewareConfig {
-    pub jwt_auth: Option<JwtAuthConfig>,
-    pub auth_sidecar: Option<AuthSidecarConfig>,
-    pub aurabox_connect: Option<AuraboxConnectConfig>,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct JwtAuthConfig {
-    pub jwks_url: String,
-    pub audience: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AuthSidecarConfig {
-    pub token_path: String,
-}
-
-#[derive(Debug, Deserialize)]
-pub struct AuraboxConnectConfig {
-    pub enabled: bool,
-    pub fallback_timeout_ms: u64,
-}
-
-#[derive(Debug, Deserialize, Default)]
-pub struct LoggingConfig {
-    pub log_to_file: bool,
-    pub log_file_path: String,
 }
 
 #[derive(Debug)]
 pub enum ConfigError {
     InvalidProxyID,
-    MissingEndpoints,
-    MissingInternalServices,
-    InvalidEndpointGroup(String),
-    InvalidServiceGroup(String),
-    MissingPeers,
+    MissingNetworks,
+    MissingGroups,
+    InvalidEndpoint { name: String, reason: String },
+    InvalidBackend { name: String, reason: String },
+    InvalidNetwork { name: String, reason: String },
+    InvalidGroup { name: String, reason: String },
+    UnknownReference { group: String, kind: String, value: String },
+    UnknownMiddleware { group: String, middleware: String, direction: String },
+    MissingMiddlewareConfig { group: String, middleware: String, direction: String },
     InvalidPeer(String),
-    UnknownGroup { rule: String, kind: String, value: String },
-    EmptyTransformChain(String),
+    MissingPeers,
+}
+
+use crate::endpoints::config::EndpointKind;
+use crate::backends::config::BackendKind;
+
+fn validate_dicom_endpoint(endpoint: &Endpoint) -> Result<(), ConfigError> {
+    if let EndpointKind::Dicom { port, .. } = &endpoint.kind {
+        if port.is_none() {
+            return Err(ConfigError::InvalidEndpoint {
+                name: endpoint.path_prefix.clone(),
+                reason: "DICOM endpoint requires a port".to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn validate_dicom_backend(backend: &Backend) -> Result<(), ConfigError> {
+    match &backend.kind {
+        BackendKind::Dicom { port, .. } => {
+            if *port == 0 {
+                return Err(ConfigError::InvalidBackend {
+                    name: "unknown".to_string(), // You might want to pass the backend name here
+                    reason: "DICOM backend requires a non-zero port".to_string(),
+                });
+            }
+        }
+        _ => {}
+    }
+    Ok(())
 }
