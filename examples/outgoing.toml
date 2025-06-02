@@ -1,3 +1,4 @@
+
 # ------------------------
 # Defines the proxy
 #-------------------------
@@ -9,7 +10,6 @@ store_dir = "/var/lib/harmony/studies"
 # ------------------------
 # Network
 #-------------------------
-
 [network.internal]
 enable_wireguard = true
 interface = "wg0"
@@ -31,27 +31,24 @@ public_key = "PUBKEY_LAB_C"
 # ------------------------
 # Endpoint groups
 #-------------------------
-
 [groups.outgoing]
 description = "DICOM PACS connecting to JMIX endpoints"
-networks = ["network.internal"]
+networks = ["internal"]
 middleware = { incoming = [], outgoing = [] }
-backends = ["endpoints.internal"]
+backends = ["internal"]
 peers = ["*"] # Allow any peers
 
 # ------------------------
 # Public endpoints
 #-------------------------
-
-# Endpoints are not required for outgoing conections
+# Endpoints are not required for outgoing connections
 
 # ------------------------
 # Backends
 #-------------------------
-
 [backends.dicom_harmony]
 type = "dicom_to_harmony"
-services = ["services.pacs_a"]
+services = ["pacs_a"]
 aet = "HARMONY"
 port = 55557
 

@@ -1,50 +1,104 @@
+
 # ------------------------
 # Defines the proxy
 #-------------------------
 [proxy]
-id = "harmony-outgoing"
+id = "harmony-incoming"
 log_level = "info"
-store_dir = "/var/lib/harmony/studies"
+store_dir = "/var/lib/jmix/studies"
 
 # ------------------------
 # Network
 #-------------------------
-[network.internal]
+[network.default]
 enable_wireguard = true
 interface = "wg0"
 
-[network.internal.http]
-bind_address = "192.168.0.1"  # Listen on a local interface
-bind_port = 8081
-
-[[network.internal.peers]]
-id = "jmix-hospital-b"
-ip = "10.6.0.2"
-public_key = "PUBKEY_HOSPITAL_B"
-
-[[network.internal.peers]]
-id = "jmix-lab-c"
-ip = "10.6.0.3"
-public_key = "PUBKEY_LAB_C"
+[network.default.http]
+bind_address = "1.2.3.4"
+bind_port = 8080
 
 # ------------------------
 # Endpoint groups
 #-------------------------
-[groups.outgoing]
-description = "DICOM PACS connecting to JMIX endpoints"
-networks = ["internal"]
-middleware = { incoming = [], outgoing = [] }
-backends = ["internal"]
-peers = ["*"] # Allow any peers
+[groups.fhir]
+description = "FHIR endpoints exposed to external clients"
+networks = ["default"]
+middleware = { incoming = ["jwt_auth"], outgoing = [] }
+endpoints = ["fhir_endpoint_a"]
+backends = ["fhir"]
+
+[groups.fhir_dicom]
+description = "DICOM PACS systems exposing FHIR endpoints"
+networks = ["default"]
+middleware = { incoming = ["jwt_auth"], outgoing = [] }
+endpoints = ["fhir_endpoint_b"]
+backends = ["dicom_fhir"]
+
+[groups.dicomweb_dicom]
+description = "DICOM PACS systems exposing DICOMWeb endpoints"
+networks = ["default"]
+middleware = { incoming = ["jwt_auth"], outgoing = [] }
+endpoints = ["dicomweb_endpoint"]
+backends = ["dicom_dicomweb"]
+
+[groups.jmix_dicom]
+description = "DICOM PACS systems exposing JMIX endpoints"
+networks = ["default"]
+middleware = { incoming = ["jwt_auth"], outgoing = [] }
+endpoints = ["jmix_endpoint"]
+backends = ["dicom_jmix"]
 
 # ------------------------
 # Public endpoints
 #-------------------------
-# Endpoints are not required for outgoing connections
+[endpoints.fhir_endpoint_a]
+type = "fhir"
+path_prefix = "/fhir/endpoint-a"
+
+[endpoints.fhir_endpoint_b]
+type = "fhir"
+path_prefix = "/fhir/endpoint-b"
+
+[endpoints.dicomweb_endpoint]
+type = "dicomweb"
+path_prefix = "/dicomweb"
+
+[endpoints.jmix_endpoint]
+type = "jmix"
+path_prefix = "/jmix/endpoint"
+
+[endpoints.my_custom]
+type = "custom"
+handler_path = "/path/to/libmy_custom_endpoint.so"
+group = "custom_group"
+path_prefix = "/custom"
 
 # ------------------------
 # Backends
 #-------------------------
+[backends.passthru_fhir]
+type = "passthru"
+services = ["fhir_a"]
+
+[backends.dicom_fhir]
+type = "dicom_to_fhir"
+services = ["pacs_a"]
+aet = "HM_DICOM_A"
+port = 104
+
+[backends.dicom_dicomweb]
+type = "dicom_to_dicomweb"
+services = ["pacs_a"]
+aet = "HM_DICOM_B"
+port = 55555
+
+[backends.dicom_jmix]
+type = "dicom_to_jmix"
+services = ["pacs_a"]
+aet = "HM_DICOM_B"
+port = 55556
+
 [backends.dicom_harmony]
 type = "dicom_to_harmony"
 services = ["pacs_a"]
@@ -54,6 +108,10 @@ port = 55557
 # ------------------------
 # Services
 #-------------------------
+[services.fhir_a]
+type = "fhir"
+url = "http://localhost:8081/fhir"
+
 [services.pacs_a]
 type = "dicom"
 aet = "PACSCLINIC"
