@@ -6,7 +6,6 @@ use std::net::SocketAddr;
 use crate::config::Config;
 use tracing_subscriber::{self, prelude::*}; // Add prelude import
 
-
 pub async fn run(config: Config) {
     // Initialize logging
     if config.logging.log_to_file {
@@ -35,7 +34,7 @@ pub async fn run(config: Config) {
             .init();
     }
 
-    tracing::info!("🔧 Starting JDX Proxy '{}'", config.proxy.id);
+    tracing::info!("🔧 Starting Harmony '{}'", config.proxy.id);
 
     // Build the router once for all endpoints
     let app = endpoints::build_router(&config).await;
@@ -49,8 +48,8 @@ pub async fn run(config: Config) {
 
     tracing::info!("🚀 Starting HTTP server on {}", addr);
     
-    // Create and run the server
-    axum::Server::bind(&addr)
+    // Create and run the server using axum-server
+    axum_server::bind(addr)
         .serve(app.into_make_service())
         .await
         .unwrap();

@@ -184,7 +184,10 @@ pub enum EndpointKind {
     Fhir,
     Jdx,
     Basic,
-    Deadletter
+    Deadletter,
+    Custom {
+        handler_path: String
+    },
 }
 
 

@@ -1,5 +1,6 @@
 # Rust build directory
 /target/
+**/target/**
 
 # Cargo lock file (uncomment this if this is a library)
 # Cargo.lock

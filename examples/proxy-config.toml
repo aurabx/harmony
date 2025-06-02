@@ -53,6 +53,15 @@ path_prefix = "/jmix/clinic-b"
 middleware = ["jwt_auth"]
 group = "external_jmix"
 
+
+# Custom endpoints must define a path to a .so (linux), .dylib (macOS) or .dll (Windows), that
+# implements the CustomEndpointFactory trait
+[endpoints.my_custom]
+type = "custom"
+handler_path = "/path/to/libmy_custom_endpoint.so"
+group = "custom_group"
+path_prefix = "/custom"
+
 # -------------------------
 # Internal services
 #-------------------------

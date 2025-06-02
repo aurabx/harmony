@@ -12,7 +12,7 @@ pub struct FhirEndpointHandler;
 impl EndpointHandler for FhirEndpointHandler {
     fn create_router(&self) -> Router {
         Router::new()
-            .route("/*path", get(handle_fhir_request).post(handle_fhir_request))
+            .route("/:path", get(handle_fhir_request).post(handle_fhir_request))
     }
 }
 
