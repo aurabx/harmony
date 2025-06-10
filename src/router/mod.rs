@@ -1,6 +1,8 @@
 use axum::{
     Router,
 };
+// use axum::middleware::from_fn_with_state;
+// use tower::ServiceBuilder;
 use crate::config::{Config};
 use crate::middleware::build_middleware_stack;
 
@@ -70,7 +72,7 @@ fn build_incoming_routes(
 
         let mut route = handler.create_router();
 
-        // Add incoming middleware
+        // Add incoming middleware using the generic middleware stack
         if !group.middleware.incoming.is_empty() {
             route = build_middleware_stack(route, &group.middleware.incoming, config.middleware.clone());
         }

@@ -50,6 +50,15 @@ endpoints = ["jmix_endpoint"]
 backends = ["dicom_jmix"]
 
 # ------------------------
+# Middleware
+#-------------------------
+[middleware.auth_sidecar]
+token_path = "/path/to/token" # Existing field
+username = "my_user"         # New field for Basic Auth username
+password = "my_password"     # New field for Basic Auth password
+
+
+# ------------------------
 # Public endpoints
 #-------------------------
 [endpoints.fhir_endpoint_a]

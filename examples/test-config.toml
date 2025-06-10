@@ -1,8 +1,14 @@
+# ------------------------
+# Defines the proxy
+#-------------------------
 [proxy]
 id = "harmony-test"
-log_level = "info"
+log_level = "debug"
 store_dir = "/tmp/harmony"
 
+# ------------------------
+# Network
+#-------------------------
 [network.default]
 enable_wireguard = false
 interface = "wg0"
@@ -11,20 +17,74 @@ interface = "wg0"
 bind_address = "0.0.0.0"  # Listen on all interfaces
 bind_port = 8080          # Use port 8080
 
-[endpoints.test]
-type = "basic"
-path_prefix = "/test"
-
-[backends.deadletter]
-type = "deadletter"
-
-[groups.test_group]
-description = "A test group"
+# ------------------------
+# Endpoint groups
+#-------------------------
+[groups.fhir_test]
+description = "FHIR endpoints for testing"
 networks = ["default"]
-middleware = { incoming = [], outgoing = [] }
-endpoints = ["test"]
-backends = ["deadletter"]
+middleware = { incoming = ["jwt_auth"], outgoing = [] }
+endpoints = ["fhir_test_endpoint_a", "fhir_test_endpoint_b"]
+backends = ["test_fhir_backend"]
 
+[groups.jdx_test]
+description = "JDX endpoints for testing"
+networks = ["default"]
+middleware = { incoming = ["auth_sidecar"], outgoing = [] }
+endpoints = ["jdx_test_endpoint"]
+backends = ["test_jdx_backend"]
+
+# ------------------------
+# Middleware
+#-------------------------
+[middleware.jwt_auth]
+public_key_path = "/path/to/test/public_key.pem"
+
+[middleware.auth_sidecar]
+token_path = "/tmp/test_token"
+username = "test_user"
+password = "test_password"
+
+# ------------------------
+# Public endpoints
+#-------------------------
+[endpoints.fhir_test_endpoint_a]
+type = "fhir"
+path_prefix = "/fhir/test-a"
+
+[endpoints.fhir_test_endpoint_b]
+type = "fhir"
+path_prefix = "/fhir/test-b"
+
+[endpoints.jdx_test_endpoint]
+type = "jdx"
+path_prefix = "/jdx/test"
+
+# ------------------------
+# Backends
+#-------------------------
+[backends.test_fhir_backend]
+type = "passthru"
+services = ["test_fhir_service"]
+
+[backends.test_jdx_backend]
+type = "passthru"
+services = ["test_jdx_service"]
+
+# ------------------------
+# Services
+#-------------------------
+[services.test_fhir_service]
+type = "fhir"
+url = "http://localhost:8081/test/fhir"
+
+[services.test_jdx_service]
+type = "jdx"
+url = "http://localhost:8082/test/jdx"
+
+# ------------------------
+# Logging
+#-------------------------
 [logging]
 log_to_file = true
-log_file_path = "/tmp/harmony.log"
+log_file_path = "/tmp/harmony_test.log"

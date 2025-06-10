@@ -10,8 +10,8 @@ use crate::backends::config::Backend;
 use crate::network::config::NetworkConfig;
 use crate::middleware::config::MiddlewareConfig;
 use crate::groups::config::Group;
-
 use crate::config::config::*;
+use crate::backends::dicom::{validate_dicom_backend, validate_dicom_endpoint};
 
 #[derive(Parser, Debug)]
 #[command(name = "harmony")]
@@ -229,34 +229,4 @@ pub enum ConfigError {
     MissingMiddlewareConfig { group: String, middleware: String, direction: String },
     InvalidPeer(String),
     MissingPeers,
-}
-
-use crate::endpoints::config::EndpointKind;
-use crate::backends::config::BackendKind;
-
-fn validate_dicom_endpoint(endpoint: &Endpoint) -> Result<(), ConfigError> {
-    if let EndpointKind::Dicom { port, .. } = &endpoint.kind {
-        if port.is_none() {
-            return Err(ConfigError::InvalidEndpoint {
-                name: endpoint.path_prefix.clone(),
-                reason: "DICOM endpoint requires a port".to_string(),
-            });
-        }
-    }
-    Ok(())
-}
-
-fn validate_dicom_backend(backend: &Backend) -> Result<(), ConfigError> {
-    match &backend.kind {
-        BackendKind::Dicom { port, .. } => {
-            if *port == 0 {
-                return Err(ConfigError::InvalidBackend {
-                    name: "unknown".to_string(), // You might want to pass the backend name here
-                    reason: "DICOM backend requires a non-zero port".to_string(),
-                });
-            }
-        }
-        _ => {}
-    }
-    Ok(())
 }

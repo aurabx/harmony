@@ -10,18 +10,24 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 fn test_basic_config() {
     let toml = r#"
         [proxy]
-        id = "jdx-1"
+        id = "harmony-incoming"
         log_level = "info"
-        store_dir = "/tmp"
+        store_dir = "/var/lib/jmix/studies"
 
-        [network]
+        [network.default]
         enable_wireguard = false
         interface = "wg0"
+
+        [network.default.http]
+        bind_address = "1.2.3.4"
+        bind_port = 8080
+
     "#;
 
     let result = load_config_from_str(toml);
     assert!(result.is_ok());
 }
+
 
 #[test]
 fn test_valid_config_passes() {
@@ -31,10 +37,14 @@ fn test_valid_config_passes() {
         log_level = "info"
         store_dir = "/tmp"
 
-        [network]
+        [network.default]
         enable_wireguard = false
         interface = "wg0"
         peers = []
+        
+        [network.default.http]
+        bind_address = "1.2.3.4"
+        bind_port = 8080
 
         [endpoints.ep1]
         type = "fhir"
@@ -68,10 +78,14 @@ fn test_missing_endpoint_group_fails() {
         log_level = "info"
         store_dir = "/tmp"
 
-        [network]
+        [network.default]
         enable_wireguard = false
         interface = "wg0"
         peers = []
+        
+        [network.default.http]
+        bind_address = "1.2.3.4"
+        bind_port = 8080
 
         [endpoints.ep1]
         type = "fhir"
@@ -91,8 +105,12 @@ fn test_missing_endpoint_group_fails() {
         transform_chain = ["fhir_to_dicom"]
     "#;
 
+    // Match both fields of `InvalidGroup`, but use `_` to ignore field contents
     let result = load_config_from_str(toml);
-    assert!(matches!(result, Err(ConfigError::InvalidGroup(_))));
+    assert!(matches!(
+        result,
+        Err(ConfigError::InvalidGroup { name: _, reason: _ })
+    ));
 }
 
 #[test]
@@ -103,10 +121,14 @@ fn test_unknown_group_in_transform_fails() {
         log_level = "info"
         store_dir = "/tmp"
 
-        [network]
+        [network.default]
         enable_wireguard = false
         interface = "wg0"
         peers = []
+        
+        [network.default.http]
+        bind_address = "1.2.3.4"
+        bind_port = 8080
 
         [endpoints.ep1]
         type = "fhir"
@@ -127,5 +149,8 @@ fn test_unknown_group_in_transform_fails() {
     "#;
 
     let result = load_config_from_str(toml);
-    assert!(matches!(result, Err(ConfigError::UnknownGroup { .. })));
+    assert!(matches!(
+        result,
+        Err(ConfigError::UnknownReference { group: _, kind: _, value: _ })
+    ));
 }

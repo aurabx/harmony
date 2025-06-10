@@ -2,15 +2,16 @@ use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]
 pub struct Backend {
-    #[serde(flatten,rename = "type")]
-    pub kind: BackendKind,
+    #[serde(rename = "type")]
+    pub type_: BackendType, // Renamed to `type_`
     #[serde(default)]
     pub middleware: Option<Vec<String>>,
 }
 
+
 #[derive(Debug, Deserialize)]
 #[serde(tag = "type", rename_all = "lowercase")]
-pub enum BackendKind {
+pub enum BackendType {
     Dicom {
         aet: String,
         host: String,
@@ -19,5 +20,7 @@ pub enum BackendKind {
     Fhir {
         url: String,
     },
-    DeadLetter
+    DeadLetter,
+    PassThru
 }
+

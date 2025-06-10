@@ -1,5 +1,7 @@
-
 use serde::Deserialize;
+use crate::middleware::jwtauth::JwtAuthConfig;
+use crate::middleware::auth::AuthSidecarConfig;
+use crate::middleware::connect::AuraboxConnectConfig;
 
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct MiddlewareConfig {
@@ -9,21 +11,4 @@ pub struct MiddlewareConfig {
     pub auth_sidecar: Option<AuthSidecarConfig>,
     #[serde(default)]
     pub aurabox_connect: Option<AuraboxConnectConfig>,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct JwtAuthConfig {
-    pub jwks_url: String,
-    pub audience: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct AuthSidecarConfig {
-    pub token_path: String,
-}
-
-#[derive(Debug, Deserialize, Clone)]
-pub struct AuraboxConnectConfig {
-    pub enabled: bool,
-    pub fallback_timeout_ms: u64,
 }
