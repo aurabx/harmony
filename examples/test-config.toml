@@ -27,12 +27,12 @@ middleware = { incoming = ["jwt_auth"], outgoing = [] }
 endpoints = ["fhir_test_endpoint_a", "fhir_test_endpoint_b"]
 backends = ["test_fhir_backend"]
 
-[groups.jdx_test]
-description = "JDX endpoints for testing"
+[groups.jmix_test]
+description = "jmix endpoints for testing"
 networks = ["default"]
 middleware = { incoming = ["auth_sidecar"], outgoing = [] }
-endpoints = ["jdx_test_endpoint"]
-backends = ["test_jdx_backend"]
+endpoints = ["jmix_test_endpoint"]
+backends = ["test_jmix_backend"]
 
 # ------------------------
 # Middleware
@@ -56,9 +56,9 @@ path_prefix = "/fhir/test-a"
 type = "fhir"
 path_prefix = "/fhir/test-b"
 
-[endpoints.jdx_test_endpoint]
-type = "jdx"
-path_prefix = "/jdx/test"
+[endpoints.jmix_test_endpoint]
+type = "jmix"
+path_prefix = "/jmix/test"
 
 # ------------------------
 # Backends
@@ -67,9 +67,9 @@ path_prefix = "/jdx/test"
 type = "passthru"
 services = ["test_fhir_service"]
 
-[backends.test_jdx_backend]
+[backends.test_jmix_backend]
 type = "passthru"
-services = ["test_jdx_service"]
+services = ["test_jmix_service"]
 
 # ------------------------
 # Services
@@ -78,9 +78,9 @@ services = ["test_jdx_service"]
 type = "fhir"
 url = "http://localhost:8081/test/fhir"
 
-[services.test_jdx_service]
-type = "jdx"
-url = "http://localhost:8082/test/jdx"
+[services.test_jmix_service]
+type = "jmix"
+url = "http://localhost:8082/test/jmix"
 
 # ------------------------
 # Logging

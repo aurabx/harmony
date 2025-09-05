@@ -1,5 +1,5 @@
 pub mod fhir;
-pub mod jdx;
+pub mod jmix;
 pub mod basic;
 pub mod custom;
 pub mod config;
@@ -12,7 +12,7 @@ use std::collections::HashMap;
 use libloading::{Library, Symbol};
 
 use crate::endpoints::fhir::FhirEndpointHandler;
-use crate::endpoints::jdx::JdxEndpointHandler;
+use crate::endpoints::jmix::JmixEndpointHandler;
 use crate::endpoints::basic::BasicEndpointHandler;
 use crate::endpoints::dicom::DicomEndpointHandler;
 use crate::endpoints::custom::CustomEndpointFactory;
@@ -35,7 +35,7 @@ impl EndpointHandlerFactory {
         match kind {
             EndpointKind::Basic { path_prefix: _ } => Ok(Box::new(BasicEndpointHandler)),
             EndpointKind::Fhir { path_prefix: _ } => Ok(Box::new(FhirEndpointHandler)),
-            EndpointKind::Jdx { path_prefix: _ } => Ok(Box::new(JdxEndpointHandler)),
+            EndpointKind::Jmix { path_prefix: _ } => Ok(Box::new(JmixEndpointHandler)),
             EndpointKind::Dicom { aet, host, port } => {
                 Ok(Box::new(DicomEndpointHandler::new(
                     aet.clone(),

@@ -23,7 +23,7 @@ pub enum EndpointKind {
         #[serde(default)]
         path_prefix: Option<String>,
     },
-    Jdx {
+    Jmix {
         #[serde(default)]
         path_prefix: Option<String>,
     },
