@@ -64,6 +64,7 @@ Testing
   - Endpoint/backend names referenced under a group must exist in [endpoints.*]/[backends.*], and DICOM-specific validators will run for type="dicom".
 
 Developer Tips and Conventions
+- Use Test Driven Development (TDD) when iterating.
 - Code style: Use rustfmt (default) and clippy for linting. Suggested commands:
   - cargo fmt --all
   - cargo clippy --all-targets -- -D warnings
@@ -92,3 +93,6 @@ Reproducible Test Demo (what we ran locally)
 Housekeeping
 - Keep examples/ TOML in sync with the validator rules to make cargo run work out-of-the-box.
 - Prefer adding small, focused integration tests under tests/ instead of complex end-to-end fixtures.
+
+Other documentation:
+- /docs/router.md describes the router's behavior.
