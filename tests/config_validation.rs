@@ -22,6 +22,17 @@ fn test_basic_config() {
         bind_address = "1.2.3.4"
         bind_port = 8080
 
+        [groups.core]
+        description = "Core group"
+        networks = ["default"]
+        endpoints = []
+        backends = []
+        peers = []
+        
+        [groups.core.middleware]
+        incoming = []
+        outgoing = []
+
     "#;
 
     let result = load_config_from_str(toml);
@@ -40,30 +51,34 @@ fn test_valid_config_passes() {
         [network.default]
         enable_wireguard = false
         interface = "wg0"
-        peers = []
         
         [network.default.http]
         bind_address = "1.2.3.4"
         bind_port = 8080
 
+        # Define one group that references the existing network and known middleware
+        [groups.core]
+        description = "Core group"
+        networks = ["default"]
+        endpoints = ["ep1"]
+        backends = ["b1"]
+        
+        [groups.core.middleware]
+        incoming = ["jwt_auth"]
+        outgoing = []
+
+        # Provide middleware configuration for referenced middleware
+        [middleware.jwt_auth]
+        public_key_path = "/tmp/dummy_pub.pem"
+
+        # Define an endpoint referenced by the group (FHIR doesn't trigger DICOM validation)
         [endpoints.ep1]
         type = "fhir"
         path_prefix = "/fhir"
-        group = "external_fhir"
-        middleware = ["test"]
 
-        [internal_services.svc1]
-        type = "dicom"
-        aet = "TEST"
-        host = "127.0.0.1"
-        port = 104
-        group = "internal_dicom"
-        middleware = ["test"]
-
-        [transform_rules.rule1]
-        from_group = "external_fhir"
-        to_group = "internal_dicom"
-        transform_chain = ["fhir_to_dicom"]
+        # Define a DICOM backend with a valid non-zero port
+        [backends.b1]
+        type = { type = "dicom", aet = "TEST", host = "127.0.0.1", port = 104 }
     "#;
 
     let result = load_config_from_str(toml);
@@ -71,7 +86,7 @@ fn test_valid_config_passes() {
 }
 
 #[test]
-fn test_missing_endpoint_group_fails() {
+fn test_missing_group_networks_fails() {
     let toml = r#"
         [proxy]
         id = "jdx-1"
@@ -81,31 +96,23 @@ fn test_missing_endpoint_group_fails() {
         [network.default]
         enable_wireguard = false
         interface = "wg0"
-        peers = []
         
         [network.default.http]
         bind_address = "1.2.3.4"
         bind_port = 8080
 
-        [endpoints.ep1]
-        type = "fhir"
-        path_prefix = "/fhir"
-        group = ""
-
-        [internal_services.svc1]
-        type = "dicom"
-        aet = "TEST"
-        host = "127.0.0.1"
-        port = 104
-        group = "internal_dicom"
-
-        [transform_rules.rule1]
-        from_group = "external_fhir"
-        to_group = "internal_dicom"
-        transform_chain = ["fhir_to_dicom"]
+        [groups.core]
+        description = "Core group"
+        networks = []
+        endpoints = []
+        backends = []
+        
+        [groups.core.middleware]
+        incoming = []
+        outgoing = []
     "#;
 
-    // Match both fields of `InvalidGroup`, but use `_` to ignore field contents
+    // Expect InvalidGroup due to missing networks
     let result = load_config_from_str(toml);
     assert!(matches!(
         result,
@@ -114,7 +121,7 @@ fn test_missing_endpoint_group_fails() {
 }
 
 #[test]
-fn test_unknown_group_in_transform_fails() {
+fn test_unknown_network_in_group_fails() {
     let toml = r#"
         [proxy]
         id = "jdx-1"
@@ -124,28 +131,20 @@ fn test_unknown_group_in_transform_fails() {
         [network.default]
         enable_wireguard = false
         interface = "wg0"
-        peers = []
         
         [network.default.http]
         bind_address = "1.2.3.4"
         bind_port = 8080
 
-        [endpoints.ep1]
-        type = "fhir"
-        path_prefix = "/fhir"
-        group = "external_fhir"
-
-        [internal_services.svc1]
-        type = "dicom"
-        aet = "TEST"
-        host = "127.0.0.1"
-        port = 104
-        group = "internal_dicom"
-
-        [transform_rules.rule1]
-        from_group = "external_fhir"
-        to_group = "ghost_group"
-        transform_chain = ["fhir_to_dicom"]
+        [groups.core]
+        description = "Core group"
+        networks = ["ghost_group"]
+        endpoints = []
+        backends = []
+        
+        [groups.core.middleware]
+        incoming = []
+        outgoing = []
     "#;
 
     let result = load_config_from_str(toml);
