@@ -4,7 +4,7 @@ pub mod backends;
 pub mod middleware;
 pub mod network;
 pub mod groups;
-mod router;
+pub mod router;
 
 use std::net::SocketAddr;
 use crate::config::Config;
