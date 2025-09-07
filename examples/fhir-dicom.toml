@@ -1,0 +1,75 @@
+# ------------------------
+# Defines the proxy
+#-------------------------
+[proxy]
+id = "harmony-test"
+log_level = "debug"
+store_dir = "/tmp/harmony"
+
+# ------------------------
+# Network
+#-------------------------
+[network.default]
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.http]
+bind_address = "0.0.0.0"  # Listen on all interfaces
+bind_port = 8080          # Use port 8080
+
+# ------------------------
+# Endpoint groups
+#-------------------------
+[groups.fhir]
+description = "FHIR to DICOM example"
+networks = ["default"]
+endpoints = ["fhir_test"]
+middleware = [
+    'middleware.jwt_auth',
+    'middleware.fhir_dicom_transform',
+]
+backends = ["dicom_backend"]
+
+# ------------------------
+# Middleware
+#-------------------------
+
+[middleware.fhir_dicom_transform]
+# This middleware has no configurable properties
+
+[middleware.basic_auth]
+token_path = "/tmp/test_token"
+username = "test_user"
+password = "test_password"
+
+# ------------------------
+# Endpoints
+#-------------------------
+[endpoints.fhir_test]
+type = "http"
+options = { path_prefix = "/test" }
+
+# ------------------------
+# Backends
+#-------------------------
+[backends.dicom_backend]
+type = "dicom"
+targets = ["pacs_a"]
+aet = "HM_DICOM_A"
+port = 104
+
+# ------------------------
+# Targets
+#-------------------------
+[targets.pacs_a]
+type = "dicom"
+aet = "PACSCLINIC"
+host = "127.0.0.1"
+port = 104
+
+# ------------------------
+# Logging
+#-------------------------
+[logging]
+log_to_file = true
+log_file_path = "/tmp/harmony_test.log"

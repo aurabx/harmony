@@ -1,37 +1,35 @@
 pub mod config;
-pub mod endpoints;
-pub mod backends;
-pub mod middleware;
-pub mod network;
-pub mod groups;
 pub mod router;
+mod models;
 
 use std::net::SocketAddr;
-use crate::config::Config;
-use tracing_subscriber::{self, prelude::*}; // Add prelude import
+use std::sync::Arc;
+use axum::serve;
+use tokio::net::TcpListener;
+use tracing_subscriber::{self, prelude::*};
+use crate::router::{build_network_router, AppState};
+use crate::config::config::Config;
 
 pub async fn run(config: Config) {
-    // Initialize logging
+    let config = Arc::new(config);
+
+    // Initialise logging
     if config.logging.log_to_file {
-        // Create a file appender
         let file_appender = tracing_subscriber::fmt::layer()
             .with_file(true)
             .with_line_number(true)
             .with_writer(std::fs::File::create(&config.logging.log_file_path).unwrap());
 
-        // Create a stdout appender
         let stdout_appender = tracing_subscriber::fmt::layer()
             .with_file(true)
             .with_line_number(true);
 
-        // Combine both appenders
         tracing_subscriber::registry()
             .with(file_appender)
             .with(stdout_appender)
             .try_init()
-            .expect("Failed to initialize logging");
+            .expect("Failed to initialise logging");
     } else {
-        // Just stdout if file logging is disabled
         tracing_subscriber::fmt()
             .with_file(true)
             .with_line_number(true)
@@ -40,29 +38,41 @@ pub async fn run(config: Config) {
 
     tracing::info!("🔧 Starting Harmony '{}'", config.proxy.id);
 
-    // Create a vector to store all server tasks
-    let mut server_tasks = Vec::new();
+    // Start servers for each network
+    for (network_name, network) in config.network.clone() { // Clone `config.network` for proper ownership
+        let config_clone = Arc::clone(&config); // Clone the Arc<Config> to ensure shared ownership
+        let network_name = network_name.clone();
+        let network = network.clone();
 
-    // Build routers for each network
-    for (network_name, network) in &config.network {
-        // Build a router specific to this network
-        let app = router::build_network_router(&config, network_name).await;
+        tokio::spawn(async move {
+            let base_app = build_network_router(config_clone.clone(), &network_name).await;
+            
+            let addr = format!("{}:{}", network.http.bind_address, network.http.bind_port)
+                .parse::<SocketAddr>()
+                .unwrap_or_else(|_| panic!("Invalid bind address or port for network {}", network_name));
 
-        // Parse the bind address from network config
-        let addr: SocketAddr = format!("{}:{}",
-                                       network.http.bind_address,
-                                       network.http.bind_port
-        ).parse().unwrap_or_else(|_| {
-            panic!("Invalid bind address or port for network {}", network_name)
+            tracing::info!(
+                "🚀 Starting HTTP server for network '{}' on '{}'",
+                network_name,
+                addr
+            );
+
+            let listener = TcpListener::bind(addr)
+                .await
+                .unwrap_or_else(|err| panic!("Failed to bind to address {addr}: {err}"));
+
+            if let Err(err) = serve(listener, base_app).await {
+                tracing::error!(
+                    "Server for network '{}' encountered an error: {}",
+                    network_name,
+                    err
+                );
+            }
         });
-
-        tracing::info!("🚀 Starting HTTP server for network {} on {}", network_name, addr);
-
-        // Create the server task
-        let server = axum_server::bind(addr).serve(app.into_make_service());
-        server_tasks.push(server);
     }
 
-    // Wait for all servers to complete (they run indefinitely unless there's an error)
-    futures::future::join_all(server_tasks).await;
+    // Block on ctrl-c
+    tokio::signal::ctrl_c()
+        .await
+        .expect("Failed to listen for ctrl-c signal");
 }

@@ -1,0 +1,70 @@
+# ------------------------
+# Defines the proxy
+#-------------------------
+[proxy]
+id = "harmony-test"
+log_level = "debug"
+store_dir = "/tmp/harmony"
+
+# ------------------------
+# Network
+#-------------------------
+[network.default]
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.http]
+bind_address = "0.0.0.0"  # Listen on all interfaces
+bind_port = 8080          # Use port 8080
+
+# ------------------------
+# Endpoint groups
+#-------------------------
+[groups.fhir]
+description = "FHIR passthru test"
+networks = ["default"]
+endpoints = ["fhir_test"]
+middleware = [
+    'middleware.basic_auth',
+]
+backends = ["fhir_backend"]
+
+# ------------------------
+# Middleware
+#-------------------------
+
+[middleware.passthru]
+# This middleware has no configurable properties
+
+[middleware.basic_auth]
+token_path = "/tmp/test_token"
+username = "test_user"
+password = "test_password"
+
+# ------------------------
+# Endpoints
+#-------------------------
+[endpoints.fhir_test]
+type = "http"
+options = { path_prefix = "/test" }
+
+# ------------------------
+# Backends
+#-------------------------
+[backends.fhir_backend]
+type = "fhir"
+targets = ["test_target"]
+
+# ------------------------
+# Targets
+#-------------------------
+[targets.test_target]
+type = "http"
+url = "http://localhost:8081/test"
+
+# ------------------------
+# Logging
+#-------------------------
+[logging]
+log_to_file = true
+log_file_path = "/tmp/harmony_test.log"

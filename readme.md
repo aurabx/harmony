@@ -12,7 +12,7 @@ Harmony is a proxy that enables secure communication between healthcare systems 
 - Audit logging
 - Format transformation rules
 - DICOM integration
-- Configurable middleware chain
+- Configurable middleware middleware
 
 ## Installation
 
@@ -39,7 +39,7 @@ The proxy is configured via a TOML file with the following main sections:
 - `[proxy]` - Core proxy settings
 - `[network]` - Network and HTTP binding configuration
 - `[endpoints]` - External endpoint definitions
-- `[internal_services]` - Internal service configurations
+- `[internal_targets]` - Internal target configurations
 - `[transform_rules]` - Data transformation rules
 - `[middleware]` - Middleware configurations
 - `[logging]` - Logging settings
@@ -109,9 +109,9 @@ sudo cp target/release/harmony /usr/local/bin/
 # /etc/systemd/system/harmony.service
 [Unit] 
 Description=HARMONY 
-Service 
+target 
 After=network.target
-[Service] 
+[target] 
 Type=simple 
 User=jmix 
 ExecStart=/usr/local/bin/harmony --config /etc/jmix/harmony-config.toml 

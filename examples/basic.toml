@@ -1,0 +1,71 @@
+# ------------------------
+# Basic configuration
+#-------------------------
+[proxy]
+# The name of the proxy, required
+id = "harmony-test"
+# The log level. Defaults to 'error'
+log_level = "debug"
+# Temp directory. Defaults to /tmp/harmony
+store_dir = "/tmp/harmony"
+
+# ------------------------
+# Network
+#
+# Defines 0 or more network configurations.
+#-------------------------
+[network.default]
+# Whether to enable wireguard connections on this network
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.http]
+bind_address = "0.0.0.0"  # Listen on all interfaces
+bind_port = 8080          # Use port 8080
+
+# ------------------------
+# Groups
+#-------------------------
+[groups.basic]
+description = "Basic passthru test"     # Optional
+networks = ["default"]                  # Optional, but group should be skipped if empty or does not match, defaults to empty, should warn if empty
+endpoints = ["basic_test"]              # Optional, but group should be skipped if empty or does not match, defaults to empty, should warn if empty
+middleware = [
+    'middleware.passthru',
+]                                       # Optional, defaults to empty, should warn if empty
+backends = ["test_backend"]             # Optional, defaults to empty, should warn if empty
+
+# ------------------------
+# Middleware
+#-------------------------
+
+[middleware.passthru]
+# This middleware has no configurable properties
+
+# ------------------------
+# Public endpoints
+#-------------------------
+[endpoints.basic_test]
+type = "http"                           # Required
+options = { path_prefix = "/test" }     # Required if type "http"
+
+# ------------------------
+# Backends
+#-------------------------
+[backends.test_backend]
+type = "http"
+targets = ["test_target"]
+
+# ------------------------
+# Targets
+#-------------------------
+[targets.test_target]
+type = "http"
+url = "http://localhost:8081/test"
+
+# ------------------------
+# Logging
+#-------------------------
+[logging]
+log_to_file = true
+log_file_path = "/tmp/harmony_test.log"
