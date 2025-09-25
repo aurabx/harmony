@@ -1,97 +1,69 @@
 use std::sync::Arc;
-use axum::body::Body;
-use axum::response::Response;
-use http::Request;
-use tower::service_fn;
-use tower::util::BoxCloneService;
-use crate::models::middleware::auth::AuthSidecarMiddleware;
-use crate::models::middleware::config::MiddlewareConfig;
-use crate::models::middleware::connect::AuraboxConnectMiddleware;
-use crate::models::middleware::jwtauth::JwtAuthMiddleware;
-use crate::models::middleware::Middleware;
-use crate::models::middleware::types::Error;
+use std::collections::HashMap;
+use crate::models::middleware::middleware::{Middleware, resolve_middleware};
+use crate::models::envelope::envelope::Envelope;
+use crate::utils::Error;
+use serde_json::Value;
 
+/// Struct representing a chain of middleware
 #[derive(Clone)]
 pub struct MiddlewareChain {
     middlewares: Arc<Vec<Box<dyn Middleware>>>,
 }
 
 impl MiddlewareChain {
-    pub fn new(
-        middleware_list: &[String],
-        config: &MiddlewareConfig
-    ) -> Self {
-        let middlewares = middleware_list.iter()
-            .filter_map(|name| Self::create_middleware(name, config))
+    /// Create a new `MiddlewareChain` from middleware instances with their configurations
+    pub fn new(middleware_instances: &[(String, HashMap<String, Value>)]) -> Self {
+        let middlewares = middleware_instances
+            .iter()
+            .filter_map(|(middleware_type, options)| {
+                match resolve_middleware(middleware_type, options) {
+                    Ok(middleware) => Some(middleware),
+                    Err(err) => {
+                        tracing::error!("Failed to resolve middleware '{}': {}", middleware_type, err);
+                        None
+                    }
+                }
+            })
             .collect();
 
         Self {
-            middlewares: Arc::new(middlewares)
+            middlewares: Arc::new(middlewares),
         }
     }
 
-    fn create_middleware(
-        name: &str,
-        config: &MiddlewareConfig
-    ) -> Option<Box<dyn Middleware>> {
-        match name {
-            "jwt_auth" => {
-                config.jwt_auth.as_ref().map(|cfg| {
-                    Box::new(JwtAuthMiddleware::new(cfg.clone())) as Box<dyn Middleware>
-                })
-            },
-            "auth_sidecar" => {
-                config.auth_sidecar.as_ref().map(|cfg| {
-                    Box::new(AuthSidecarMiddleware::new(cfg.clone())) as Box<dyn Middleware>
-                })
-            },
-            "aurabox_connect" => {
-                config.aurabox_connect.as_ref().map(|cfg| {
-                    Box::new(AuraboxConnectMiddleware::new(cfg.clone())) as Box<dyn Middleware>
-                })
-            },
-            _ => {
-                tracing::warn!("Unknown middleware: {}", name);
-                None
-            }
-        }
+    /// Create middleware chain from a simplified list (for backward compatibility)
+    pub fn from_simple_list(middleware_list: &[String]) -> Self {
+        let middleware_instances: Vec<(String, HashMap<String, Value>)> = middleware_list
+            .iter()
+            .map(|name| (name.clone(), HashMap::new()))
+            .collect();
+        
+        Self::new(&middleware_instances)
     }
 
-    pub async fn left(&self, mut request: Request<Body>) -> Result<Request<Body>, Error> {
+    /// Processes the incoming envelope through the "left" middleware chain.
+    pub async fn left(
+        &self,
+        mut envelope: Envelope<serde_json::Value>,
+    ) -> Result<Envelope<serde_json::Value>, Error> {
         for middleware in self.middlewares.iter() {
-            // Destructure the request into its parts and body
-            let (parts, body) = request.into_parts();
-
-            let next = BoxCloneService::new(service_fn(|req: Request<Body>| {
-                async move { Ok::<Response, Error>(Response::new(req.into_body())) }
-            }));
-
-            // Reconstruct the request with parts and body after middleware processing
-            request = match middleware.left(Request::from_parts(parts, body), next).await {
-                Ok(response) => Request::new(response.into_body()), // Construct a new request from the response body
-                Err(e) => return Err(e),
-            };
+            // Pass the envelope through the middleware
+            envelope = middleware.left(envelope).await?;
         }
-
-        Ok(request)
+        Ok(envelope)
     }
 
-    pub async fn right(&self, mut request: Request<Body>) -> Result<Request<Body>, Error> {
-        for middleware in self.middlewares.iter() {
-            // Destructure the request into its parts and body
-            let (parts, body) = request.into_parts();
-
-            let next = BoxCloneService::new(service_fn(|req: Request<Body>| {
-                async move { Ok::<Response, Error>(Response::new(req.into_body())) }
-            }));
-
-            // Reconstruct the request with parts and body after middleware processing
-            request = match middleware.right(Request::from_parts(parts, body), next).await {
-                Ok(response) => Request::new(response.into_body()), // Construct a new request from the response body
-                Err(e) => return Err(e),
-            };
+    /// Processes the outgoing envelope through the "right" middleware chain.
+    pub async fn right(
+        &self,
+        mut envelope: Envelope<serde_json::Value>,
+    ) -> Result<Envelope<serde_json::Value>, Error> {
+        // Process middleware in reverse order for right-side processing
+        for middleware in self.middlewares.iter().rev() {
+            // Pass the envelope through the middleware
+            envelope = middleware.right(envelope).await?;
         }
-
-        Ok(request)
+        Ok(envelope)
     }
 }

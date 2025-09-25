@@ -19,7 +19,7 @@ pub async fn build_network_router(
 
     let mut app = Router::new();
 
-    for (group_name, group) in &config.groups {
+    for (group_name, group) in &config.pipelines {
         if !group.networks.contains(&network_name.to_string()) {
             continue;
         }

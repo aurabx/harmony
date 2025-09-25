@@ -2,17 +2,17 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use crate::config::config::ConfigError;
 use crate::models::envelope::envelope::Envelope;
-use crate::models::middleware::types::Error;
-use crate::models::endpoints::endpoint_type::{EndpointHandler, EndpointType};
+use crate::models::services::services::{ServiceHandler, ServiceType};
 use serde_json::Value;
 use serde::Deserialize;
 use crate::router::route_config::RouteConfig;
 use http::{Method, Response};
+use crate::utils::Error;
 
 #[derive(Debug, Deserialize)]
 pub struct FhirEndpoint {}
 
-impl EndpointType for FhirEndpoint {
+impl ServiceType for FhirEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         // Ensure 'path_prefix' exists and is valid
         let path_prefix = options
@@ -41,7 +41,7 @@ impl EndpointType for FhirEndpoint {
         // Return route configurations for GET and POST methods
         vec![
             RouteConfig {
-                path: format!("{}/:path", path_prefix),
+                path: format!("{}/{{*wildcard}}", path_prefix), // Use {*wildcard} syntax
                 methods: vec![Method::GET, Method::POST],
                 description: Some("Handles FHIR GET and POST requests".to_string()),
             },
@@ -50,16 +50,16 @@ impl EndpointType for FhirEndpoint {
 }
 
 #[async_trait]
-impl EndpointHandler<Value> for FhirEndpoint {
+impl ServiceHandler<Value> for FhirEndpoint {
     type ReqBody = Value;
     type ResBody = Value;
 
     // Process the incoming request and transform it into an Envelope
-    async fn handle_request(
+    async fn transform_request(
         &self,
         mut envelope: Envelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Envelope<Vec<u8>>, crate::models::middleware::types::Error> {
+    ) -> Result<Envelope<Vec<u8>>, Error> {
         // Add or modify the envelope's normalized data
         envelope.normalized_data = Some(serde_json::json!({
             "message": "FHIR endpoint received the request",
@@ -70,11 +70,11 @@ impl EndpointHandler<Value> for FhirEndpoint {
     }
 
     // Convert the processed Envelope into an HTTP Response
-    async fn handle_response(
+    async fn transform_response(
         &self,
         envelope: Envelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Response<Self::ResBody>, crate::models::middleware::types::Error> {
+    ) -> Result<Response<Self::ResBody>, Error> {
         // Serialize the envelope's normalized data into an HTTP Response
         let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {
             Error::from("Failed to serialize FHIR response payload into JSON")
@@ -85,14 +85,3 @@ impl EndpointHandler<Value> for FhirEndpoint {
             .map_err(|_| Error::from("Failed to construct FHIR HTTP response"))
     }
 }
-
-// impl FhirEndpoint {
-//     /// Example handler for FHIR GET or POST requests
-//     async fn fhir_handler(JsonExtract(payload): JsonExtract<Value>) -> Json<Value> {
-//         Json(serde_json::json!({
-//             "status": "success",
-//             "message": "FHIR endpoint accepted the request",
-//             "payload": payload,
-//         }))
-//     }
-// }

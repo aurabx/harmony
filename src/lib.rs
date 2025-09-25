@@ -1,13 +1,14 @@
 pub mod config;
 pub mod router;
-mod models;
+pub mod models;
+mod utils;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
 use axum::serve;
 use tokio::net::TcpListener;
 use tracing_subscriber::{self, prelude::*};
-use crate::router::{build_network_router, AppState};
+use crate::router::{build_network_router};
 use crate::config::config::Config;
 
 pub async fn run(config: Config) {

@@ -1,6 +1,5 @@
 use std::collections::HashMap;
 use crate::models::envelope::envelope::{Envelope, RequestDetails};
-use super::*;
 
 #[cfg(test)] #[test]
 fn test_create_envelope() {

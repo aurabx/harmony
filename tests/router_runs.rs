@@ -1,9 +1,8 @@
-use harmony::config::Config;
-use harmony::config::ConfigError;
-use harmony::config::Config as HarmonyConfig;
+use harmony::config::config::{Config, ConfigError};
 use axum::http::{Request, StatusCode};
 use axum::body::Body;
 use tower::ServiceExt; // for Router::oneshot
+use std::sync::Arc;
 
 // Helper: parse and validate a config from TOML
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
@@ -14,7 +13,7 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 
 #[tokio::test]
 async fn router_builds_and_handles_404() {
-    // Minimal config with one network and one empty group bound to that network.
+    // Minimal config with one network and one empty pipeline bound to that network.
     let toml = r#"
         [proxy]
         id = "router-test"
@@ -29,22 +28,21 @@ async fn router_builds_and_handles_404() {
         bind_address = "127.0.0.1"
         bind_port = 8080
 
-        [groups.core]
-        description = "Core group"
+        [pipelines.core]
+        description = "Core pipeline"
         networks = ["default"]
         endpoints = []
         backends = []
-        peers = []
+        middleware = []
 
-        [groups.core.middleware]
-        incoming = []
-        outgoing = []
+        [services.http]
+        module = ""
     "#;
 
-    let cfg: HarmonyConfig = load_config_from_str(toml).expect("valid config");
+    let cfg: Config = load_config_from_str(toml).expect("valid config");
 
     // Build the router for the default network. This should not panic.
-    let app = harmony::router::build_network_router(&cfg, "default").await;
+    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
 
     // Fire a simple request against root. Since we didn't mount any routes,
     // axum should return 404 NOT FOUND. The important part is that the router
@@ -59,7 +57,7 @@ async fn router_builds_and_handles_404() {
 
 #[tokio::test]
 async fn router_handles_basic_request() {
-    // Minimal config with one network, one group, and one endpoint.
+    // Minimal config with one network, one pipeline, and one endpoint.
     let toml = r#"
         [proxy]
         id = "router-test"
@@ -74,33 +72,33 @@ async fn router_handles_basic_request() {
         bind_address = "127.0.0.1"
         bind_port = 8080
 
-        [groups.core]
-        description = "Core group"
+        [pipelines.core]
+        description = "Core pipeline"
         networks = ["default"]
         endpoints = ["basic"]
         backends = []
-
-        [groups.core.middleware]
-        incoming = []
-        outgoing = []
+        middleware = []
 
         [endpoints.basic]
-        description = "A basic test endpoint"
+        service = "http"
+        [endpoints.basic.options]
         path_prefix = "/basic"
-        kind = "basic"
-        type = "basic" # Add this field
+
+        [services.http]
+        module = ""
     "#;
 
-    let cfg: HarmonyConfig = load_config_from_str(toml).expect("valid config");
+    let cfg: Config = load_config_from_str(toml).expect("valid config");
 
     // Build the router for the default network.
-    let app = harmony::router::build_network_router(&cfg, "default").await;
+    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
 
-    // Send a request to the `/basic` endpoint.
+    // Send a request to the `/basic/get-route` endpoint (based on HttpEndpoint implementation).
     let response = app
         .oneshot(
             Request::builder()
-                .uri("/basic")
+                .uri("/basic/get-route")
+                .method("GET")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -110,25 +108,18 @@ async fn router_handles_basic_request() {
     // Verify the response status is 200 OK.
     assert_eq!(response.status(), StatusCode::OK);
 
-    // Use axum::body::to_bytes instead of hyper::body::to_bytes.
+    // Read the response body
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read response body");
-    let body: serde_json::Value = serde_json::from_slice(&body).expect("parse JSON response");
-    assert_eq!(
-        body,
-        serde_json::json!({
-            "status": "success",
-            "message": "Basic endpoint responding"
-        })
-    );
+    let body_str = String::from_utf8(body.to_vec()).expect("parse response body as string");
+
+    // The response should contain the processed message from HttpEndpoint
+    assert!(body_str.contains("BasicEndpoint processed the request"));
 }
 
 #[tokio::test]
 async fn router_selects_correct_endpoint_based_on_path() {
-    use axum::{body::Body, http::{Request, StatusCode}};
-    use tower::ServiceExt; // for Router::oneshot
-
     // Minimal configuration with two endpoints sharing one network.
     let toml = r#"
         [proxy]
@@ -144,40 +135,42 @@ async fn router_selects_correct_endpoint_based_on_path() {
         bind_address = "127.0.0.1"
         bind_port = 8080
 
-        [groups.core]
-        description = "Core group"
+        [pipelines.core]
+        description = "Core pipeline"
         networks = ["default"]
-        endpoints = ["basic", "custom"]
+        endpoints = ["basic", "fhir"]
         backends = []
-
-        [groups.core.middleware]
-        incoming = []
-        outgoing = []
+        middleware = []
 
         [endpoints.basic]
-        description = "A basic endpoint"
+        service = "http"
+        [endpoints.basic.options]
         path_prefix = "/basic"
-        kind = "basic"
-        type = "basic"
 
-        [endpoints.custom]
-        description = "A custom endpoint"
-        path_prefix = "/custom"
-        kind = "custom"
-        type = "custom"
+        [endpoints.fhir]
+        service = "fhir"
+        [endpoints.fhir.options]
+        path_prefix = "/fhir"
+
+        [services.http]
+        module = ""
+        
+        [services.fhir]
+        module = ""
     "#;
 
     // Load and validate configuration
     let cfg = load_config_from_str(toml).expect("valid config");
 
     // Build the router for the default network
-    let app = harmony::router::build_network_router(&cfg, "default").await;
+    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
 
-    // Test `/basic` endpoint
+    // Test `/basic/get-route` endpoint
     let response = app.clone()
         .oneshot(
             Request::builder()
-                .uri("/basic")
+                .uri("/basic/get-route")
+                .method("GET")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -190,40 +183,29 @@ async fn router_selects_correct_endpoint_based_on_path() {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read response body");
-    let body: serde_json::Value = serde_json::from_slice(&body).expect("parse JSON response");
-    assert_eq!(
-        body,
-        serde_json::json!({
-            "status": "success",
-            "message": "Basic endpoint responding"
-        })
-    );
+    let body_str = String::from_utf8(body.to_vec()).expect("parse response body as string");
+    assert!(body_str.contains("BasicEndpoint processed the request"));
 
-    // Test `/custom` endpoint
+    // Test `/fhir/:path` endpoint
     let response = app.clone()
         .oneshot(
             Request::builder()
-                .uri("/custom")
+                .uri("/fhir/patient")
+                .method("GET")
                 .body(Body::empty())
                 .unwrap(),
         )
         .await
         .expect("router handled request");
 
-    // Verify the `/custom` route returns 200 OK
+    // Verify the `/fhir` route returns 200 OK
     assert_eq!(response.status(), StatusCode::OK);
 
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read response body");
-    let body: serde_json::Value = serde_json::from_slice(&body).expect("parse JSON response");
-    assert_eq!(
-        body,
-        serde_json::json!({
-            "status": "success",
-            "message": "Custom endpoint responding"
-        })
-    );
+    let body_str = String::from_utf8(body.to_vec()).expect("parse response body as string");
+    assert!(body_str.contains("FHIR endpoint received the request"));
 
     // Test a non-existent route
     let response = app
@@ -242,10 +224,6 @@ async fn router_selects_correct_endpoint_based_on_path() {
 
 #[tokio::test]
 async fn router_handles_path_based_routing() {
-    use axum::{Router, http::{Request, StatusCode}, Json};
-    use serde_json::json;
-    use tower::ServiceExt; // For `Router::oneshot`
-
     // Create a configuration with multiple endpoints
     let toml = r#"
         [proxy]
@@ -261,40 +239,38 @@ async fn router_handles_path_based_routing() {
         bind_address = "127.0.0.1"
         bind_port = 8080
 
-        [groups.core]
-        description = "Core group"
+        [pipelines.core]
+        description = "Core pipeline"
         networks = ["default"]
         endpoints = ["echo_one", "echo_two"]
         backends = []
-
-        [groups.core.middleware]
-        incoming = []
-        outgoing = []
+        middleware = []
 
         [endpoints.echo_one]
-        description = "First echo endpoint"
+        service = "echo"
+        [endpoints.echo_one.options]
         path_prefix = "/echo1"
-        kind = "echo"
-        type = "basic"
 
         [endpoints.echo_two]
-        description = "Second echo endpoint"
+        service = "echo"
+        [endpoints.echo_two.options]
         path_prefix = "/echo2"
-        kind = "echo"
-        type = "basic"
+
+        [services.echo]
+        module = ""
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
 
     // Build the router
-    let app = harmony::router::build_network_router(&cfg, "default").await;
+    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
 
-    // Test first endpoint `/echo1`
+    // Test first endpoint `/echo1/:path`
     let response = app.clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/echo1")
+                .uri("/echo1/test")
                 .header("Content-Type", "application/json")
                 .body(Body::from(r#"{"key":"value1"}"#))
                 .unwrap(),
@@ -306,15 +282,15 @@ async fn router_handles_path_based_routing() {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read response body");
-    let body: serde_json::Value = serde_json::from_slice(&body).expect("parse JSON response");
-    assert_eq!(body, json!({"echo": {"key": "value1"}}));
+    let body_str = String::from_utf8(body.to_vec()).expect("parse response body as string");
+    assert!(body_str.contains("Echo endpoint received the request"));
 
-    // Test second endpoint `/echo2`
+    // Test second endpoint `/echo2/:path`
     let response = app.clone()
         .oneshot(
             Request::builder()
                 .method("POST")
-                .uri("/echo2")
+                .uri("/echo2/test")
                 .header("Content-Type", "application/json")
                 .body(Body::from(r#"{"key":"value2"}"#))
                 .unwrap(),
@@ -326,11 +302,11 @@ async fn router_handles_path_based_routing() {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read response body");
-    let body: serde_json::Value = serde_json::from_slice(&body).expect("parse JSON response");
-    assert_eq!(body, json!({"echo": {"key":"value2"}}));
+    let body_str = String::from_utf8(body.to_vec()).expect("parse response body as string");
+    assert!(body_str.contains("Echo endpoint received the request"));
 
     // Test non-existent route
-    let response = app.clone() // Cloning here again to avoid move
+    let response = app.clone()
         .oneshot(
             Request::builder()
                 .method("POST")

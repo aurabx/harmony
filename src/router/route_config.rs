@@ -1,4 +1,3 @@
-use axum::routing::Route;
 
 #[derive(Debug, Clone)]
 pub struct RouteConfig {

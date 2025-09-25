@@ -1,16 +1,13 @@
 use serde::Deserialize;
 use axum::{
-    response::Response,
-    http::{Request, HeaderValue, StatusCode},
-    body::Body,
+    http::{HeaderValue},
 };
-use tower::Service;
 use base64::{engine::general_purpose, Engine as _};
 use std::sync::Arc;
 use std::error::Error as StdError;
-
-
-use crate::models::middleware::{Middleware, Next, Error};
+use crate::models::envelope::envelope::Envelope;
+use crate::models::middleware::middleware::Middleware;
+use crate::utils::Error;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AuthSidecarConfig {
@@ -35,50 +32,25 @@ impl AuthSidecarMiddleware {
 impl Middleware for AuthSidecarMiddleware {
     async fn left(
         &self,
-        request: Request<Body>,
-        mut next: Next<Body>,
-    ) -> Result<Response, Error> {
-        // Step 1: Extract the `Authorization` header
-        let header = match request.headers().get("Authorization") {
-            Some(h) => h,
-            None => {
-                let error_message = "Missing Authorization header";
-                tracing::error!("{}", error_message);
-                return Ok(Response::builder()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .header("WWW-Authenticate", "Basic realm=\"example\"")
-                    .body(Body::from(error_message))
-                    .unwrap());
-            }
-        };
+        envelope: Envelope<serde_json::Value>,
+    ) -> Result<Envelope<serde_json::Value>, Error> {
+        // For now, just pass through the envelope
+        // In a real implementation, you would:
+        // 1. Extract auth information from envelope.request_details.headers
+        // 2. Validate the auth credentials
+        // 3. Either return the envelope or return an error
 
-        // Step 2: Decode and validate the Basic Auth credentials
-        match validate_basic_auth(header, &self.config).await {
-            Ok(()) => {
-                // Step 3: Pass the request to the next middleware in the middleware
-                let response = next.call(request).await?;
-
-                // Optionally log the response
-                tracing::info!(
-                    "Response status after AuthSidecarMiddleware: {}",
-                    response.status()
-                );
-
-                Ok(response)
-            }
-            Err(err) => {
-                tracing::error!("Invalid Basic Auth: {}", err);
-                return Ok(Response::builder()
-                    .status(StatusCode::UNAUTHORIZED)
-                    .header("WWW-Authenticate", "Basic realm=\"example\"")
-                    .body(Body::from("Invalid Basic Auth credentials"))
-                    .unwrap());
-            }
-        }
+        tracing::info!("Processing auth middleware (left)");
+        Ok(envelope)
     }
 
-    async fn right(&self, request: Request<Body>, next: Next<Body>) -> Result<Response, Error> {
-        todo!()
+    async fn right(
+        &self,
+        envelope: Envelope<serde_json::Value>,
+    ) -> Result<Envelope<serde_json::Value>, Error> {
+        // For now, just pass through the envelope
+        tracing::info!("Processing auth middleware (right)");
+        Ok(envelope)
     }
 }
 

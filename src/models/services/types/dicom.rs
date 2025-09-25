@@ -1,14 +1,14 @@
 use std::collections::HashMap;
 use async_trait::async_trait;
-use axum::http::{Request, Response};
+use axum::http::{Response};
 use serde_json::Value;
 use serde::Deserialize;
 use crate::config::config::ConfigError;
 use crate::models::envelope::envelope::Envelope;
-use crate::models::middleware::types::Error;
-use crate::models::endpoints::endpoint_type::{EndpointType, EndpointHandler};
+use crate::models::services::services::{ServiceType, ServiceHandler};
 
 use http::Method;
+use crate::utils::Error;
 use crate::router::route_config::RouteConfig;
 
 #[derive(Debug, Deserialize)]
@@ -18,7 +18,7 @@ pub struct DicomEndpoint {
     pub port: Option<u16>,
 }
 
-impl EndpointType for DicomEndpoint {
+impl ServiceType for DicomEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         if options
             .get("aet")
@@ -78,15 +78,15 @@ impl EndpointType for DicomEndpoint {
 }
 
 #[async_trait]
-impl EndpointHandler<Value> for DicomEndpoint {
+impl ServiceHandler<Value> for DicomEndpoint {
     type ReqBody = Value;
     type ResBody = Value;
 
-    async fn handle_request(
+    async fn transform_request(
         &self,
         mut envelope: Envelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Envelope<Vec<u8>>, crate::models::middleware::types::Error> {
+    ) -> Result<Envelope<Vec<u8>>, Error> {
         let aet = options
             .get("aet")
             .and_then(|v| v.as_str())
@@ -102,11 +102,11 @@ impl EndpointHandler<Value> for DicomEndpoint {
         Ok(envelope)
     }
 
-    async fn handle_response(
+    async fn transform_response(
         &self,
         envelope: Envelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Response<Self::ResBody>, crate::models::middleware::types::Error> {
+    ) -> Result<Response<Self::ResBody>, Error> {
         // Convert the Envelope back into an HTTP response
         let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {
             Error::from("Failed to serialize DICOM response payload into JSON")

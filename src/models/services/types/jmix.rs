@@ -4,16 +4,16 @@ use axum::{http::{Response}};
 use serde_json::Value;
 use serde::Deserialize;
 use crate::models::envelope::envelope::Envelope;
-use crate::models::middleware::types::Error;
+use crate::utils::Error;
 use crate::config::config::ConfigError;
-use crate::models::endpoints::endpoint_type::{EndpointHandler, EndpointType};
+use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
 use http::Method;
 
 #[derive(Debug, Deserialize)]
 pub struct JmixEndpoint {}
 
-impl EndpointType for JmixEndpoint {
+impl ServiceType for JmixEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         // Ensure 'path_prefix' exists and is non-empty
         if options
@@ -38,12 +38,12 @@ impl EndpointType for JmixEndpoint {
 
         vec![
             RouteConfig {
-                path: format!("{}/:path", path_prefix),
+                path: format!("{}/{{*wildcard}}", path_prefix), // Use {*wildcard} syntax
                 methods: vec![Method::POST],
                 description: Some("Handles JMIX POST requests".to_string()),
             },
             RouteConfig {
-                path: format!("{}/:path", path_prefix),
+                path: format!("{}/{{*wildcard}}", path_prefix), // Use {*wildcard} syntax
                 methods: vec![Method::GET],
                 description: Some("Handles JMIX GET requests".to_string()),
             }
@@ -52,15 +52,15 @@ impl EndpointType for JmixEndpoint {
 }
 
 #[async_trait]
-impl EndpointHandler<Value> for JmixEndpoint {
+impl ServiceHandler<Value> for JmixEndpoint {
     type ReqBody = Value;
     type ResBody = Value;
 
-    async fn handle_request(
+    async fn transform_request(
         &self,
         mut envelope: Envelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Envelope<Vec<u8>>, crate::models::middleware::types::Error> {
+    ) -> Result<Envelope<Vec<u8>>, Error> {
         let path = options.get("path").cloned().unwrap_or_default();
 
         // Add or modify normalized data in the envelope
@@ -73,11 +73,11 @@ impl EndpointHandler<Value> for JmixEndpoint {
         Ok(envelope)
     }
 
-    async fn handle_response(
+    async fn transform_response(
         &self,
         envelope: Envelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Response<Self::ResBody>, crate::models::middleware::types::Error> {
+    ) -> Result<Response<Self::ResBody>, Error> {
         // Serialize the normalized data into a JSON HTTP response
         let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {
             Error::from("Failed to serialize Jmix response payload into JSON")
@@ -88,19 +88,3 @@ impl EndpointHandler<Value> for JmixEndpoint {
             .map_err(|_| Error::from("Failed to construct JMIX HTTP response"))
     }
 }
-
-// impl JmixEndpoint {
-//     /// Handles JMIX-specific requests and responds with a placeholder JSON directly
-//     pub async fn jmix_handler(
-//         Path(path): Path<String>, // Path parameter extraction
-//         Json(payload): Json<Value> // JSON body extraction
-//     ) -> AxumJson<Value> {
-//         // Process and respond with extracted data
-//         AxumJson(serde_json::json!({
-//             "status": "success",
-//             "message": "Jmix endpoint response",
-//             "path": path,
-//             "payload": payload,
-//         }))
-//     }
-// }

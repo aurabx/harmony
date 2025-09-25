@@ -5,15 +5,15 @@ use serde::Deserialize;
 use http::{Response};
 use crate::config::config::ConfigError;
 use crate::models::envelope::envelope::Envelope;
-use crate::models::middleware::types::Error;
-use crate::models::endpoints::endpoint_type::{EndpointType, EndpointHandler};
+use crate::models::services::services::{ServiceType, ServiceHandler};
 use crate::router::route_config::RouteConfig;
 use http::Method;
+use crate::utils::Error;
 
 #[derive(Debug, Deserialize)]
 pub struct EchoEndpoint {}
 
-impl EndpointType for EchoEndpoint {
+impl ServiceType for EchoEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         // Ensure 'path_prefix' exists and is non-empty
         if options
@@ -38,7 +38,7 @@ impl EndpointType for EchoEndpoint {
 
         vec![
             RouteConfig {
-                path: format!("{}/:path", path_prefix),
+                path: format!("{}/{{*wildcard}}", path_prefix), // Use {*wildcard} syntax
                 methods: vec![Method::POST],
                 description: Some("Handles Echo POST requests".to_string()),
             },
@@ -47,15 +47,15 @@ impl EndpointType for EchoEndpoint {
 }
 
 #[async_trait]
-impl EndpointHandler<Value> for EchoEndpoint {
+impl ServiceHandler<Value> for EchoEndpoint {
     type ReqBody = Value;
     type ResBody = Value;
 
-    async fn handle_request(
+    async fn transform_request(
         &self,
         mut envelope: Envelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Envelope<Vec<u8>>, crate::models::middleware::types::Error> {
+    ) -> Result<Envelope<Vec<u8>>, Error> {
         // Add or modify the envelope's normalized data
         envelope.normalized_data = Some(serde_json::json!({
             "message": "Echo endpoint received the request",
@@ -65,11 +65,11 @@ impl EndpointHandler<Value> for EchoEndpoint {
         Ok(envelope)
     }
 
-    async fn handle_response(
+    async fn transform_response(
         &self,
         envelope: Envelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Response<Self::ResBody>, crate::models::middleware::types::Error> {
+    ) -> Result<Response<Self::ResBody>, Error> {
         // Serialize the envelope's normalized data into an HTTP Response
         let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {
             Error::from("Failed to serialize Echo response payload into JSON")
@@ -80,14 +80,3 @@ impl EndpointHandler<Value> for EchoEndpoint {
             .map_err(|_| Error::from("Failed to construct Echo HTTP response"))
     }
 }
-
-// impl EchoEndpoint {
-//     /// Example inline handler for Echo POST requests
-//     async fn handle_request(JsonExtract(payload): JsonExtract<Value>) -> Json<Value> {
-//         Json(serde_json::json!({
-//             "status": "success",
-//             "message": "Echo endpoint processed the payload",
-//             "payload": payload,
-//         }))
-//     }
-// }

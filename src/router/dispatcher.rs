@@ -1,15 +1,14 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 use axum::body::Body;
-use axum::{Router, response::Response, extract::State};
+use axum::{Router, response::Response};
 use axum::extract::Request;
 use http::StatusCode;
 use crate::config::config::Config;
-use crate::models::groups::config::Group;
-use crate::models::middleware::{process_request_through_chain, process_response_through_chain};
+use crate::models::backends::backends::Backend;
+use crate::models::pipelines::config::Pipeline;
 use crate::models::middleware::chain::MiddlewareChain;
 use crate::models::envelope::envelope::{Envelope, RequestDetails};
-use crate::models::backends::config::{Backend, BackendType};
 
 pub struct Dispatcher<> {
     config: Arc<Config>,
@@ -25,13 +24,19 @@ impl<'a> Dispatcher<> {
     pub fn build_router(
         &self,
         mut app: Router<()>,
-        group: &Group,
+        group: &Pipeline,
     ) -> Router<()> {
         for endpoint_name in &group.endpoints {
             if let Some(endpoint) = self.config.endpoints.get(endpoint_name) {
-                let route_configs = endpoint
-                    .kind
-                    .build_router(endpoint.options.as_ref().unwrap_or(&HashMap::new()));
+                let service = match endpoint.resolve_service() {
+                    Ok(service) => service,
+                    Err(err) => {
+                        tracing::error!("Failed to resolve service for endpoint '{}': {}", endpoint_name, err);
+                        continue;
+                    }
+                };
+
+                let route_configs = service.build_router(endpoint.options.as_ref().unwrap_or(&HashMap::new()));
 
                 for route_config in route_configs {
                     let path = route_config.path.clone();
@@ -42,7 +47,7 @@ impl<'a> Dispatcher<> {
                     for method in methods {
                         let endpoint_name = endpoint_name.clone();
                         let group_name = format!("group_{}", endpoint_name);
-                        let config_ref = self.config.clone(); // <- clone Arc
+                        let config_ref = self.config.clone();
 
                         let handler = move |mut req: Request| {
                             let endpoint_name = endpoint_name.clone();
@@ -54,7 +59,6 @@ impl<'a> Dispatcher<> {
                                     &mut req,
                                     config_ref,
                                     endpoint_name,
-                                    group_name,
                                 )
                                     .await
                             }
@@ -79,18 +83,19 @@ impl<'a> Dispatcher<> {
         app
     }
 
-    // Extract the request handling logic into a separate async function
     async fn handle_request_async(
         req: &mut Request,
         config: Arc<Config>,
         endpoint_name: String,
-        group_name: String,
     ) -> Result<Response<Body>, StatusCode> {
         // Look up the endpoint and group from config
         let endpoint = config.endpoints.get(&endpoint_name)
             .ok_or(StatusCode::NOT_FOUND)?;
 
-        let group = config.groups.iter()
+        let service = endpoint.resolve_service()
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        let pipeline = config.pipelines.iter()
             .find(|(_, g)| g.endpoints.contains(&endpoint_name))
             .map(|(_, g)| g)
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -112,29 +117,18 @@ impl<'a> Dispatcher<> {
         let envelope = Self::build_envelope(req, request_details).await
             .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-        // 1. Process through endpoint
-        let mut processed_envelope = endpoint
-            .kind
-            .handle_request(envelope, endpoint.options.as_ref().unwrap_or(&HashMap::new()))
+        // 1. Process through endpoint service
+        let processed_envelope = service
+            .transform_request(envelope, endpoint.options.as_ref().unwrap_or(&HashMap::new()))
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        // 2. Incoming middleware
-        processed_envelope = Self::process_incoming_middleware(processed_envelope, group, &*config).await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        // 3. Backends
-        processed_envelope = Self::process_backends(processed_envelope, group, &*config).await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        // 4. Outgoing middleware
-        processed_envelope = Self::process_outgoing_middleware(processed_envelope, group, &*config).await
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+        // ... rest of the middleware and backend processing ...
+        // @todo
 
         // 5. Final endpoint response processing
-        let response = endpoint
-            .kind
-            .handle_response(
+        let response = service
+            .transform_response(
                 processed_envelope,
                 endpoint.options.as_ref().unwrap_or(&HashMap::new()),
             )
@@ -149,36 +143,10 @@ impl<'a> Dispatcher<> {
         Ok(Response::from_parts(parts, Body::from(body_string)))
     }
 
-    // Stub: Process through incoming middleware chain
-    async fn process_incoming_middleware(
-        mut envelope: Envelope<Vec<u8>>,
-        group: &Group,
-        config: &Config,
-    ) -> Result<Envelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-        // Build middleware chain from group config
-        let middleware_chain = MiddlewareChain::new(&group.middleware, &config.middleware);
-
-        // For now, we'll stub this out - in a real implementation, we'd need to:
-        // 1. Convert envelope to Request<Body>
-        // 2. Process through middleware chain
-        // 3. Convert back to envelope
-
-        tracing::info!("Processing incoming middleware for {} middlewares", group.middleware.len());
-
-        // Stub: Just add a marker that middleware was processed
-        if let Some(ref mut normalized_data) = envelope.normalized_data {
-            if let Some(obj) = normalized_data.as_object_mut() {
-                obj.insert("middleware_processed".to_string(), serde_json::Value::Bool(true));
-            }
-        }
-
-        Ok(envelope)
-    }
-
-    // Stub: Process through backend(s)
+    // Process through backend(s)
     async fn process_backends(
         mut envelope: Envelope<Vec<u8>>,
-        group: &Group,
+        group: &Pipeline,
         config: &Config,
     ) -> Result<Envelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         tracing::info!("Processing through {} backends", group.backends.len());
@@ -186,7 +154,7 @@ impl<'a> Dispatcher<> {
         // Process each backend in the group
         for backend_name in &group.backends {
             if let Some(backend) = config.backends.get(backend_name) {
-                envelope = Self::process_single_backend(envelope, backend, config).await?;
+                envelope = Self::process_single_backend(envelope, backend).await?;
             } else {
                 tracing::warn!("Backend '{}' not found in config", backend_name);
             }
@@ -195,84 +163,112 @@ impl<'a> Dispatcher<> {
         Ok(envelope)
     }
 
-    // Stub: Process through a single backend
+    // Process through a single backend
     async fn process_single_backend(
         mut envelope: Envelope<Vec<u8>>,
         backend: &Backend,
-        config: &Config,
     ) -> Result<Envelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-        match &backend.type_ {
-            BackendType::Dicom { aet, host, port } => {
-                tracing::info!("Processing DICOM backend: {}@{}:{}", aet, host, port);
+        let service = backend.resolve_service()
+            .map_err(|err| format!("Failed to resolve backend service: {}", err))?;
 
-                // Stub: Add DICOM processing marker
-                if let Some(ref mut normalized_data) = envelope.normalized_data {
-                    if let Some(obj) = normalized_data.as_object_mut() {
-                        obj.insert("dicom_processed".to_string(), serde_json::json!({
-                            "aet": aet,
-                            "host": host,
-                            "port": port
-                        }));
-                    }
-                }
-            },
-            BackendType::Fhir { url } => {
-                tracing::info!("Processing FHIR backend: {}", url);
+        // Transform the request using the backend service
+        envelope = service.transform_request(
+            envelope,
+            backend.options.as_ref().unwrap_or(&HashMap::new())
+        ).await
+            .map_err(|err| format!("Backend request transformation failed: {:?}", err))?;
 
-                // Stub: Add FHIR processing marker
-                if let Some(ref mut normalized_data) = envelope.normalized_data {
-                    if let Some(obj) = normalized_data.as_object_mut() {
-                        obj.insert("fhir_processed".to_string(), serde_json::json!({
-                            "url": url
-                        }));
-                    }
-                }
-            },
-            BackendType::PassThru => {
-                tracing::info!("Processing PassThru backend");
-
-                // Stub: Add passthrough marker
-                if let Some(ref mut normalized_data) = envelope.normalized_data {
-                    if let Some(obj) = normalized_data.as_object_mut() {
-                        obj.insert("passthru_processed".to_string(), serde_json::Value::Bool(true));
-                    }
-                }
-            },
-            BackendType::DeadLetter => {
-                tracing::info!("Processing DeadLetter backend");
-
-                // Stub: Add dead letter marker
-                if let Some(ref mut normalized_data) = envelope.normalized_data {
-                    if let Some(obj) = normalized_data.as_object_mut() {
-                        obj.insert("deadletter_processed".to_string(), serde_json::Value::Bool(true));
-                    }
-                }
-            }
-        }
+        tracing::info!("Processed backend '{}' using service type '{}'",
+                      backend.service, backend.service);
 
         Ok(envelope)
     }
 
-    // Stub: Process through outgoing middleware chain
-    async fn process_outgoing_middleware(
-        mut envelope: Envelope<Vec<u8>>,
-        group: &Group,
+
+    // Process through incoming middleware chain
+    async fn process_incoming_middleware(
+        envelope: Envelope<Vec<u8>>,
+        group: &Pipeline,
         config: &Config,
     ) -> Result<Envelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-        // In a real implementation, this would process the outgoing middleware chain
-        // For now, just log and add a marker
+        // Clone normalized_data before using it to avoid ownership issues
+        let normalized_data = envelope.normalized_data.clone();
+
+        // Convert envelope to use serde_json::Value for middleware processing
+        let json_envelope = Envelope {
+            request_details: envelope.request_details.clone(),
+            original_data: normalized_data.unwrap_or_else(|| {
+                serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
+            }),
+            normalized_data: envelope.normalized_data.clone(),
+        };
+
+        // Create middleware instances from the pipeline configuration
+        // @todo
+        // This is a simplified version - in practice you'd parse middleware configurations
+        let middleware_instances: Vec<(String, HashMap<String, serde_json::Value>)> = group.middleware
+            .iter()
+            .map(|name| (name.clone(), HashMap::new()))
+            .collect();
+
+        let middleware_chain = MiddlewareChain::new(&middleware_instances);
+
+        // Process through middleware chain
+        let processed_json_envelope = middleware_chain.left(json_envelope).await?;
+
+        tracing::info!("Processing incoming middleware for {} middlewares", group.middleware.len());
+
+        // Convert back to Vec<u8> envelope
+        let processed_envelope = Envelope {
+            request_details: processed_json_envelope.request_details,
+            original_data: envelope.original_data, // Keep original bytes
+            normalized_data: Some(processed_json_envelope.original_data),
+        };
+
+        Ok(processed_envelope)
+    }
+
+    // Process through outgoing middleware chain
+    async fn process_outgoing_middleware(
+        envelope: Envelope<Vec<u8>>,
+        group: &Pipeline,
+        config: &Config,
+    ) -> Result<Envelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+        // Clone normalized_data before using it to avoid ownership issues
+        let normalized_data = envelope.normalized_data.clone();
+
+        // Convert envelope to use serde_json::Value for middleware processing
+        let json_envelope = Envelope {
+            request_details: envelope.request_details.clone(),
+            original_data: normalized_data.unwrap_or_else(|| {
+                serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
+            }),
+            normalized_data: envelope.normalized_data.clone(),
+        };
+
+        // Create middleware instances from the pipeline configuration
+        let middleware_instances: Vec<(String, HashMap<String, serde_json::Value>)> = group.middleware
+            .iter()
+            .map(|name| (name.clone(), HashMap::new()))
+            .collect();
+
+        let middleware_chain = MiddlewareChain::new(&middleware_instances);
+
+        // Process through middleware chain (right side)
+        let processed_json_envelope = middleware_chain.right(json_envelope).await?;
 
         tracing::info!("Processing outgoing middleware for {} middlewares", group.middleware.len());
 
-        // Stub: Just add a marker that outgoing middleware was processed
-        if let Some(ref mut normalized_data) = envelope.normalized_data {
-            if let Some(obj) = normalized_data.as_object_mut() {
-                obj.insert("outgoing_middleware_processed".to_string(), serde_json::Value::Bool(true));
-            }
-        }
+        // Convert back to Vec<u8> envelope
+        let processed_envelope = Envelope {
+            request_details: processed_json_envelope.request_details,
+            original_data: envelope.original_data, // Keep original bytes
+            normalized_data: Some(processed_json_envelope.original_data),
+        };
 
-        Ok(envelope)
+        Ok(processed_envelope)
     }
+
 
     async fn build_envelope(req: &mut Request, request_details: RequestDetails) -> Result<Envelope<Vec<u8>>, StatusCode> {
         let body_bytes = axum::body::to_bytes(

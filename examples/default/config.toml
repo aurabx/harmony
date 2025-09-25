@@ -1,0 +1,67 @@
+# ------------------------
+# Basic configuration
+#-------------------------
+[proxy]
+# The name of the proxy, required
+id = "harmony-test"
+# The log level. Defaults to 'error'
+log_level = "debug"
+# Temp directory. Defaults to /tmp/harmony
+store_dir = "/tmp/harmony"
+
+# ------------------------
+# Network
+#
+# Defines 0 or more network configurations.
+#-------------------------
+[network.default]
+# Whether to enable wireguard connections on this network
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.http]
+bind_address = "0.0.0.0"  # Listen on all interfaces
+bind_port = 8080          # Use port 8080
+
+# ------------------------
+# Pipelines
+#-------------------------
+pipelines_path = "examples/default/pipelines"
+transforms_path = "examples/default/transforms"
+
+# ------------------------
+# Logging
+#-------------------------
+[logging]
+log_to_file = true
+log_file_path = "/tmp/harmony_test.log"
+
+# ------------------------
+# Service types
+#-------------------------
+[services.http]
+module=""
+
+[services.fhir]
+module=""
+
+[services.dicom]
+module=""
+
+[services.echo]
+module=""
+
+[services.jmix]
+module=""
+
+# ------------------------
+# Available middleware
+#-------------------------
+[middleware_types.jwtauth]
+module=""
+
+[middleware_types.auth]
+module=""
+
+[middleware_types.connect]
+module=""

@@ -1,5 +1,4 @@
 use serde::Deserialize;
-use crate::config::config::ConfigError;
 
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]

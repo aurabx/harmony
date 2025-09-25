@@ -4,15 +4,15 @@ use http::{Response};
 use serde_json::Value;
 use async_trait::async_trait;
 use crate::config::config::ConfigError;
-use crate::models::endpoints::endpoint_type::{EndpointHandler, EndpointType};
+use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::models::envelope::envelope::Envelope;
-use crate::models::middleware::types::Error;
+use crate::utils::Error;
 use crate::router::route_config::RouteConfig;
 
 #[derive(Debug, Deserialize)]
 pub struct HttpEndpoint {}
 
-impl EndpointType for HttpEndpoint {
+impl ServiceType for HttpEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         // Ensure 'path_prefix' exists and is not empty
         if options
@@ -51,15 +51,15 @@ impl EndpointType for HttpEndpoint {
 }
 
 #[async_trait]
-impl EndpointHandler<Value> for HttpEndpoint {
+impl ServiceHandler<Value> for HttpEndpoint {
     type ReqBody = Value;
     type ResBody = Value;
 
-    async fn handle_request(
+    async fn transform_request(
         &self,
         mut envelope: Envelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Envelope<Vec<u8>>, crate::models::middleware::types::Error> {
+    ) -> Result<Envelope<Vec<u8>>, Error> {
         // Add or modify normalized data in the envelope
         envelope.normalized_data = Some(serde_json::json!({
             "message": "BasicEndpoint processed the request",
@@ -68,11 +68,11 @@ impl EndpointHandler<Value> for HttpEndpoint {
 
         Ok(envelope)
     }
-    async fn handle_response(
+    async fn transform_response(
         &self,
         envelope: Envelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Response<Self::ResBody>, crate::models::middleware::types::Error> {
+    ) -> Result<Response<Self::ResBody>, Error> {
         // Serialize the envelope's normalized data into an HTTP Response
         let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {
             Error::from("Failed to serialize FHIR response payload into JSON")

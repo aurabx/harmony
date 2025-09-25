@@ -1,11 +1,7 @@
 use serde::Deserialize;
-use tower::Service;
-use axum::{
-    response::Response,
-    http::Request,
-    body::Body,
-};
-use crate::models::middleware::{Middleware, Next, Error};
+use crate::models::envelope::envelope::Envelope;
+use crate::models::middleware::middleware::Middleware;
+use crate::utils::Error;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct AuraboxConnectConfig {
@@ -28,13 +24,12 @@ impl AuraboxConnectMiddleware {
 impl Middleware for AuraboxConnectMiddleware {
     async fn left(
         &self,
-        request: Request<Body>,
-        mut next: Next<Body>,
-    ) -> Result<Response, Error> {
+        envelope: Envelope<serde_json::Value>,
+    ) -> Result<Envelope<serde_json::Value>, Error> {
         if !self.config.enabled {
             // If the middleware is disabled, log and skip further handling
             tracing::info!("AuraboxConnectMiddleware is disabled, skipping middleware logic.");
-            return next.call(request).await;
+            return Ok(envelope);
         }
 
         // Simulate some logic based on `fallback_timeout_ms` (e.g., logging or conditional behavior)
@@ -43,15 +38,21 @@ impl Middleware for AuraboxConnectMiddleware {
             self.config.fallback_timeout_ms
         );
 
-        // Proceed with the next middleware or handler
-        next.call(request).await.map_err(|err| {
-            let error_message = format!("AuraboxConnectMiddleware encountered an error: {}", err);
-            tracing::error!("{}", error_message);
-            err
-        })
+        // For now, just pass through the envelope
+        // In a real implementation, you might modify the envelope based on connection logic
+        Ok(envelope)
     }
 
-    async fn right(&self, request: Request<Body>, next: Next<Body>) -> Result<Response, Error> {
-        todo!()
+    async fn right(
+        &self,
+        envelope: Envelope<serde_json::Value>,
+    ) -> Result<Envelope<serde_json::Value>, Error> {
+        if !self.config.enabled {
+            tracing::info!("AuraboxConnectMiddleware is disabled for right processing.");
+            return Ok(envelope);
+        }
+
+        tracing::info!("AuraboxConnectMiddleware processing response (right)");
+        Ok(envelope)
     }
 }
