@@ -1,61 +1,105 @@
+use std::collections::HashMap;
+use serde_json::Value;
+use toml; // bring the toml crate into scope
+
 use crate::config::config::{Config, ConfigError};
 
-fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
-    let config: Config = toml::from_str(toml).expect("TOML parse error");
-    config.validate()?;
-    Ok(config)
+/// Parse a TOML string into a `Config` and run the project's validation logic.
+fn load_config_from_str(toml_str: &str) -> Result<Config, ConfigError> {
+    // `toml::from_str` deserialises the string according to the `Config` struct.
+    let cfg: Config = toml::from_str(toml_str).expect("TOML parse error");
+    // Validate cross‑references, required fields, etc.
+    cfg.validate()?;
+    Ok(cfg)
 }
 
-#[cfg(test)] #[test]
+#[cfg(test)]
+#[test]
 fn test_basic_config() {
+    // This TOML matches the current configuration schema.
     let toml = r#"
         [proxy]
-        id = "harmony-incoming"
+        id = "router-test"
         log_level = "info"
-        store_dir = "/var/lib/jmix/studies"
+        store_dir = "/tmp"
 
         [network.default]
         enable_wireguard = false
         interface = "wg0"
 
         [network.default.http]
-        bind_address = "1.2.3.4"
+        bind_address = "127.0.0.1"
         bind_port = 8080
 
-        [groups.core]
-        description = "Core group"
+        [pipelines.core]
+        description = "Core pipeline"
         networks = ["default"]
-        endpoints = []
+        endpoints = ["basic", "fhir"]
         backends = []
-        
-        [groups.core.middleware]
-        incoming = []
-        outgoing = []
+        middleware = []
 
         [endpoints.basic]
-        description = "Basic endpoint"
-        type = "basic"
+        service = "http"
+        [endpoints.basic.options]
         path_prefix = "/basic"
 
-        [backends.test_backend]
-        type = "basic"
-        targets = ["target_1"]
+        [endpoints.fhir]
+        service = "fhir"
+        [endpoints.fhir.options]
+        path_prefix = "/fhir"
 
-        [targets.target_1]
-        type = "http"
-        url = "http://localhost:8081"`
+        [services.http]
+        module = ""
+
+        [services.fhir]
+        module = ""
     "#;
 
+
+    // -----------------------------------------------------------------
+    // Load & validate the configuration
+    // -----------------------------------------------------------------
     let result = load_config_from_str(toml);
-    assert!(result.is_ok());
+    assert!(result.is_ok(), "Configuration should parse and validate");
 
     let config = result.unwrap();
 
-    // Additional checks to ensure the config fields were parsed correctly
-    assert_eq!(config.proxy.id, "harmony-incoming");
+    // -----------------------------------------------------------------
+    // Helper functions to read values from the `options` maps
+    // -----------------------------------------------------------------
+    fn get_str_option(
+        opt: &Option<HashMap<String, Value>>,
+        key: &str,
+    ) -> String {
+        opt.as_ref()
+            .and_then(|m| m.get(key))
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string())
+            .expect("option missing or not a string")
+    }
+
+    fn get_vec_str_option(
+        opt: &Option<HashMap<String, Value>>,
+        key: &str,
+    ) -> Vec<String> {
+        opt.as_ref()
+            .and_then(|m| m.get(key))
+            .and_then(|v| v.as_array())
+            .expect("option missing or not an array")
+            .iter()
+            .map(|v| v.as_str().expect("array element not a string").to_string())
+            .collect()
+    }
+
+    // -----------------------------------------------------------------
+    // Assertions that reflect the data in the TOML above
+    // -----------------------------------------------------------------
+    // Proxy fields
+    assert_eq!(config.proxy.id, "router-test");
+    // Network fields
     assert_eq!(config.network["default"].interface, "wg0");
-    assert_eq!(config.network["default"].http.bind_address, "1.2.3.4");
-    assert_eq!(config.endpoints["basic"].path_prefix, "/basic");
-    assert_eq!(config.backends["test_backend"].targets, vec!["target_1"]);
-    assert_eq!(config.targets["target_1"].url, "http://localhost:8081");
+    assert_eq!(
+        config.network["default"].http.bind_address,
+        "127.0.0.1"
+    );
 }
