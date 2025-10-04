@@ -1,4 +1,4 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use axum::{
     http::{HeaderValue},
 };
@@ -9,7 +9,7 @@ use crate::models::envelope::envelope::Envelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct AuthSidecarConfig {
     pub token_path: String, // Existing field
     pub username: String,   // New field for Basic Auth username
@@ -17,13 +17,13 @@ pub struct AuthSidecarConfig {
 }
 
 pub struct AuthSidecarMiddleware {
-    config: Arc<AuthSidecarConfig>, // Reference to shared config
+    _config: Arc<AuthSidecarConfig>, // Reference to shared config (unused for now)
 }
 
 impl AuthSidecarMiddleware {
     pub fn new(config: AuthSidecarConfig) -> Self {
         Self {
-            config: Arc::new(config),
+            _config: Arc::new(config),
         }
     }
 }
@@ -54,6 +54,7 @@ impl Middleware for AuthSidecarMiddleware {
     }
 }
 
+#[allow(dead_code)]
 async fn validate_basic_auth(
     header: &HeaderValue,
     config: &AuthSidecarConfig,

@@ -76,7 +76,7 @@ impl ServiceHandler<Value> for JmixEndpoint {
     async fn transform_response(
         &self,
         envelope: Envelope<Vec<u8>>,
-        options: &HashMap<String, Value>,
+        _options: &HashMap<String, Value>,
     ) -> Result<Response<Self::ResBody>, Error> {
         // Serialize the normalized data into a JSON HTTP response
         let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {

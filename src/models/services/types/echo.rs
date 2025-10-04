@@ -54,7 +54,7 @@ impl ServiceHandler<Value> for EchoEndpoint {
     async fn transform_request(
         &self,
         mut envelope: Envelope<Vec<u8>>,
-        options: &HashMap<String, Value>,
+        _options: &HashMap<String, Value>,
     ) -> Result<Envelope<Vec<u8>>, Error> {
         // Add or modify the envelope's normalized data
         envelope.normalized_data = Some(serde_json::json!({
@@ -68,7 +68,7 @@ impl ServiceHandler<Value> for EchoEndpoint {
     async fn transform_response(
         &self,
         envelope: Envelope<Vec<u8>>,
-        options: &HashMap<String, Value>,
+        _options: &HashMap<String, Value>,
     ) -> Result<Response<Self::ResBody>, Error> {
         // Serialize the envelope's normalized data into an HTTP Response
         let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {

@@ -1,5 +1,5 @@
 use jsonwebtoken::DecodingKey;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     sync::Arc,
 };
@@ -7,7 +7,7 @@ use crate::models::envelope::envelope::Envelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct JwtAuthConfig {
     pub public_key_path: String, // Path to the public key file
 }

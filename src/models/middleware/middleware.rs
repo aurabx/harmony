@@ -98,6 +98,9 @@ fn create_builtin_middleware(middleware_type: &str, options: &HashMap<String, Va
             let config = parse_aurabox_connect_config(options)?;
             Ok(Box::new(AuraboxConnectMiddleware::new(config)))
         },
+        "passthru" => {
+            Ok(Box::new(crate::models::middleware::types::passthru::PassthruMiddleware::new()))
+        }
         _ => Err(format!("Unsupported built-in middleware type: {}", middleware_type)),
     }
 }
@@ -156,7 +159,7 @@ fn parse_aurabox_connect_config(options: &HashMap<String, Value>) -> Result<crat
 #[async_trait]
 pub trait Middleware: Send + Sync {
     /// Validate the middleware configuration
-    fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
+    fn validate(&self, _options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         // Default implementation - can be overridden
         Ok(())
     }

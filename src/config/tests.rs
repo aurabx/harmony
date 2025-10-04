@@ -1,5 +1,5 @@
-use std::collections::HashMap;
-use serde_json::Value;
+#![cfg(test)]
+
 use toml; // bring the toml crate into scope
 
 use crate::config::config::{Config, ConfigError};
@@ -13,7 +13,6 @@ fn load_config_from_str(toml_str: &str) -> Result<Config, ConfigError> {
     Ok(cfg)
 }
 
-#[cfg(test)]
 #[test]
 fn test_basic_config() {
     // This TOML matches the current configuration schema.
@@ -63,33 +62,6 @@ fn test_basic_config() {
     assert!(result.is_ok(), "Configuration should parse and validate");
 
     let config = result.unwrap();
-
-    // -----------------------------------------------------------------
-    // Helper functions to read values from the `options` maps
-    // -----------------------------------------------------------------
-    fn get_str_option(
-        opt: &Option<HashMap<String, Value>>,
-        key: &str,
-    ) -> String {
-        opt.as_ref()
-            .and_then(|m| m.get(key))
-            .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .expect("option missing or not a string")
-    }
-
-    fn get_vec_str_option(
-        opt: &Option<HashMap<String, Value>>,
-        key: &str,
-    ) -> Vec<String> {
-        opt.as_ref()
-            .and_then(|m| m.get(key))
-            .and_then(|v| v.as_array())
-            .expect("option missing or not an array")
-            .iter()
-            .map(|v| v.as_str().expect("array element not a string").to_string())
-            .collect()
-    }
 
     // -----------------------------------------------------------------
     // Assertions that reflect the data in the TOML above

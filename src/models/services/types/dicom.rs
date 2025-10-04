@@ -105,7 +105,7 @@ impl ServiceHandler<Value> for DicomEndpoint {
     async fn transform_response(
         &self,
         envelope: Envelope<Vec<u8>>,
-        options: &HashMap<String, Value>,
+        _options: &HashMap<String, Value>,
     ) -> Result<Response<Self::ResBody>, Error> {
         // Convert the Envelope back into an HTTP response
         let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {

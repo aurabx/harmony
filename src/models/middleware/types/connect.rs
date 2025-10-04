@@ -1,9 +1,9 @@
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use crate::models::envelope::envelope::Envelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct AuraboxConnectConfig {
     pub enabled: bool,
     pub fallback_timeout_ms: u64,

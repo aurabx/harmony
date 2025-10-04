@@ -1,7 +1,9 @@
+#![cfg(test)]
+
 use std::collections::HashMap;
 use crate::models::envelope::envelope::{Envelope, RequestDetails};
 
-#[cfg(test)] #[test]
+#[test]
 fn test_create_envelope() {
     let request_details = RequestDetails{
         method: "POST".to_string(),

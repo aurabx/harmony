@@ -257,8 +257,9 @@ impl Config {
     }
 
 
+    #[allow(dead_code)]
     fn validate_middleware(&self) -> Result<(), ConfigError> {
-        for (name, endpoint) in &self.endpoints {
+        for (_name, _endpoint) in &self.endpoints {
             // todo: Actually implement middleware validation
             // let handler = endpoint.kind.resolve_handler(name)?;
             // handler.validate()?; // Validate the resolved endpoint
@@ -289,7 +290,7 @@ impl Config {
             if middleware_config.module.is_empty() {
                 // Built-in middleware, validate that it exists
                 match name.as_str() {
-                    "jwtauth" | "auth" | "connect" => {} // Valid built-in middleware
+                    "jwtauth" | "auth" | "connect" | "passthru" => {} // Valid built-in middleware
                     _ => return Err(ConfigError::InvalidMiddleware {
                         name: name.clone(),
                         reason: format!("Unknown built-in middleware type: {}", name),

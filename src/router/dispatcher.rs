@@ -46,12 +46,10 @@ impl<'a> Dispatcher<> {
 
                     for method in methods {
                         let endpoint_name = endpoint_name.clone();
-                        let group_name = format!("group_{}", endpoint_name);
                         let config_ref = self.config.clone();
 
                         let handler = move |mut req: Request| {
                             let endpoint_name = endpoint_name.clone();
-                            let group_name = group_name.clone();
                             let config_ref = config_ref.clone();
 
                             async move {
@@ -123,13 +121,46 @@ impl<'a> Dispatcher<> {
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        // ... rest of the middleware and backend processing ...
-        // @todo
+        // 2. Incoming (left) middleware chain
+        let after_incoming_mw = Self::process_incoming_middleware(
+            processed_envelope,
+            pipeline,
+            &config,
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!("Incoming middleware failed: {:?}", err);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
+
+        // 3. Process through configured backends
+        let after_backends = Self::process_backends(
+            after_incoming_mw,
+            pipeline,
+            &config,
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!("Backend processing failed: {:?}", err);
+            StatusCode::BAD_GATEWAY
+        })?;
+
+        // 4. Outgoing (right) middleware chain
+        let after_outgoing_mw = Self::process_outgoing_middleware(
+            after_backends,
+            pipeline,
+            &config,
+        )
+        .await
+        .map_err(|err| {
+            tracing::error!("Outgoing middleware failed: {:?}", err);
+            StatusCode::INTERNAL_SERVER_ERROR
+        })?;
 
         // 5. Final endpoint response processing
         let response = service
             .transform_response(
-                processed_envelope,
+                after_outgoing_mw,
                 endpoint.options.as_ref().unwrap_or(&HashMap::new()),
             )
             .await
@@ -203,12 +234,11 @@ impl<'a> Dispatcher<> {
             normalized_data: envelope.normalized_data.clone(),
         };
 
-        // Create middleware instances from the pipeline configuration
-        // @todo
-        // This is a simplified version - in practice you'd parse middleware configurations
-        let middleware_instances: Vec<(String, HashMap<String, serde_json::Value>)> = group.middleware
+        // Build middleware instances from pipeline names + config options
+        let middleware_instances: Vec<(String, HashMap<String, serde_json::Value>)> = group
+            .middleware
             .iter()
-            .map(|name| (name.clone(), HashMap::new()))
+            .map(|raw| Self::resolve_middleware_instance(raw, config))
             .collect();
 
         let middleware_chain = MiddlewareChain::new(&middleware_instances);
@@ -222,7 +252,7 @@ impl<'a> Dispatcher<> {
         let processed_envelope = Envelope {
             request_details: processed_json_envelope.request_details,
             original_data: envelope.original_data, // Keep original bytes
-            normalized_data: Some(processed_json_envelope.original_data),
+            normalized_data: processed_json_envelope.normalized_data,
         };
 
         Ok(processed_envelope)
@@ -246,10 +276,11 @@ impl<'a> Dispatcher<> {
             normalized_data: envelope.normalized_data.clone(),
         };
 
-        // Create middleware instances from the pipeline configuration
-        let middleware_instances: Vec<(String, HashMap<String, serde_json::Value>)> = group.middleware
+        // Build middleware instances from pipeline names + config options
+        let middleware_instances: Vec<(String, HashMap<String, serde_json::Value>)> = group
+            .middleware
             .iter()
-            .map(|name| (name.clone(), HashMap::new()))
+            .map(|raw| Self::resolve_middleware_instance(raw, config))
             .collect();
 
         let middleware_chain = MiddlewareChain::new(&middleware_instances);
@@ -269,6 +300,60 @@ impl<'a> Dispatcher<> {
         Ok(processed_envelope)
     }
 
+
+    fn resolve_middleware_instance(
+        raw_name: &str,
+        config: &Config,
+    ) -> (String, HashMap<String, serde_json::Value>) {
+        // Normalize name: accept forms like "middleware.jwt_auth" or "jwt_auth"
+        let base = raw_name.split('.').last().unwrap_or(raw_name).to_lowercase();
+
+        // Helper to turn a config struct into a map
+        let to_map = |val: serde_json::Value| -> HashMap<String, serde_json::Value> {
+            match val {
+                serde_json::Value::Object(map) => map.into_iter().collect(),
+                _ => HashMap::new(),
+            }
+        };
+
+        match base.as_str() {
+            // JWT auth
+            "jwt_auth" | "jwtauth" => {
+                let opts = config
+                    .middleware
+                    .jwt_auth
+                    .as_ref()
+                    .map(|c| serde_json::to_value(c).unwrap_or(serde_json::Value::Null))
+                    .map(to_map)
+                    .unwrap_or_default();
+                ("jwtauth".to_string(), opts)
+            }
+            // Basic/Auth sidecar
+            "basic_auth" | "auth_sidecar" | "auth" => {
+                let opts = config
+                    .middleware
+                    .auth_sidecar
+                    .as_ref()
+                    .map(|c| serde_json::to_value(c).unwrap_or(serde_json::Value::Null))
+                    .map(to_map)
+                    .unwrap_or_default();
+                ("auth".to_string(), opts)
+            }
+            // Aurabox connect
+            "aurabox_connect" | "connect" => {
+                let opts = config
+                    .middleware
+                    .aurabox_connect
+                    .as_ref()
+                    .map(|c| serde_json::to_value(c).unwrap_or(serde_json::Value::Null))
+                    .map(to_map)
+                    .unwrap_or_default();
+                ("connect".to_string(), opts)
+            }
+            // Fallback: pass the normalized name with no options
+            other => (other.to_string(), HashMap::new()),
+        }
+    }
 
     async fn build_envelope(req: &mut Request, request_details: RequestDetails) -> Result<Envelope<Vec<u8>>, StatusCode> {
         let body_bytes = axum::body::to_bytes(
