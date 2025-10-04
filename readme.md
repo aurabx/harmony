@@ -1,4 +1,6 @@
-# Harmony Documentation
+# Harmony Proxy
+
+** This software is alpha quality and in development. Many advertised features do not yet exist.**
 
 ## Overview
 Harmony is a proxy that enables secure communication between healthcare systems by handling FHIR and JMIX format exchanges, with support for HTTPS endpoints and WireGuard networking. It provides transformation rules between different formats and protocols commonly used in healthcare IT systems.
