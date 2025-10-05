@@ -105,8 +105,13 @@ impl<'a> Dispatcher<> {
             .and_then(|m| m.get("path_prefix"))
             .and_then(|v| v.as_str())
             .unwrap_or("");
-        let full_path = req.uri().path();
-        let mut subpath = full_path.strip_prefix(path_prefix).unwrap_or("").to_string();
+        let path_only = req.uri().path().to_string();
+        let full_path_with_query = req
+            .uri()
+            .path_and_query()
+            .map(|pq| pq.as_str().to_string())
+            .unwrap_or_else(|| path_only.clone());
+        let mut subpath = path_only.strip_prefix(path_prefix).unwrap_or("").to_string();
         if subpath.starts_with('/') { subpath = subpath.trim_start_matches('/').to_string(); }
 
         let headers_map: HashMap<String, String> = req
@@ -117,6 +122,7 @@ impl<'a> Dispatcher<> {
 
         let mut metadata_map: HashMap<String, String> = HashMap::new();
         metadata_map.insert("path".to_string(), subpath);
+        metadata_map.insert("full_path".to_string(), full_path_with_query);
 
         let request_details = RequestDetails {
             method: req.method().to_string(),

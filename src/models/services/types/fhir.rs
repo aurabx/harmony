@@ -69,9 +69,18 @@ impl ServiceHandler<Value> for FhirEndpoint {
             .unwrap_or_default();
 
         // Add or modify the envelope's normalized data
+        let full_path = envelope
+            .request_details
+            .metadata
+            .get("full_path")
+            .cloned()
+            .unwrap_or_default();
+
         envelope.normalized_data = Some(serde_json::json!({
             "message": "FHIR endpoint received the request",
             "path": subpath,
+            "full_path": full_path,
+            "headers": envelope.request_details.headers,
             "original_data": envelope.original_data,
         }));
 

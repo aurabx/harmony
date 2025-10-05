@@ -65,6 +65,8 @@ async fn fhir_endpoint_handles_get_request() {
     let json: serde_json::Value = serde_json::from_str(&body).expect("json");
     assert_eq!(json["message"], "FHIR endpoint received the request");
     assert_eq!(json["path"], "patient/123");
+    assert_eq!(json["full_path"], "/fhir/patient/123");
+    assert!(json["headers"].is_object());
 }
 
 #[tokio::test]
@@ -119,6 +121,8 @@ async fn fhir_put_is_supported() {
     let json: serde_json::Value = serde_json::from_str(&body).expect("json");
     assert_eq!(json["message"], "FHIR endpoint received the request");
     assert_eq!(json["path"], "Patient/123");
+    assert_eq!(json["full_path"], "/fhir/Patient/123");
+    assert!(json["headers"].is_object());
 }
 
 #[tokio::test]
@@ -173,6 +177,8 @@ async fn fhir_delete_is_supported() {
     let json: serde_json::Value = serde_json::from_str(&body).expect("json");
     assert_eq!(json["message"], "FHIR endpoint received the request");
     assert_eq!(json["path"], "Patient/123");
+    assert_eq!(json["full_path"], "/fhir/Patient/123");
+    assert!(json["headers"].is_object());
 }
 
 #[tokio::test]
@@ -232,4 +238,6 @@ async fn fhir_backend_is_invoked_in_pipeline() {
     let json: serde_json::Value = serde_json::from_str(&body).expect("json");
     assert_eq!(json["message"], "FHIR endpoint received the request");
     assert_eq!(json["path"], "Observation");
+    assert_eq!(json["full_path"], "/fhir/Observation");
+    assert!(json["headers"].is_object());
 }

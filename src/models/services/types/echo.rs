@@ -65,9 +65,18 @@ impl ServiceHandler<Value> for EchoEndpoint {
             .unwrap_or_default();
 
         // Add or modify the envelope's normalized data including subpath
+        let full_path = envelope
+            .request_details
+            .metadata
+            .get("full_path")
+            .cloned()
+            .unwrap_or_default();
+
         envelope.normalized_data = Some(serde_json::json!({
             "message": "Echo endpoint received the request",
             "path": subpath,
+            "full_path": full_path,
+            "headers": envelope.request_details.headers,
             "original_data": envelope.original_data,
         }));
 
