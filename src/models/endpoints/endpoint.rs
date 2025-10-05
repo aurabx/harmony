@@ -12,7 +12,7 @@ pub struct Endpoint {
 
 impl Endpoint {
     /// Resolves the service type using the centralized service resolver
-    pub fn resolve_service(&self) -> Result<Box<dyn ServiceType<ReqBody=Value, ResBody=Value>>, String> {
+pub fn resolve_service(&self) -> Result<Box<dyn ServiceType<ReqBody=Value>>, String> {
         resolve_service(&self.service)
     }
 }

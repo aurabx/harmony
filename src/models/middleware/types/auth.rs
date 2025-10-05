@@ -5,7 +5,7 @@ use axum::{
 use base64::{engine::general_purpose, Engine as _};
 use std::sync::Arc;
 use std::error::Error as StdError;
-use crate::models::envelope::envelope::Envelope;
+use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 
@@ -56,8 +56,8 @@ impl AuthSidecarMiddleware {
 impl Middleware for AuthSidecarMiddleware {
     async fn left(
         &self,
-        envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error> {
+        envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         tracing::info!("Processing auth middleware (left)");
 
         // Extract Authorization header (case-insensitive; keys stored lowercase)
@@ -96,8 +96,8 @@ impl Middleware for AuthSidecarMiddleware {
 
     async fn right(
         &self,
-        envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error> {
+        envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         tracing::info!("Processing auth middleware (right)");
         Ok(envelope)
     }

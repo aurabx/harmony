@@ -1,7 +1,7 @@
 
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
-use crate::models::envelope::envelope::Envelope;
+use crate::models::envelope::envelope::RequestEnvelope;
 use crate::utils::Error;
 use crate::config::config::{Config, ConfigError};
 use std::collections::HashMap;
@@ -117,12 +117,12 @@ pub trait Middleware: Send + Sync {
     /// Modify the outgoing envelope on its way to the backend.
     async fn left(
         &self,
-        envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error>;
+        envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error>;
 
     /// Modify the incoming envelope on its way from the backend.
     async fn right(
         &self,
-        envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error>;
+        envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error>;
 }

@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use async_trait::async_trait;
 use serde_json::Value;
 use serde::Deserialize;
-use http::{Response};
+use axum::{response::Response, body::Body};
 use crate::config::config::ConfigError;
-use crate::models::envelope::envelope::Envelope;
+use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::services::services::{ServiceType, ServiceHandler};
 use crate::router::route_config::RouteConfig;
 use http::Method;
@@ -49,13 +49,12 @@ impl ServiceType for EchoEndpoint {
 #[async_trait]
 impl ServiceHandler<Value> for EchoEndpoint {
     type ReqBody = Value;
-    type ResBody = Value;
 
     async fn transform_request(
         &self,
-        mut envelope: Envelope<Vec<u8>>,
+        mut envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
-    ) -> Result<Envelope<Vec<u8>>, Error> {
+    ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
         // Capture subpath from request metadata inserted by dispatcher
         let subpath = envelope
             .request_details
@@ -85,14 +84,47 @@ impl ServiceHandler<Value> for EchoEndpoint {
 
     async fn transform_response(
         &self,
-        envelope: Envelope<Vec<u8>>,
+        envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
-    ) -> Result<Response<Self::ResBody>, Error> {
-        // Return the envelope's normalized data directly as a JSON Value
-        let body: serde_json::Value = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
-        Response::builder()
-            .status(200)
-            .body(body)
+    ) -> Result<Response, Error> {
+        // Convention: response metadata may be present at normalized_data.response
+        let nd = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
+        let response_meta = nd.get("response");
+
+        // Determine status
+        let status = response_meta
+            .and_then(|m| m.get("status"))
+            .and_then(|s| s.as_u64())
+            .and_then(|code| http::StatusCode::from_u16(code as u16).ok())
+            .unwrap_or(http::StatusCode::OK);
+
+        // Build headers
+        let mut builder = Response::builder().status(status);
+        let mut has_content_type = false;
+        if let Some(hdrs) = response_meta.and_then(|m| m.get("headers")).and_then(|h| h.as_object()) {
+            for (k, v) in hdrs.iter() {
+                if let Some(val_str) = v.as_str() {
+                    if k.eq_ignore_ascii_case("content-type") { has_content_type = true; }
+                    builder = builder.header(k.as_str(), val_str);
+                }
+            }
+        }
+
+        // Determine body
+        if let Some(body_val) = response_meta.and_then(|m| m.get("body")).and_then(|b| b.as_str()) {
+            // Raw body provided by middleware
+            return builder
+                .body(Body::from(body_val.to_string()))
+                .map_err(|_| Error::from("Failed to construct Echo HTTP response"));
+        }
+
+        // Fallback to JSON serialization of normalized_data
+        let body_str = serde_json::to_string(&nd).map_err(|_| Error::from("Failed to serialize Echo response JSON"))?;
+        if !has_content_type {
+            builder = builder.header("content-type", "application/json");
+        }
+        builder
+            .body(Body::from(body_str))
             .map_err(|_| Error::from("Failed to construct Echo HTTP response"))
     }
 }

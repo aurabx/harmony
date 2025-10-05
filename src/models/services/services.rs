@@ -1,8 +1,8 @@
 
 use std::collections::HashMap;
-use crate::models::envelope::envelope::Envelope;
+use crate::models::envelope::envelope::RequestEnvelope;
 use async_trait::async_trait;
-use axum::http::Response;
+use axum::response::Response;
 use crate::config::config::ConfigError;
 use serde_json::Value;
 use serde::Deserialize;
@@ -36,7 +36,7 @@ pub fn initialise_service_registry(config: &Config) {
 
 /// Resolves a service type from the registry and returns a boxed ServiceType
 /// This function can be used by both Endpoints and Backends
-pub fn resolve_service(service_type: &str) -> Result<Box<dyn ServiceType<ReqBody=Value, ResBody=Value>>, String> {
+pub fn resolve_service(service_type: &str) -> Result<Box<dyn ServiceType<ReqBody=Value>>, String> {
     // Check the registry first
     if let Some(registry) = SERVICE_REGISTRY.get() {
         if let Some(module) = registry.get(service_type) {
@@ -63,7 +63,7 @@ pub fn resolve_service(service_type: &str) -> Result<Box<dyn ServiceType<ReqBody
 }
 
 /// Creates built-in service instances
-fn create_builtin_service(service_type: &str) -> Result<Box<dyn ServiceType<ReqBody=Value, ResBody=Value>>, String> {
+fn create_builtin_service(service_type: &str) -> Result<Box<dyn ServiceType<ReqBody=Value>>, String> {
     match service_type.to_lowercase().as_str() {
         "http" => Ok(Box::new(crate::models::services::types::http::HttpEndpoint {})),
         "jmix" => Ok(Box::new(crate::models::services::types::jmix::JmixEndpoint {})),
@@ -94,19 +94,19 @@ where
     T: Send,
 {
     type ReqBody: Send;
-    type ResBody: Send;
+    // Response body is determined by the Service; use axum Body
 
     /// Handles incoming requests, producing an Envelope
     async fn transform_request(
         &self,
-        envelope: Envelope<Vec<u8>>,
+        envelope: RequestEnvelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Envelope<Vec<u8>>, Error>;
+    ) -> Result<RequestEnvelope<Vec<u8>>, Error>;
 
     /// Handles the response stage, converting Envelope back into an HTTP response
     async fn transform_response(
         &self,
-        envelope: Envelope<Vec<u8>>,
+        envelope: RequestEnvelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Response<Self::ResBody>, Error>;
+    ) -> Result<Response, Error>;
 }

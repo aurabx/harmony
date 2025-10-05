@@ -1,4 +1,4 @@
-use crate::models::envelope::envelope::Envelope;
+use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 
@@ -13,8 +13,8 @@ impl PassthruMiddleware {
 impl Middleware for PassthruMiddleware {
     async fn left(
         &self,
-        mut envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error> {
+        mut envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         // Ensure normalized_data is an object and set a marker
         let mut obj = envelope.normalized_data.clone().unwrap_or(serde_json::json!({}));
         if let Some(map) = obj.as_object_mut() {
@@ -26,8 +26,8 @@ impl Middleware for PassthruMiddleware {
 
     async fn right(
         &self,
-        mut envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error> {
+        mut envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         let mut obj = envelope.normalized_data.clone().unwrap_or(serde_json::json!({}));
         if let Some(map) = obj.as_object_mut() {
             map.insert("mw_right".to_string(), serde_json::json!(true));

@@ -8,7 +8,7 @@ use crate::config::config::Config;
 use crate::models::backends::backends::Backend;
 use crate::models::pipelines::config::Pipeline;
 use crate::models::middleware::chain::MiddlewareChain;
-use crate::models::envelope::envelope::{Envelope, RequestDetails};
+use crate::models::envelope::envelope::{RequestEnvelope, RequestDetails};
 
 pub struct Dispatcher<> {
     config: Arc<Config>,
@@ -180,26 +180,22 @@ impl<'a> Dispatcher<> {
         // 5. Final endpoint response processing
         let response = service
             .transform_response(
-                after_outgoing_mw,
+                after_outgoing_mw.clone(),
                 endpoint.options.as_ref().unwrap_or(&HashMap::new()),
             )
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        // Convert the response to axum's expected format
-        let (parts, body) = response.into_parts();
-        let body_string = serde_json::to_string(&body)
-            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-
-        Ok(Response::from_parts(parts, Body::from(body_string)))
+        // Return the Response produced by the service directly (service controls body/headers)
+        Ok(response)
     }
 
     // Process through backend(s)
     async fn process_backends(
-        mut envelope: Envelope<Vec<u8>>,
+        mut envelope: RequestEnvelope<Vec<u8>>,
         group: &Pipeline,
         config: &Config,
-    ) -> Result<Envelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         tracing::info!("Processing through {} backends", group.backends.len());
 
         // Process each backend in the group
@@ -216,9 +212,9 @@ impl<'a> Dispatcher<> {
 
     // Process through a single backend
     async fn process_single_backend(
-        mut envelope: Envelope<Vec<u8>>,
+        mut envelope: RequestEnvelope<Vec<u8>>,
         backend: &Backend,
-    ) -> Result<Envelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         let service = backend.resolve_service()
             .map_err(|err| format!("Failed to resolve backend service: {}", err))?;
 
@@ -238,15 +234,15 @@ impl<'a> Dispatcher<> {
 
     // Process through incoming middleware chain
     async fn process_incoming_middleware(
-        envelope: Envelope<Vec<u8>>,
+        envelope: RequestEnvelope<Vec<u8>>,
         group: &Pipeline,
         config: &Config,
-    ) -> Result<Envelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         // Clone normalized_data before using it to avoid ownership issues
         let normalized_data = envelope.normalized_data.clone();
 
         // Convert envelope to use serde_json::Value for middleware processing
-        let json_envelope = Envelope {
+        let json_envelope = RequestEnvelope {
             request_details: envelope.request_details.clone(),
             original_data: normalized_data.unwrap_or_else(|| {
                 serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
@@ -269,7 +265,7 @@ impl<'a> Dispatcher<> {
         tracing::info!("Processing incoming middleware for {} middlewares", group.middleware.len());
 
         // Convert back to Vec<u8> envelope
-        let processed_envelope = Envelope {
+        let processed_envelope = RequestEnvelope {
             request_details: processed_json_envelope.request_details,
             original_data: envelope.original_data, // Keep original bytes
             normalized_data: processed_json_envelope.normalized_data,
@@ -280,15 +276,15 @@ impl<'a> Dispatcher<> {
 
     // Process through outgoing middleware chain
     async fn process_outgoing_middleware(
-        envelope: Envelope<Vec<u8>>,
+        envelope: RequestEnvelope<Vec<u8>>,
         group: &Pipeline,
         config: &Config,
-    ) -> Result<Envelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         // Clone normalized_data before using it to avoid ownership issues
         let normalized_data = envelope.normalized_data.clone();
 
         // Convert envelope to use serde_json::Value for middleware processing
-        let json_envelope = Envelope {
+        let json_envelope = RequestEnvelope {
             request_details: envelope.request_details.clone(),
             original_data: normalized_data.unwrap_or_else(|| {
                 serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
@@ -311,7 +307,7 @@ impl<'a> Dispatcher<> {
         tracing::info!("Processing outgoing middleware for {} middlewares", group.middleware.len());
 
         // Convert back to Vec<u8> envelope
-        let processed_envelope = Envelope {
+        let processed_envelope = RequestEnvelope {
             request_details: processed_json_envelope.request_details,
             original_data: envelope.original_data, // Keep original bytes
             normalized_data: Some(processed_json_envelope.original_data),
@@ -375,7 +371,7 @@ impl<'a> Dispatcher<> {
         }
     }
 
-    async fn build_envelope(req: &mut Request, request_details: RequestDetails) -> Result<Envelope<Vec<u8>>, StatusCode> {
+    async fn build_envelope(req: &mut Request, request_details: RequestDetails) -> Result<RequestEnvelope<Vec<u8>>, StatusCode> {
         let body_bytes = axum::body::to_bytes(
             std::mem::replace(req.body_mut(), Body::empty()),
             usize::MAX
@@ -387,7 +383,7 @@ impl<'a> Dispatcher<> {
         let body_value: Option<serde_json::Value> =
             serde_json::from_slice(&body_bytes).ok();
 
-        let envelope = Envelope {
+        let envelope = RequestEnvelope {
             request_details,
             original_data: body_bytes,
             normalized_data: body_value,

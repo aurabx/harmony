@@ -3,7 +3,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     sync::Arc,
 };
-use crate::models::envelope::envelope::Envelope;
+use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use serde_json::Value as JsonValue;
@@ -153,7 +153,7 @@ impl JwtAuthMiddleware {
     }
 
     /// Extract JWT token from Authorization header in the envelope
-    fn extract_token_from_envelope(&self, envelope: &Envelope<serde_json::Value>) -> Result<String, Error> {
+    fn extract_token_from_envelope(&self, envelope: &RequestEnvelope<serde_json::Value>) -> Result<String, Error> {
         if let Some(auth_header) = envelope.request_details.headers.get("authorization") {
             if auth_header.starts_with("Bearer ") {
                 Ok(auth_header.trim_start_matches("Bearer ").to_string())
@@ -170,8 +170,8 @@ impl JwtAuthMiddleware {
 impl Middleware for JwtAuthMiddleware {
     async fn left(
         &self,
-        envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error> {
+        envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         // Step 1: Extract the JWT token from the envelope's headers
         let token = match self.extract_token_from_envelope(&envelope) {
             Ok(token) => token,
@@ -196,8 +196,8 @@ impl Middleware for JwtAuthMiddleware {
 
     async fn right(
         &self,
-        envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error> {
+        envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         // For JWT auth, typically no processing is needed on the right side
         // Just pass through the envelope
         tracing::info!("JWT Auth middleware processing response (right)");

@@ -1,7 +1,7 @@
 #![cfg(test)]
 
 use std::collections::HashMap;
-use crate::models::envelope::envelope::{Envelope, RequestDetails};
+use crate::models::envelope::envelope::{RequestEnvelope, RequestDetails};
 
 #[test]
 fn test_create_envelope() {
@@ -17,7 +17,7 @@ fn test_create_envelope() {
     };
 
     let original_data = vec!["example", "data"];
-    let envelope = Envelope::new(request_details.clone(), original_data);
+    let envelope = RequestEnvelope::new(request_details.clone(), original_data);
 
     assert_eq!(envelope.request_details.method, request_details.method);
     assert!(envelope.normalized_data.is_some());

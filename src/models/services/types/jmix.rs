@@ -1,9 +1,9 @@
 use std::collections::HashMap;
 use async_trait::async_trait;
-use axum::{http::{Response}};
+use axum::{response::Response, body::Body};
 use serde_json::Value;
 use serde::Deserialize;
-use crate::models::envelope::envelope::Envelope;
+use crate::models::envelope::envelope::RequestEnvelope;
 use crate::utils::Error;
 use crate::config::config::ConfigError;
 use crate::models::services::services::{ServiceHandler, ServiceType};
@@ -54,13 +54,12 @@ impl ServiceType for JmixEndpoint {
 #[async_trait]
 impl ServiceHandler<Value> for JmixEndpoint {
     type ReqBody = Value;
-    type ResBody = Value;
 
     async fn transform_request(
         &self,
-        mut envelope: Envelope<Vec<u8>>,
+        mut envelope: RequestEnvelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Envelope<Vec<u8>>, Error> {
+    ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
         let path = options.get("path").cloned().unwrap_or_default();
 
         // Add or modify normalized data in the envelope
@@ -75,16 +74,41 @@ impl ServiceHandler<Value> for JmixEndpoint {
 
     async fn transform_response(
         &self,
-        envelope: Envelope<Vec<u8>>,
+        envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
-    ) -> Result<Response<Self::ResBody>, Error> {
-        // Serialize the normalized data into a JSON HTTP response
-        let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {
-            Error::from("Failed to serialize Jmix response payload into JSON")
-        })?;
-        Response::builder()
-            .status(200)
-            .body(body.into())
+    ) -> Result<Response, Error> {
+        let nd = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
+        let response_meta = nd.get("response");
+
+        let status = response_meta
+            .and_then(|m| m.get("status"))
+            .and_then(|s| s.as_u64())
+            .and_then(|code| http::StatusCode::from_u16(code as u16).ok())
+            .unwrap_or(http::StatusCode::OK);
+
+        let mut builder = Response::builder().status(status);
+        let mut has_content_type = false;
+        if let Some(hdrs) = response_meta.and_then(|m| m.get("headers")).and_then(|h| h.as_object()) {
+            for (k, v) in hdrs.iter() {
+                if let Some(val_str) = v.as_str() {
+                    if k.eq_ignore_ascii_case("content-type") { has_content_type = true; }
+                    builder = builder.header(k.as_str(), val_str);
+                }
+            }
+        }
+
+        if let Some(body_str) = response_meta.and_then(|m| m.get("body")).and_then(|b| b.as_str()) {
+            return builder
+                .body(Body::from(body_str.to_string()))
+                .map_err(|_| Error::from("Failed to construct JMIX HTTP response"));
+        }
+
+        let body_str = serde_json::to_string(&nd).map_err(|_| Error::from("Failed to serialize Jmix response payload into JSON"))?;
+        if !has_content_type {
+            builder = builder.header("content-type", "application/json");
+        }
+        builder
+            .body(Body::from(body_str))
             .map_err(|_| Error::from("Failed to construct JMIX HTTP response"))
     }
 }

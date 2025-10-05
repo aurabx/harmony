@@ -1,5 +1,5 @@
 use serde::{Deserialize, Serialize};
-use crate::models::envelope::envelope::Envelope;
+use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 
@@ -41,8 +41,8 @@ impl AuraboxConnectMiddleware {
 impl Middleware for AuraboxConnectMiddleware {
     async fn left(
         &self,
-        envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error> {
+        envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         if !self.config.enabled {
             // If the middleware is disabled, log and skip further handling
             tracing::info!("AuraboxConnectMiddleware is disabled, skipping middleware logic.");
@@ -62,8 +62,8 @@ impl Middleware for AuraboxConnectMiddleware {
 
     async fn right(
         &self,
-        envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error> {
+        envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         if !self.config.enabled {
             tracing::info!("AuraboxConnectMiddleware is disabled for right processing.");
             return Ok(envelope);

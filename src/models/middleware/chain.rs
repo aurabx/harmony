@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::collections::HashMap;
 use crate::models::middleware::middleware::{Middleware, resolve_middleware};
-use crate::models::envelope::envelope::Envelope;
+use crate::models::envelope::envelope::RequestEnvelope;
 use crate::utils::Error;
 use serde_json::Value;
 
@@ -45,8 +45,8 @@ impl MiddlewareChain {
     /// Processes the incoming envelope through the "left" middleware chain.
     pub async fn left(
         &self,
-        mut envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error> {
+        mut envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         for middleware in self.middlewares.iter() {
             // Pass the envelope through the middleware
             envelope = middleware.left(envelope).await?;
@@ -57,8 +57,8 @@ impl MiddlewareChain {
     /// Processes the outgoing envelope through the "right" middleware chain.
     pub async fn right(
         &self,
-        mut envelope: Envelope<serde_json::Value>,
-    ) -> Result<Envelope<serde_json::Value>, Error> {
+        mut envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         // Process middleware in reverse order for right-side processing
         for middleware in self.middlewares.iter().rev() {
             // Pass the envelope through the middleware
