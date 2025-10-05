@@ -75,11 +75,11 @@ impl ServiceHandler<Value> for HttpEndpoint {
     ) -> Result<Response<Self::ResBody>, Error> {
         // Serialize the envelope's normalized data into an HTTP Response
         let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {
-            Error::from("Failed to serialize FHIR response payload into JSON")
+            Error::from("Failed to serialize HTTP response payload into JSON")
         })?;
         Response::builder()
             .status(200)
             .body(body.into())
-            .map_err(|_| Error::from("Failed to construct FHIR HTTP response"))
+            .map_err(|_| Error::from("Failed to construct HTTP response"))
     }
 }
