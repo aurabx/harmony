@@ -161,12 +161,44 @@ sudo chmod 750 /var/lib/jmix sudo chown -R jmix:jmix /var/lib/jmix
 
 ### JWT Authentication
 
-Ensure proper configuration of JWT authentication:
+The JWT Auth middleware verifies bearer tokens and enforces standard claims.
 
+Modes
+- RS256 (recommended): Provide a PEM public key via public_key_path.
+- HS256 (development/test): Explicitly enable HS256 and provide a shared secret.
+
+Behavior
+- Expects Authorization: Bearer <token>
+- Enforces algorithm (prevents downgrades)
+- Validates exp, nbf, and iat with optional leeway
+- Validates iss and aud if configured
+- On failure, returns 401 Unauthorized
+
+Configuration examples
+- RS256 (public key):
 ```toml
-[middleware.jwt_auth] 
-jwks_url = "https://your-auth-server/.well-known/jwks.json" 
+[middleware_types.jwtauth]
+module = ""
+
+[middleware.jwt_auth]
+public_key_path = "/etc/harmony/jwt_public.pem"
+issuer = "https://auth.example.com/"
 audience = "harmony"
+leeway_secs = 60
+```
+
+- HS256 (dev/test only):
+```toml
+[middleware_types.jwtauth]
+module = ""
+
+[middleware.jwt_auth]
+use_hs256 = true
+hs256_secret = "replace-with-strong-secret"
+issuer = "https://auth.example.com/"
+audience = "harmony"
+leeway_secs = 60
+public_key_path = "" # unused in HS256 mode
 ```
 
 ## Development

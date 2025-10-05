@@ -20,6 +20,30 @@ pub struct AuthSidecarMiddleware {
     _config: Arc<AuthSidecarConfig>, // Reference to shared config (unused for now)
 }
 
+pub fn parse_config(options: &std::collections::HashMap<String, serde_json::Value>) -> Result<AuthSidecarConfig, String> {
+    let token_path = options
+        .get("token_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let username = options
+        .get("username")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'username' for auth middleware")?;
+
+    let password = options
+        .get("password")
+        .and_then(|v| v.as_str())
+        .ok_or("Missing 'password' for auth middleware")?;
+
+    Ok(AuthSidecarConfig {
+        token_path,
+        username: username.to_string(),
+        password: password.to_string(),
+    })
+}
+
 impl AuthSidecarMiddleware {
     pub fn new(config: AuthSidecarConfig) -> Self {
         Self {

@@ -14,6 +14,23 @@ pub struct AuraboxConnectMiddleware {
     config: AuraboxConnectConfig,
 }
 
+pub fn parse_config(options: &std::collections::HashMap<String, serde_json::Value>) -> Result<AuraboxConnectConfig, String> {
+    let enabled = options
+        .get("enabled")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(true);
+
+    let fallback_timeout_ms = options
+        .get("fallback_timeout_ms")
+        .and_then(|v| v.as_u64())
+        .unwrap_or(5000);
+
+    Ok(AuraboxConnectConfig {
+        enabled,
+        fallback_timeout_ms,
+    })
+}
+
 impl AuraboxConnectMiddleware {
     pub fn new(config: AuraboxConnectConfig) -> Self {
         Self { config }

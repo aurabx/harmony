@@ -87,15 +87,15 @@ fn create_builtin_middleware(middleware_type: &str, options: &HashMap<String, Va
 
     match middleware_type.to_lowercase().as_str() {
         "jwtauth" => {
-            let config = parse_jwt_auth_config(options)?;
+            let config = crate::models::middleware::types::jwtauth::parse_config(options)?;
             Ok(Box::new(JwtAuthMiddleware::new(config)))
         },
         "auth" => {
-            let config = parse_auth_sidecar_config(options)?;
+            let config = crate::models::middleware::types::auth::parse_config(options)?;
             Ok(Box::new(AuthSidecarMiddleware::new(config)))
         },
         "connect" => {
-            let config = parse_aurabox_connect_config(options)?;
+            let config = crate::models::middleware::types::connect::parse_config(options)?;
             Ok(Box::new(AuraboxConnectMiddleware::new(config)))
         },
         "passthru" => {
@@ -105,56 +105,6 @@ fn create_builtin_middleware(middleware_type: &str, options: &HashMap<String, Va
     }
 }
 
-fn parse_jwt_auth_config(options: &HashMap<String, Value>) -> Result<crate::models::middleware::types::jwtauth::JwtAuthConfig, String> {
-    let public_key_path = options
-        .get("public_key_path")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing 'public_key_path' for jwtauth middleware")?;
-
-    Ok(crate::models::middleware::types::jwtauth::JwtAuthConfig {
-        public_key_path: public_key_path.to_string(),
-    })
-}
-
-fn parse_auth_sidecar_config(options: &HashMap<String, Value>) -> Result<crate::models::middleware::types::auth::AuthSidecarConfig, String> {
-    let token_path = options
-        .get("token_path")
-        .and_then(|v| v.as_str())
-        .unwrap_or("").to_string();
-
-    let username = options
-        .get("username")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing 'username' for auth middleware")?;
-
-    let password = options
-        .get("password")
-        .and_then(|v| v.as_str())
-        .ok_or("Missing 'password' for auth middleware")?;
-
-    Ok(crate::models::middleware::types::auth::AuthSidecarConfig {
-        token_path,
-        username: username.to_string(),
-        password: password.to_string(),
-    })
-}
-
-fn parse_aurabox_connect_config(options: &HashMap<String, Value>) -> Result<crate::models::middleware::types::connect::AuraboxConnectConfig, String> {
-    let enabled = options
-        .get("enabled")
-        .and_then(|v| v.as_bool())
-        .unwrap_or(true);
-
-    let fallback_timeout_ms = options
-        .get("fallback_timeout_ms")
-        .and_then(|v| v.as_u64())
-        .unwrap_or(5000);
-
-    Ok(crate::models::middleware::types::connect::AuraboxConnectConfig {
-        enabled,
-        fallback_timeout_ms,
-    })
-}
 
 #[async_trait]
 pub trait Middleware: Send + Sync {

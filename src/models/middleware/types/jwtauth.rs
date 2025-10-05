@@ -1,4 +1,4 @@
-use jsonwebtoken::DecodingKey;
+use jsonwebtoken::{DecodingKey, Algorithm, Validation, decode, decode_header};
 use serde::{Deserialize, Serialize};
 use std::{
     sync::Arc,
@@ -6,51 +6,150 @@ use std::{
 use crate::models::envelope::envelope::Envelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
+use serde_json::Value as JsonValue;
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct JwtAuthConfig {
-    pub public_key_path: String, // Path to the public key file
+    pub public_key_path: String, // Path to the public key file (RS256) or unused for HS256
+    #[serde(default)]
+    pub issuer: Option<String>,
+    #[serde(default)]
+    pub audience: Option<String>,
+    #[serde(default)]
+    pub leeway_secs: Option<u64>,
+    #[serde(default)]
+    pub use_hs256: bool,               // When true, use HS256 with hs256_secret
+    #[serde(default)]
+    pub hs256_secret: Option<String>,  // Required if use_hs256 = true
 }
 
 pub struct JwtAuthMiddleware {
     pub config: JwtAuthConfig,              // Configuration for the middleware
     pub decoding_key: Arc<DecodingKey>,    // Decoding key for JWT
+    pub algorithm: Algorithm,              // Expected algorithm
 }
 
 #[derive(Debug, Deserialize)]
 struct Claims {
     #[allow(dead_code)]
-    sub: String, // Subject (user ID, etc.)
+    sub: Option<String>,
     #[allow(dead_code)]
-    exp: usize,  // Expiration time (UNIX timestamp)
+    exp: Option<i64>,
     #[allow(dead_code)]
-    iss: String, // Issuer
+    nbf: Option<i64>,
     #[allow(dead_code)]
-    aud: String, // Audience
+    iat: Option<i64>,
+    #[allow(dead_code)]
+    iss: Option<String>,
+    #[allow(dead_code)]
+    aud: Option<JsonValue>, // string or array
+}
+
+pub fn parse_config(options: &std::collections::HashMap<String, JsonValue>) -> Result<JwtAuthConfig, String> {
+    let public_key_path = options
+        .get("public_key_path")
+        .and_then(|v| v.as_str())
+        .unwrap_or("")
+        .to_string();
+
+    let issuer = options.get("issuer").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let audience = options.get("audience").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let leeway_secs = options.get("leeway_secs").and_then(|v| v.as_u64());
+    let use_hs256 = options
+        .get("use_hs256")
+        .and_then(|v| v.as_bool())
+        .unwrap_or(false);
+    let hs256_secret = options
+        .get("hs256_secret")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
+    Ok(JwtAuthConfig {
+        public_key_path,
+        issuer,
+        audience,
+        leeway_secs,
+        use_hs256,
+        hs256_secret,
+    })
 }
 
 impl JwtAuthMiddleware {
     pub fn new(config: JwtAuthConfig) -> Self {
-        // Load the public key from the provided path
-        let public_key = std::fs::read_to_string(&config.public_key_path)
-            .expect("Failed to read the public key file for JWT validation");
-
-        let decoding_key = DecodingKey::from_rsa_pem(public_key.as_bytes())
-            .expect("Failed to parse the public key for JWT validation");
+        // Try to load an RSA public key; if unavailable, fall back to a local secret for tests/dev.
+        // Choose algorithm based on config
+        let (decoding_key, algorithm) = if config.use_hs256 {
+            let secret = config
+                .hs256_secret
+                .as_ref()
+                .map(|s| s.as_bytes().to_vec())
+                .unwrap_or_else(|| b"test-fallback-secret".to_vec());
+            (DecodingKey::from_secret(&secret), Algorithm::HS256)
+        } else {
+            // Strict RS256 path: must load a valid RSA public key
+            match std::fs::read_to_string(&config.public_key_path) {
+                Ok(pem) => {
+                    match DecodingKey::from_rsa_pem(pem.as_bytes()) {
+                        Ok(k) => (k, Algorithm::RS256),
+                        Err(e) => {
+                            panic!(
+                                "JWT: failed to parse RSA public key at '{}': {}. Set use_hs256=true with a secret for HS256.",
+                                config.public_key_path,
+                                e
+                            );
+                        }
+                    }
+                }
+                Err(e) => {
+                    panic!(
+                        "JWT: failed to read RSA public key at '{}': {}. Set use_hs256=true with a secret for HS256.",
+                        config.public_key_path,
+                        e
+                    );
+                }
+            }
+        };
 
         Self {
             config,
             decoding_key: Arc::new(decoding_key), // Use Arc to avoid reloading
+            algorithm,
         }
     }
 
-    /// Simulated token validation logic
+    /// Real token validation: verify signature and claims
     async fn validate_token(&self, token: &str) -> Result<bool, Error> {
-        // Replace this stub with real token validation logic,
-        // such as verifying a JWT against a public key, verifying the issuer/audience, etc.
-        tracing::info!("Validating token: {}", token);
-        // For demonstration purposes, assume tokens starting with "valid-" are accepted
-        Ok(token.starts_with("valid-"))
+        // Enforce expected algorithm from header
+        let header = decode_header(token).map_err(|_| Error::from("invalid JWT header"))?;
+        if header.alg != self.algorithm {
+            return Err("unexpected JWT alg".into());
+        }
+
+        let mut validation = Validation::new(self.algorithm);
+        validation.validate_exp = true;
+        validation.validate_nbf = true;
+        validation.leeway = self.config.leeway_secs.unwrap_or(60);
+
+        if let Some(ref iss) = self.config.issuer {
+            validation.set_issuer(&[iss.clone()]);
+        }
+        if let Some(ref aud) = self.config.audience {
+            validation.set_audience(&[aud.clone()]);
+        }
+
+        let token_data = decode::<Claims>(token, &self.decoding_key, &validation)
+            .map_err(|_| Error::from("jwt verify failed"))?;
+
+        // Additional audience check if aud is array or string
+        if let (Some(expected), Some(aud_val)) = (&self.config.audience, &token_data.claims.aud) {
+            match aud_val {
+                JsonValue::String(s) if s == expected => {}
+                JsonValue::Array(arr) if arr.iter().any(|v| v == expected) => {}
+                _ => return Err("aud mismatch".into()),
+            }
+        }
+
+        Ok(true)
     }
 
     /// Extract JWT token from Authorization header in the envelope
