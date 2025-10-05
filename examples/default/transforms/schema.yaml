@@ -7,7 +7,10 @@ mappings:
   - type: transform
     from: StudyInstanceUID
     to: study.uid
-    func: prefix:urn:dicom:
+    func:
+    prefix:
+    urn:
+    dicom:
   - type: const
     to: jmix.meta.version
     value: "1.0"
