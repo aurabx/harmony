@@ -33,6 +33,7 @@
 # Temporary directories
 /tmp/
 .tmp/
+./tmp/
 
 # Database files
 *.db

@@ -98,17 +98,31 @@ impl<'a> Dispatcher<> {
             .map(|(_, g)| g)
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
+        // Derive the subpath after the endpoint's path_prefix and store it in metadata
+        let path_prefix = endpoint
+            .options
+            .as_ref()
+            .and_then(|m| m.get("path_prefix"))
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let full_path = req.uri().path();
+        let mut subpath = full_path.strip_prefix(path_prefix).unwrap_or("").to_string();
+        if subpath.starts_with('/') { subpath = subpath.trim_start_matches('/').to_string(); }
+
+        let headers_map: HashMap<String, String> = req
+            .headers()
+            .iter()
+            .map(|(key, value)| (key.to_string(), value.to_str().unwrap_or_default().to_string()))
+            .collect();
+
+        let mut metadata_map: HashMap<String, String> = HashMap::new();
+        metadata_map.insert("path".to_string(), subpath);
+
         let request_details = RequestDetails {
             method: req.method().to_string(),
             uri: req.uri().to_string(),
-            headers: req
-                .headers()
-                .iter()
-                .map(|(key, value)| {
-                    (key.to_string(), value.to_str().unwrap_or_default().to_string())
-                })
-                .collect(),
-            metadata: HashMap::new(),
+            headers: headers_map,
+            metadata: metadata_map,
         };
 
         // Build the envelope from the request

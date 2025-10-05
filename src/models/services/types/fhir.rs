@@ -38,12 +38,12 @@ impl ServiceType for FhirEndpoint {
             .and_then(|v| v.as_str())
             .unwrap_or("/fhir");
 
-        // Return route configurations for GET and POST methods
+        // Return route configurations for GET/POST/PUT/DELETE methods
         vec![
             RouteConfig {
                 path: format!("{}/{{*wildcard}}", path_prefix), // Use {*wildcard} syntax
-                methods: vec![Method::GET, Method::POST],
-                description: Some("Handles FHIR GET and POST requests".to_string()),
+                methods: vec![Method::GET, Method::POST, Method::PUT, Method::DELETE],
+                description: Some("Handles FHIR GET/POST/PUT/DELETE requests".to_string()),
             },
         ]
     }
@@ -60,9 +60,18 @@ impl ServiceHandler<Value> for FhirEndpoint {
         mut envelope: Envelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<Envelope<Vec<u8>>, Error> {
+        // Capture subpath from request metadata inserted by dispatcher
+        let subpath = envelope
+            .request_details
+            .metadata
+            .get("path")
+            .cloned()
+            .unwrap_or_default();
+
         // Add or modify the envelope's normalized data
         envelope.normalized_data = Some(serde_json::json!({
             "message": "FHIR endpoint received the request",
+            "path": subpath,
             "original_data": envelope.original_data,
         }));
 
@@ -75,13 +84,11 @@ impl ServiceHandler<Value> for FhirEndpoint {
         envelope: Envelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<Response<Self::ResBody>, Error> {
-        // Serialize the envelope's normalized data into an HTTP Response
-        let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {
-            Error::from("Failed to serialize FHIR response payload into JSON")
-        })?;
+        // Return the envelope's normalized data directly as a JSON Value
+        let body: serde_json::Value = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
         Response::builder()
             .status(200)
-            .body(body.into())
+            .body(body)
             .map_err(|_| Error::from("Failed to construct FHIR HTTP response"))
     }
 }

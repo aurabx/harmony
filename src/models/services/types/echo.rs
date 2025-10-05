@@ -56,9 +56,18 @@ impl ServiceHandler<Value> for EchoEndpoint {
         mut envelope: Envelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<Envelope<Vec<u8>>, Error> {
-        // Add or modify the envelope's normalized data
+        // Capture subpath from request metadata inserted by dispatcher
+        let subpath = envelope
+            .request_details
+            .metadata
+            .get("path")
+            .cloned()
+            .unwrap_or_default();
+
+        // Add or modify the envelope's normalized data including subpath
         envelope.normalized_data = Some(serde_json::json!({
             "message": "Echo endpoint received the request",
+            "path": subpath,
             "original_data": envelope.original_data,
         }));
 
@@ -70,13 +79,11 @@ impl ServiceHandler<Value> for EchoEndpoint {
         envelope: Envelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<Response<Self::ResBody>, Error> {
-        // Serialize the envelope's normalized data into an HTTP Response
-        let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {
-            Error::from("Failed to serialize Echo response payload into JSON")
-        })?;
+        // Return the envelope's normalized data directly as a JSON Value
+        let body: serde_json::Value = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
         Response::builder()
             .status(200)
-            .body(body.into())
+            .body(body)
             .map_err(|_| Error::from("Failed to construct Echo HTTP response"))
     }
 }

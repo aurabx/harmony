@@ -36,14 +36,14 @@ impl ServiceType for HttpEndpoint {
 
         vec![
             RouteConfig {
-                path: format!("{}/get-route", path_prefix), // Example route
-                methods: vec![http::Method::GET],
-                description: Some("Handles GET requests for HttpEndpoint".to_string()),
-            },
-            RouteConfig {
-                path: format!("{}/post-route", path_prefix), // Example route
-                methods: vec![http::Method::POST],
-                description: Some("Handles POST requests for HttpEndpoint".to_string()),
+                path: format!("{}/{{*wildcard}}", path_prefix),
+                methods: vec![
+                    http::Method::GET,
+                    http::Method::POST,
+                    http::Method::PUT,
+                    http::Method::DELETE,
+                ],
+                description: Some("Handles GET/POST/PUT/DELETE for HttpEndpoint".to_string()),
             },
         ]
     }
@@ -73,13 +73,11 @@ impl ServiceHandler<Value> for HttpEndpoint {
         envelope: Envelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<Response<Self::ResBody>, Error> {
-        // Serialize the envelope's normalized data into an HTTP Response
-        let body = serde_json::to_string(&envelope.normalized_data).map_err(|_| {
-            Error::from("Failed to serialize HTTP response payload into JSON")
-        })?;
+        // Return the envelope's normalized data directly as a JSON Value
+        let body: serde_json::Value = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
         Response::builder()
             .status(200)
-            .body(body.into())
+            .body(body)
             .map_err(|_| Error::from("Failed to construct HTTP response"))
     }
 }
