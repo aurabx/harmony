@@ -34,21 +34,46 @@ impl Middleware for AuthSidecarMiddleware {
         &self,
         envelope: Envelope<serde_json::Value>,
     ) -> Result<Envelope<serde_json::Value>, Error> {
-        // For now, just pass through the envelope
-        // In a real implementation, you would:
-        // 1. Extract auth information from envelope.request_details.headers
-        // 2. Validate the auth credentials
-        // 3. Either return the envelope or return an error
-
         tracing::info!("Processing auth middleware (left)");
-        Ok(envelope)
+
+        // Extract Authorization header (case-insensitive; keys stored lowercase)
+        let auth_header_opt = envelope
+            .request_details
+            .headers
+            .get("authorization")
+            .cloned();
+
+        let header_val = match auth_header_opt {
+            Some(h) => h,
+            None => return Err("Missing Authorization header".into()),
+        };
+
+        // Validate Basic auth against configured username/password
+        if !header_val.starts_with("Basic ") {
+            return Err("Authorization header must start with 'Basic '".into());
+        }
+        let encoded = &header_val[6..];
+        let decoded_bytes = general_purpose::STANDARD
+            .decode(encoded)
+            .map_err(|_| Error::from("Failed to decode Basic Auth credentials"))?;
+        let decoded = String::from_utf8(decoded_bytes)
+            .map_err(|_| Error::from("Failed to parse Basic Auth credentials as UTF-8"))?;
+
+        let mut parts = decoded.splitn(2, ':');
+        let user = parts.next().ok_or_else(|| Error::from("Missing username in Basic Auth credentials"))?;
+        let pass = parts.next().ok_or_else(|| Error::from("Missing password in Basic Auth credentials"))?;
+
+        if user == self._config.username && pass == self._config.password {
+            Ok(envelope)
+        } else {
+            Err("Invalid username or password".into())
+        }
     }
 
     async fn right(
         &self,
         envelope: Envelope<serde_json::Value>,
     ) -> Result<Envelope<serde_json::Value>, Error> {
-        // For now, just pass through the envelope
         tracing::info!("Processing auth middleware (right)");
         Ok(envelope)
     }

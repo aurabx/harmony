@@ -129,8 +129,8 @@ impl<'a> Dispatcher<> {
         )
         .await
         .map_err(|err| {
-            tracing::error!("Incoming middleware failed: {:?}", err);
-            StatusCode::INTERNAL_SERVER_ERROR
+            tracing::warn!("Incoming middleware failed: {:?}", err);
+            StatusCode::UNAUTHORIZED
         })?;
 
         // 3. Process through configured backends
