@@ -1,37 +1,85 @@
 # Middleware
 
-Middleware allows for authenticating, modifying or transforming the Envelope.
+Middleware extends the request/response pipeline to authenticate, enrich, or transform the Envelope as it flows between endpoints and backends.
 
-## Middleware types
+- Authentication middleware runs at the start of the pipeline (endpoint side)
+- Transformation middleware can run before requests are sent to backends and/or on responses
 
-### Authentication
+## Authentication
 
-#### Basic Auth
-Validates a `username` and `password` combination, often passed as Base64-encoded credentials in an HTTP header. `Authorization`
+### Basic Auth
+Validates a `username`/`password` combination, typically supplied in the `Authorization: Basic <base64>` header.
 
-- **`username`**: A string representing the username to authenticate the request.
-- **`password`**: A string representing the password corresponding to the username.
-- **`token_path`** (optional): A path or endpoint where tokens or credentials are stored or validated.
+Config keys:
+- `username` (string)
+- `password` (string)
+- `token_path` (optional, string): file path for a pre-shared token, if used by your environment
 
-#### JWT Auth
-To authenticate a request using JWT (JSON Web Token), the following properties are typically required:
+Example:
+```toml
+[middleware.basic_auth]
+username = "test_user"
+password = "test_password"
+# token_path = "/tmp/test_token" # optional
+```
 
-- **`jwt_secret`** (or a public key): A secret key used to verify the JWT signature. This might alternatively reference a public/private key pair depending on the algorithm.
-- **`issuer`** (optional): The expected "issuer" of the token (found in the token's claims).
-- **`audience`** (optional): The expected target audience of the token (found in the token's claims).
-- **`token_path`** (optional): A path or endpoint to validate or obtain JWTs.
-- **`header`**: The header where the token is expected to be present (e.g., with a `Bearer <token>` format). `Authorization`
+### JWT Auth
+Verification of `Authorization: Bearer <token>` using cryptographic signature checks and strict claims validation.
 
-### Transformation
+Supported modes:
+- RS256 (default, recommended): Verify with an RSA public key in PEM format.
+- HS256 (explicit, dev/test only): Verify with a symmetric secret when `use_hs256 = true`.
 
-#### DICOM to JSON
-Converts DICOM into JSON
+Behavior:
+- Strict algorithm enforcement (no algorithm downgrades)
+- Signature verified with `jsonwebtoken` crate
+- Validates `exp`, `nbf`, and `iat` with optional leeway
+- Validates `iss` and `aud` when configured
+- Any verification error returns HTTP 401 Unauthorized
+- Startup safety: if `use_hs256` is not explicitly set to true and no `public_key_path` is provided, the middleware will panic during initialization to avoid insecure defaults
 
-#### DICOMweb to JSON
-Converts DICOMweb into JSON
+Config keys:
+- `public_key_path` (string, required for RS256): Path to RSA public key (PEM)
+- `use_hs256` (bool, default false): Enable HS256 mode explicitly
+- `hs256_secret` (string, required when `use_hs256 = true`): Shared secret for HS256
+- `issuer` (string, optional): Expected `iss`
+- `audience` (string, optional): Expected `aud`
+- `leeway_secs` (integer, optional): Allowed clock skew when validating time-based claims
 
-#### FHIR to DICOM
-Converts FHIR to DICOM
+Examples
+- RS256 (recommended):
+```toml
+[middleware.jwt_auth]
+public_key_path = "/etc/harmony/jwt_public.pem"
+issuer = "https://auth.example.com/"
+audience = "harmony"
+leeway_secs = 60
+```
 
-#### JMIX to DICOM
-Converts JMIX to DICOM
+- HS256 (development/test only):
+```toml
+[middleware.jwt_auth]
+use_hs256 = true
+hs256_secret = "replace-with-strong-secret"
+issuer = "https://auth.example.com/"
+audience = "harmony"
+leeway_secs = 60
+```
+
+Notes:
+- Place JWT auth middleware early in your pipeline to reject unauthenticated requests before expensive work.
+- Configuration parsing for this middleware lives within the middleware module itself.
+
+## Transformation
+
+### DICOM to JSON
+Converts DICOM into JSON.
+
+### DICOMweb to JSON
+Converts DICOMweb into JSON.
+
+### FHIR to DICOM
+Converts FHIR to DICOM.
+
+### JMIX to DICOM
+Converts JMIX to DICOM.

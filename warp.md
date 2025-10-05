@@ -60,16 +60,20 @@ cargo clippy --all-targets -- -D warnings
 - [.aiassistant/rules/ai.md](.aiassistant/rules/ai.md) - AI assistant context loading rules
 - [.junie/guidelines.md](.junie/guidelines.md) - **Essential reading**: Build system, test strategy, validator behavior, development conventions, and known pitfalls
 
-### Architecture Documentation
+### Documentation
+- [docs/getting-started.md](docs/getting-started.md) - Build, run, and local conventions
+- [docs/configuration.md](docs/configuration.md) - Top-level and pipeline configuration
+- [docs/middleware.md](docs/middleware.md) - Authentication (JWT, Basic) and transforms
+- [docs/testing.md](docs/testing.md) - Testing strategy and commands
+- [docs/security.md](docs/security.md) - Security guidance and best practices
 - [docs/system-description.md](docs/system-description.md) - High-level system overview and Runbeam architecture
 - [docs/router.md](docs/router.md) - Router behavior and request flow (Endpoint → Middleware → Service → Backend)
 - [docs/envelope.md](docs/envelope.md) - Core Envelope struct for data exchange
 - [docs/endpoints.md](docs/endpoints.md) - Endpoint types (HTTP, FHIR, JMIX, DICOMweb)
 - [docs/backends.md](docs/backends.md) - Backend types and target communication
-- [docs/middleware.md](docs/middleware.md) - Authentication and transformation middleware
 
 ### Other
-- [readme.md](readme.md) - Installation, configuration examples, deployment guide
+- [readme.md](readme.md) - Project overview and links
 
 ## Quick Start Development
 
