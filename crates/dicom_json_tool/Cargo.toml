@@ -1,0 +1,25 @@
+[package]
+name = "dicom_json_tool"
+version = "0.1.0"
+edition = "2021"
+description = "Convert between DICOM (DIMSE identifier datasets) and DICOM JSON (Part 18) with optional command/query metadata wrapper"
+
+[dependencies]
+dicom-object = { version = "0.9" }
+dicom-core = "0.9"
+dicom-dictionary-std = "0.9"
+dicom-encoding = "0.9"
+dicom-parser = "0.9"
+dicom-json = "0.9"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+clap = { version = "4.5.48", features = ["derive"] }
+anyhow = "1.0.100"
+
+[dev-dependencies]
+tokio = { version = "1", features = ["full"] }
+
+[[bin]]
+name = "dicom-json"
+path = "src/main.rs"

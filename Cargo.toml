@@ -2,6 +2,7 @@
 members = [
     ".",
     "crates/dimse",
+    "crates/dicom_json_tool",
 ]
 resolver = "2"
 
