@@ -1,5 +1,7 @@
 mod dispatcher;
 pub mod route_config;
+pub mod pipeline_runner;
+pub mod scp_launcher;
 
 use std::sync::Arc;
 use axum::Router;
@@ -19,11 +21,11 @@ pub async fn build_network_router(
 
     let mut app = Router::new();
 
-    for (_group_name, group) in &config.pipelines {
+        for (group_name, group) in &config.pipelines {
         if !group.networks.contains(&network_name.to_string()) {
             continue;
         }
-        app = dispatcher.build_router(app, group);
+        app = dispatcher.build_router(app, group_name, group);
     }
 
     app

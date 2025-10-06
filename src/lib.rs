@@ -2,6 +2,8 @@ pub mod config;
 pub mod router;
 pub mod models;
 mod utils;
+pub mod globals;
+pub mod integrations;
 
 use std::net::SocketAddr;
 use std::sync::Arc;
@@ -13,6 +15,7 @@ use crate::config::config::Config;
 
 pub async fn run(config: Config) {
     let config = Arc::new(config);
+    crate::globals::set_config(config.clone());
 
     // Initialise logging
     if config.logging.log_to_file {

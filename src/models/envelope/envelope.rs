@@ -27,6 +27,7 @@ pub struct RequestDetails {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct ResponseDetails {
     /// HTTP status code
     pub status: u16,
@@ -37,6 +38,7 @@ pub struct ResponseDetails {
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
+#[allow(dead_code)]
 pub struct ResponseEnvelope<T> {
     pub response_details: ResponseDetails,
     #[serde(skip)]

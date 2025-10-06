@@ -1,0 +1,56 @@
+[package]
+name = "dimse"
+version = "0.1.0"
+edition = "2021"
+description = "DIMSE protocol implementation for DICOM services"
+authors = ["runbeam"]
+
+[features]
+default = ["dcmtk_cli"]
+dcmtk_cli = []
+tls = ["tokio-rustls", "rustls-pemfile"]
+
+[dependencies]
+# DICOM libraries
+dicom-core = "0.9"
+dicom-dictionary-std = "0.9"
+dicom-encoding = "0.9"
+dicom-parser = "0.9"
+dicom-ul = "0.9"
+dicom-object = "0.9"
+
+# Async runtime and utilities
+tokio = { version = "1", features = ["full"] }
+tokio-util = { version = "0.7", features = ["codec"] }
+futures = "0.3"
+async-trait = "0.1"
+
+# Serialization and configuration
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+toml = "0.8"
+
+# Logging and error handling
+tracing = "0.1"
+thiserror = "1.0"
+anyhow = "1.0"
+
+# Networking and streams
+bytes = "1.0"
+uuid = { version = "1.0", features = ["v4", "serde"] }
+chrono = { version = "0.4", features = ["serde"] }
+
+# TLS support (optional)
+tokio-rustls = { version = "0.26", optional = true }
+rustls-pemfile = { version = "2.0", optional = true }
+
+# Temporary file handling
+tempfile = "3.0"
+
+# Async streams
+async-stream = "0.3"
+tokio-stream = "0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+env_logger = "0.11"

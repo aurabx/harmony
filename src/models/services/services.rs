@@ -69,9 +69,11 @@ fn create_builtin_service(service_type: &str) -> Result<Box<dyn ServiceType<ReqB
         "jmix" => Ok(Box::new(crate::models::services::types::jmix::JmixEndpoint {})),
         "fhir" => Ok(Box::new(crate::models::services::types::fhir::FhirEndpoint {})),
         "dicom" => Ok(Box::new(crate::models::services::types::dicom::DicomEndpoint {
+            local_aet: None,
             aet: None,
             host: None,
             port: None,
+            use_tls: None,
         })),
         "echo" => Ok(Box::new(crate::models::services::types::echo::EchoEndpoint {})),
         _ => Err(format!("Unsupported built-in service type: {}", service_type)),

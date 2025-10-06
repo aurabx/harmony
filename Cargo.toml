@@ -1,3 +1,10 @@
+[workspace]
+members = [
+    ".",
+    "crates/dimse",
+]
+resolver = "2"
+
 [package]
 name = "harmony"
 version = "0.1.0"
@@ -8,6 +15,7 @@ name = "harmony"
 path = "src/lib.rs"
 
 [dependencies]
+dimse = { path = "crates/dimse" }
 tokio = { version = "1", features = ["full"] }
 axum = "0.8.4"
 serde = { version = "1.0", features = ["derive"] }

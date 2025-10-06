@@ -24,6 +24,7 @@ impl<'a> Dispatcher<> {
     pub fn build_router(
         &self,
         mut app: Router<()>,
+        group_name: &str,
         group: &Pipeline,
     ) -> Router<()> {
         for endpoint_name in &group.endpoints {
@@ -37,6 +38,15 @@ impl<'a> Dispatcher<> {
                 };
 
                 let route_configs = service.build_router(endpoint.options.as_ref().unwrap_or(&HashMap::new()));
+
+                // If endpoint service is DICOM in endpoint (SCP) mode, start SCP listener
+                if endpoint.service.eq_ignore_ascii_case("dicom") {
+                    let opts_map: HashMap<String, serde_json::Value> = endpoint.options.clone().unwrap_or_default();
+                    let is_backend = opts_map.contains_key("host") || opts_map.contains_key("aet");
+                    if !is_backend {
+                        crate::router::scp_launcher::ensure_dimse_scp_started(endpoint_name, group_name, &opts_map);
+                    }
+                }
 
                 for route_config in route_configs {
                     let path = route_config.path.clone();
