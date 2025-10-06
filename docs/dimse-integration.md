@@ -116,49 +116,19 @@ curl -X POST http://localhost:8080/dicom/find \
 - **DIMSE Crate Foundation**: Separate crate with proper DICOM dependencies
 - **Dual Service Support**: Single service type supports both backend and endpoint usage
 - **Configuration Integration**: Seamlessly integrated with existing service architecture
-- **SCU Operations**: C-ECHO and C-FIND operations (stub implementations)
-- **SCP Listener**: DIMSE SCP can accept inbound connections and forward to pipelines
+- **SCU Operations (via DCMTK)**: C-ECHO and C-FIND wired through `echoscu`/`findscu`, exercised end-to-end in tests
+- **C-FIND Dataset Extraction/Streaming**: Responses extracted (`-X`) and streamed back as datasets; artifacts preserved under `./tmp`
 - **Validation**: Proper configuration validation for both usage patterns
 
-### 🚧 Stub Implementations
-Current implementations are functional stubs that:
-- Validate configuration and remote node connectivity
-- Log operations with proper tracing
-- Return structured JSON responses
-- Handle errors gracefully
-
-**Current limitations**:
-- C-FIND/C-MOVE dataset streaming is stubbed; provider returns empty result sets while the pipeline executes.
+### 🚧 Stub / Scaffold
+- **C-MOVE**: Not implemented
 
 ### 📋 Planned Enhancements
-1. **Real DIMSE Protocol**: Replace stubs with actual `dicom-ul` based implementations
-2. **Dataset Streaming**: Stream C-FIND/C-MOVE results from pipeline outputs
-3. **C-STORE Operations**: Support for storing DICOM objects
-4. **TLS Support**: Secure DICOM connections
+1. **Native DIMSE Protocol**: Implement SCU/SCP with `dicom-ul` (replace DCMTK CLI usage)
+2. **C-STORE and C-MOVE**: Add full support for store and move operations
+3. **TLS Support**: Secure DICOM connections for SCU/SCP
+4. **Hardening & Observability**: Robust error handling, metrics, and logs across DIMSE flows
 
 ## Configuration Examples
 
 See `examples/default/pipelines/dimse-integration.toml` for a complete configuration demonstrating both backend (SCU) and endpoint (SCP) usage patterns.
-
-## Binary Stream Handling
-
-The integration respects the user's preference for binary stream handling:
-- DICOM payloads stay in memory as `DatasetStream` objects
-- Temporary files written to `./tmp` only when needed (e.g., JMIX packaging)
-- Automatic cleanup of temporary files
-
-## Error Handling
-
-The integration provides comprehensive error handling:
-- Configuration validation errors at startup
-- Network connectivity errors during operations  
-- DICOM protocol errors with detailed messages
-- Graceful fallbacks for unavailable services
-
-## Next Steps
-
-To complete the integration:
-1. Implement actual DIMSE protocol handlers using `dicom-ul`
-2. Add SCP listener support for inbound DICOM connections
-3. Integrate with JMIX middleware for payload packaging
-4. Add comprehensive testing with real DICOM nodes

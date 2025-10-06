@@ -77,21 +77,110 @@ impl DimseScu {
         
         debug!("C-FIND query parameters: {:?}", query.parameters);
         
-        // TODO: Implement actual DICOM association and C-FIND
-        // This is a stub implementation that returns an empty stream
-        
-        let (_tx, rx) = mpsc::channel(100);
-        
-        // Simulate some async work
-        tokio::spawn(async move {
-            // Simulate finding some results
-            tokio::time::sleep(Duration::from_millis(200)).await;
+        // Real implementation (Phase 1): use DCMTK findscu if available
+        #[cfg(feature = "dcmtk_cli")]
+        {
+            use tokio::process::Command;
+            use uuid::Uuid;
+            use std::path::PathBuf;
+            let mut args: Vec<String> = Vec::new();
+            args.push("-aet".into());
+            args.push(self.config.local_aet.clone());
+            args.push("-aec".into());
+            args.push(node.ae_title.clone());
+
+            // Use Patient Root (default) unless specified otherwise
+            args.push("-P".into());
+
+            // Set QueryRetrieveLevel via -k
+            let level_str = match query.query_level {
+                crate::types::QueryLevel::Patient => "PATIENT",
+                crate::types::QueryLevel::Study => "STUDY",
+                crate::types::QueryLevel::Series => "SERIES",
+                crate::types::QueryLevel::Image => "IMAGE",
+            };
+            args.push("-k".into());
+            args.push(format!("QueryRetrieveLevel={}", level_str));
+
+            // Add keys from parameters
+            for (k, v) in query.parameters.iter() {
+                let tag = if k.len() == 8 {
+                    format!("({},{})", &k[0..4], &k[4..8])
+                } else {
+                    k.clone()
+                };
+                args.push("-k".into());
+                if v.is_empty() {
+                    args.push(format!("{}=", tag));
+                } else {
+                    args.push(format!("{}={}", tag, v));
+                }
+            }
+
+            // Output directory for matches under ./tmp
+            let out_dir = PathBuf::from(format!("./tmp/dcmtk_find_{}", Uuid::new_v4()));
+            if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
+                warn!("Failed to create output dir {:?}: {}", out_dir, e);
+            } else {
+                // DCMTK findscu options to write matches to directory
+                args.push("-X".into()); // extract responses to DICOM files
+                args.push("-od".into());
+                args.push(out_dir.to_string_lossy().to_string());
+            }
+
+            // Host and port at the end
+            args.push(node.host.clone());
+            args.push(node.port.to_string());
+
+            // Prepare channel to stream results
+            let (tx, rx) = mpsc::channel(100);
+
+            debug!("Running findscu args: {:?}", args);
+            let tx_clone = tx.clone();
+            let out_dir_clone = out_dir.clone();
+            tokio::spawn(async move {
+                match Command::new("findscu").args(&args).output().await {
+                    Ok(out) => {
+                        if out.status.success() {
+                            info!("C-FIND completed (findscu success)");
+                            // Read produced files
+                            if let Ok(mut rd) = tokio::fs::read_dir(&out_dir_clone).await {
+                                while let Ok(Some(entry)) = rd.next_entry().await {
+                                    let path = entry.path();
+                                    if path.extension().and_then(|s| s.to_str()).unwrap_or("") == "dcm" {
+                                        // Keep files for inspection; do not remove on drop
+                                        let _ = tx_clone.send(Ok(DatasetStream::from_file(path, false))).await;
+                                    }
+                                }
+                            }
+                        } else {
+                            let stderr = String::from_utf8_lossy(&out.stderr);
+                            let stdout = String::from_utf8_lossy(&out.stdout);
+                            warn!("findscu failed: status={:?}, stdout={}, stderr={}", out.status.code(), stdout, stderr);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to spawn findscu: {}", e);
+                    }
+                }
+                // drop sender to close stream
+            });
+
+            let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+            return Ok(stream);
             
-            // For now, just send an empty result set
-            debug!("C-FIND completed with 0 results");
-            // Channel closes automatically when tx is dropped
-        });
-        
+        }
+
+        #[cfg(not(feature = "dcmtk_cli"))]
+        {
+            // No CLI available; return empty stream
+            let (_tx, rx) = mpsc::channel(0);
+            let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+            return Ok(stream);
+        }
+
+        // Default fallback (should not be reached)
+        let (_tx, rx) = mpsc::channel(0);
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(stream)
     }

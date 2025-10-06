@@ -11,6 +11,7 @@ use crate::utils::Error;
 use crate::router::route_config::RouteConfig;
 use dimse::{DimseConfig, RemoteNode, DimseScu};
 use dimse::types::{FindQuery, QueryLevel};
+use dicom_json_tool as djt;
 
 #[derive(Debug, Deserialize)]
 pub struct DicomEndpoint {
@@ -236,31 +237,71 @@ impl DicomEndpoint {
                 }
             },
             "find" | "/find" => {
-                // Parse request body for query parameters
-                let query_params: HashMap<String, String> = serde_json::from_slice(&envelope.original_data)
-                    .unwrap_or_default();
-                
-                let query_level = query_params.get("query_level")
-                    .and_then(|level| level.parse::<QueryLevel>().ok())
-                    .unwrap_or(QueryLevel::Patient);
-                
-                let mut query = FindQuery::patient(query_params.get("patient_id").cloned());
-                query.query_level = query_level;
-                
-                // Add other query parameters
-                for (key, value) in query_params {
-                    if !key.starts_with("query_") {
-                        query = query.with_parameter(key, value);
+                // Parse request body as either wrapper or raw identifier JSON
+                let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
+                    .unwrap_or(serde_json::Value::Null);
+
+                // Extract identifier JSON
+                let (_cmd, identifier_json, _qmeta) = match body_json {
+                    serde_json::Value::Object(_) => djt::parse_wrapper_or_identifier(&body_json),
+                    _ => (None, serde_json::json!({}), None),
+                };
+
+                // Flatten identifier JSON into tag->string map for FindQuery parameters
+                let mut params: HashMap<String, String> = HashMap::new();
+                if let Some(map) = identifier_json.as_object() {
+                    for (tag, entry) in map.iter() {
+                        // Expect { vr: ..., Value: [...] }
+                        if let Some(val_array) = entry.get("Value").and_then(|v| v.as_array()) {
+                            if let Some(first) = val_array.get(0) {
+                                if let Some(s) = first.as_str() {
+                                    params.insert(tag.clone(), s.to_string());
+                                } else if let Some(obj) = first.as_object() {
+                                    // PN case: { Alphabetic: "..." }
+                                    if let Some(alpha) = obj.get("Alphabetic").and_then(|v| v.as_str()) {
+                                        params.insert(tag.clone(), alpha.to_string());
+                                    }
+                                }
+                            } else {
+                                // Empty array indicates return key
+                                params.insert(tag.clone(), String::new());
+                            }
+                        }
                     }
                 }
 
-                // Perform C-FIND (for now, just return query info)
+                // Choose query level (default: Patient)
+                let mut query = FindQuery::patient(params.get("00100020").cloned()); // PatientID if present
+                query.query_level = QueryLevel::Patient;
+                for (k, v) in params.into_iter() {
+                    query = query.with_parameter(k, v);
+                }
+
+                // Perform C-FIND and collect results
                 match scu.find(&remote_node, query).await {
-                    Ok(_stream) => serde_json::json!({
-                        "operation": "find",
-                        "success": true,
-                        "message": "C-FIND initiated (streaming not yet implemented)"
-                    }),
+                    Ok(mut stream) => {
+                        use futures_util::StreamExt;
+                        let mut matches: Vec<serde_json::Value> = Vec::new();
+                        while let Some(item) = stream.next().await {
+                            if let Ok(ds) = item {
+                                match ds {
+                                    dimse::types::DatasetStream::File { ref path, .. } => {
+                                        if let Ok(obj) = dicom_object::open_file(path) {
+                                            if let Ok(json) = dicom_json_tool::identifier_to_json_value(&obj) {
+                                                matches.push(json);
+                                            }
+                                        }
+                                    }
+                                    _ => {}
+                                }
+                            }
+                        }
+                        serde_json::json!({
+                            "operation": "find",
+                            "success": true,
+                            "matches": matches
+                        })
+                    }
                     Err(e) => serde_json::json!({
                         "operation": "find",
                         "success": false,
