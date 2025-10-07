@@ -2,7 +2,6 @@
 
 use std::time::Duration;
 
-use futures::stream::Stream;
 use tokio::sync::mpsc;
 use tracing::{info, warn, error, debug};
 
@@ -59,127 +58,128 @@ impl DimseScu {
 
     /// Send a C-FIND request to a remote node
     pub async fn find(
-        &self, 
-        node: &RemoteNode, 
-        query: FindQuery
-    ) -> Result<impl Stream<Item = Result<DatasetStream>>> {
+        &self,
+        node: &RemoteNode,
+        query: FindQuery,
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
         info!(
-            "Sending C-FIND to {}@{}:{} (level: {}, max_results: {})", 
-            node.ae_title, 
-            node.host, 
+            "Sending C-FIND to {}@{}:{} (level: {}, max_results: {})",
+            node.ae_title,
+            node.host,
             node.port,
             query.query_level,
             query.max_results
         );
-        
-        // Validate the remote node configuration
+
         node.validate()?;
-        
         debug!("C-FIND query parameters: {:?}", query.parameters);
-        
-        // Real implementation (Phase 1): use DCMTK findscu if available
-        #[cfg(feature = "dcmtk_cli")]
-        {
-            use tokio::process::Command;
-            use uuid::Uuid;
-            use std::path::PathBuf;
-            let mut args: Vec<String> = Vec::new();
-            args.push("-aet".into());
-            args.push(self.config.local_aet.clone());
-            args.push("-aec".into());
-            args.push(node.ae_title.clone());
+        self.find_impl(node, query).await
+    }
 
-            // Use Patient Root (default) unless specified otherwise
-            args.push("-P".into());
+    #[cfg(feature = "dcmtk_cli")]
+    async fn find_impl(
+        &self,
+        node: &RemoteNode,
+        query: FindQuery,
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
+        use tokio::process::Command;
+        use uuid::Uuid;
+        use std::path::PathBuf;
 
-            // Set QueryRetrieveLevel via -k
-            let level_str = match query.query_level {
-                crate::types::QueryLevel::Patient => "PATIENT",
-                crate::types::QueryLevel::Study => "STUDY",
-                crate::types::QueryLevel::Series => "SERIES",
-                crate::types::QueryLevel::Image => "IMAGE",
+        let mut args: Vec<String> = Vec::new();
+        args.push("-aet".into());
+        args.push(self.config.local_aet.clone());
+        args.push("-aec".into());
+        args.push(node.ae_title.clone());
+
+        // Use Patient Root (default) unless specified otherwise
+        args.push("-P".into());
+
+        // Set QueryRetrieveLevel via -k
+        let level_str = match query.query_level {
+            crate::types::QueryLevel::Patient => "PATIENT",
+            crate::types::QueryLevel::Study => "STUDY",
+            crate::types::QueryLevel::Series => "SERIES",
+            crate::types::QueryLevel::Image => "IMAGE",
+        };
+        args.push("-k".into());
+        args.push(format!("QueryRetrieveLevel={}", level_str));
+
+        // Add keys from parameters
+        for (k, v) in query.parameters.iter() {
+            let tag = if k.len() == 8 {
+                format!("{},{}", &k[0..4], &k[4..8])
+            } else {
+                k.clone()
             };
             args.push("-k".into());
-            args.push(format!("QueryRetrieveLevel={}", level_str));
-
-            // Add keys from parameters
-            for (k, v) in query.parameters.iter() {
-                let tag = if k.len() == 8 {
-                    format!("({},{})", &k[0..4], &k[4..8])
-                } else {
-                    k.clone()
-                };
-                args.push("-k".into());
-                if v.is_empty() {
-                    args.push(format!("{}=", tag));
-                } else {
-                    args.push(format!("{}={}", tag, v));
-                }
-            }
-
-            // Output directory for matches under ./tmp
-            let out_dir = PathBuf::from(format!("./tmp/dcmtk_find_{}", Uuid::new_v4()));
-            if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
-                warn!("Failed to create output dir {:?}: {}", out_dir, e);
+            if v.is_empty() {
+                args.push(format!("{}=", tag));
             } else {
-                // DCMTK findscu options to write matches to directory
-                args.push("-X".into()); // extract responses to DICOM files
-                args.push("-od".into());
-                args.push(out_dir.to_string_lossy().to_string());
+                args.push(format!("{}={}", tag, v));
             }
+        }
 
-            // Host and port at the end
-            args.push(node.host.clone());
-            args.push(node.port.to_string());
+        // Output directory for matches under ./tmp
+        let out_dir = PathBuf::from(format!("./tmp/dcmtk_find_{}", Uuid::new_v4()));
+        if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
+            warn!("Failed to create output dir {:?}: {}", out_dir, e);
+        } else {
+            // DCMTK findscu options to write matches to directory
+            args.push("-X".into()); // extract responses to DICOM files
+            args.push("-od".into());
+            args.push(out_dir.to_string_lossy().to_string());
+        }
 
-            // Prepare channel to stream results
-            let (tx, rx) = mpsc::channel(100);
+        // Host and port at the end
+        args.push(node.host.clone());
+        args.push(node.port.to_string());
 
-            debug!("Running findscu args: {:?}", args);
-            let tx_clone = tx.clone();
-            let out_dir_clone = out_dir.clone();
-            tokio::spawn(async move {
-                match Command::new("findscu").args(&args).output().await {
-                    Ok(out) => {
-                        if out.status.success() {
-                            info!("C-FIND completed (findscu success)");
-                            // Read produced files
-                            if let Ok(mut rd) = tokio::fs::read_dir(&out_dir_clone).await {
-                                while let Ok(Some(entry)) = rd.next_entry().await {
-                                    let path = entry.path();
-                                    if path.extension().and_then(|s| s.to_str()).unwrap_or("") == "dcm" {
-                                        // Keep files for inspection; do not remove on drop
-                                        let _ = tx_clone.send(Ok(DatasetStream::from_file(path, false))).await;
-                                    }
+        // Prepare channel to stream results
+        let (tx, rx) = mpsc::channel(100);
+
+        debug!("Running findscu args: {:?}", args);
+        let tx_clone = tx.clone();
+        let out_dir_clone = out_dir.clone();
+        tokio::spawn(async move {
+            match Command::new("findscu").args(&args).output().await {
+                Ok(out) => {
+                    if out.status.success() {
+                        info!("C-FIND completed (findscu success)");
+                        // Read produced files
+                        if let Ok(mut rd) = tokio::fs::read_dir(&out_dir_clone).await {
+                            while let Ok(Some(entry)) = rd.next_entry().await {
+                                let path = entry.path();
+                                if path.extension().and_then(|s| s.to_str()).unwrap_or("") == "dcm" {
+                                    // Keep files for inspection; do not remove on drop
+                                    let _ = tx_clone.send(Ok(DatasetStream::from_file(path, false))).await;
                                 }
                             }
-                        } else {
-                            let stderr = String::from_utf8_lossy(&out.stderr);
-                            let stdout = String::from_utf8_lossy(&out.stdout);
-                            warn!("findscu failed: status={:?}, stdout={}, stderr={}", out.status.code(), stdout, stderr);
                         }
-                    }
-                    Err(e) => {
-                        warn!("Failed to spawn findscu: {}", e);
+                    } else {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        warn!("findscu failed: status={:?}, stdout={}, stderr={}", out.status.code(), stdout, stderr);
                     }
                 }
-                // drop sender to close stream
-            });
+                Err(e) => {
+                    warn!("Failed to spawn findscu: {}", e);
+                }
+            }
+            // drop sender to close stream
+        });
 
-            let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-            return Ok(stream);
-            
-        }
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        Ok(stream)
+    }
 
-        #[cfg(not(feature = "dcmtk_cli"))]
-        {
-            // No CLI available; return empty stream
-            let (_tx, rx) = mpsc::channel(0);
-            let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
-            return Ok(stream);
-        }
-
-        // Default fallback (should not be reached)
+    #[cfg(not(feature = "dcmtk_cli"))]
+    async fn find_impl(
+        &self,
+        _node: &RemoteNode,
+        _query: FindQuery,
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
+        // No CLI available; return empty stream
         let (_tx, rx) = mpsc::channel(0);
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(stream)
@@ -190,36 +190,289 @@ impl DimseScu {
         &self,
         node: &RemoteNode,
         query: MoveQuery,
-    ) -> Result<impl Stream<Item = Result<DatasetStream>>> {
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
         info!(
-            "Sending C-MOVE to {}@{}:{} (level: {}, dest: {})", 
-            node.ae_title, 
-            node.host, 
+            "Sending C-MOVE to {}@{}:{} (level: {}, dest: {})",
+            node.ae_title,
+            node.host,
             node.port,
             query.query_level,
             query.destination_aet
         );
-        
-        // Validate the remote node configuration
+
         node.validate()?;
-        
         debug!("C-MOVE query parameters: {:?}", query.parameters);
-        
-        // TODO: Implement actual DICOM association and C-MOVE
-        // This is a stub implementation
-        
-        let (_tx, rx) = mpsc::channel(100);
-        
-        // Simulate some async work
+        self.move_impl(node, query).await
+    }
+
+    #[cfg(feature = "dcmtk_cli")]
+    async fn move_impl(
+        &self,
+        node: &RemoteNode,
+        query: MoveQuery,
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
+        use tokio::process::Command;
+        use uuid::Uuid;
+        use std::path::PathBuf;
+
+        // Build movescu args
+        let mut args: Vec<String> = Vec::new();
+        // Enable verbose output for diagnostics
+        args.push("-d".into());
+
+        // Use Study Root query model for C-MOVE so queries by StudyInstanceUID match in dcmqrscp
+        args.push("-S".into());
+
+        // Calling and called AETs
+        args.push("-aet".into());
+        args.push(self.config.local_aet.clone());
+        args.push("-aec".into());
+        args.push(node.ae_title.clone());
+
+        // Move destination AET (default to our local AET)
+        args.push("-aem".into());
+        args.push(query.destination_aet.clone());
+
+        // QueryRetrieveLevel via tag form 0008,0052
+        let level_str = match query.query_level {
+            crate::types::QueryLevel::Patient => "PATIENT",
+            crate::types::QueryLevel::Study => "STUDY",
+            crate::types::QueryLevel::Series => "SERIES",
+            crate::types::QueryLevel::Image => "IMAGE",
+        };
+        args.push("-k".into());
+        args.push(format!("0008,0052={}", level_str));
+
+        // Add keys from parameters (convert 8-char tags to (gggg,eeee))
+        for (k, v) in query.parameters.iter() {
+            let tag = if k.len() == 8 {
+                format!("{},{}", &k[0..4], &k[4..8])
+            } else {
+                k.clone()
+            };
+            args.push("-k".into());
+            if v.is_empty() {
+                args.push(format!("{}=", tag));
+            } else {
+                args.push(format!("{}={}", tag, v));
+            }
+        }
+
+        // Output directory for received objects
+        let out_dir = PathBuf::from(format!("./tmp/dcmtk_move_{}", Uuid::new_v4()));
+        if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
+            warn!("Failed to create move output dir {:?}: {}", out_dir, e);
+        } else {
+            args.push("-od".into());
+            args.push(out_dir.to_string_lossy().to_string());
+        }
+
+        // Incoming C-STORE port (must match SCP's HostTable mapping for destination AET)
+        let listen_port: u16 = self.config.incoming_store_port;
+        args.push("+P".into());
+        args.push(listen_port.to_string());
+
+        // Host and port at the end
+        args.push(node.host.clone());
+        args.push(node.port.to_string());
+
+        // Prepare streaming channel
+        let (tx, rx) = mpsc::channel(100);
+
+        info!("Running movescu with args: {:?}", args);
+        let tx_clone = tx.clone();
+        let out_dir_clone = out_dir.clone();
+        let args_for_debug = args.clone();
         tokio::spawn(async move {
-            // Simulate move operation
-            tokio::time::sleep(Duration::from_millis(500)).await;
-            
-            // For now, just complete successfully without moving anything
-            debug!("C-MOVE completed");
-            // Channel closes automatically when tx is dropped
+            match Command::new("movescu").args(&args).output().await {
+                Ok(out) => {
+                    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
+                    let stderr = String::from_utf8_lossy(&out.stderr).to_string();
+                    // Write a debug artifact to ./tmp for test introspection
+                    let debug_payload = serde_json::json!({
+                        "args": args_for_debug,
+                        "stdout": stdout,
+                        "stderr": stderr,
+                        "status_code": out.status.code()
+                    });
+                    if let Err(e) = tokio::fs::create_dir_all("./tmp").await {
+                        warn!("Failed to ensure ./tmp exists: {}", e);
+                    } else {
+                        if let Err(e) = tokio::fs::write("./tmp/movescu_last.json", debug_payload.to_string()).await {
+                            warn!("Failed to write movescu_last.json: {}", e);
+                        }
+                    }
+
+                    if out.status.success() {
+                        info!("C-MOVE completed (movescu success)");
+                        // Enumerate received files and stream them back
+                        if let Ok(mut rd) = tokio::fs::read_dir(&out_dir_clone).await {
+                            while let Ok(Some(entry)) = rd.next_entry().await {
+                                let path = entry.path();
+                                if let Ok(meta) = tokio::fs::metadata(&path).await {
+                                    if meta.is_file() {
+                                        let _ = tx_clone.send(Ok(DatasetStream::from_file(path, false))).await;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        warn!("movescu failed: status={:?}, stdout=\n{}\nstderr=\n{}", out.status.code(), stdout, stderr);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to spawn movescu: {}", e);
+                }
+            }
+            // drop sender to close stream
         });
-        
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        Ok(stream)
+    }
+
+    #[cfg(not(feature = "dcmtk_cli"))]
+    async fn move_impl(
+        &self,
+        _node: &RemoteNode,
+        _query: MoveQuery,
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
+        // No CLI available; return empty stream
+        let (_tx, rx) = mpsc::channel(0);
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        Ok(stream)
+    }
+
+    /// Send a C-GET request to a remote node
+    pub async fn get_request(
+        &self,
+        node: &RemoteNode,
+        query: crate::types::GetQuery,
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
+        info!(
+            "Sending C-GET to {}@{}:{} (level: {})",
+            node.ae_title,
+            node.host,
+            node.port,
+            query.query_level,
+        );
+
+        node.validate()?;
+        debug!("C-GET query parameters: {:?}", query.parameters);
+        self.get_impl(node, query).await
+    }
+
+    #[cfg(feature = "dcmtk_cli")]
+    async fn get_impl(
+        &self,
+        node: &RemoteNode,
+        query: crate::types::GetQuery,
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
+        use tokio::process::Command;
+        use uuid::Uuid;
+        use std::path::PathBuf;
+
+        let mut args: Vec<String> = Vec::new();
+
+        // Use Patient Root by default or Study Root as per query level
+        match query.query_level {
+            crate::types::QueryLevel::Patient => args.push("-P".into()),
+            crate::types::QueryLevel::Study | crate::types::QueryLevel::Series | crate::types::QueryLevel::Image => args.push("-S".into()),
+        }
+
+        // Calling and called AETs
+        args.push("-aet".into());
+        args.push(self.config.local_aet.clone());
+        args.push("-aec".into());
+        args.push(node.ae_title.clone());
+
+        // QueryRetrieveLevel
+        let level_str = match query.query_level {
+            crate::types::QueryLevel::Patient => "PATIENT",
+            crate::types::QueryLevel::Study => "STUDY",
+            crate::types::QueryLevel::Series => "SERIES",
+            crate::types::QueryLevel::Image => "IMAGE",
+        };
+        args.push("-k".into());
+        args.push(format!("QueryRetrieveLevel={}", level_str));
+
+        // Add keys from parameters
+        for (k, v) in query.parameters.iter() {
+            let tag = if k.len() == 8 {
+                format!("{},{}", &k[0..4], &k[4..8])
+            } else {
+                k.clone()
+            };
+            args.push("-k".into());
+            if v.is_empty() {
+                args.push(format!("{}=", tag));
+            } else {
+                args.push(format!("{}={}", tag, v));
+            }
+        }
+
+        // Output directory for received objects
+        let out_dir = PathBuf::from(format!("./tmp/dcmtk_get_{}", Uuid::new_v4()));
+        if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
+            warn!("Failed to create get output dir {:?}: {}", out_dir, e);
+        } else {
+            args.push("-od".into());
+            args.push(out_dir.to_string_lossy().to_string());
+        }
+
+        // Host and port at the end
+        args.push(node.host.clone());
+        args.push(node.port.to_string());
+
+        // Prepare streaming channel
+        let (tx, rx) = mpsc::channel(100);
+
+        debug!("Running getscu args: {:?}", args);
+        let tx_clone = tx.clone();
+        let out_dir_clone = out_dir.clone();
+        tokio::spawn(async move {
+            match Command::new("getscu").args(&args).output().await {
+                Ok(out) => {
+                    if out.status.success() {
+                        info!("C-GET completed (getscu success)");
+                        // Enumerate received files and stream them back
+                        if let Ok(mut rd) = tokio::fs::read_dir(&out_dir_clone).await {
+                            while let Ok(Some(entry)) = rd.next_entry().await {
+                                let path = entry.path();
+                                if let Ok(meta) = tokio::fs::metadata(&path).await {
+                                    if meta.is_file() {
+                                        let _ = tx_clone.send(Ok(DatasetStream::from_file(path, false))).await;
+                                    }
+                                }
+                            }
+                        }
+                    } else {
+                        let stderr = String::from_utf8_lossy(&out.stderr);
+                        let stdout = String::from_utf8_lossy(&out.stdout);
+                        warn!("getscu failed: status={:?}, stdout={}, stderr={}", out.status.code(), stdout, stderr);
+                    }
+                }
+                Err(e) => {
+                    warn!("Failed to spawn getscu: {}", e);
+                }
+            }
+            // drop sender to close stream
+        });
+
+        let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
+        Ok(stream)
+    }
+
+    #[cfg(not(feature = "dcmtk_cli"))]
+    async fn get_impl(
+        &self,
+        _node: &RemoteNode,
+        _query: crate::types::GetQuery,
+    ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
+        // No CLI available; return empty stream
+        let (_tx, rx) = mpsc::channel(0);
         let stream = tokio_stream::wrappers::ReceiverStream::new(rx);
         Ok(stream)
     }

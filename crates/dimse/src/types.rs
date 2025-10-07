@@ -107,6 +107,16 @@ pub struct MoveQuery {
     pub priority: MovePriority,
 }
 
+/// Query parameters for C-GET operations
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct GetQuery {
+    /// Query level (PATIENT, STUDY, SERIES, IMAGE)
+    pub query_level: QueryLevel,
+    
+    /// Query parameters as DICOM tags and values
+    pub parameters: std::collections::HashMap<String, String>,
+}
+
 /// DICOM query/retrieve levels
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 pub enum QueryLevel {
@@ -333,6 +343,22 @@ impl MoveQuery {
     /// Set the priority
     pub fn with_priority(mut self, priority: MovePriority) -> Self {
         self.priority = priority;
+        self
+    }
+}
+
+impl GetQuery {
+    /// Create a new get query
+    pub fn new(query_level: QueryLevel) -> Self {
+        Self {
+            query_level,
+            parameters: std::collections::HashMap::new(),
+        }
+    }
+    
+    /// Add a query parameter
+    pub fn with_parameter(mut self, tag: impl Into<String>, value: impl Into<String>) -> Self {
+        self.parameters.insert(tag.into(), value.into());
         self
     }
 }

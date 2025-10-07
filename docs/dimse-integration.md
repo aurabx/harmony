@@ -116,19 +116,60 @@ curl -X POST http://localhost:8080/dicom/find \
 - **DIMSE Crate Foundation**: Separate crate with proper DICOM dependencies
 - **Dual Service Support**: Single service type supports both backend and endpoint usage
 - **Configuration Integration**: Seamlessly integrated with existing service architecture
-- **SCU Operations (via DCMTK)**: C-ECHO and C-FIND wired through `echoscu`/`findscu`, exercised end-to-end in tests
+- **SCU Operations (via DCMTK)**: C-ECHO, C-FIND, C-GET, and C-MOVE wired through `echoscu`/`findscu`/`getscu`/`movescu`, exercised end-to-end in tests
 - **C-FIND Dataset Extraction/Streaming**: Responses extracted (`-X`) and streamed back as datasets; artifacts preserved under `./tmp`
+- **C-GET/C-MOVE Streaming**: All files written by DCMTK receivers in the operation output directory are streamed back (DCMTK may produce files without `.dcm` extensions, e.g. `SC.<SOPInstanceUID>`) 
 - **Validation**: Proper configuration validation for both usage patterns
 
 ### 🚧 Stub / Scaffold
-- **C-MOVE**: Not implemented
+- Native DIMSE (non-DCMTK) networking
 
 ### 📋 Planned Enhancements
 1. **Native DIMSE Protocol**: Implement SCU/SCP with `dicom-ul` (replace DCMTK CLI usage)
-2. **C-STORE and C-MOVE**: Add full support for store and move operations
-3. **TLS Support**: Secure DICOM connections for SCU/SCP
-4. **Hardening & Observability**: Robust error handling, metrics, and logs across DIMSE flows
+2. **TLS Support**: Secure DICOM connections for SCU/SCP
+3. **Hardening & Observability**: Robust error handling, metrics, and logs across DIMSE flows
 
 ## Configuration Examples
 
 See `examples/default/pipelines/dimse-integration.toml` for a complete configuration demonstrating both backend (SCU) and endpoint (SCP) usage patterns.
+
+## Notes and Tips
+
+- DCMTK CLI tag format: when passing keys via `-k`, use plain tag form `gggg,eeee` without parentheses. For example, set the QueryRetrieveLevel and keys like:
+  - `-k 0008,0052=STUDY`
+  - `-k 0020,000D=<StudyInstanceUID>`
+  - `-k 0010,0020=<PatientID>`
+- C-MOVE destination listener: `movescu` must listen for incoming C-STORE. Harmony config exposes `incoming_store_port`; the SCU uses DCMTK’s `+P <port>` option and `-aem <DEST_AET>`. Ensure the QR SCP’s HostTable includes the destination AET with the same host/port.
+- Test artifacts under `./tmp`:
+  - C-FIND: `./tmp/dcmtk_find_<uuid>/rsp*.dcm`
+  - C-GET:  `./tmp/dcmtk_get_<uuid>/*`
+  - C-MOVE: `./tmp/dcmtk_move_<uuid>/*`
+  - Last MOVE debug payload: `./tmp/movescu_last.json`
+- Debugging: set `HARMONY_TEST_DEBUG=1` to attach the last `movescu` arguments/stdout/stderr to HTTP responses (where applicable).
+- Test data: if `dev/samples` exists, tests may preload a limited number of `.dcm` files into the QR SCP via `storescu` prior to MOVE operations.
+
+## Troubleshooting
+
+- Association rejected with BadAppContextName in QR SCP logs
+  - This can appear if a readiness probe uses a raw TCP connect during startup (no DICOM PDU). It is safe to ignore if a subsequent valid association is accepted.
+
+- No instances received after C-MOVE
+  - Verify that the destination AET in the MOVE request matches a HostTable entry on the QR SCP with the correct host and port. For example:
+    - `HARMONY_MOVE = (HARMONY_MOVE, 127.0.0.1, 11124)`
+  - Ensure the SCU is listening for incoming C-STORE on that same port. DCMTK movescu uses `+P <port>` (some older docs mention `-pm`, but Homebrew DCMTK 3.6.9 uses `+P`).
+  - Use Study Root for MOVE (`-S`) when matching by `StudyInstanceUID`.
+  - Check movescu debug at `./tmp/movescu_last.json` for args, stdout, stderr, and status.
+
+- C-MOVE/C-GET produce no files even though DCMTK reports success
+  - DCMTK may write files without a `.dcm` extension (e.g., `SC.<SOPInstanceUID>`). Tools or code expecting only `.dcm` names might miss them.
+  - In Harmony, we stream back all files in the DCMTK output directory, regardless of extension.
+
+- DCMTK `-k` key errors like "bad key format"
+  - Use `gggg,eeee` format without parentheses. Examples: `0008,0052=STUDY`, `0020,000D=<UID>`, `0010,0020=<PatientID>`.
+
+- Duplicate or quota warnings in dcmqrscp logs
+  - dcmqrscp may delete stored files due to duplicate SOP Instance UID or internal quotas while still indexing the dataset. This can be normal for tests and not an error.
+
+- Debugging tips
+  - Run pre-MOVE diagnostics with `findscu` at STUDY level and `-X -od` to see matched identifiers.
+  - Set `HARMONY_TEST_DEBUG=1` to include `movescu_last.json` in API responses for MOVE.

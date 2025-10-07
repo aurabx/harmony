@@ -28,20 +28,26 @@ This project is alpha quality and under active development.
 - This repository writes test artifacts under `./tmp` instead of `/tmp`.
 - For DICOM integration tests using DCMTK, you will typically see:
   - `./tmp/qrscp/dcmqrscp.cfg` — generated dcmqrscp configuration
-  - `./tmp/qrscp/seed.dcm` — seeded Part 10 file stored via storescu
+  - `./tmp/qrscp/seed*.dcm` — seeded Part 10 files stored via storescu
   - `./tmp/dcmtk_find_<uuid>/rspXXXX.dcm` — extracted C-FIND responses (preserved)
+  - `./tmp/dcmtk_get_<uuid>/*` — C-GET received objects (DCMTK may not use `.dcm` extension)
+  - `./tmp/dcmtk_move_<uuid>/*` — C-MOVE received objects (DCMTK may not use `.dcm` extension)
+  - `./tmp/movescu_last.json` — last movescu args/stdout/stderr and status for debugging
 
-To clean up DCMTK C-FIND outputs:
+Cleanup helpers:
 
-```bash path=null start=null
-rm -rf ./tmp/dcmtk_find_*
+```bash
+# Remove all DCMTK artifacts
+rm -rf ./tmp/dcmtk_find_* ./tmp/dcmtk_get_* ./tmp/dcmtk_move_* ./tmp/movescu_last.json
 ```
 
-Run the focused tests:
+Run focused tests:
 
-```bash path=null start=null
+```bash
 cargo test --no-fail-fast --test dimse_scp_starts -- --nocapture
 cargo test --no-fail-fast --test dicom_find_qrscp -- --nocapture
+cargo test --no-fail-fast --test dicom_get_qrscp -- --nocapture
+HARMONY_TEST_DEBUG=1 cargo test --no-fail-fast --test dicom_move_qrscp -- --nocapture
 ```
 
 ## Licence and Use

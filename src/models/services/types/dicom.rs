@@ -10,7 +10,7 @@ use crate::models::services::services::{ServiceType, ServiceHandler};
 use crate::utils::Error;
 use crate::router::route_config::RouteConfig;
 use dimse::{DimseConfig, RemoteNode, DimseScu};
-use dimse::types::{FindQuery, QueryLevel};
+use dimse::types::{FindQuery, QueryLevel, GetQuery};
 use dicom_json_tool as djt;
 
 #[derive(Debug, Deserialize)]
@@ -205,10 +205,17 @@ impl DicomEndpoint {
         let local_aet = self.get_local_aet(options)
             .unwrap_or_else(|| "HARMONY_SCU".to_string());
         
-        let dimse_config = DimseConfig {
+        let mut dimse_config = DimseConfig {
             local_aet,
             ..Default::default()
         };
+
+        // Allow configuring incoming_store_port for C-MOVE via backend options
+        if let Some(port_val) = options.get("incoming_store_port").and_then(|v| v.as_u64()) {
+            if (1..=65535).contains(&port_val) {
+                dimse_config.incoming_store_port = port_val as u16;
+            }
+        }
 
         // Create SCU client
         let scu = DimseScu::new(dimse_config);
@@ -304,6 +311,142 @@ impl DicomEndpoint {
                     }
                     Err(e) => serde_json::json!({
                         "operation": "find",
+                        "success": false,
+                        "error": e.to_string()
+                    })
+                }
+            },
+            "move" | "/move" => {
+                // Parse request body to build a MoveQuery (destination defaults to our local AET)
+                let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
+                    .unwrap_or(serde_json::Value::Null);
+
+                let (_cmd, identifier_json, _qmeta) = match body_json {
+                    serde_json::Value::Object(_) => djt::parse_wrapper_or_identifier(&body_json),
+                    _ => (None, serde_json::json!({}), None),
+                };
+
+                // Flatten identifier JSON into tag->string map for MoveQuery parameters
+                let mut params: HashMap<String, String> = HashMap::new();
+                if let Some(map) = identifier_json.as_object() {
+                    for (tag, entry) in map.iter() {
+                        if let Some(val_array) = entry.get("Value").and_then(|v| v.as_array()) {
+                            if let Some(first) = val_array.get(0) {
+                                if let Some(s) = first.as_str() {
+                                    params.insert(tag.clone(), s.to_string());
+                                } else if let Some(obj) = first.as_object() {
+                                    if let Some(alpha) = obj.get("Alphabetic").and_then(|v| v.as_str()) {
+                                        params.insert(tag.clone(), alpha.to_string());
+                                    }
+                                }
+                            } else {
+                                params.insert(tag.clone(), String::new());
+                            }
+                        }
+                    }
+                }
+
+                // Destination AE: default to our local AET (download into proxy tmp)
+                let destination_aet = self.get_local_aet(options).unwrap_or_else(|| "HARMONY_SCU".to_string());
+                let mut move_q = dimse::types::MoveQuery::new(QueryLevel::Study, destination_aet);
+                for (k, v) in params.into_iter() {
+                    move_q = move_q.with_parameter(k, v);
+                }
+
+                match scu.move_request(&remote_node, move_q).await {
+                    Ok(mut stream) => {
+                        use futures_util::StreamExt;
+                        let mut instances: Vec<serde_json::Value> = Vec::new();
+                        while let Some(item) = stream.next().await {
+                            if let Ok(ds) = item {
+                                if let dimse::types::DatasetStream::File { ref path, .. } = ds {
+                                    if let Ok(obj) = dicom_object::open_file(path) {
+                                        if let Ok(json) = dicom_json_tool::identifier_to_json_value(&obj) {
+                                            instances.push(json);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        // Optional debug attachment
+                        let mut response = serde_json::json!({
+                            "operation": "move",
+                            "success": true,
+                            "instances": instances
+                        });
+                        if std::env::var("HARMONY_TEST_DEBUG").ok().as_deref() == Some("1") {
+                            if let Ok(debug_text) = std::fs::read_to_string("./tmp/movescu_last.json") {
+                                if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(&debug_text) {
+                                    response["debug"] = debug_json;
+                                }
+                            }
+                        }
+                        response
+                    }
+                    Err(e) => serde_json::json!({
+                        "operation": "move",
+                        "success": false,
+                        "error": e.to_string()
+                    })
+                }
+            },
+            "get" | "/get" => {
+                // Parse request body to build a GetQuery
+                let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
+                    .unwrap_or(serde_json::Value::Null);
+
+                let (_cmd, identifier_json, _qmeta) = match body_json {
+                    serde_json::Value::Object(_) => djt::parse_wrapper_or_identifier(&body_json),
+                    _ => (None, serde_json::json!({}), None),
+                };
+
+                let mut params: HashMap<String, String> = HashMap::new();
+                if let Some(map) = identifier_json.as_object() {
+                    for (tag, entry) in map.iter() {
+                        if let Some(val_array) = entry.get("Value").and_then(|v| v.as_array()) {
+                            if let Some(first) = val_array.get(0) {
+                                if let Some(s) = first.as_str() {
+                                    params.insert(tag.clone(), s.to_string());
+                                } else if let Some(obj) = first.as_object() {
+                                    if let Some(alpha) = obj.get("Alphabetic").and_then(|v| v.as_str()) {
+                                        params.insert(tag.clone(), alpha.to_string());
+                                    }
+                                }
+                            } else {
+                                params.insert(tag.clone(), String::new());
+                            }
+                        }
+                    }
+                }
+
+                let mut get_q = GetQuery::new(QueryLevel::Study);
+                for (k, v) in params.into_iter() {
+                    get_q = get_q.with_parameter(k, v);
+                }
+
+                match scu.get_request(&remote_node, get_q).await {
+                    Ok(mut stream) => {
+                        use futures_util::StreamExt;
+                        let mut instances: Vec<serde_json::Value> = Vec::new();
+                        while let Some(item) = stream.next().await {
+                            if let Ok(ds) = item {
+                                if let dimse::types::DatasetStream::File { ref path, .. } = ds {
+                                    if let Ok(obj) = dicom_object::open_file(path) {
+                                        if let Ok(json) = dicom_json_tool::identifier_to_json_value(&obj) {
+                                            instances.push(json);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        serde_json::json!({
+                            "operation": "get",
+                            "success": true,
+                            "instances": instances
+                        })
+                    }
+                    Err(e) => serde_json::json!({
+                        "operation": "get",
                         "success": false,
                         "error": e.to_string()
                     })
