@@ -8,7 +8,7 @@ use crate::config::config::Config;
 use crate::models::backends::backends::Backend;
 use crate::models::pipelines::config::Pipeline;
 use crate::models::middleware::chain::MiddlewareChain;
-use crate::models::envelope::envelope::{RequestEnvelope, RequestDetails};
+use crate::models::envelope::envelope::RequestEnvelope;
 
 pub struct Dispatcher<> {
     config: Arc<Config>,

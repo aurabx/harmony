@@ -30,7 +30,7 @@ pub struct Envelope<T> {
 #### **Fields**
 1. **`request_details`**:
     - Type: [`RequestDetails`](#requestdetails-structure)
-    - Description: Contains metadata about the incoming HTTP request such as headers, URI, and method.
+- Description: Contains metadata about the incoming HTTP request such as method, URI, headers, cookies, query parameters, cache status, and free-form metadata.
 
 2. **`original_data`**:
     - Type: Generic (`T`)
@@ -50,6 +50,9 @@ pub struct RequestDetails {
     pub method: String,
     pub uri: String,
     pub headers: HashMap<String, String>,
+    pub cookies: HashMap<String, String>,
+    pub query_params: HashMap<String, Vec<String>>,
+    pub cache_status: Option<String>,
     pub metadata: HashMap<String, String>,
 }
 ```
@@ -68,7 +71,19 @@ pub struct RequestDetails {
     - Type: `HashMap<String, String>`
     - Description: A collection of HTTP header keys and values from the request.
 
-4. **`metadata`**:
+4. **`cookies`**:
+    - Type: `HashMap<String, String>`
+    - Description: Parsed cookies from Cookie headers.
+
+5. **`query_params`**:
+    - Type: `HashMap<String, Vec<String>>`
+    - Description: Query parameters from the URI. Keys may map to multiple values.
+
+6. **`cache_status`**:
+    - Type: `Option<String>`
+    - Description: Cache status derived from common headers (Cache-Status, X-Cache, CF-Cache-Status).
+
+7. **`metadata`**:
     - Type: `HashMap<String, String>`
     - Description: Additional metadata about the request, if applicable.
 

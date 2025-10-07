@@ -63,6 +63,9 @@ impl PipelineQueryProvider {
             method: op.to_string(),
             uri: format!("dicom://scp/{}", op.to_lowercase()),
             headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
             metadata: meta,
         };
 

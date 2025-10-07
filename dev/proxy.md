@@ -9,6 +9,8 @@ Support methods: GET, POST, PUT, DELETE
 Capture the full incoming path (everything after base URL)
 Capture all incoming headers
 Capture request body (if present)
+Capture cookies
+Capture caching
 
 3. Upstream Forwarding
 

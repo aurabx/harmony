@@ -13,6 +13,9 @@ fn test_create_envelope() {
             headers.insert("Content-Type".to_string(), "application/json".to_string());
             headers
         },
+        cookies: HashMap::new(),
+        query_params: HashMap::new(),
+        cache_status: None,
         metadata: HashMap::new(),
     };
 

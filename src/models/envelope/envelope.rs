@@ -4,7 +4,7 @@ use std::collections::HashMap;
 /// Represents an Envelope for passing data between endpoints, backends, and middleware.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RequestEnvelope<T> {
-    /// Request details, such as method, headers, and metadata.
+    /// Request details, such as method, headers, cookies, query params, cache status and metadata.
     pub request_details: RequestDetails,
     /// Original data received from the source (not serialized).
     #[serde(skip)]
@@ -22,6 +22,12 @@ pub struct RequestDetails {
     pub uri: String,
     /// HTTP headers as key-value pairs.
     pub headers: HashMap<String, String>,
+    /// Cookies parsed from the Cookie header(s): name -> value.
+    pub cookies: HashMap<String, String>,
+    /// Query parameters parsed from the request URI: name -> list of values.
+    pub query_params: HashMap<String, Vec<String>>,
+    /// Cache status derived from common cache headers (e.g., Cache-Status, X-Cache, CF-Cache-Status).
+    pub cache_status: Option<String>,
     /// Additional metadata, if necessary.
     pub metadata: HashMap<String, String>,
 }

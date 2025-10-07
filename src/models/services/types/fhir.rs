@@ -48,6 +48,15 @@ impl ServiceType for FhirEndpoint {
             },
         ]
     }
+    async fn build_request_envelope(
+        &self,
+        req: &mut axum::extract::Request,
+        options: &HashMap<String, Value>,
+    ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error> {
+        // Delegate to HttpEndpoint's builder to keep HTTP parsing consistent
+        let http = crate::models::services::types::http::HttpEndpoint {};
+        http.build_request_envelope(req, options).await
+    }
 }
 
 #[async_trait]

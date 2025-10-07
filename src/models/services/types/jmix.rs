@@ -49,6 +49,16 @@ impl ServiceType for JmixEndpoint {
             }
         ]
     }
+
+    async fn build_request_envelope(
+        &self,
+        req: &mut axum::extract::Request,
+        options: &HashMap<String, Value>,
+    ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error> {
+        // Delegate to HttpEndpoint builder for consistent HTTP parsing
+        let http = crate::models::services::types::http::HttpEndpoint {};
+        http.build_request_envelope(req, options).await
+    }
 }
 
 #[async_trait]
