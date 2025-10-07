@@ -108,41 +108,18 @@ impl<'a> Dispatcher<> {
             .map(|(_, g)| g)
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        // Derive the subpath after the endpoint's path_prefix and store it in metadata
-        let path_prefix = endpoint
-            .options
-            .as_ref()
-            .and_then(|m| m.get("path_prefix"))
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-        let path_only = req.uri().path().to_string();
-        let full_path_with_query = req
-            .uri()
-            .path_and_query()
-            .map(|pq| pq.as_str().to_string())
-            .unwrap_or_else(|| path_only.clone());
-        let mut subpath = path_only.strip_prefix(path_prefix).unwrap_or("").to_string();
-        if subpath.starts_with('/') { subpath = subpath.trim_start_matches('/').to_string(); }
+        // Prefer protocol-agnostic envelope builder; fallback to HTTP-only if not implemented
+        let ctx = Self::http_request_to_protocol_ctx(
+            req,
+            endpoint.options.as_ref().unwrap_or(&HashMap::new()),
+        ).await.map_err(|_| StatusCode::BAD_REQUEST)?;
 
-        let headers_map: HashMap<String, String> = req
-            .headers()
-            .iter()
-            .map(|(key, value)| (key.to_string(), value.to_str().unwrap_or_default().to_string()))
-            .collect();
-
-        let mut metadata_map: HashMap<String, String> = HashMap::new();
-        metadata_map.insert("path".to_string(), subpath);
-        metadata_map.insert("full_path".to_string(), full_path_with_query);
-
-        let request_details = RequestDetails {
-            method: req.method().to_string(),
-            uri: req.uri().to_string(),
-            headers: headers_map,
-            metadata: metadata_map,
-        };
-
-        // Build the envelope from the request
-        let envelope = Self::build_envelope(req, request_details).await
+        let envelope = service
+            .build_protocol_envelope(
+                ctx,
+                endpoint.options.as_ref().unwrap_or(&HashMap::new()),
+            )
+            .await
             .map_err(|_| StatusCode::BAD_REQUEST)?;
 
         // 1. Process through endpoint service
@@ -198,6 +175,124 @@ impl<'a> Dispatcher<> {
 
         // Return the Response produced by the service directly (service controls body/headers)
         Ok(response)
+    }
+
+    // Convert an Axum HTTP request into a ProtocolCtx for protocol-agnostic envelope builders
+    async fn http_request_to_protocol_ctx(
+        req: &mut Request,
+        options: &HashMap<String, serde_json::Value>,
+    ) -> Result<crate::models::protocol::ProtocolCtx, crate::utils::Error> {
+        use crate::models::protocol::{Protocol, ProtocolCtx};
+        use crate::utils::Error;
+        use axum::body::Body;
+
+        // Compute subpath using path_prefix option
+        let path_prefix = options
+            .get("path_prefix")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        let path_only = req.uri().path().to_string();
+        let full_path_with_query = req
+            .uri()
+            .path_and_query()
+            .map(|pq| pq.as_str().to_string())
+            .unwrap_or_else(|| path_only.clone());
+        let mut subpath = path_only.strip_prefix(path_prefix).unwrap_or("").to_string();
+        if subpath.starts_with('/') {
+            subpath = subpath.trim_start_matches('/').to_string();
+        }
+
+        // Headers
+        let headers_obj: serde_json::Value = {
+            let map: serde_json::Map<String, serde_json::Value> = req
+                .headers()
+                .iter()
+                .map(|(k, v)| {
+                    (
+                        k.to_string(),
+                        serde_json::Value::String(v.to_str().unwrap_or_default().to_string()),
+                    )
+                })
+                .collect();
+            serde_json::Value::Object(map)
+        };
+
+        // Cookies
+        let cookies_obj: serde_json::Value = {
+            let mut map = serde_json::Map::new();
+            for val in req.headers().get_all(http::header::COOKIE).iter() {
+                if let Ok(s) = val.to_str() {
+                    for part in s.split(';') {
+                        let kv = part.trim();
+                        if kv.is_empty() { continue; }
+                        let mut split = kv.splitn(2, '=');
+                        let name = split.next().unwrap_or("").trim();
+                        let value = split.next().unwrap_or("").trim();
+                        if !name.is_empty() {
+                            map.insert(name.to_string(), serde_json::Value::String(value.to_string()));
+                        }
+                    }
+                }
+            }
+            serde_json::Value::Object(map)
+        };
+
+        // Query params
+        let query_obj: serde_json::Value = {
+            let mut root = serde_json::Map::new();
+            if let Some(q) = req.uri().query() {
+                for (k, v) in url::form_urlencoded::parse(q.as_bytes()) {
+                    root.entry(k.to_string())
+                        .or_insert_with(|| serde_json::Value::Array(vec![]))
+                        .as_array_mut()
+                        .unwrap()
+                        .push(serde_json::Value::String(v.to_string()));
+                }
+            }
+            serde_json::Value::Object(root)
+        };
+
+        // Cache status
+        let cache_status = req
+            .headers()
+            .get("Cache-Status")
+            .or_else(|| req.headers().get("X-Cache"))
+            .or_else(|| req.headers().get("CF-Cache-Status"))
+            .and_then(|v| v.to_str().ok())
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        // Metadata
+        let mut meta_map = std::collections::HashMap::new();
+        meta_map.insert("protocol".to_string(), "http".to_string());
+        meta_map.insert("path".to_string(), subpath);
+        meta_map.insert("full_path".to_string(), full_path_with_query);
+
+        // attrs object
+        let mut attrs = serde_json::Map::new();
+        attrs.insert("method".to_string(), serde_json::Value::String(req.method().to_string()));
+        attrs.insert("uri".to_string(), serde_json::Value::String(req.uri().to_string()));
+        attrs.insert("headers".to_string(), headers_obj);
+        attrs.insert("cookies".to_string(), cookies_obj);
+        attrs.insert("query_params".to_string(), query_obj);
+        attrs.insert("cache_status".to_string(), serde_json::Value::String(cache_status));
+
+        // Body bytes
+        let body_bytes = axum::body::to_bytes(
+            std::mem::replace(req.body_mut(), Body::empty()),
+            usize::MAX,
+        )
+        .await
+        .map_err(|_| Error::from("Failed to read request body"))?
+        .to_vec();
+
+        Ok(ProtocolCtx {
+            protocol: Protocol::Http,
+            payload: body_bytes,
+            meta: meta_map,
+            attrs: serde_json::Value::Object(attrs),
+        })
     }
 
     // Process through backend(s)
@@ -381,24 +476,4 @@ impl<'a> Dispatcher<> {
         }
     }
 
-    async fn build_envelope(req: &mut Request, request_details: RequestDetails) -> Result<RequestEnvelope<Vec<u8>>, StatusCode> {
-        let body_bytes = axum::body::to_bytes(
-            std::mem::replace(req.body_mut(), Body::empty()),
-            usize::MAX
-        )
-            .await
-            .map_err(|_| StatusCode::BAD_REQUEST)?
-            .to_vec();
-
-        let body_value: Option<serde_json::Value> =
-            serde_json::from_slice(&body_bytes).ok();
-
-        let envelope = RequestEnvelope {
-            request_details,
-            original_data: body_bytes,
-            normalized_data: body_value,
-        };
-
-        Ok(envelope)
-    }
 }

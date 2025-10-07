@@ -6,3 +6,4 @@ pub mod endpoints;
 pub(crate) mod envelope;
 pub mod pipelines;
 pub(crate) mod backends;
+pub mod protocol;

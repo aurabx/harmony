@@ -2,7 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use async_trait::async_trait;
 use crate::router::pipeline_runner::run_pipeline;
-use crate::models::envelope::envelope::{RequestEnvelope, RequestDetails};
+use crate::models::envelope::envelope::RequestEnvelope;
 use crate::globals::get_config;
 use dimse::types::{DatasetStream, QueryLevel};
 use dimse::{Result as DimseResult};
@@ -11,11 +11,12 @@ use dicom_json_tool as tool;
 
 pub struct PipelineQueryProvider {
     pipeline: String,
+    endpoint: String,
 }
 
 impl PipelineQueryProvider {
-    pub fn new(pipeline: impl Into<String>) -> Self {
-        Self { pipeline: pipeline.into() }
+    pub fn new(pipeline: impl Into<String>, endpoint: impl Into<String>) -> Self {
+        Self { pipeline: pipeline.into(), endpoint: endpoint.into() }
     }
 
     fn build_identifier_json(&self, parameters: &HashMap<String, String>) -> serde_json::Value {
@@ -56,25 +57,35 @@ impl PipelineQueryProvider {
         tool::model::QueryMetadata(out)
     }
 
-    async fn run(&self, op: &str, body: serde_json::Value, meta: HashMap<String, String>) -> DimseResult<RequestEnvelope<Vec<u8>>> {
+    async fn run(&self, op: &str, body: serde_json::Value, mut meta: HashMap<String, String>) -> DimseResult<RequestEnvelope<Vec<u8>>> {
+        use crate::models::protocol::{Protocol, ProtocolCtx};
         let config = get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
 
-        let details = RequestDetails {
-            method: op.to_string(),
-            uri: format!("dicom://scp/{}", op.to_lowercase()),
-            headers: HashMap::new(),
-            cookies: HashMap::new(),
-            query_params: HashMap::new(),
-            cache_status: None,
-            metadata: meta,
+        // Resolve endpoint service and options
+        let endpoint = config.endpoints.get(&self.endpoint)
+            .ok_or_else(|| DimseError::operation_failed(format!("Unknown endpoint '{}'", self.endpoint)))?;
+        let service = endpoint.resolve_service()
+            .map_err(|e| DimseError::operation_failed(format!("Resolve service failed: {}", e)))?;
+        let options_owned: HashMap<String, serde_json::Value> = endpoint.options.clone().unwrap_or_default();
+        let options = &options_owned;
+
+        // ProtocolCtx for DIMSE
+        meta.insert("protocol".into(), "dimse".into());
+        meta.insert("operation".into(), op.to_string());
+        let ctx = ProtocolCtx {
+            protocol: Protocol::Dimse,
+            payload: serde_json::to_vec(&body).unwrap_or_default(),
+            meta,
+            attrs: serde_json::json!({}),
         };
 
-        let envelope = RequestEnvelope {
-            request_details: details,
-            original_data: serde_json::to_vec(&body).unwrap_or_default(),
-            normalized_data: Some(body),
-        };
+        // Let the service build the envelope
+        let envelope = service
+            .build_protocol_envelope(ctx, options)
+            .await
+            .map_err(|e| DimseError::operation_failed(format!("Envelope build failed: {}", e)))?;
 
+        // Run common pipeline
         let processed = run_pipeline(envelope, &self.pipeline, Arc::clone(&config))
             .await
             .map_err(|e| DimseError::operation_failed(format!("Pipeline failed: {}", e)))?;

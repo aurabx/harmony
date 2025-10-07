@@ -13,6 +13,7 @@ use crate::utils::Error;
 #[derive(Debug, Deserialize)]
 pub struct FhirEndpoint {}
 
+#[async_trait]
 impl ServiceType for FhirEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         // Ensure 'path_prefix' exists and is valid
@@ -48,15 +49,17 @@ impl ServiceType for FhirEndpoint {
             },
         ]
     }
-    async fn build_request_envelope(
+
+    async fn build_protocol_envelope(
         &self,
-        req: &mut axum::extract::Request,
+        ctx: crate::models::protocol::ProtocolCtx,
         options: &HashMap<String, Value>,
     ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error> {
-        // Delegate to HttpEndpoint's builder to keep HTTP parsing consistent
+        // Delegate to HttpEndpoint for HTTP variant
         let http = crate::models::services::types::http::HttpEndpoint {};
-        http.build_request_envelope(req, options).await
+        http.build_protocol_envelope(ctx, options).await
     }
+
 }
 
 #[async_trait]

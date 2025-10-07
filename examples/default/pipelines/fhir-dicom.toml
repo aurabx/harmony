@@ -26,6 +26,7 @@ networks = ["default"]
 endpoints = ["fhir_test"]
 middleware = [
     'middleware.jwt_auth',
+    'middleware.json_extractor',
     'middleware.fhir_dicom_transform',
 ]
 backends = ["dicom_backend"]

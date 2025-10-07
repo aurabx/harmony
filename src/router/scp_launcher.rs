@@ -58,9 +58,10 @@ pub fn ensure_dimse_scp_started(
     if let Some(b) = options.get("enable_move").and_then(|v| v.as_bool()) { dimse_config.enable_move = b; }
 
     let pipeline = pipeline_name.to_string();
+    let endpoint = endpoint_name.to_string();
 
     tokio::spawn(async move {
-        let provider: Arc<dyn dimse::scp::QueryProvider> = Arc::new(PipelineQueryProvider::new(pipeline));
+        let provider: Arc<dyn dimse::scp::QueryProvider> = Arc::new(PipelineQueryProvider::new(pipeline, endpoint));
         let scp = dimse::DimseScp::new(dimse_config.clone(), provider);
         if let Err(e) = scp.run().await {
             tracing::error!("DIMSE SCP '{}' failed: {}", local_aet, e);

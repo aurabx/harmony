@@ -12,6 +12,7 @@ use crate::router::route_config::RouteConfig;
 #[derive(Debug, Deserialize)]
 pub struct HttpEndpoint {}
 
+#[async_trait]
 impl ServiceType for HttpEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         // Ensure 'path_prefix' exists and is not empty
@@ -46,6 +47,78 @@ impl ServiceType for HttpEndpoint {
                 description: Some("Handles GET/POST/PUT/DELETE for HttpEndpoint".to_string()),
             },
         ]
+    }
+
+    // noinspection DuplicatedCode
+    // Protocol-agnostic builder (HTTP variant)
+    async fn build_protocol_envelope(
+        &self,
+        ctx: crate::models::protocol::ProtocolCtx,
+        _options: &HashMap<String, Value>,
+    ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error> {
+        use crate::models::envelope::envelope::{RequestEnvelope, RequestDetails};
+        use crate::utils::Error;
+        use std::collections::HashMap as Map;
+
+        if ctx.protocol != crate::models::protocol::Protocol::Http {
+            return Err(Error::from("HttpEndpoint only supports Protocol::Http in build_protocol_envelope"));
+        }
+
+        let attrs = ctx.attrs.as_object().ok_or_else(|| Error::from("invalid attrs for HTTP"))?;
+        let headers_map: Map<String, String> = attrs
+            .get("headers")
+            .and_then(|v| v.as_object())
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
+            .unwrap_or_default();
+        let cookies_map: Map<String, String> = attrs
+            .get("cookies")
+            .and_then(|v| v.as_object())
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
+            .unwrap_or_default();
+        let query_params: Map<String, Vec<String>> = attrs
+            .get("query_params")
+            .and_then(|v| v.as_object())
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| {
+                        let vec = v.as_array().unwrap_or(&vec![])
+                            .iter()
+                            .filter_map(|s| s.as_str().map(|s| s.to_string()))
+                            .collect::<Vec<_>>();
+                        (k.clone(), vec)
+                    })
+                    .collect::<Map<String, Vec<String>>>()
+            })
+            .unwrap_or_default();
+        let cache_status = attrs
+            .get("cache_status")
+            .and_then(|v| v.as_str())
+            .map(|s| s.to_string());
+
+        let mut metadata: Map<String, String> = Map::new();
+        // pass through HTTP-derived meta (path, full_path) from ctx.meta
+        if let Some(path) = ctx.meta.get("path") { metadata.insert("path".into(), path.clone()); }
+        if let Some(full) = ctx.meta.get("full_path") { metadata.insert("full_path".into(), full.clone()); }
+        if let Some(proto) = ctx.meta.get("protocol") { metadata.insert("protocol".into(), proto.clone()); }
+
+        let method = attrs.get("method").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let uri = attrs.get("uri").and_then(|v| v.as_str()).unwrap_or("").to_string();
+
+        let request_details = RequestDetails {
+            method,
+            uri,
+            headers: headers_map,
+            cookies: cookies_map,
+            query_params,
+            cache_status,
+            metadata,
+        };
+
+        Ok(RequestEnvelope {
+            request_details,
+            original_data: ctx.payload,
+            normalized_data: None,
+        })
     }
 
 }

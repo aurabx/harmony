@@ -88,6 +88,16 @@ pub trait ServiceType: ServiceHandler<Value> {
 
     /// Returns configured routes
     fn build_router(&self, options: &HashMap<String, Value>) -> Vec<RouteConfig>;
+
+    /// Protocol-agnostic envelope builder. Default: unsupported.
+    async fn build_protocol_envelope(
+        &self,
+        _ctx: crate::models::protocol::ProtocolCtx,
+        _options: &HashMap<String, Value>,
+    ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
+        Err(Error::from("build_protocol_envelope is not supported by this service"))
+    }
+
 }
 
 #[async_trait]

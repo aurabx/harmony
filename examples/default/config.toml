@@ -65,3 +65,6 @@ module=""
 
 [middleware_types.connect]
 module=""
+
+[middleware_types.json_extractor]
+module=""

@@ -13,6 +13,7 @@ use http::Method;
 #[derive(Debug, Deserialize)]
 pub struct JmixEndpoint {}
 
+#[async_trait]
 impl ServiceType for JmixEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         // Ensure 'path_prefix' exists and is non-empty
@@ -50,14 +51,17 @@ impl ServiceType for JmixEndpoint {
         ]
     }
 
-    async fn build_request_envelope(
+    async fn build_protocol_envelope(
         &self,
-        req: &mut axum::extract::Request,
+        ctx: crate::models::protocol::ProtocolCtx,
         options: &HashMap<String, Value>,
     ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error> {
-        // Delegate to HttpEndpoint builder for consistent HTTP parsing
-        let http = crate::models::services::types::http::HttpEndpoint {};
-        http.build_request_envelope(req, options).await
+        // For HTTP protocol, delegate to HttpEndpoint for consistent HTTP parsing
+        if ctx.protocol == crate::models::protocol::Protocol::Http {
+            let http = crate::models::services::types::http::HttpEndpoint {};
+            return http.build_protocol_envelope(ctx, options).await;
+        }
+        Err(crate::utils::Error::from("JmixEndpoint only supports Protocol::Http envelope building"))
     }
 }
 

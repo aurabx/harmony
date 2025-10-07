@@ -101,6 +101,9 @@ fn create_builtin_middleware(middleware_type: &str, options: &HashMap<String, Va
         "passthru" => {
             Ok(Box::new(crate::models::middleware::types::passthru::PassthruMiddleware::new()))
         }
+        "json_extractor" | "json" => {
+            Ok(Box::new(crate::models::middleware::types::json_extractor::JsonExtractorMiddleware::new()))
+        }
         _ => Err(format!("Unsupported built-in middleware type: {}", middleware_type)),
     }
 }

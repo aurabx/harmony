@@ -86,6 +86,7 @@ impl DicomEndpoint {
     }
 }
 
+#[async_trait]
 impl ServiceType for DicomEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         if self.is_backend_usage(options) {
@@ -128,6 +129,43 @@ impl ServiceType for DicomEndpoint {
             // Endpoint usage - no HTTP routes; SCP listener is started by the router/dispatcher with pipeline context
             vec![]
         }
+    }
+
+    async fn build_protocol_envelope(
+        &self,
+        ctx: crate::models::protocol::ProtocolCtx,
+        _options: &HashMap<String, Value>,
+    ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error> {
+        use crate::models::envelope::envelope::{RequestEnvelope, RequestDetails};
+        use crate::utils::Error;
+        use std::collections::HashMap as Map;
+
+        if ctx.protocol != crate::models::protocol::Protocol::Dimse {
+            return Err(Error::from("DicomEndpoint only supports Protocol::Dimse in build_protocol_envelope"));
+        }
+
+        // Build minimal RequestDetails using meta
+        let mut metadata: Map<String, String> = ctx.meta.clone();
+        let op = metadata.get("operation").cloned().unwrap_or_else(|| "DIMSE".into());
+        let uri = format!("dicom://scp/{}", op.to_lowercase());
+        let details = RequestDetails {
+            method: op,
+            uri,
+            headers: Map::new(),
+            cookies: Map::new(),
+            query_params: Map::new(),
+            cache_status: None,
+            metadata,
+        };
+
+        // Prefer normalized_data as the JSON body if payload is JSON
+        let normalized: Option<serde_json::Value> = serde_json::from_slice(&ctx.payload).ok();
+
+        Ok(RequestEnvelope {
+            request_details: details,
+            original_data: ctx.payload,
+            normalized_data: normalized,
+        })
     }
 }
 
