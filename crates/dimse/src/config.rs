@@ -21,6 +21,11 @@ pub struct DimseConfig {
     #[serde(default = "default_port")]
     pub port: u16,
     
+    /// Port to listen for incoming C-STORE during C-MOVE (used by movescu +P)
+    /// This must match the HostTable entry for the destination AE on the QR SCP.
+    #[serde(default = "default_incoming_store_port")]
+    pub incoming_store_port: u16,
+    
     /// Maximum PDU size in bytes
     #[serde(default = "default_max_pdu")]
     pub max_pdu: u32,
@@ -107,6 +112,7 @@ impl Default for DimseConfig {
             local_aet: "HARMONY_SCP".to_string(),
             bind_addr: default_bind_addr(),
             port: default_port(),
+            incoming_store_port: default_incoming_store_port(),
             max_pdu: default_max_pdu(),
             connect_timeout_ms: default_connect_timeout(),
             association_timeout_ms: default_association_timeout(),
@@ -230,6 +236,10 @@ fn default_port() -> u16 {
     DEFAULT_DIMSE_PORT
 }
 
+fn default_incoming_store_port() -> u16 {
+    11123
+}
+
 fn default_max_pdu() -> u32 {
     65536
 }
@@ -266,15 +276,16 @@ fn default_true() -> bool {
 mod tests {
     use super::*;
 
-    #[test]
-    fn test_default_config() {
-        let config = DimseConfig::default();
-        assert_eq!(config.local_aet, "HARMONY_SCP");
-        assert_eq!(config.port, DEFAULT_DIMSE_PORT);
-        assert!(config.enable_echo);
-        assert!(config.enable_find);
-        assert!(config.enable_move);
-    }
+#[test]
+fn test_default_config() {
+    let config = DimseConfig::default();
+    assert_eq!(config.local_aet, "HARMONY_SCP");
+    assert_eq!(config.port, DEFAULT_DIMSE_PORT);
+    assert_eq!(config.incoming_store_port, 11123);
+    assert!(config.enable_echo);
+    assert!(config.enable_find);
+    assert!(config.enable_move);
+}
 
     #[test]
     fn test_remote_node_builder() {
