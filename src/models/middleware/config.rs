@@ -1,7 +1,7 @@
-use serde::Deserialize;
-use crate::models::middleware::types::jwtauth::JwtAuthConfig;
 use crate::models::middleware::types::auth::AuthSidecarConfig;
 use crate::models::middleware::types::connect::AuraboxConnectConfig;
+use crate::models::middleware::types::jwtauth::JwtAuthConfig;
+use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct MiddlewareConfig {

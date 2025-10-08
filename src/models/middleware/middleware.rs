@@ -1,13 +1,12 @@
-
-use async_trait::async_trait;
-use once_cell::sync::OnceCell;
+use crate::config::config::{Config, ConfigError};
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::utils::Error;
-use crate::config::config::{Config, ConfigError};
-use std::collections::HashMap;
+use async_trait::async_trait;
 use once_cell::sync::Lazy;
+use once_cell::sync::OnceCell;
 use serde::Deserialize;
 use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub struct MiddlewareInstance {
@@ -24,10 +23,8 @@ impl MiddlewareInstance {
     pub fn resolve_middleware(&self) -> Result<Box<dyn Middleware>, String> {
         let options = self.options.as_ref().unwrap_or(&EMPTY_OPTIONS);
         resolve_middleware(&self.middleware_type, options)
-
     }
 }
-
 
 // Middleware registry similar to services
 pub static MIDDLEWARE_REGISTRY: OnceCell<HashMap<String, String>> = OnceCell::new();
@@ -53,7 +50,10 @@ pub fn initialise_middleware_registry(config: &Config) {
 }
 
 /// Resolves a middleware type from the registry and returns a boxed Middleware
-pub fn resolve_middleware(middleware_type: &str, options: &HashMap<String, Value>) -> Result<Box<dyn Middleware>, String> {
+pub fn resolve_middleware(
+    middleware_type: &str,
+    options: &HashMap<String, Value>,
+) -> Result<Box<dyn Middleware>, String> {
     // Check the registry first
     if let Some(registry) = MIDDLEWARE_REGISTRY.get() {
         if let Some(module) = registry.get(middleware_type) {
@@ -80,7 +80,10 @@ pub fn resolve_middleware(middleware_type: &str, options: &HashMap<String, Value
 }
 
 /// Creates built-in middleware instances
-fn create_builtin_middleware(middleware_type: &str, options: &HashMap<String, Value>) -> Result<Box<dyn Middleware>, String> {
+fn create_builtin_middleware(
+    middleware_type: &str,
+    options: &HashMap<String, Value>,
+) -> Result<Box<dyn Middleware>, String> {
     use crate::models::middleware::types::auth::AuthSidecarMiddleware;
     use crate::models::middleware::types::connect::AuraboxConnectMiddleware;
     use crate::models::middleware::types::jwtauth::JwtAuthMiddleware;
@@ -89,25 +92,27 @@ fn create_builtin_middleware(middleware_type: &str, options: &HashMap<String, Va
         "jwtauth" => {
             let config = crate::models::middleware::types::jwtauth::parse_config(options)?;
             Ok(Box::new(JwtAuthMiddleware::new(config)))
-        },
+        }
         "auth" => {
             let config = crate::models::middleware::types::auth::parse_config(options)?;
             Ok(Box::new(AuthSidecarMiddleware::new(config)))
-        },
+        }
         "connect" => {
             let config = crate::models::middleware::types::connect::parse_config(options)?;
             Ok(Box::new(AuraboxConnectMiddleware::new(config)))
-        },
-        "passthru" => {
-            Ok(Box::new(crate::models::middleware::types::passthru::PassthruMiddleware::new()))
         }
-        "json_extractor" | "json" => {
-            Ok(Box::new(crate::models::middleware::types::json_extractor::JsonExtractorMiddleware::new()))
-        }
-        _ => Err(format!("Unsupported built-in middleware type: {}", middleware_type)),
+        "passthru" => Ok(Box::new(
+            crate::models::middleware::types::passthru::PassthruMiddleware::new(),
+        )),
+        "json_extractor" | "json" => Ok(Box::new(
+            crate::models::middleware::types::json_extractor::JsonExtractorMiddleware::new(),
+        )),
+        _ => Err(format!(
+            "Unsupported built-in middleware type: {}",
+            middleware_type
+        )),
     }
 }
-
 
 #[async_trait]
 pub trait Middleware: Send + Sync {

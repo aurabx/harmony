@@ -1,9 +1,9 @@
-pub mod network;
-pub mod services;
-pub mod targets;
-pub mod middleware;
+pub(crate) mod backends;
 pub mod endpoints;
 pub(crate) mod envelope;
+pub mod middleware;
+pub mod network;
 pub mod pipelines;
-pub(crate) mod backends;
 pub mod protocol;
+pub mod services;
+pub mod targets;

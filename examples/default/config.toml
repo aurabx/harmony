@@ -6,8 +6,6 @@
 id = "harmony-test"
 # The log level. Defaults to 'error'
 log_level = "debug"
-# Temp directory. Defaults to /tmp/harmony
-store_dir = "/tmp/harmony"
 
 # ------------------------
 # Network
@@ -35,6 +33,17 @@ transforms_path = "examples/default/transforms"
 [logging]
 log_to_file = true
 log_file_path = "/tmp/harmony_test.log"
+
+# ------------------------
+# Storage
+#
+# Configurable storage backend for temporary files
+#-------------------------
+[storage]
+backend = "filesystem"
+
+[storage.options]
+path = "./tmp"
 
 # ------------------------
 # Service types

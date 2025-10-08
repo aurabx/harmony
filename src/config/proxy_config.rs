@@ -6,8 +6,6 @@ pub struct ProxyConfig {
     pub id: String,
     #[serde(default = "default_log_level")]
     pub log_level: String,
-    #[serde(default = "default_store_dir")]
-    pub store_dir: String,
     #[serde(default = "default_pipelines_path")]
     pub pipelines_path: String,
     #[serde(default = "default_transforms_path")]
@@ -19,11 +17,6 @@ fn default_log_level() -> String {
     "error".to_string()
 }
 
-/// Default store directory for the proxy configuration
-fn default_store_dir() -> String {
-    "/tmp/harmony".to_string()
-}
-
 /// Default pipelines path for the proxy configuration
 fn default_pipelines_path() -> String {
     "examples/default/pipelines".to_string()
@@ -33,4 +26,3 @@ fn default_pipelines_path() -> String {
 fn default_transforms_path() -> String {
     "examples/default/transforms".to_string()
 }
-

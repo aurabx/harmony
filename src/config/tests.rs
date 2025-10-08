@@ -54,7 +54,6 @@ fn test_basic_config() {
         module = ""
     "#;
 
-
     // -----------------------------------------------------------------
     // Load & validate the configuration
     // -----------------------------------------------------------------
@@ -70,8 +69,5 @@ fn test_basic_config() {
     assert_eq!(config.proxy.id, "router-test");
     // Network fields
     assert_eq!(config.network["default"].interface, "wg0");
-    assert_eq!(
-        config.network["default"].http.bind_address,
-        "127.0.0.1"
-    );
+    assert_eq!(config.network["default"].http.bind_address, "127.0.0.1");
 }

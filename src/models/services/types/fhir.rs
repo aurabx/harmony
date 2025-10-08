@@ -1,14 +1,14 @@
-use std::collections::HashMap;
-use async_trait::async_trait;
 use crate::config::config::ConfigError;
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::services::services::{ServiceHandler, ServiceType};
-use serde_json::Value;
-use serde::Deserialize;
 use crate::router::route_config::RouteConfig;
-use http::Method;
-use axum::{response::Response, body::Body};
 use crate::utils::Error;
+use async_trait::async_trait;
+use axum::{body::Body, response::Response};
+use http::Method;
+use serde::Deserialize;
+use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub struct FhirEndpoint {}
@@ -41,25 +41,23 @@ impl ServiceType for FhirEndpoint {
             .unwrap_or("/fhir");
 
         // Return route configurations for GET/POST/PUT/DELETE methods
-        vec![
-            RouteConfig {
-                path: format!("{}/{{*wildcard}}", path_prefix), // Use {*wildcard} syntax
-                methods: vec![Method::GET, Method::POST, Method::PUT, Method::DELETE],
-                description: Some("Handles FHIR GET/POST/PUT/DELETE requests".to_string()),
-            },
-        ]
+        vec![RouteConfig {
+            path: format!("{}/{{*wildcard}}", path_prefix), // Use {*wildcard} syntax
+            methods: vec![Method::GET, Method::POST, Method::PUT, Method::DELETE],
+            description: Some("Handles FHIR GET/POST/PUT/DELETE requests".to_string()),
+        }]
     }
 
     async fn build_protocol_envelope(
         &self,
         ctx: crate::models::protocol::ProtocolCtx,
         options: &HashMap<String, Value>,
-    ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error> {
+    ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error>
+    {
         // Delegate to HttpEndpoint for HTTP variant
         let http = crate::models::services::types::http::HttpEndpoint {};
         http.build_protocol_envelope(ctx, options).await
     }
-
 }
 
 #[async_trait]
@@ -116,22 +114,31 @@ impl ServiceHandler<Value> for FhirEndpoint {
 
         let mut builder = Response::builder().status(status);
         let mut has_content_type = false;
-        if let Some(hdrs) = response_meta.and_then(|m| m.get("headers")).and_then(|h| h.as_object()) {
+        if let Some(hdrs) = response_meta
+            .and_then(|m| m.get("headers"))
+            .and_then(|h| h.as_object())
+        {
             for (k, v) in hdrs.iter() {
                 if let Some(val_str) = v.as_str() {
-                    if k.eq_ignore_ascii_case("content-type") { has_content_type = true; }
+                    if k.eq_ignore_ascii_case("content-type") {
+                        has_content_type = true;
+                    }
                     builder = builder.header(k.as_str(), val_str);
                 }
             }
         }
 
-        if let Some(body_str) = response_meta.and_then(|m| m.get("body")).and_then(|b| b.as_str()) {
+        if let Some(body_str) = response_meta
+            .and_then(|m| m.get("body"))
+            .and_then(|b| b.as_str())
+        {
             return builder
                 .body(Body::from(body_str.to_string()))
                 .map_err(|_| Error::from("Failed to construct FHIR HTTP response"));
         }
 
-        let body_str = serde_json::to_string(&nd).map_err(|_| Error::from("Failed to serialize FHIR response JSON"))?;
+        let body_str = serde_json::to_string(&nd)
+            .map_err(|_| Error::from("Failed to serialize FHIR response JSON"))?;
         if !has_content_type {
             builder = builder.header("content-type", "application/json");
         }

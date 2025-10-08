@@ -6,10 +6,10 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use tokio::net::TcpListener;
 use tokio::sync::RwLock;
-use tracing::{info, warn, error, debug, span, Level};
+use tracing::{debug, error, info, span, warn, Level};
 
 use crate::config::DimseConfig;
-use crate::router::{Router, DimseRequest, DimseResponse, DimseRequestPayload};
+use crate::router::{DimseRequest, DimseRequestPayload, DimseResponse, Router};
 use crate::types::{DatasetStream, QueryLevel};
 use crate::{DimseError, Result};
 
@@ -65,11 +65,10 @@ impl DimseScp {
     pub async fn run(self) -> Result<()> {
         let addr = SocketAddr::new(self.config.bind_addr, self.config.port);
         let listener = TcpListener::bind(addr).await?;
-        
+
         info!(
-            "Starting DIMSE SCP on {} (AET: {})", 
-            addr, 
-            self.config.local_aet
+            "Starting DIMSE SCP on {} (AET: {})",
+            addr, self.config.local_aet
         );
 
         // Validate configuration
@@ -81,12 +80,15 @@ impl DimseScp {
             match listener.accept().await {
                 Ok((stream, peer_addr)) => {
                     debug!("Accepted connection from {}", peer_addr);
-                    
+
                     // Check association limit
                     {
                         let active = scp.active_associations.read().await;
                         if *active >= scp.config.max_associations {
-                            warn!("Maximum associations reached, rejecting connection from {}", peer_addr);
+                            warn!(
+                                "Maximum associations reached, rejecting connection from {}",
+                                peer_addr
+                            );
                             drop(stream);
                             continue;
                         }
@@ -162,7 +164,9 @@ impl DimseScp {
         router: &Arc<dyn Router>,
     ) -> Result<()> {
         let request_id = request.id;
-        let _span = span!(Level::DEBUG, "dimse_request", id = %request_id, command = ?request.command).entered();
+        let _span =
+            span!(Level::DEBUG, "dimse_request", id = %request_id, command = ?request.command)
+                .entered();
 
         match request.payload {
             DimseRequestPayload::Echo => {
@@ -172,31 +176,41 @@ impl DimseScp {
                 } else {
                     DimseResponse::error(request_id, "C-ECHO not supported".to_string())
                 };
-                
+
                 self.send_response(request, response, router).await?;
             }
-            
+
             DimseRequestPayload::Find(ref query) => {
-                debug!("Processing C-FIND request: level={}, params={:?}", query.query_level, query.parameters);
-                
+                debug!(
+                    "Processing C-FIND request: level={}, params={:?}",
+                    query.query_level, query.parameters
+                );
+
                 if !self.config.enable_find {
-                    let response = DimseResponse::error(request_id, "C-FIND not supported".to_string());
+                    let response =
+                        DimseResponse::error(request_id, "C-FIND not supported".to_string());
                     self.send_response(request, response, router).await?;
                     return Ok(());
                 }
 
-                match self.query_provider.find(query.query_level, &query.parameters, query.max_results).await {
+                match self
+                    .query_provider
+                    .find(query.query_level, &query.parameters, query.max_results)
+                    .await
+                {
                     Ok(datasets) => {
                         debug!("Found {} matching datasets", datasets.len());
-                        
+
                         // Send each dataset as a pending response
                         for (i, dataset) in datasets.iter().enumerate() {
                             let is_final = i == datasets.len() - 1;
-                            let response = DimseResponse::find(request_id, Some(dataset.clone()), is_final);
-                            
+                            let response =
+                                DimseResponse::find(request_id, Some(dataset.clone()), is_final);
+
                             if let Some(ref stream_tx) = request.stream_tx {
-                                stream_tx.send(response).await
-                                    .map_err(|_| DimseError::router("Failed to send stream response"))?;
+                                stream_tx.send(response).await.map_err(|_| {
+                                    DimseError::router("Failed to send stream response")
+                                })?;
                             }
                         }
 
@@ -212,32 +226,38 @@ impl DimseScp {
                     }
                 }
             }
-            
+
             DimseRequestPayload::Move(ref query) => {
-                debug!("Processing C-MOVE request: level={}, dest={}", query.query_level, query.destination_aet);
-                
+                debug!(
+                    "Processing C-MOVE request: level={}, dest={}",
+                    query.query_level, query.destination_aet
+                );
+
                 if !self.config.enable_move {
-                    let response = DimseResponse::error(request_id, "C-MOVE not supported".to_string());
+                    let response =
+                        DimseResponse::error(request_id, "C-MOVE not supported".to_string());
                     self.send_response(request, response, router).await?;
                     return Ok(());
                 }
 
                 // TODO: Implement actual C-MOVE logic
                 // For now, just locate the datasets and report status
-                match self.query_provider.locate(query.query_level, &query.parameters).await {
+                match self
+                    .query_provider
+                    .locate(query.query_level, &query.parameters)
+                    .await
+                {
                     Ok(datasets) => {
                         let total = datasets.len() as u32;
                         debug!("Located {} datasets for move", total);
-                        
+
                         // Send final status response
                         let response = DimseResponse::move_response(
-                            request_id,
-                            None,
-                            0, // remaining
+                            request_id, None, 0,     // remaining
                             total, // completed
-                            0, // failed
-                            0, // warning
-                            true, // is_final
+                            0,     // failed
+                            0,     // warning
+                            true,  // is_final
                         );
                         self.send_response(request, response, router).await?;
                     }
@@ -247,10 +267,10 @@ impl DimseScp {
                     }
                 }
             }
-            
+
             DimseRequestPayload::Store(ref dataset) => {
                 debug!("Processing C-STORE request");
-                
+
                 match self.query_provider.store(dataset.clone()).await {
                     Ok(()) => {
                         let response = DimseResponse::store(request_id, true);
@@ -276,7 +296,8 @@ impl DimseScp {
         router: &Arc<dyn Router>,
     ) -> Result<()> {
         if let Some(response_tx) = request.response_tx {
-            response_tx.send(response)
+            response_tx
+                .send(response)
                 .map_err(|_| DimseError::router("Failed to send response"))?;
         } else {
             router.send_response(response).await?;
@@ -340,10 +361,10 @@ mod tests {
             port: 0, // Use any available port
             ..Default::default()
         };
-        
+
         let temp_dir = tempfile::tempdir().unwrap();
         let query_provider = Arc::new(DefaultQueryProvider::new(temp_dir.path().to_path_buf()));
-        
+
         let scp = DimseScp::new(config, query_provider);
         assert_eq!(scp.config.local_aet, "TEST_SCP");
     }

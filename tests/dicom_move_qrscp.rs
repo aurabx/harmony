@@ -1,9 +1,9 @@
-use harmony::config::config::{Config, ConfigError};
-use axum::http::{Request, StatusCode};
 use axum::body::Body;
-use tower::ServiceExt;
-use std::sync::Arc;
+use axum::http::{Request, StatusCode};
+use harmony::config::config::{Config, ConfigError};
 use std::path::PathBuf;
+use std::sync::Arc;
+use tower::ServiceExt;
 
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(toml).expect("TOML parse error");
@@ -15,7 +15,11 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 async fn dicom_move_with_dcmqrscp() {
     // Skip if DCMTK tools are not present
     for bin in ["dcmqrscp", "storescu", "movescu"].iter() {
-        if std::process::Command::new(bin).arg("--version").output().is_err() {
+        if std::process::Command::new(bin)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             eprintln!("Skipping dcmqrscp C-MOVE test: {} not found", bin);
             return;
         }
@@ -25,16 +29,27 @@ async fn dicom_move_with_dcmqrscp() {
     fn collect_dcm_files(root: &std::path::Path, max_files: usize) -> Vec<std::path::PathBuf> {
         let mut files = Vec::new();
         fn walk(dir: &std::path::Path, files: &mut Vec<std::path::PathBuf>, max_files: usize) {
-            if files.len() >= max_files { return; }
+            if files.len() >= max_files {
+                return;
+            }
             if let Ok(read) = std::fs::read_dir(dir) {
                 for entry in read.flatten() {
-                    if files.len() >= max_files { break; }
+                    if files.len() >= max_files {
+                        break;
+                    }
                     let path = entry.path();
                     if path.is_dir() {
                         walk(&path, files, max_files);
-                    } else if path.extension().and_then(|s| s.to_str()).map(|s| s.eq_ignore_ascii_case("dcm")).unwrap_or(false) {
+                    } else if path
+                        .extension()
+                        .and_then(|s| s.to_str())
+                        .map(|s| s.eq_ignore_ascii_case("dcm"))
+                        .unwrap_or(false)
+                    {
                         files.push(path);
-                        if files.len() >= max_files { break; }
+                        if files.len() >= max_files {
+                            break;
+                        }
                     }
                 }
             }
@@ -46,11 +61,16 @@ async fn dicom_move_with_dcmqrscp() {
     // Helper: send a single DICOM file to QR_SCP via storescu
     async fn send_via_storescu(file: &std::path::Path, port: u16) -> bool {
         match tokio::process::Command::new("storescu")
-            .arg("--aetitle").arg("HARMONY_SCU")
-            .arg("--call").arg("QR_SCP")
-            .arg("127.0.0.1").arg(port.to_string())
+            .arg("--aetitle")
+            .arg("HARMONY_SCU")
+            .arg("--call")
+            .arg("QR_SCP")
+            .arg("127.0.0.1")
+            .arg(port.to_string())
             .arg(file)
-            .status().await {
+            .status()
+            .await
+        {
             Ok(status) => status.success(),
             Err(_) => false,
         }
@@ -61,33 +81,59 @@ async fn dicom_move_with_dcmqrscp() {
         if std::env::var("HARMONY_TEST_DEBUG").ok().as_deref() != Some("1") {
             return;
         }
-        if std::process::Command::new("findscu").arg("--version").output().is_err() {
+        if std::process::Command::new("findscu")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             eprintln!("[diag] findscu not available, skipping pre-MOVE C-FIND");
             return;
         }
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_else(|_| std::time::Duration::from_secs(0));
-        let out_dir = std::path::PathBuf::from(format!("./tmp/dcmtk_find_diag_{}_{}", now.as_secs(), now.subsec_nanos()));
+        let out_dir = std::path::PathBuf::from(format!(
+            "./tmp/dcmtk_find_diag_{}_{}",
+            now.as_secs(),
+            now.subsec_nanos()
+        ));
         let _ = std::fs::create_dir_all(&out_dir);
         let args = vec![
             "-S".to_string(),
-            "-aet".to_string(), "HARMONY_MOVE".to_string(),
-            "-aec".to_string(), "QR_SCP".to_string(),
-            "-k".to_string(), "0008,0052=STUDY".to_string(),
-            "-k".to_string(), format!("0020,000D={}", study_uid),
-            "-k".to_string(), format!("0010,0020={}", patient_id),
+            "-aet".to_string(),
+            "HARMONY_MOVE".to_string(),
+            "-aec".to_string(),
+            "QR_SCP".to_string(),
+            "-k".to_string(),
+            "0008,0052=STUDY".to_string(),
+            "-k".to_string(),
+            format!("0020,000D={}", study_uid),
+            "-k".to_string(),
+            format!("0010,0020={}", patient_id),
             "-X".to_string(),
-            "-od".to_string(), out_dir.to_string_lossy().to_string(),
-            "127.0.0.1".to_string(), port.to_string(),
+            "-od".to_string(),
+            out_dir.to_string_lossy().to_string(),
+            "127.0.0.1".to_string(),
+            port.to_string(),
         ];
         eprintln!("[diag] Running findscu with args: {:?}", args);
-        match tokio::process::Command::new("findscu").args(&args).output().await {
+        match tokio::process::Command::new("findscu")
+            .args(&args)
+            .output()
+            .await
+        {
             Ok(out) => {
                 let stderr = String::from_utf8_lossy(&out.stderr);
                 let stdout = String::from_utf8_lossy(&out.stdout);
-                let produced = std::fs::read_dir(&out_dir).ok()
-                    .map(|rd| rd.filter_map(|e| e.ok()).filter(|e| e.path().extension().and_then(|s| s.to_str()) == Some("dcm")).count())
+                let produced = std::fs::read_dir(&out_dir)
+                    .ok()
+                    .map(|rd| {
+                        rd.filter_map(|e| e.ok())
+                            .filter(|e| {
+                                e.path().extension().and_then(|s| s.to_str()) == Some("dcm")
+                            })
+                            .count()
+                    })
                     .unwrap_or(0);
                 eprintln!("[diag] findscu status={:?}, out_dir dcm files={}, stdout=\n{}\n----\nstderr=\n{}", out.status.code(), produced, stdout, stderr);
             }
@@ -123,7 +169,8 @@ async fn dicom_move_with_dcmqrscp() {
     // Start dcmqrscp
     let mut qr_child = tokio::process::Command::new("dcmqrscp")
         .arg("-d")
-        .arg("-c").arg(&cfg_path)
+        .arg("-c")
+        .arg(&cfg_path)
         .arg(port.to_string())
         .kill_on_drop(true)
         .spawn()
@@ -131,7 +178,12 @@ async fn dicom_move_with_dcmqrscp() {
 
     // Wait for port to be ready
     for _ in 0..60 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() { break; }
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
+            break;
+        }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
@@ -140,7 +192,12 @@ async fn dicom_move_with_dcmqrscp() {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap();
-        format!("1.2.826.0.1.3680043.10.5432.{}.{}.{}", suf, now.as_secs(), now.subsec_nanos())
+        format!(
+            "1.2.826.0.1.3680043.10.5432.{}.{}.{}",
+            suf,
+            now.as_secs(),
+            now.subsec_nanos()
+        )
     };
     let study_uid = mkuid("study");
     let series_uid = mkuid("series");
@@ -165,11 +222,16 @@ async fn dicom_move_with_dcmqrscp() {
 
     // Send the dataset to QR via storescu
     let status = tokio::process::Command::new("storescu")
-        .arg("--aetitle").arg("HARMONY_SCU")
-        .arg("--call").arg("QR_SCP")
-        .arg("127.0.0.1").arg(port.to_string())
+        .arg("--aetitle")
+        .arg("HARMONY_SCU")
+        .arg("--call")
+        .arg("QR_SCP")
+        .arg("127.0.0.1")
+        .arg(port.to_string())
         .arg(&dicom_path)
-        .status().await.expect("run storescu");
+        .status()
+        .await
+        .expect("run storescu");
     if !status.success() {
         eprintln!("storescu failed; skipping assertions");
         let _ = qr_child.kill().await;
@@ -194,7 +256,8 @@ async fn dicom_move_with_dcmqrscp() {
     }
 
     // Build Harmony config with DICOM backend pointing to QR_SCP
-    let toml = format!(r#"
+    let toml = format!(
+        r#"
         [proxy]
         id = "dicom-move-test"
         log_level = "info"
@@ -234,7 +297,9 @@ async fn dicom_move_with_dcmqrscp() {
         module = ""
         [services.dicom]
         module = ""
-    "#, port=port);
+    "#,
+        port = port
+    );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
@@ -249,7 +314,8 @@ async fn dicom_move_with_dcmqrscp() {
             "00100020": { "vr": "LO", "Value": [ "MOVE123" ] }
         }
     });
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/dicom/move")
@@ -262,14 +328,26 @@ async fn dicom_move_with_dcmqrscp() {
         .expect("router handled request");
 
     assert_eq!(response.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json parse");
     // Print full response including debug before assertions for diagnostics
-    eprintln!("C-MOVE response: {}", serde_json::to_string_pretty(&json).unwrap());
+    eprintln!(
+        "C-MOVE response: {}",
+        serde_json::to_string_pretty(&json).unwrap()
+    );
     assert_eq!(json.get("operation").and_then(|v| v.as_str()), Some("move"));
     assert_eq!(json.get("success").and_then(|v| v.as_bool()), Some(true));
-    let instances = json.get("instances").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    assert!(instances.len() >= 1, "Expected at least one C-MOVE instance, got 0");
+    let instances = json
+        .get("instances")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !instances.is_empty(),
+        "Expected at least one C-MOVE instance, got 0"
+    );
 
     let _ = qr_child.kill().await;
 }

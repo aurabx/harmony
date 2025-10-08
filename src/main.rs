@@ -1,5 +1,5 @@
-use harmony::config::{Cli};
 use harmony::config::config::Config;
+use harmony::config::Cli;
 
 #[tokio::main]
 async fn main() {

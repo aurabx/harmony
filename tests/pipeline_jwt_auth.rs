@@ -1,10 +1,10 @@
-use harmony::config::config::{Config, ConfigError};
-use axum::http::{Request, StatusCode};
 use axum::body::Body;
-use tower::ServiceExt; // for Router::oneshot
+use axum::http::{Request, StatusCode};
+use harmony::config::config::{Config, ConfigError};
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use serde::Serialize;
 use std::sync::Arc;
-use jsonwebtoken::{encode, Header, EncodingKey, Algorithm};
-use serde::{Serialize};
+use tower::ServiceExt; // for Router::oneshot
 
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(toml).expect("TOML parse error");
@@ -90,7 +90,8 @@ async fn jwt_auth_allows_valid_bearer() {
         &Header::new(Algorithm::HS256),
         &claims,
         &EncodingKey::from_secret(b"test-fallback-secret"),
-    ).expect("encode jwt");
+    )
+    .expect("encode jwt");
 
     let response = app
         .oneshot(

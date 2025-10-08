@@ -146,6 +146,17 @@ The validator enforces strict requirements:
 - **Output Directory**: Use `./tmp` directory for temporary files (not system `/tmp`)
 - **Dynamic Loading**: libloading supports custom endpoints/middleware (see `examples/custom_endpoint`)
 
+## Change Management and PR Hygiene
+
+- Keep changes narrowly scoped. Do not mix unrelated work (e.g., storage refactors vs. Clippy/lint/format changes) in the same PR.
+- If you need to apply broad formatting or lint fixes, submit them as a separate PR from any functional changes.
+- When a large refactor is necessary, split into clearly labeled commits (e.g., "storage: introduce backend abstraction" vs. "lint: clippy fixes, no logic changes").
+- Avoid touching files outside the feature’s scope unless strictly required for compilation.
+- Prefer incremental PRs over one large change; this improves reviewability and reduces risk.
+
+Incident log:
+- 2025-10-08: Mixed a storage refactor with widespread Clippy/test cleanups. This made it hard to review the storage changes. Policy updated above—never mix jobs in a single PR.
+
 ## Monorepo Context
 
 This proxy is part of the larger Runbeam ecosystem:

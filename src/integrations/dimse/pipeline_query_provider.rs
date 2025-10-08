@@ -1,13 +1,13 @@
+use crate::globals::get_config;
+use crate::models::envelope::envelope::RequestEnvelope;
+use crate::router::pipeline_runner::run_pipeline;
+use async_trait::async_trait;
+use dicom_json_tool as tool;
+use dimse::error::DimseError;
+use dimse::types::{DatasetStream, QueryLevel};
+use dimse::Result as DimseResult;
 use std::collections::HashMap;
 use std::sync::Arc;
-use async_trait::async_trait;
-use crate::router::pipeline_runner::run_pipeline;
-use crate::models::envelope::envelope::RequestEnvelope;
-use crate::globals::get_config;
-use dimse::types::{DatasetStream, QueryLevel};
-use dimse::{Result as DimseResult};
-use dimse::error::DimseError;
-use dicom_json_tool as tool;
 
 pub struct PipelineQueryProvider {
     pipeline: String,
@@ -16,7 +16,10 @@ pub struct PipelineQueryProvider {
 
 impl PipelineQueryProvider {
     pub fn new(pipeline: impl Into<String>, endpoint: impl Into<String>) -> Self {
-        Self { pipeline: pipeline.into(), endpoint: endpoint.into() }
+        Self {
+            pipeline: pipeline.into(),
+            endpoint: endpoint.into(),
+        }
     }
 
     fn build_identifier_json(&self, parameters: &HashMap<String, String>) -> serde_json::Value {
@@ -40,7 +43,10 @@ impl PipelineQueryProvider {
         serde_json::Value::Object(map)
     }
 
-    fn build_query_metadata(&self, parameters: &HashMap<String, String>) -> tool::model::QueryMetadata {
+    fn build_query_metadata(
+        &self,
+        parameters: &HashMap<String, String>,
+    ) -> tool::model::QueryMetadata {
         let mut out: HashMap<String, tool::model::QueryMetaEntry> = HashMap::new();
         for (tag, val) in parameters.iter() {
             let match_type = if val.is_empty() {
@@ -52,21 +58,35 @@ impl PipelineQueryProvider {
             } else {
                 "EXACT"
             };
-            out.insert(tag.clone(), tool::model::QueryMetaEntry { match_type: Some(match_type.into()) });
+            out.insert(
+                tag.clone(),
+                tool::model::QueryMetaEntry {
+                    match_type: Some(match_type.into()),
+                },
+            );
         }
         tool::model::QueryMetadata(out)
     }
 
-    async fn run(&self, op: &str, body: serde_json::Value, mut meta: HashMap<String, String>) -> DimseResult<RequestEnvelope<Vec<u8>>> {
+    async fn run(
+        &self,
+        op: &str,
+        body: serde_json::Value,
+        mut meta: HashMap<String, String>,
+    ) -> DimseResult<RequestEnvelope<Vec<u8>>> {
         use crate::models::protocol::{Protocol, ProtocolCtx};
-        let config = get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
 
         // Resolve endpoint service and options
-        let endpoint = config.endpoints.get(&self.endpoint)
-            .ok_or_else(|| DimseError::operation_failed(format!("Unknown endpoint '{}'", self.endpoint)))?;
-        let service = endpoint.resolve_service()
+        let endpoint = config.endpoints.get(&self.endpoint).ok_or_else(|| {
+            DimseError::operation_failed(format!("Unknown endpoint '{}'", self.endpoint))
+        })?;
+        let service = endpoint
+            .resolve_service()
             .map_err(|e| DimseError::operation_failed(format!("Resolve service failed: {}", e)))?;
-        let options_owned: HashMap<String, serde_json::Value> = endpoint.options.clone().unwrap_or_default();
+        let options_owned: HashMap<String, serde_json::Value> =
+            endpoint.options.clone().unwrap_or_default();
         let options = &options_owned;
 
         // ProtocolCtx for DIMSE
@@ -107,11 +127,21 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         meta.insert("dicom.max_results".into(), max_results.to_string());
 
         // Build wrapper for pipeline
-        let cmd = tool::model::CommandMeta { message_id: Some(1), sop_class_uid: None, priority: Some("MEDIUM".into()), direction: Some("REQUEST".into()) };
+        let cmd = tool::model::CommandMeta {
+            message_id: Some(1),
+            sop_class_uid: None,
+            priority: Some("MEDIUM".into()),
+            direction: Some("REQUEST".into()),
+        };
         let identifier = self.build_identifier_json(parameters);
         let qmeta = self.build_query_metadata(parameters);
-        let wrapper = tool::model::Wrapper { command: Some(cmd), identifier, query_metadata: Some(qmeta) };
-        let body = serde_json::to_value(&wrapper).map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
+        let wrapper = tool::model::Wrapper {
+            command: Some(cmd),
+            identifier,
+            query_metadata: Some(qmeta),
+        };
+        let body = serde_json::to_value(&wrapper)
+            .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
         let _envelope = self.run("C-FIND", body, meta).await?;
         // For now, we return empty datasets (stub) and rely on envelope side effects/logging
@@ -127,11 +157,21 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         meta.insert("dicom.operation".into(), "C-MOVE".into());
         meta.insert("dicom.query_level".into(), format!("{}", query_level));
 
-        let cmd = tool::model::CommandMeta { message_id: Some(1), sop_class_uid: None, priority: Some("MEDIUM".into()), direction: Some("REQUEST".into()) };
+        let cmd = tool::model::CommandMeta {
+            message_id: Some(1),
+            sop_class_uid: None,
+            priority: Some("MEDIUM".into()),
+            direction: Some("REQUEST".into()),
+        };
         let identifier = self.build_identifier_json(parameters);
         let qmeta = self.build_query_metadata(parameters);
-        let wrapper = tool::model::Wrapper { command: Some(cmd), identifier, query_metadata: Some(qmeta) };
-        let body = serde_json::to_value(&wrapper).map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
+        let wrapper = tool::model::Wrapper {
+            command: Some(cmd),
+            identifier,
+            query_metadata: Some(qmeta),
+        };
+        let body = serde_json::to_value(&wrapper)
+            .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
         let _envelope = self.run("C-MOVE", body, meta).await?;
         Ok(vec![])

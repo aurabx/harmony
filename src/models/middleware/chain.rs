@@ -1,9 +1,9 @@
-use std::sync::Arc;
-use std::collections::HashMap;
-use crate::models::middleware::middleware::{Middleware, resolve_middleware};
 use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::middleware::middleware::{resolve_middleware, Middleware};
 use crate::utils::Error;
 use serde_json::Value;
+use std::collections::HashMap;
+use std::sync::Arc;
 
 /// Struct representing a chain of middleware
 #[derive(Clone)]
@@ -20,7 +20,11 @@ impl MiddlewareChain {
                 match resolve_middleware(middleware_type, options) {
                     Ok(middleware) => Some(middleware),
                     Err(err) => {
-                        tracing::error!("Failed to resolve middleware '{}': {}", middleware_type, err);
+                        tracing::error!(
+                            "Failed to resolve middleware '{}': {}",
+                            middleware_type,
+                            err
+                        );
                         None
                     }
                 }
@@ -38,7 +42,7 @@ impl MiddlewareChain {
             .iter()
             .map(|name| (name.clone(), HashMap::new()))
             .collect();
-        
+
         Self::new(&middleware_instances)
     }
 

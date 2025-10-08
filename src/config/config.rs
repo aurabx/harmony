@@ -1,21 +1,22 @@
-use std::collections::HashMap;
-use once_cell::sync::Lazy;
-use serde::Deserialize;
-use crate::config::Cli;
 use crate::config::logging_config::LoggingConfig;
 use crate::config::proxy_config::ProxyConfig;
-use crate::models::endpoints::endpoint::Endpoint;
+use crate::config::Cli;
 use crate::models::backends::backends::Backend;
-use crate::models::pipelines::config::Pipeline;
+use crate::models::endpoints::endpoint::Endpoint;
+use crate::models::middleware::middleware::{initialise_middleware_registry, MiddlewareConfig};
 use crate::models::network::config::NetworkConfig;
-use crate::models::targets::config::TargetConfig;
-use crate::models::services::services::ServiceConfig;
+use crate::models::pipelines::config::Pipeline;
 use crate::models::services::services::initialise_service_registry;
-use crate::models::middleware::middleware::{MiddlewareConfig, initialise_middleware_registry};
+use crate::models::services::services::ServiceConfig;
+use crate::models::targets::config::TargetConfig;
+use crate::storage::StorageConfig;
+use once_cell::sync::Lazy;
+use serde::Deserialize;
+use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
 
-static DEFAULT_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(|| HashMap::new());
+static DEFAULT_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(HashMap::new);
 
 #[derive(Debug, Deserialize, Default)]
 pub struct Config {
@@ -40,15 +41,16 @@ pub struct Config {
     #[serde(default)]
     pub targets: HashMap<String, TargetConfig>,
     #[serde(default)]
+    pub storage: StorageConfig,
+    #[serde(default)]
     pub transforms: (),
 }
-
 
 impl Config {
     pub fn from_args(cli: Cli) -> Self {
         // Load the base configuration file
-        let contents = std::fs::read_to_string(&cli.config_path)
-            .expect("Failed to read config file");
+        let contents =
+            std::fs::read_to_string(&cli.config_path).expect("Failed to read config file");
         let mut config: Config = toml::from_str(&contents).expect("Failed to parse config");
 
         // Attempt to load additional configs and merge them into the current config.
@@ -64,7 +66,6 @@ impl Config {
         config.validate().expect("Configuration validation failed");
         config
     }
-    
 
     fn initialize_service_registry(&self) {
         initialise_service_registry(self);
@@ -74,13 +75,15 @@ impl Config {
         initialise_middleware_registry(self);
     }
 
-
     /// Loads all additional configuration files from pipelines_path and transforms_path
-    fn load_additional_configs(config: &Config, base_config_path: &str) -> Result<Vec<Config>, Box<dyn std::error::Error>> {
+    fn load_additional_configs(
+        config: &Config,
+        base_config_path: &str,
+    ) -> Result<Vec<Config>, Box<dyn std::error::Error>> {
         let base_dir = Path::new(base_config_path)
             .parent()
             .ok_or("Failed to retrieve base directory of config file")?;
-        
+
         let mut configs = Vec::new();
 
         // Load configurations from `pipelines_path`
@@ -103,7 +106,7 @@ impl Config {
         let mut configs = Vec::new();
         for entry in fs::read_dir(dir)? {
             let path = entry?.path();
-            if path.is_file() && path.extension().map_or(false, |ext| ext == "toml") {
+            if path.is_file() && path.extension().is_some_and(|ext| ext == "toml") {
                 let contents = fs::read_to_string(&path)?;
                 let config: Config = toml::from_str(&contents)?;
                 configs.push(config);
@@ -136,7 +139,8 @@ impl Config {
         self.validate_endpoints()?;
         self.validate_backends()?;
         self.validate_targets()?;
-        
+        self.validate_storage()?;
+
         Ok(())
     }
 
@@ -144,7 +148,7 @@ impl Config {
         if self.proxy.id.trim().is_empty() {
             return Err(ConfigError::InvalidProxy {
                 name: self.proxy.id.clone(),
-                reason: "No proxy id provided".to_string()
+                reason: "No proxy id provided".to_string(),
             });
         }
 
@@ -157,14 +161,6 @@ impl Config {
                     "Invalid log_level '{}'. Valid options are: {:?}",
                     self.proxy.log_level, valid_log_levels
                 ),
-            });
-        }
-
-        // Check if store_dir is set; default to "/tmp"
-        if self.proxy.store_dir.trim().is_empty() {
-            return Err(ConfigError::InvalidProxy {
-                name: self.proxy.id.clone(),
-                reason: "store_dir cannot be empty".to_string(),
             });
         }
 
@@ -193,18 +189,30 @@ impl Config {
         for (name, pipeline) in &self.pipelines {
             // Warn and skip if networks are empty or do not match
             if pipeline.networks.is_empty() {
-                tracing::warn!("Pipeline '{}' has no associated networks, skipping validation", name);
+                tracing::warn!(
+                    "Pipeline '{}' has no associated networks, skipping validation",
+                    name
+                );
                 continue;
             }
-            let is_network_matched = pipeline.networks.iter().any(|network| self.network.contains_key(network));
+            let is_network_matched = pipeline
+                .networks
+                .iter()
+                .any(|network| self.network.contains_key(network));
             if !is_network_matched {
-                tracing::warn!("Pipeline '{}' does not match any network, skipping validation", name);
+                tracing::warn!(
+                    "Pipeline '{}' does not match any network, skipping validation",
+                    name
+                );
                 continue;
             }
 
             // Warn and skip if endpoints are empty or do not match
             if pipeline.endpoints.is_empty() {
-                tracing::warn!("Pipeline '{}' has no endpoints defined, skipping validation", name);
+                tracing::warn!(
+                    "Pipeline '{}' has no endpoints defined, skipping validation",
+                    name
+                );
                 continue;
             }
             for endpoint in &pipeline.endpoints {
@@ -218,7 +226,10 @@ impl Config {
 
             // Warn if middleware is empty
             if pipeline.middleware.is_empty() {
-                tracing::warn!("Pipeline '{}' has an empty middleware of middleware/services", name);
+                tracing::warn!(
+                    "Pipeline '{}' has an empty middleware of middleware/services",
+                    name
+                );
             }
         }
         Ok(())
@@ -226,40 +237,48 @@ impl Config {
 
     fn validate_endpoints(&self) -> Result<(), ConfigError> {
         for (name, endpoint) in &self.endpoints {
-            let service = endpoint.resolve_service().map_err(|err| ConfigError::InvalidEndpoint {
-                name: name.clone(),
-                reason: err,
-            })?;
+            let service =
+                endpoint
+                    .resolve_service()
+                    .map_err(|err| ConfigError::InvalidEndpoint {
+                        name: name.clone(),
+                        reason: err,
+                    })?;
 
             let options = endpoint.options.as_ref().unwrap_or(&DEFAULT_OPTIONS);
-            service.validate(options).map_err(|err| ConfigError::InvalidEndpoint {
-                name: name.clone(),
-                reason: format!("Service validation failed: {:?}", err),
-            })?;
+            service
+                .validate(options)
+                .map_err(|err| ConfigError::InvalidEndpoint {
+                    name: name.clone(),
+                    reason: format!("Service validation failed: {:?}", err),
+                })?;
         }
         Ok(())
     }
 
     fn validate_backends(&self) -> Result<(), ConfigError> {
         for (name, backend) in &self.backends {
-            let service = backend.resolve_service().map_err(|err| ConfigError::InvalidBackend {
-                name: name.clone(),
-                reason: err,
-            })?;
+            let service = backend
+                .resolve_service()
+                .map_err(|err| ConfigError::InvalidBackend {
+                    name: name.clone(),
+                    reason: err,
+                })?;
 
             let options = backend.options.as_ref().unwrap_or(&DEFAULT_OPTIONS);
-            service.validate(options).map_err(|err| ConfigError::InvalidBackend {
-                name: name.clone(),
-                reason: format!("Service validation failed: {:?}", err),
-            })?;
+            service
+                .validate(options)
+                .map_err(|err| ConfigError::InvalidBackend {
+                    name: name.clone(),
+                    reason: format!("Service validation failed: {:?}", err),
+                })?;
         }
         Ok(())
     }
 
-
     #[allow(dead_code)]
     fn validate_middleware(&self) -> Result<(), ConfigError> {
-        for (_name, _endpoint) in &self.endpoints {
+        for _endpoint in self.endpoints.values() {
             // todo: Actually implement middleware validation
             // let handler = endpoint.kind.resolve_handler(name)?;
             // handler.validate()?; // Validate the resolved endpoint
@@ -291,14 +310,45 @@ impl Config {
                 // Built-in middleware, validate that it exists
                 match name.as_str() {
                     "jwtauth" | "auth" | "connect" | "passthru" => {} // Valid built-in middleware
-                    _ => return Err(ConfigError::InvalidMiddleware {
-                        name: name.clone(),
-                        reason: format!("Unknown built-in middleware type: {}", name),
-                    })
+                    _ => {
+                        return Err(ConfigError::InvalidMiddleware {
+                            name: name.clone(),
+                            reason: format!("Unknown built-in middleware type: {}", name),
+                        })
+                    }
                 }
             }
         }
         Ok(())
+    }
+
+    fn validate_storage(&self) -> Result<(), ConfigError> {
+        match self.storage.backend.as_str() {
+            "filesystem" => {
+                // Validate filesystem backend options
+                if let Some(path) = self.storage.options.get("path") {
+                    if let Some(path_str) = path.as_str() {
+                        if path_str.trim().is_empty() {
+                            return Err(ConfigError::InvalidStorage {
+                                backend: self.storage.backend.clone(),
+                                reason: "Storage path cannot be empty".to_string(),
+                            });
+                        }
+                    } else {
+                        return Err(ConfigError::InvalidStorage {
+                            backend: self.storage.backend.clone(),
+                            reason: "Storage path must be a string".to_string(),
+                        });
+                    }
+                }
+                // Path is optional and defaults to "./tmp"
+                Ok(())
+            }
+            _ => Err(ConfigError::InvalidStorage {
+                backend: self.storage.backend.clone(),
+                reason: format!("Unsupported storage backend: {}", self.storage.backend),
+            }),
+        }
     }
 }
 
@@ -311,6 +361,7 @@ pub enum ConfigError {
     InvalidNetwork { name: String, reason: String },
     InvalidPipeline { name: String, reason: String },
     InvalidMiddleware { name: String, reason: String }, // Added for middleware validation
+    InvalidStorage { backend: String, reason: String }, // Added for storage validation
 }
 
 // Rename the existing MiddlewareConfig to avoid confusion

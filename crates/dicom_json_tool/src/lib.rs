@@ -1,6 +1,6 @@
 use serde_json::Value;
-use thiserror::Error;
 use std::path::Path;
+use thiserror::Error;
 
 pub mod model {
     use serde::{Deserialize, Serialize};
@@ -31,7 +31,12 @@ pub mod model {
         #[serde(default, skip_serializing_if = "Option::is_none")]
         pub command: Option<CommandMeta>,
         pub identifier: Value, // DICOM JSON dataset per Part 18
-        #[serde(rename = "query_metadata", alias = "queryMetadata", default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            rename = "query_metadata",
+            alias = "queryMetadata",
+            default,
+            skip_serializing_if = "Option::is_none"
+        )]
         pub query_metadata: Option<QueryMetadata>,
     }
 }
@@ -51,12 +56,21 @@ pub fn identifier_to_json_value(obj: &dicom_object::mem::InMemDicomObject) -> Re
 }
 
 pub fn json_value_to_identifier(v: &Value) -> Result<dicom_object::mem::InMemDicomObject> {
-    let obj = dicom_json::from_value(v.clone()).map_err(|e| ConvertError::Json(format!("{}", e)))?;
+    let obj =
+        dicom_json::from_value(v.clone()).map_err(|e| ConvertError::Json(format!("{}", e)))?;
     Ok(obj)
 }
 
-pub fn wrap_with_command(identifier: Value, command: Option<model::CommandMeta>, query_meta: Option<model::QueryMetadata>) -> model::Wrapper {
-    model::Wrapper { command, identifier, query_metadata: query_meta }
+pub fn wrap_with_command(
+    identifier: Value,
+    command: Option<model::CommandMeta>,
+    query_meta: Option<model::QueryMetadata>,
+) -> model::Wrapper {
+    model::Wrapper {
+        command,
+        identifier,
+        query_metadata: query_meta,
+    }
 }
 
 pub fn unwrap_identifier(wrapper: &model::Wrapper) -> &Value {
@@ -91,7 +105,13 @@ pub fn write_part10(path: &Path, obj: &dicom_object::mem::InMemDicomObject) -> R
 }
 
 /// Try to parse a wrapper from a JSON value; if it's not a wrapper, treat it as a raw identifier
-pub fn parse_wrapper_or_identifier(v: &Value) -> (Option<model::CommandMeta>, Value, Option<model::QueryMetadata>) {
+pub fn parse_wrapper_or_identifier(
+    v: &Value,
+) -> (
+    Option<model::CommandMeta>,
+    Value,
+    Option<model::QueryMetadata>,
+) {
     // Attempt to deserialize as a wrapper first
     if let Ok(w) = serde_json::from_value::<model::Wrapper>(v.clone()) {
         return (w.command, w.identifier, w.query_metadata);

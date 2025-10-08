@@ -1,8 +1,8 @@
-use harmony::config::config::{Config, ConfigError};
-use axum::http::{Request, StatusCode};
 use axum::body::Body;
-use tower::ServiceExt; // for Router::oneshot
+use axum::http::{Request, StatusCode};
+use harmony::config::config::{Config, ConfigError};
 use std::sync::Arc;
+use tower::ServiceExt; // for Router::oneshot
 
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(toml).expect("TOML parse error");
@@ -58,8 +58,10 @@ async fn http_to_dicom_backend_echo_succeeds() {
     std::fs::create_dir_all("./tmp/dcmtk_in").expect("create dcmtk output dir");
     let mut child = tokio::process::Command::new("storescp")
         .arg("--fork")
-        .arg("--aetitle").arg("ORTHANC")
-        .arg("--output-directory").arg("./tmp/dcmtk_in")
+        .arg("--aetitle")
+        .arg("ORTHANC")
+        .arg("--output-directory")
+        .arg("./tmp/dcmtk_in")
         .arg("4242")
         .kill_on_drop(true)
         .spawn()
@@ -67,7 +69,10 @@ async fn http_to_dicom_backend_echo_succeeds() {
 
     // Wait for port to accept connections
     for _ in 0..30 {
-        if tokio::net::TcpStream::connect("127.0.0.1:4242").await.is_ok() {
+        if tokio::net::TcpStream::connect("127.0.0.1:4242")
+            .await
+            .is_ok()
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;

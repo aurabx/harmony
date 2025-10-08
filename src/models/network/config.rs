@@ -51,7 +51,7 @@ impl Default for HttpConfig {
 //     pub ip: String,
 //     pub public_key: String,
 // }
-// 
+//
 // impl PeerConfig {
 //     pub fn validate(&self) -> Result<(), ConfigError> {
 //         if self.id.trim().is_empty() || self.ip.trim().is_empty() || self.public_key.trim().is_empty() {

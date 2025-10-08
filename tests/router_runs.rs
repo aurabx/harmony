@@ -1,8 +1,8 @@
-use harmony::config::config::{Config, ConfigError};
-use axum::http::{Request, StatusCode};
 use axum::body::Body;
-use tower::ServiceExt; // for Router::oneshot
+use axum::http::{Request, StatusCode};
+use harmony::config::config::{Config, ConfigError};
 use std::sync::Arc;
+use tower::ServiceExt; // for Router::oneshot
 
 // Helper: parse and validate a config from TOML
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
@@ -166,7 +166,8 @@ async fn router_selects_correct_endpoint_based_on_path() {
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
 
     // Test `/basic/get-route` endpoint
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/basic/get-route")
@@ -187,7 +188,8 @@ async fn router_selects_correct_endpoint_based_on_path() {
     assert!(body_str.contains("BasicEndpoint processed the request"));
 
     // Test `/fhir/:path` endpoint
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/fhir/patient")
@@ -266,7 +268,8 @@ async fn router_handles_path_based_routing() {
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
 
     // Test first endpoint `/echo1/:path`
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -286,7 +289,8 @@ async fn router_handles_path_based_routing() {
     assert!(body_str.contains("Echo endpoint received the request"));
 
     // Test second endpoint `/echo2/:path`
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")
@@ -306,7 +310,8 @@ async fn router_handles_path_based_routing() {
     assert!(body_str.contains("Echo endpoint received the request"));
 
     // Test non-existent route
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .method("POST")

@@ -10,8 +10,16 @@ use crate::utils::Error;
 /// - Runs typically after authentication middleware.
 pub struct JsonExtractorMiddleware;
 
+impl Default for JsonExtractorMiddleware {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl JsonExtractorMiddleware {
-    pub fn new() -> Self { Self }
+    pub fn new() -> Self {
+        Self
+    }
 }
 
 #[async_trait::async_trait]

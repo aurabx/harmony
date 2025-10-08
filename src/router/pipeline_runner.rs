@@ -1,16 +1,18 @@
+use crate::config::config::Config;
+use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::middleware::chain::MiddlewareChain;
+use crate::models::pipelines::config::Pipeline;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::config::config::Config;
-use crate::models::pipelines::config::Pipeline;
-use crate::models::middleware::chain::MiddlewareChain;
-use crate::models::envelope::envelope::RequestEnvelope;
 
 pub async fn run_pipeline(
     envelope: RequestEnvelope<Vec<u8>>,
     pipeline_name: &str,
     config: Arc<Config>,
 ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-    let group: &Pipeline = config.pipelines.get(pipeline_name)
+    let group: &Pipeline = config
+        .pipelines
+        .get(pipeline_name)
         .ok_or_else(|| format!("Unknown pipeline '{}'", pipeline_name))?;
 
     // 1. Incoming (left) middleware chain
@@ -32,13 +34,16 @@ async fn process_backends(
 ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
     for backend_name in &group.backends {
         if let Some(backend) = config.backends.get(backend_name) {
-            let service = backend.resolve_service()
+            let service = backend
+                .resolve_service()
                 .map_err(|err| format!("Failed to resolve backend service: {}", err))?;
 
-            envelope = service.transform_request(
-                envelope,
-                backend.options.as_ref().unwrap_or(&HashMap::new()),
-            ).await
+            envelope = service
+                .transform_request(
+                    envelope,
+                    backend.options.as_ref().unwrap_or(&HashMap::new()),
+                )
+                .await
                 .map_err(|err| format!("Backend request transformation failed: {:?}", err))?;
         } else {
             tracing::warn!("Backend '{}' not found in config", backend_name);
@@ -131,7 +136,11 @@ fn resolve_middleware_instance(
     config: &Config,
 ) -> (String, HashMap<String, serde_json::Value>) {
     // Normalize name: accept forms like "middleware.jwt_auth" or "jwt_auth"
-    let base = raw_name.split('.').last().unwrap_or(raw_name).to_lowercase();
+    let base = raw_name
+        .split('.')
+        .next_back()
+        .unwrap_or(raw_name)
+        .to_lowercase();
 
     // Helper to turn a config struct into a map
     let to_map = |val: serde_json::Value| -> HashMap<String, serde_json::Value> {

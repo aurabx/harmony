@@ -1,9 +1,9 @@
-use harmony::config::config::{Config, ConfigError};
-use axum::http::{Request, StatusCode};
 use axum::body::Body;
-use tower::ServiceExt; // for Router::oneshot
-use std::sync::Arc;
+use axum::http::{Request, StatusCode};
 use base64::{engine::general_purpose, Engine as _};
+use harmony::config::config::{Config, ConfigError};
+use std::sync::Arc;
+use tower::ServiceExt; // for Router::oneshot
 
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(toml).expect("TOML parse error");
@@ -13,7 +13,10 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 
 fn basic_header(user: &str, pass: &str) -> String {
     let creds = format!("{}:{}", user, pass);
-    format!("Basic {}", general_purpose::STANDARD.encode(creds.as_bytes()))
+    format!(
+        "Basic {}",
+        general_purpose::STANDARD.encode(creds.as_bytes())
+    )
 }
 
 #[tokio::test]

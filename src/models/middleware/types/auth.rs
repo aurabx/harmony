@@ -1,13 +1,11 @@
-use serde::{Deserialize, Serialize};
-use axum::{
-    http::{HeaderValue},
-};
-use base64::{engine::general_purpose, Engine as _};
-use std::sync::Arc;
-use std::error::Error as StdError;
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
+use axum::http::HeaderValue;
+use base64::{engine::general_purpose, Engine as _};
+use serde::{Deserialize, Serialize};
+use std::error::Error as StdError;
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct AuthSidecarConfig {
@@ -20,7 +18,9 @@ pub struct AuthSidecarMiddleware {
     _config: Arc<AuthSidecarConfig>, // Reference to shared config (unused for now)
 }
 
-pub fn parse_config(options: &std::collections::HashMap<String, serde_json::Value>) -> Result<AuthSidecarConfig, String> {
+pub fn parse_config(
+    options: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<AuthSidecarConfig, String> {
     let token_path = options
         .get("token_path")
         .and_then(|v| v.as_str())
@@ -84,8 +84,12 @@ impl Middleware for AuthSidecarMiddleware {
             .map_err(|_| Error::from("Failed to parse Basic Auth credentials as UTF-8"))?;
 
         let mut parts = decoded.splitn(2, ':');
-        let user = parts.next().ok_or_else(|| Error::from("Missing username in Basic Auth credentials"))?;
-        let pass = parts.next().ok_or_else(|| Error::from("Missing password in Basic Auth credentials"))?;
+        let user = parts
+            .next()
+            .ok_or_else(|| Error::from("Missing username in Basic Auth credentials"))?;
+        let pass = parts
+            .next()
+            .ok_or_else(|| Error::from("Missing password in Basic Auth credentials"))?;
 
         if user == self._config.username && pass == self._config.password {
             Ok(envelope)
@@ -126,8 +130,12 @@ async fn validate_basic_auth(
 
     // Split the credentials into username and password
     let mut parts = decoded_credentials.splitn(2, ':');
-    let username = parts.next().ok_or("Missing username in Basic Auth credentials")?;
-    let password = parts.next().ok_or("Missing password in Basic Auth credentials")?;
+    let username = parts
+        .next()
+        .ok_or("Missing username in Basic Auth credentials")?;
+    let password = parts
+        .next()
+        .ok_or("Missing password in Basic Auth credentials")?;
 
     // Validate the credentials against the config
     if username == config.username && password == config.password {

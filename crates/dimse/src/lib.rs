@@ -23,7 +23,7 @@ pub mod tls;
 // Re-export commonly used types
 pub use config::{DimseConfig, RemoteNode};
 pub use error::{DimseError, Result};
-pub use router::{DimseRequest, DimseResponse, Router, InMemoryRouter};
+pub use router::{DimseRequest, DimseResponse, InMemoryRouter, Router};
 pub use scp::DimseScp;
 pub use scu::DimseScu;
 pub use types::{DatasetStream, DimseCommand};

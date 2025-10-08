@@ -41,7 +41,10 @@ fn wrapper_roundtrip_snake_case() {
     // Ensure we serialize with snake_case keys
     let w_json = serde_json::to_value(&w).expect("serialize wrapper");
     assert_eq!(w_json["command"]["message_id"], 1);
-    assert_eq!(w_json["command"]["sop_class_uid"], "1.2.840.10008.5.1.4.1.2.1.1");
+    assert_eq!(
+        w_json["command"]["sop_class_uid"],
+        "1.2.840.10008.5.1.4.1.2.1.1"
+    );
 }
 
 #[test]
@@ -70,7 +73,10 @@ fn wrapper_parse_user_format_snake_case() {
     let (cmd_opt, identifier, qmeta_opt) = tool::parse_wrapper_or_identifier(&user);
     let cmd = cmd_opt.expect("command meta present");
     assert_eq!(cmd.message_id, Some(1));
-    assert_eq!(cmd.sop_class_uid.as_deref(), Some("1.2.840.10008.5.1.4.1.2.1.1"));
+    assert_eq!(
+        cmd.sop_class_uid.as_deref(),
+        Some("1.2.840.10008.5.1.4.1.2.1.1")
+    );
     assert!(identifier.get("00100020").is_some());
     let qmeta = qmeta_opt.expect("query metadata present");
     assert!(qmeta.0.get("00100010").is_some());

@@ -1,26 +1,25 @@
-use std::collections::HashMap;
-use std::sync::Arc;
-use axum::body::Body;
-use axum::{Router, response::Response};
-use axum::extract::Request;
-use http::StatusCode;
 use crate::config::config::Config;
 use crate::models::backends::backends::Backend;
-use crate::models::pipelines::config::Pipeline;
-use crate::models::middleware::chain::MiddlewareChain;
 use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::middleware::chain::MiddlewareChain;
+use crate::models::pipelines::config::Pipeline;
+use axum::body::Body;
+use axum::extract::Request;
+use axum::{response::Response, Router};
+use http::StatusCode;
+use std::collections::HashMap;
+use std::sync::Arc;
 
-pub struct Dispatcher<> {
+pub struct Dispatcher {
     config: Arc<Config>,
 }
 
-impl<'a> Dispatcher<> {
+impl Dispatcher {
     pub fn new(config: Arc<Config>) -> Self {
         Self { config }
     }
 
     /// Builds incoming routes for a specific group within the given app router.
-
     pub fn build_router(
         &self,
         mut app: Router<()>,
@@ -32,19 +31,29 @@ impl<'a> Dispatcher<> {
                 let service = match endpoint.resolve_service() {
                     Ok(service) => service,
                     Err(err) => {
-                        tracing::error!("Failed to resolve service for endpoint '{}': {}", endpoint_name, err);
+                        tracing::error!(
+                            "Failed to resolve service for endpoint '{}': {}",
+                            endpoint_name,
+                            err
+                        );
                         continue;
                     }
                 };
 
-                let route_configs = service.build_router(endpoint.options.as_ref().unwrap_or(&HashMap::new()));
+                let route_configs =
+                    service.build_router(endpoint.options.as_ref().unwrap_or(&HashMap::new()));
 
                 // If endpoint service is DICOM in endpoint (SCP) mode, start SCP listener
                 if endpoint.service.eq_ignore_ascii_case("dicom") {
-                    let opts_map: HashMap<String, serde_json::Value> = endpoint.options.clone().unwrap_or_default();
+                    let opts_map: HashMap<String, serde_json::Value> =
+                        endpoint.options.clone().unwrap_or_default();
                     let is_backend = opts_map.contains_key("host") || opts_map.contains_key("aet");
                     if !is_backend {
-                        crate::router::scp_launcher::ensure_dimse_scp_started(endpoint_name, group_name, &opts_map);
+                        crate::router::scp_launcher::ensure_dimse_scp_started(
+                            endpoint_name,
+                            group_name,
+                            &opts_map,
+                        );
                     }
                 }
 
@@ -68,7 +77,7 @@ impl<'a> Dispatcher<> {
                                     config_ref,
                                     endpoint_name,
                                 )
-                                    .await
+                                .await
                             }
                         };
 
@@ -97,13 +106,18 @@ impl<'a> Dispatcher<> {
         endpoint_name: String,
     ) -> Result<Response<Body>, StatusCode> {
         // Look up the endpoint and group from config
-        let endpoint = config.endpoints.get(&endpoint_name)
+        let endpoint = config
+            .endpoints
+            .get(&endpoint_name)
             .ok_or(StatusCode::NOT_FOUND)?;
 
-        let service = endpoint.resolve_service()
+        let service = endpoint
+            .resolve_service()
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
-        let pipeline = config.pipelines.iter()
+        let pipeline = config
+            .pipelines
+            .iter()
             .find(|(_, g)| g.endpoints.contains(&endpoint_name))
             .map(|(_, g)| g)
             .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -112,57 +126,49 @@ impl<'a> Dispatcher<> {
         let ctx = Self::http_request_to_protocol_ctx(
             req,
             endpoint.options.as_ref().unwrap_or(&HashMap::new()),
-        ).await.map_err(|_| StatusCode::BAD_REQUEST)?;
+        )
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
 
         let envelope = service
-            .build_protocol_envelope(
-                ctx,
-                endpoint.options.as_ref().unwrap_or(&HashMap::new()),
-            )
+            .build_protocol_envelope(ctx, endpoint.options.as_ref().unwrap_or(&HashMap::new()))
             .await
             .map_err(|_| StatusCode::BAD_REQUEST)?;
 
         // 1. Process through endpoint service
         let processed_envelope = service
-            .transform_request(envelope, endpoint.options.as_ref().unwrap_or(&HashMap::new()))
+            .transform_request(
+                envelope,
+                endpoint.options.as_ref().unwrap_or(&HashMap::new()),
+            )
             .await
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         // 2. Incoming (left) middleware chain
-        let after_incoming_mw = Self::process_incoming_middleware(
-            processed_envelope,
-            pipeline,
-            &config,
-        )
-        .await
-        .map_err(|err| {
-            tracing::warn!("Incoming middleware failed: {:?}", err);
-            StatusCode::UNAUTHORIZED
-        })?;
+        let after_incoming_mw =
+            Self::process_incoming_middleware(processed_envelope, pipeline, &config)
+                .await
+                .map_err(|err| {
+                    tracing::warn!("Incoming middleware failed: {:?}", err);
+                    StatusCode::UNAUTHORIZED
+                })?;
 
         // 3. Process through configured backends
-        let after_backends = Self::process_backends(
-            after_incoming_mw,
-            pipeline,
-            &config,
-        )
-        .await
-        .map_err(|err| {
-            tracing::error!("Backend processing failed: {:?}", err);
-            StatusCode::BAD_GATEWAY
-        })?;
+        let after_backends = Self::process_backends(after_incoming_mw, pipeline, &config)
+            .await
+            .map_err(|err| {
+                tracing::error!("Backend processing failed: {:?}", err);
+                StatusCode::BAD_GATEWAY
+            })?;
 
         // 4. Outgoing (right) middleware chain
-        let after_outgoing_mw = Self::process_outgoing_middleware(
-            after_backends,
-            pipeline,
-            &config,
-        )
-        .await
-        .map_err(|err| {
-            tracing::error!("Outgoing middleware failed: {:?}", err);
-            StatusCode::INTERNAL_SERVER_ERROR
-        })?;
+        let after_outgoing_mw =
+            Self::process_outgoing_middleware(after_backends, pipeline, &config)
+                .await
+                .map_err(|err| {
+                    tracing::error!("Outgoing middleware failed: {:?}", err);
+                    StatusCode::INTERNAL_SERVER_ERROR
+                })?;
 
         // 5. Final endpoint response processing
         let response = service
@@ -198,7 +204,10 @@ impl<'a> Dispatcher<> {
             .path_and_query()
             .map(|pq| pq.as_str().to_string())
             .unwrap_or_else(|| path_only.clone());
-        let mut subpath = path_only.strip_prefix(path_prefix).unwrap_or("").to_string();
+        let mut subpath = path_only
+            .strip_prefix(path_prefix)
+            .unwrap_or("")
+            .to_string();
         if subpath.starts_with('/') {
             subpath = subpath.trim_start_matches('/').to_string();
         }
@@ -225,12 +234,17 @@ impl<'a> Dispatcher<> {
                 if let Ok(s) = val.to_str() {
                     for part in s.split(';') {
                         let kv = part.trim();
-                        if kv.is_empty() { continue; }
+                        if kv.is_empty() {
+                            continue;
+                        }
                         let mut split = kv.splitn(2, '=');
                         let name = split.next().unwrap_or("").trim();
                         let value = split.next().unwrap_or("").trim();
                         if !name.is_empty() {
-                            map.insert(name.to_string(), serde_json::Value::String(value.to_string()));
+                            map.insert(
+                                name.to_string(),
+                                serde_json::Value::String(value.to_string()),
+                            );
                         }
                     }
                 }
@@ -271,21 +285,28 @@ impl<'a> Dispatcher<> {
 
         // attrs object
         let mut attrs = serde_json::Map::new();
-        attrs.insert("method".to_string(), serde_json::Value::String(req.method().to_string()));
-        attrs.insert("uri".to_string(), serde_json::Value::String(req.uri().to_string()));
+        attrs.insert(
+            "method".to_string(),
+            serde_json::Value::String(req.method().to_string()),
+        );
+        attrs.insert(
+            "uri".to_string(),
+            serde_json::Value::String(req.uri().to_string()),
+        );
         attrs.insert("headers".to_string(), headers_obj);
         attrs.insert("cookies".to_string(), cookies_obj);
         attrs.insert("query_params".to_string(), query_obj);
-        attrs.insert("cache_status".to_string(), serde_json::Value::String(cache_status));
+        attrs.insert(
+            "cache_status".to_string(),
+            serde_json::Value::String(cache_status),
+        );
 
         // Body bytes
-        let body_bytes = axum::body::to_bytes(
-            std::mem::replace(req.body_mut(), Body::empty()),
-            usize::MAX,
-        )
-        .await
-        .map_err(|_| Error::from("Failed to read request body"))?
-        .to_vec();
+        let body_bytes =
+            axum::body::to_bytes(std::mem::replace(req.body_mut(), Body::empty()), usize::MAX)
+                .await
+                .map_err(|_| Error::from("Failed to read request body"))?
+                .to_vec();
 
         Ok(ProtocolCtx {
             protocol: Protocol::Http,
@@ -320,22 +341,27 @@ impl<'a> Dispatcher<> {
         mut envelope: RequestEnvelope<Vec<u8>>,
         backend: &Backend,
     ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-        let service = backend.resolve_service()
+        let service = backend
+            .resolve_service()
             .map_err(|err| format!("Failed to resolve backend service: {}", err))?;
 
         // Transform the request using the backend service
-        envelope = service.transform_request(
-            envelope,
-            backend.options.as_ref().unwrap_or(&HashMap::new())
-        ).await
+        envelope = service
+            .transform_request(
+                envelope,
+                backend.options.as_ref().unwrap_or(&HashMap::new()),
+            )
+            .await
             .map_err(|err| format!("Backend request transformation failed: {:?}", err))?;
 
-        tracing::info!("Processed backend '{}' using service type '{}'",
-                      backend.service, backend.service);
+        tracing::info!(
+            "Processed backend '{}' using service type '{}'",
+            backend.service,
+            backend.service
+        );
 
         Ok(envelope)
     }
-
 
     // Process through incoming middleware chain
     async fn process_incoming_middleware(
@@ -367,7 +393,10 @@ impl<'a> Dispatcher<> {
         // Process through middleware chain
         let processed_json_envelope = middleware_chain.left(json_envelope).await?;
 
-        tracing::info!("Processing incoming middleware for {} middlewares", group.middleware.len());
+        tracing::info!(
+            "Processing incoming middleware for {} middlewares",
+            group.middleware.len()
+        );
 
         // Convert back to Vec<u8> envelope
         let processed_envelope = RequestEnvelope {
@@ -409,7 +438,10 @@ impl<'a> Dispatcher<> {
         // Process through middleware chain (right side)
         let processed_json_envelope = middleware_chain.right(json_envelope).await?;
 
-        tracing::info!("Processing outgoing middleware for {} middlewares", group.middleware.len());
+        tracing::info!(
+            "Processing outgoing middleware for {} middlewares",
+            group.middleware.len()
+        );
 
         // Convert back to Vec<u8> envelope
         let processed_envelope = RequestEnvelope {
@@ -421,13 +453,16 @@ impl<'a> Dispatcher<> {
         Ok(processed_envelope)
     }
 
-
     fn resolve_middleware_instance(
         raw_name: &str,
         config: &Config,
     ) -> (String, HashMap<String, serde_json::Value>) {
         // Normalize name: accept forms like "middleware.jwt_auth" or "jwt_auth"
-        let base = raw_name.split('.').last().unwrap_or(raw_name).to_lowercase();
+        let base = raw_name
+            .split('.')
+            .next_back()
+            .unwrap_or(raw_name)
+            .to_lowercase();
 
         // Helper to turn a config struct into a map
         let to_map = |val: serde_json::Value| -> HashMap<String, serde_json::Value> {
@@ -475,5 +510,4 @@ impl<'a> Dispatcher<> {
             other => (other.to_string(), HashMap::new()),
         }
     }
-
 }

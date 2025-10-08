@@ -1,7 +1,7 @@
-use serde::{Deserialize, Serialize};
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct AuraboxConnectConfig {
@@ -14,7 +14,9 @@ pub struct AuraboxConnectMiddleware {
     config: AuraboxConnectConfig,
 }
 
-pub fn parse_config(options: &std::collections::HashMap<String, serde_json::Value>) -> Result<AuraboxConnectConfig, String> {
+pub fn parse_config(
+    options: &std::collections::HashMap<String, serde_json::Value>,
+) -> Result<AuraboxConnectConfig, String> {
     let enabled = options
         .get("enabled")
         .and_then(|v| v.as_bool())

@@ -1,11 +1,11 @@
 #![cfg(test)]
 
+use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
 use std::collections::HashMap;
-use crate::models::envelope::envelope::{RequestEnvelope, RequestDetails};
 
 #[test]
 fn test_create_envelope() {
-    let request_details = RequestDetails{
+    let request_details = RequestDetails {
         method: "POST".to_string(),
         uri: "/example-path".to_string(),
         headers: {

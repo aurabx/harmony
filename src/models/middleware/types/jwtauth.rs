@@ -1,12 +1,10 @@
-use jsonwebtoken::{DecodingKey, Algorithm, Validation, decode, decode_header};
-use serde::{Deserialize, Serialize};
-use std::{
-    sync::Arc,
-};
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
+use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
+use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct JwtAuthConfig {
@@ -18,15 +16,15 @@ pub struct JwtAuthConfig {
     #[serde(default)]
     pub leeway_secs: Option<u64>,
     #[serde(default)]
-    pub use_hs256: bool,               // When true, use HS256 with hs256_secret
+    pub use_hs256: bool, // When true, use HS256 with hs256_secret
     #[serde(default)]
-    pub hs256_secret: Option<String>,  // Required if use_hs256 = true
+    pub hs256_secret: Option<String>, // Required if use_hs256 = true
 }
 
 pub struct JwtAuthMiddleware {
-    pub config: JwtAuthConfig,              // Configuration for the middleware
-    pub decoding_key: Arc<DecodingKey>,    // Decoding key for JWT
-    pub algorithm: Algorithm,              // Expected algorithm
+    pub config: JwtAuthConfig,          // Configuration for the middleware
+    pub decoding_key: Arc<DecodingKey>, // Decoding key for JWT
+    pub algorithm: Algorithm,           // Expected algorithm
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,15 +43,23 @@ struct Claims {
     aud: Option<JsonValue>, // string or array
 }
 
-pub fn parse_config(options: &std::collections::HashMap<String, JsonValue>) -> Result<JwtAuthConfig, String> {
+pub fn parse_config(
+    options: &std::collections::HashMap<String, JsonValue>,
+) -> Result<JwtAuthConfig, String> {
     let public_key_path = options
         .get("public_key_path")
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
 
-    let issuer = options.get("issuer").and_then(|v| v.as_str()).map(|s| s.to_string());
-    let audience = options.get("audience").and_then(|v| v.as_str()).map(|s| s.to_string());
+    let issuer = options
+        .get("issuer")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+    let audience = options
+        .get("audience")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
     let leeway_secs = options.get("leeway_secs").and_then(|v| v.as_u64());
     let use_hs256 = options
         .get("use_hs256")
@@ -88,18 +94,16 @@ impl JwtAuthMiddleware {
         } else {
             // Strict RS256 path: must load a valid RSA public key
             match std::fs::read_to_string(&config.public_key_path) {
-                Ok(pem) => {
-                    match DecodingKey::from_rsa_pem(pem.as_bytes()) {
-                        Ok(k) => (k, Algorithm::RS256),
-                        Err(e) => {
-                            panic!(
+                Ok(pem) => match DecodingKey::from_rsa_pem(pem.as_bytes()) {
+                    Ok(k) => (k, Algorithm::RS256),
+                    Err(e) => {
+                        panic!(
                                 "JWT: failed to parse RSA public key at '{}': {}. Set use_hs256=true with a secret for HS256.",
                                 config.public_key_path,
                                 e
                             );
-                        }
                     }
-                }
+                },
                 Err(e) => {
                     panic!(
                         "JWT: failed to read RSA public key at '{}': {}. Set use_hs256=true with a secret for HS256.",
@@ -153,7 +157,10 @@ impl JwtAuthMiddleware {
     }
 
     /// Extract JWT token from Authorization header in the envelope
-    fn extract_token_from_envelope(&self, envelope: &RequestEnvelope<serde_json::Value>) -> Result<String, Error> {
+    fn extract_token_from_envelope(
+        &self,
+        envelope: &RequestEnvelope<serde_json::Value>,
+    ) -> Result<String, Error> {
         if let Some(auth_header) = envelope.request_details.headers.get("authorization") {
             if auth_header.starts_with("Bearer ") {
                 Ok(auth_header.trim_start_matches("Bearer ").to_string())

@@ -1,15 +1,14 @@
-
-use std::collections::HashMap;
+use crate::config::config::Config;
+use crate::config::config::ConfigError;
 use crate::models::envelope::envelope::RequestEnvelope;
+use crate::router::route_config::RouteConfig;
+use crate::utils::Error;
 use async_trait::async_trait;
 use axum::response::Response;
-use crate::config::config::ConfigError;
-use serde_json::Value;
-use serde::Deserialize;
-use crate::utils::Error;
-use crate::router::route_config::RouteConfig;
 use once_cell::sync::OnceCell;
-use crate::config::config::Config;
+use serde::Deserialize;
+use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
@@ -36,7 +35,9 @@ pub fn initialise_service_registry(config: &Config) {
 
 /// Resolves a service type from the registry and returns a boxed ServiceType
 /// This function can be used by both Endpoints and Backends
-pub fn resolve_service(service_type: &str) -> Result<Box<dyn ServiceType<ReqBody=Value>>, String> {
+pub fn resolve_service(
+    service_type: &str,
+) -> Result<Box<dyn ServiceType<ReqBody = Value>>, String> {
     // Check the registry first
     if let Some(registry) = SERVICE_REGISTRY.get() {
         if let Some(module) = registry.get(service_type) {
@@ -63,26 +64,40 @@ pub fn resolve_service(service_type: &str) -> Result<Box<dyn ServiceType<ReqBody
 }
 
 /// Creates built-in service instances
-fn create_builtin_service(service_type: &str) -> Result<Box<dyn ServiceType<ReqBody=Value>>, String> {
+fn create_builtin_service(
+    service_type: &str,
+) -> Result<Box<dyn ServiceType<ReqBody = Value>>, String> {
     match service_type.to_lowercase().as_str() {
-        "http" => Ok(Box::new(crate::models::services::types::http::HttpEndpoint {})),
-        "jmix" => Ok(Box::new(crate::models::services::types::jmix::JmixEndpoint {})),
-        "fhir" => Ok(Box::new(crate::models::services::types::fhir::FhirEndpoint {})),
-        "dicom" => Ok(Box::new(crate::models::services::types::dicom::DicomEndpoint {
-            local_aet: None,
-            aet: None,
-            host: None,
-            port: None,
-            use_tls: None,
-        })),
-        "echo" => Ok(Box::new(crate::models::services::types::echo::EchoEndpoint {})),
-        _ => Err(format!("Unsupported built-in service type: {}", service_type)),
+        "http" => Ok(Box::new(
+            crate::models::services::types::http::HttpEndpoint {},
+        )),
+        "jmix" => Ok(Box::new(
+            crate::models::services::types::jmix::JmixEndpoint {},
+        )),
+        "fhir" => Ok(Box::new(
+            crate::models::services::types::fhir::FhirEndpoint {},
+        )),
+        "dicom" => Ok(Box::new(
+            crate::models::services::types::dicom::DicomEndpoint {
+                local_aet: None,
+                aet: None,
+                host: None,
+                port: None,
+                use_tls: None,
+            },
+        )),
+        "echo" => Ok(Box::new(
+            crate::models::services::types::echo::EchoEndpoint {},
+        )),
+        _ => Err(format!(
+            "Unsupported built-in service type: {}",
+            service_type
+        )),
     }
 }
 
 #[async_trait]
 pub trait ServiceType: ServiceHandler<Value> {
-
     /// Validate the service configuration
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError>;
 
@@ -95,9 +110,10 @@ pub trait ServiceType: ServiceHandler<Value> {
         _ctx: crate::models::protocol::ProtocolCtx,
         _options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-        Err(Error::from("build_protocol_envelope is not supported by this service"))
+        Err(Error::from(
+            "build_protocol_envelope is not supported by this service",
+        ))
     }
-
 }
 
 #[async_trait]

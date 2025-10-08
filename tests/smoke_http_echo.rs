@@ -1,8 +1,8 @@
-use harmony::config::config::{Config, ConfigError};
-use axum::http::{Request, StatusCode};
 use axum::body::Body;
-use tower::ServiceExt; // for Router::oneshot
+use axum::http::{Request, StatusCode};
+use harmony::config::config::{Config, ConfigError};
 use std::sync::Arc;
+use tower::ServiceExt; // for Router::oneshot
 
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(toml).expect("TOML parse error");
@@ -57,7 +57,7 @@ fn get_test_config() -> &'static str {
 async fn build_test_router() -> axum::Router<()> {
     // Ensure ./tmp directory exists for store_dir
     let _ = std::fs::create_dir_all("./tmp");
-    
+
     let cfg = load_config_from_str(get_test_config()).expect("valid config");
     harmony::router::build_network_router(Arc::new(cfg), "default").await
 }

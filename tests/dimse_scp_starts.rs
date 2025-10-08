@@ -16,7 +16,8 @@ async fn dimse_scp_starts_for_dicom_endpoint() {
     drop(listener);
 
     // Build a config where a pipeline references a DICOM endpoint (SCP)
-    let toml = format!(r#"
+    let toml = format!(
+        r#"
         [proxy]
         id = "dimse-scp-test"
         log_level = "info"
@@ -47,7 +48,8 @@ async fn dimse_scp_starts_for_dicom_endpoint() {
 
         [services.dicom]
         module = ""
-    "#);
+    "#
+    );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
 
@@ -60,11 +62,20 @@ async fn dimse_scp_starts_for_dicom_endpoint() {
     let mut connected = false;
     for _ in 0..30 {
         match TcpStream::connect(&addr).await {
-            Ok(_s) => { connected = true; break; },
-            Err(e) => { last_err = Some(e); }
+            Ok(_s) => {
+                connected = true;
+                break;
+            }
+            Err(e) => {
+                last_err = Some(e);
+            }
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    assert!(connected, "Failed to connect to DIMSE SCP on {}: {:?}", addr, last_err);
+    assert!(
+        connected,
+        "Failed to connect to DIMSE SCP on {}: {:?}",
+        addr, last_err
+    );
 }

@@ -1,25 +1,26 @@
-use std::collections::HashMap;
-use async_trait::async_trait;
-use axum::{response::Response, body::Body};
-use serde_json::Value;
-use serde::Deserialize;
 use crate::config::config::ConfigError;
 use crate::models::envelope::envelope::RequestEnvelope;
-use crate::models::services::services::{ServiceType, ServiceHandler};
+use crate::models::services::services::{ServiceHandler, ServiceType};
+use async_trait::async_trait;
+use axum::{body::Body, response::Response};
+use serde::Deserialize;
+use serde_json::Value;
+use std::collections::HashMap;
 
-use crate::utils::Error;
+use crate::globals::get_storage;
 use crate::router::route_config::RouteConfig;
-use dimse::{DimseConfig, RemoteNode, DimseScu};
-use dimse::types::{FindQuery, QueryLevel, GetQuery};
+use crate::utils::Error;
 use dicom_json_tool as djt;
+use dimse::types::{FindQuery, GetQuery, QueryLevel};
+use dimse::{DimseConfig, DimseScu, RemoteNode};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 pub struct DicomEndpoint {
     pub local_aet: Option<String>,
-    pub aet: Option<String>,  // For backward compatibility (remote AET)
+    pub aet: Option<String>, // For backward compatibility (remote AET)
     pub host: Option<String>,
     pub port: Option<u16>,
     pub use_tls: Option<bool>,
@@ -35,7 +36,8 @@ impl DicomEndpoint {
 
     /// Get the local AET from options or struct
     fn get_local_aet(&self, options: &HashMap<String, Value>) -> Option<String> {
-        options.get("local_aet")
+        options
+            .get("local_aet")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
             .or_else(|| self.local_aet.clone())
@@ -43,24 +45,32 @@ impl DicomEndpoint {
     }
 
     /// Create a remote node from configuration
-    fn create_remote_node(&self, options: &HashMap<String, Value>) -> Result<RemoteNode, ConfigError> {
-        let aet = options.get("aet")
+    fn create_remote_node(
+        &self,
+        options: &HashMap<String, Value>,
+    ) -> Result<RemoteNode, ConfigError> {
+        let aet = options
+            .get("aet")
             .and_then(|v| v.as_str())
             .or(self.aet.as_deref())
             .ok_or_else(|| ConfigError::InvalidEndpoint {
                 name: "dicom".to_string(),
                 reason: "Missing remote 'aet' (Application Entity Title)".to_string(),
-            })?.to_string();
+            })?
+            .to_string();
 
-        let host = options.get("host")
+        let host = options
+            .get("host")
             .and_then(|v| v.as_str())
             .or(self.host.as_deref())
             .ok_or_else(|| ConfigError::InvalidEndpoint {
                 name: "dicom".to_string(),
                 reason: "Missing 'host' (DICOM server address)".to_string(),
-            })?.to_string();
+            })?
+            .to_string();
 
-        let port = options.get("port")
+        let port = options
+            .get("port")
             .and_then(|v| v.as_u64())
             .or(self.port.map(|p| p as u64))
             .ok_or_else(|| ConfigError::InvalidEndpoint {
@@ -77,11 +87,13 @@ impl DicomEndpoint {
         }
 
         let mut node = RemoteNode::new(aet, host, port as u16);
-        
-        if options.get("use_tls")
+
+        if options
+            .get("use_tls")
             .and_then(|v| v.as_bool())
             .or(self.use_tls)
-            .unwrap_or(false) {
+            .unwrap_or(false)
+        {
             node = node.with_tls();
         }
 
@@ -97,12 +109,13 @@ impl ServiceType for DicomEndpoint {
             self.create_remote_node(options)?;
         } else {
             // Endpoint usage - validate local AET only for SCP listener
-            let local_aet = self.get_local_aet(options)
-                .ok_or_else(|| ConfigError::InvalidEndpoint {
-                    name: "dicom".to_string(),
-                    reason: "Missing 'local_aet' for DICOM endpoint (SCP)".to_string(),
-                })?;
-            
+            let local_aet =
+                self.get_local_aet(options)
+                    .ok_or_else(|| ConfigError::InvalidEndpoint {
+                        name: "dicom".to_string(),
+                        reason: "Missing 'local_aet' for DICOM endpoint (SCP)".to_string(),
+                    })?;
+
             if local_aet.trim().is_empty() || local_aet.len() > 16 {
                 return Err(ConfigError::InvalidEndpoint {
                     name: "dicom".to_string(),
@@ -120,7 +133,7 @@ impl ServiceType for DicomEndpoint {
                 }
             }
         }
-        
+
         Ok(())
     }
 
@@ -138,18 +151,24 @@ impl ServiceType for DicomEndpoint {
         &self,
         ctx: crate::models::protocol::ProtocolCtx,
         _options: &HashMap<String, Value>,
-    ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error> {
-        use crate::models::envelope::envelope::{RequestEnvelope, RequestDetails};
+    ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error>
+    {
+        use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
         use crate::utils::Error;
         use std::collections::HashMap as Map;
 
         if ctx.protocol != crate::models::protocol::Protocol::Dimse {
-            return Err(Error::from("DicomEndpoint only supports Protocol::Dimse in build_protocol_envelope"));
+            return Err(Error::from(
+                "DicomEndpoint only supports Protocol::Dimse in build_protocol_envelope",
+            ));
         }
 
         // Build minimal RequestDetails using meta
-        let mut metadata: Map<String, String> = ctx.meta.clone();
-        let op = metadata.get("operation").cloned().unwrap_or_else(|| "DIMSE".into());
+        let metadata: Map<String, String> = ctx.meta.clone();
+        let op = metadata
+            .get("operation")
+            .cloned()
+            .unwrap_or_else(|| "DIMSE".into());
         let uri = format!("dicom://scp/{}", op.to_lowercase());
         let details = RequestDetails {
             method: op,
@@ -206,22 +225,31 @@ impl ServiceHandler<Value> for DicomEndpoint {
 
         let mut builder = Response::builder().status(status);
         let mut has_content_type = false;
-        if let Some(hdrs) = response_meta.and_then(|m| m.get("headers")).and_then(|h| h.as_object()) {
+        if let Some(hdrs) = response_meta
+            .and_then(|m| m.get("headers"))
+            .and_then(|h| h.as_object())
+        {
             for (k, v) in hdrs.iter() {
                 if let Some(val_str) = v.as_str() {
-                    if k.eq_ignore_ascii_case("content-type") { has_content_type = true; }
+                    if k.eq_ignore_ascii_case("content-type") {
+                        has_content_type = true;
+                    }
                     builder = builder.header(k.as_str(), val_str);
                 }
             }
         }
 
-        if let Some(body_str) = response_meta.and_then(|m| m.get("body")).and_then(|b| b.as_str()) {
+        if let Some(body_str) = response_meta
+            .and_then(|m| m.get("body"))
+            .and_then(|b| b.as_str())
+        {
             return builder
                 .body(Body::from(body_str.to_string()))
                 .map_err(|_| Error::from("Failed to construct DICOM HTTP response"));
         }
 
-        let body_str = serde_json::to_string(&nd).map_err(|_| Error::from("Failed to serialize DICOM response payload into JSON"))?;
+        let body_str = serde_json::to_string(&nd)
+            .map_err(|_| Error::from("Failed to serialize DICOM response payload into JSON"))?;
         if !has_content_type {
             builder = builder.header("content-type", "application/json");
         }
@@ -239,13 +267,15 @@ impl DicomEndpoint {
         options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
         // Create remote node configuration
-        let remote_node = self.create_remote_node(options)
+        let remote_node = self
+            .create_remote_node(options)
             .map_err(|e| Error::from(format!("Failed to create remote node: {:?}", e)))?;
 
         // Create DIMSE SCU configuration
-        let local_aet = self.get_local_aet(options)
+        let local_aet = self
+            .get_local_aet(options)
             .unwrap_or_else(|| "HARMONY_SCU".to_string());
-        
+
         let mut dimse_config = DimseConfig {
             local_aet,
             ..Default::default()
@@ -262,7 +292,10 @@ impl DicomEndpoint {
         let scu = DimseScu::new(dimse_config);
 
         // Extract path to determine operation type
-        let path = envelope.request_details.metadata.get("path")
+        let path = envelope
+            .request_details
+            .metadata
+            .get("path")
             .cloned()
             .unwrap_or_default();
 
@@ -281,9 +314,9 @@ impl DicomEndpoint {
                         "operation": "echo",
                         "success": false,
                         "error": e.to_string()
-                    })
+                    }),
                 }
-            },
+            }
             "find" | "/find" => {
                 // Parse request body as either wrapper or raw identifier JSON
                 let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
@@ -301,12 +334,14 @@ impl DicomEndpoint {
                     for (tag, entry) in map.iter() {
                         // Expect { vr: ..., Value: [...] }
                         if let Some(val_array) = entry.get("Value").and_then(|v| v.as_array()) {
-                            if let Some(first) = val_array.get(0) {
+                            if let Some(first) = val_array.first() {
                                 if let Some(s) = first.as_str() {
                                     params.insert(tag.clone(), s.to_string());
                                 } else if let Some(obj) = first.as_object() {
                                     // PN case: { Alphabetic: "..." }
-                                    if let Some(alpha) = obj.get("Alphabetic").and_then(|v| v.as_str()) {
+                                    if let Some(alpha) =
+                                        obj.get("Alphabetic").and_then(|v| v.as_str())
+                                    {
                                         params.insert(tag.clone(), alpha.to_string());
                                     }
                                 }
@@ -331,16 +366,13 @@ impl DicomEndpoint {
                         use futures_util::StreamExt;
                         let mut matches: Vec<serde_json::Value> = Vec::new();
                         while let Some(item) = stream.next().await {
-                            if let Ok(ds) = item {
-                                match ds {
-                                    dimse::types::DatasetStream::File { ref path, .. } => {
-                                        if let Ok(obj) = dicom_object::open_file(path) {
-                                            if let Ok(json) = dicom_json_tool::identifier_to_json_value(&obj) {
-                                                matches.push(json);
-                                            }
-                                        }
+                            if let Ok(dimse::types::DatasetStream::File { ref path, .. }) = item {
+                                if let Ok(obj) = dicom_object::open_file(path) {
+                                    if let Ok(json) =
+                                        dicom_json_tool::identifier_to_json_value(&obj)
+                                    {
+                                        matches.push(json);
                                     }
-                                    _ => {}
                                 }
                             }
                         }
@@ -354,9 +386,9 @@ impl DicomEndpoint {
                         "operation": "find",
                         "success": false,
                         "error": e.to_string()
-                    })
+                    }),
                 }
-            },
+            }
             "move" | "/move" => {
                 // Parse request body to build a MoveQuery (destination defaults to our local AET)
                 let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
@@ -372,11 +404,13 @@ impl DicomEndpoint {
                 if let Some(map) = identifier_json.as_object() {
                     for (tag, entry) in map.iter() {
                         if let Some(val_array) = entry.get("Value").and_then(|v| v.as_array()) {
-                            if let Some(first) = val_array.get(0) {
+                            if let Some(first) = val_array.first() {
                                 if let Some(s) = first.as_str() {
                                     params.insert(tag.clone(), s.to_string());
                                 } else if let Some(obj) = first.as_object() {
-                                    if let Some(alpha) = obj.get("Alphabetic").and_then(|v| v.as_str()) {
+                                    if let Some(alpha) =
+                                        obj.get("Alphabetic").and_then(|v| v.as_str())
+                                    {
                                         params.insert(tag.clone(), alpha.to_string());
                                     }
                                 }
@@ -388,7 +422,9 @@ impl DicomEndpoint {
                 }
 
                 // Destination AE: default to our local AET (download into proxy tmp)
-                let destination_aet = self.get_local_aet(options).unwrap_or_else(|| "HARMONY_SCU".to_string());
+                let destination_aet = self
+                    .get_local_aet(options)
+                    .unwrap_or_else(|| "HARMONY_SCU".to_string());
                 let mut move_q = dimse::types::MoveQuery::new(QueryLevel::Study, destination_aet);
                 for (k, v) in params.into_iter() {
                     move_q = move_q.with_parameter(k, v);
@@ -398,28 +434,43 @@ impl DicomEndpoint {
                     Ok(mut stream) => {
                         use futures_util::StreamExt;
                         let mut instances: Vec<serde_json::Value> = Vec::new();
-                        // Prepare unique folder under ./tmp/dimse/<uuid>
-                        let base = Path::new("./tmp").join("dimse");
-                        let _ = fs::create_dir_all(&base);
+
+                        // Prepare unique folder using storage backend
                         let folder_id = Uuid::new_v4().to_string();
-                        let folder_path = base.join(&folder_id);
-                        let _ = fs::create_dir_all(&folder_path);
+                        let folder_path = if let Some(storage) = get_storage() {
+                            storage
+                                .ensure_dir_str(&format!("dimse/{}", folder_id))
+                                .unwrap_or_else(|_| {
+                                    // Fallback to manual creation
+                                    let fallback =
+                                        Path::new("./tmp").join("dimse").join(&folder_id);
+                                    let _ = fs::create_dir_all(&fallback);
+                                    fallback
+                                })
+                        } else {
+                            // Fallback if storage not available
+                            let base = Path::new("./tmp").join("dimse");
+                            let _ = fs::create_dir_all(&base);
+                            let folder_path = base.join(&folder_id);
+                            let _ = fs::create_dir_all(&folder_path);
+                            folder_path
+                        };
                         let mut file_count = 0usize;
 
                         while let Some(item) = stream.next().await {
-                            if let Ok(ds) = item {
-                                if let dimse::types::DatasetStream::File { ref path, .. } = ds {
-                                    // Copy file into our unique folder
-                                    if let Some(name) = Path::new(path).file_name() {
-                                        let dest = folder_path.join(name);
-                                        let _ = fs::copy(path, &dest);
-                                        file_count += 1;
-                                    }
-                                    // Also capture identifier metadata
-                                    if let Ok(obj) = dicom_object::open_file(path) {
-                                        if let Ok(json) = dicom_json_tool::identifier_to_json_value(&obj) {
-                                            instances.push(json);
-                                        }
+                            if let Ok(dimse::types::DatasetStream::File { ref path, .. }) = item {
+                                // Copy file into our unique folder
+                                if let Some(name) = Path::new(path).file_name() {
+                                    let dest = folder_path.join(name);
+                                    let _ = fs::copy(path, &dest);
+                                    file_count += 1;
+                                }
+                                // Also capture identifier metadata
+                                if let Ok(obj) = dicom_object::open_file(path) {
+                                    if let Ok(json) =
+                                        dicom_json_tool::identifier_to_json_value(&obj)
+                                    {
+                                        instances.push(json);
                                     }
                                 }
                             }
@@ -435,8 +486,15 @@ impl DicomEndpoint {
                             "file_count": file_count
                         });
                         if std::env::var("HARMONY_TEST_DEBUG").ok().as_deref() == Some("1") {
-                            if let Ok(debug_text) = std::fs::read_to_string("./tmp/movescu_last.json") {
-                                if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(&debug_text) {
+                            let debug_path = if let Some(storage) = get_storage() {
+                                storage.subpath_str("movescu_last.json")
+                            } else {
+                                Path::new("./tmp").join("movescu_last.json")
+                            };
+                            if let Ok(debug_text) = std::fs::read_to_string(&debug_path) {
+                                if let Ok(debug_json) =
+                                    serde_json::from_str::<serde_json::Value>(&debug_text)
+                                {
                                     response["debug"] = debug_json;
                                 }
                             }
@@ -447,9 +505,9 @@ impl DicomEndpoint {
                         "operation": "move",
                         "success": false,
                         "error": e.to_string()
-                    })
+                    }),
                 }
-            },
+            }
             "get" | "/get" => {
                 // Parse request body to build a GetQuery
                 let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
@@ -464,11 +522,13 @@ impl DicomEndpoint {
                 if let Some(map) = identifier_json.as_object() {
                     for (tag, entry) in map.iter() {
                         if let Some(val_array) = entry.get("Value").and_then(|v| v.as_array()) {
-                            if let Some(first) = val_array.get(0) {
+                            if let Some(first) = val_array.first() {
                                 if let Some(s) = first.as_str() {
                                     params.insert(tag.clone(), s.to_string());
                                 } else if let Some(obj) = first.as_object() {
-                                    if let Some(alpha) = obj.get("Alphabetic").and_then(|v| v.as_str()) {
+                                    if let Some(alpha) =
+                                        obj.get("Alphabetic").and_then(|v| v.as_str())
+                                    {
                                         params.insert(tag.clone(), alpha.to_string());
                                     }
                                 }
@@ -488,28 +548,43 @@ impl DicomEndpoint {
                     Ok(mut stream) => {
                         use futures_util::StreamExt;
                         let mut instances: Vec<serde_json::Value> = Vec::new();
-                        // Prepare unique folder under ./tmp/dimse/<uuid>
-                        let base = Path::new("./tmp").join("dimse");
-                        let _ = fs::create_dir_all(&base);
+
+                        // Prepare unique folder using storage backend
                         let folder_id = Uuid::new_v4().to_string();
-                        let folder_path = base.join(&folder_id);
-                        let _ = fs::create_dir_all(&folder_path);
+                        let folder_path = if let Some(storage) = get_storage() {
+                            storage
+                                .ensure_dir_str(&format!("dimse/{}", folder_id))
+                                .unwrap_or_else(|_| {
+                                    // Fallback to manual creation
+                                    let fallback =
+                                        Path::new("./tmp").join("dimse").join(&folder_id);
+                                    let _ = fs::create_dir_all(&fallback);
+                                    fallback
+                                })
+                        } else {
+                            // Fallback if storage not available
+                            let base = Path::new("./tmp").join("dimse");
+                            let _ = fs::create_dir_all(&base);
+                            let folder_path = base.join(&folder_id);
+                            let _ = fs::create_dir_all(&folder_path);
+                            folder_path
+                        };
                         let mut file_count = 0usize;
 
                         while let Some(item) = stream.next().await {
-                            if let Ok(ds) = item {
-                                if let dimse::types::DatasetStream::File { ref path, .. } = ds {
-                                    // Copy file into our unique folder
-                                    if let Some(name) = Path::new(path).file_name() {
-                                        let dest = folder_path.join(name);
-                                        let _ = fs::copy(path, &dest);
-                                        file_count += 1;
-                                    }
-                                    // Also capture identifier metadata
-                                    if let Ok(obj) = dicom_object::open_file(path) {
-                                        if let Ok(json) = dicom_json_tool::identifier_to_json_value(&obj) {
-                                            instances.push(json);
-                                        }
+                            if let Ok(dimse::types::DatasetStream::File { ref path, .. }) = item {
+                                // Copy file into our unique folder
+                                if let Some(name) = Path::new(path).file_name() {
+                                    let dest = folder_path.join(name);
+                                    let _ = fs::copy(path, &dest);
+                                    file_count += 1;
+                                }
+                                // Also capture identifier metadata
+                                if let Ok(obj) = dicom_object::open_file(path) {
+                                    if let Ok(json) =
+                                        dicom_json_tool::identifier_to_json_value(&obj)
+                                    {
+                                        instances.push(json);
                                     }
                                 }
                             }
@@ -527,18 +602,17 @@ impl DicomEndpoint {
                         "operation": "get",
                         "success": false,
                         "error": e.to_string()
-                    })
+                    }),
                 }
-            },
+            }
             _ => serde_json::json!({
                 "operation": "unknown",
                 "success": false,
                 "error": format!("Unknown DIMSE operation: {}", path)
-            })
+            }),
         };
 
         envelope.normalized_data = Some(result);
         Ok(envelope.clone())
     }
 }
-

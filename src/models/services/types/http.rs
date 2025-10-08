@@ -1,13 +1,13 @@
-use std::collections::HashMap;
-use serde::Deserialize;
-use axum::{response::Response, body::Body};
-use serde_json::Value;
-use async_trait::async_trait;
 use crate::config::config::ConfigError;
-use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::models::envelope::envelope::RequestEnvelope;
-use crate::utils::Error;
+use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
+use crate::utils::Error;
+use async_trait::async_trait;
+use axum::{body::Body, response::Response};
+use serde::Deserialize;
+use serde_json::Value;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub struct HttpEndpoint {}
@@ -19,7 +19,7 @@ impl ServiceType for HttpEndpoint {
         if options
             .get("path_prefix")
             .and_then(|v| v.as_str())
-            .map_or(true, |s| s.trim().is_empty())
+            .is_none_or(|s| s.trim().is_empty())
         {
             return Err(ConfigError::InvalidEndpoint {
                 name: "basic".to_string(),
@@ -35,18 +35,16 @@ impl ServiceType for HttpEndpoint {
             .and_then(|v| v.as_str())
             .unwrap_or("/");
 
-        vec![
-            RouteConfig {
-                path: format!("{}/{{*wildcard}}", path_prefix),
-                methods: vec![
-                    http::Method::GET,
-                    http::Method::POST,
-                    http::Method::PUT,
-                    http::Method::DELETE,
-                ],
-                description: Some("Handles GET/POST/PUT/DELETE for HttpEndpoint".to_string()),
-            },
-        ]
+        vec![RouteConfig {
+            path: format!("{}/{{*wildcard}}", path_prefix),
+            methods: vec![
+                http::Method::GET,
+                http::Method::POST,
+                http::Method::PUT,
+                http::Method::DELETE,
+            ],
+            description: Some("Handles GET/POST/PUT/DELETE for HttpEndpoint".to_string()),
+        }]
     }
 
     // noinspection DuplicatedCode
@@ -55,25 +53,39 @@ impl ServiceType for HttpEndpoint {
         &self,
         ctx: crate::models::protocol::ProtocolCtx,
         _options: &HashMap<String, Value>,
-    ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error> {
-        use crate::models::envelope::envelope::{RequestEnvelope, RequestDetails};
+    ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error>
+    {
+        use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
         use crate::utils::Error;
         use std::collections::HashMap as Map;
 
         if ctx.protocol != crate::models::protocol::Protocol::Http {
-            return Err(Error::from("HttpEndpoint only supports Protocol::Http in build_protocol_envelope"));
+            return Err(Error::from(
+                "HttpEndpoint only supports Protocol::Http in build_protocol_envelope",
+            ));
         }
 
-        let attrs = ctx.attrs.as_object().ok_or_else(|| Error::from("invalid attrs for HTTP"))?;
+        let attrs = ctx
+            .attrs
+            .as_object()
+            .ok_or_else(|| Error::from("invalid attrs for HTTP"))?;
         let headers_map: Map<String, String> = attrs
             .get("headers")
             .and_then(|v| v.as_object())
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
         let cookies_map: Map<String, String> = attrs
             .get("cookies")
             .and_then(|v| v.as_object())
-            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string())).collect())
+            .map(|m| {
+                m.iter()
+                    .map(|(k, v)| (k.clone(), v.as_str().unwrap_or("").to_string()))
+                    .collect()
+            })
             .unwrap_or_default();
         let query_params: Map<String, Vec<String>> = attrs
             .get("query_params")
@@ -81,7 +93,9 @@ impl ServiceType for HttpEndpoint {
             .map(|m| {
                 m.iter()
                     .map(|(k, v)| {
-                        let vec = v.as_array().unwrap_or(&vec![])
+                        let vec = v
+                            .as_array()
+                            .unwrap_or(&vec![])
                             .iter()
                             .filter_map(|s| s.as_str().map(|s| s.to_string()))
                             .collect::<Vec<_>>();
@@ -97,12 +111,26 @@ impl ServiceType for HttpEndpoint {
 
         let mut metadata: Map<String, String> = Map::new();
         // pass through HTTP-derived meta (path, full_path) from ctx.meta
-        if let Some(path) = ctx.meta.get("path") { metadata.insert("path".into(), path.clone()); }
-        if let Some(full) = ctx.meta.get("full_path") { metadata.insert("full_path".into(), full.clone()); }
-        if let Some(proto) = ctx.meta.get("protocol") { metadata.insert("protocol".into(), proto.clone()); }
+        if let Some(path) = ctx.meta.get("path") {
+            metadata.insert("path".into(), path.clone());
+        }
+        if let Some(full) = ctx.meta.get("full_path") {
+            metadata.insert("full_path".into(), full.clone());
+        }
+        if let Some(proto) = ctx.meta.get("protocol") {
+            metadata.insert("protocol".into(), proto.clone());
+        }
 
-        let method = attrs.get("method").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let uri = attrs.get("uri").and_then(|v| v.as_str()).unwrap_or("").to_string();
+        let method = attrs
+            .get("method")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        let uri = attrs
+            .get("uri")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
 
         let request_details = RequestDetails {
             method,
@@ -120,7 +148,6 @@ impl ServiceType for HttpEndpoint {
             normalized_data: None,
         })
     }
-
 }
 
 #[async_trait]
@@ -156,22 +183,31 @@ impl ServiceHandler<Value> for HttpEndpoint {
 
         let mut builder = Response::builder().status(status);
         let mut has_content_type = false;
-        if let Some(hdrs) = response_meta.and_then(|m| m.get("headers")).and_then(|h| h.as_object()) {
+        if let Some(hdrs) = response_meta
+            .and_then(|m| m.get("headers"))
+            .and_then(|h| h.as_object())
+        {
             for (k, v) in hdrs.iter() {
                 if let Some(val_str) = v.as_str() {
-                    if k.eq_ignore_ascii_case("content-type") { has_content_type = true; }
+                    if k.eq_ignore_ascii_case("content-type") {
+                        has_content_type = true;
+                    }
                     builder = builder.header(k.as_str(), val_str);
                 }
             }
         }
 
-        if let Some(body_str) = response_meta.and_then(|m| m.get("body")).and_then(|b| b.as_str()) {
+        if let Some(body_str) = response_meta
+            .and_then(|m| m.get("body"))
+            .and_then(|b| b.as_str())
+        {
             return builder
                 .body(Body::from(body_str.to_string()))
                 .map_err(|_| Error::from("Failed to construct HTTP response"));
         }
 
-        let body_str = serde_json::to_string(&nd).map_err(|_| Error::from("Failed to serialize HTTP response JSON"))?;
+        let body_str = serde_json::to_string(&nd)
+            .map_err(|_| Error::from("Failed to serialize HTTP response JSON"))?;
         if !has_content_type {
             builder = builder.header("content-type", "application/json");
         }

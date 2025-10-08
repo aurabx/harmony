@@ -1,15 +1,15 @@
-use harmony::config::config::{Config, ConfigError};
-use axum::http::{Request, StatusCode};
 use axum::body::Body;
-use tower::ServiceExt; // for Router::oneshot
-use std::sync::Arc;
+use axum::http::{Request, StatusCode};
+use harmony::config::config::{Config, ConfigError};
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+use rand::thread_rng;
+use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+use rsa::{RsaPrivateKey, RsaPublicKey};
+use serde::Serialize;
 use std::fs;
 use std::path::Path;
-use jsonwebtoken::{encode, Header, EncodingKey, Algorithm};
-use serde::Serialize;
-use rand::thread_rng;
-use rsa::{RsaPrivateKey, RsaPublicKey};
-use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+use std::sync::Arc;
+use tower::ServiceExt; // for Router::oneshot
 
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(toml).expect("TOML parse error");
@@ -30,8 +30,13 @@ fn generate_rs256_keypair() -> (String, String) {
     let mut rng = thread_rng();
     let priv_key = RsaPrivateKey::new(&mut rng, 2048).expect("generate rsa key");
     let pub_key = RsaPublicKey::from(&priv_key);
-    let priv_pem = priv_key.to_pkcs8_pem(rsa::pkcs8::LineEnding::LF).expect("pkcs8 pem").to_string();
-    let pub_pem = pub_key.to_public_key_pem(rsa::pkcs8::LineEnding::LF).expect("pub pem");
+    let priv_pem = priv_key
+        .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+        .expect("pkcs8 pem")
+        .to_string();
+    let pub_pem = pub_key
+        .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+        .expect("pub pem");
     (priv_pem, pub_pem)
 }
 
@@ -93,14 +98,28 @@ async fn jwt_rs256_allows_valid_signature() {
 
     // Sign a token with the matching private key using RS256
     #[derive(Serialize)]
-    struct Claims { iss: String, aud: String, exp: i64, iat: i64 }
-    let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()) as i64;
-    let claims = Claims { iss: "https://test-issuer/".to_string(), aud: "harmony".to_string(), exp: now + 600, iat: now - 10 };
+    struct Claims {
+        iss: String,
+        aud: String,
+        exp: i64,
+        iat: i64,
+    }
+    let now = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()) as i64;
+    let claims = Claims {
+        iss: "https://test-issuer/".to_string(),
+        aud: "harmony".to_string(),
+        exp: now + 600,
+        iat: now - 10,
+    };
     let token = encode(
         &Header::new(Algorithm::RS256),
         &claims,
         &EncodingKey::from_rsa_pem(priv_pem.as_bytes()).expect("load priv pem"),
-    ).expect("encode jwt");
+    )
+    .expect("encode jwt");
 
     let response = app
         .oneshot(
@@ -175,14 +194,28 @@ async fn jwt_rs256_rejects_wrong_alg() {
 
     // Create an HS256 token (wrong alg for RS256 mode)
     #[derive(Serialize)]
-    struct Claims { iss: String, aud: String, exp: i64, iat: i64 }
-    let now = (std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap().as_secs()) as i64;
-    let claims = Claims { iss: "https://test-issuer/".to_string(), aud: "harmony".to_string(), exp: now + 600, iat: now - 10 };
+    struct Claims {
+        iss: String,
+        aud: String,
+        exp: i64,
+        iat: i64,
+    }
+    let now = (std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs()) as i64;
+    let claims = Claims {
+        iss: "https://test-issuer/".to_string(),
+        aud: "harmony".to_string(),
+        exp: now + 600,
+        iat: now - 10,
+    };
     let token = encode(
         &Header::new(Algorithm::HS256),
         &claims,
         &EncodingKey::from_secret(b"wrong-secret"),
-    ).expect("encode jwt");
+    )
+    .expect("encode jwt");
 
     let response = app
         .oneshot(

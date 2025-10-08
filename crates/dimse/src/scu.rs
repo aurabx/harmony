@@ -3,7 +3,7 @@
 use std::time::Duration;
 
 use tokio::sync::mpsc;
-use tracing::{info, warn, error, debug};
+use tracing::{debug, error, info, warn};
 
 use crate::config::{DimseConfig, RemoteNode};
 use crate::types::{DatasetStream, FindQuery, MoveQuery};
@@ -23,36 +23,57 @@ impl DimseScu {
 
     /// Send a C-ECHO request to a remote node
     pub async fn echo(&self, node: &RemoteNode) -> Result<bool> {
-        info!("Sending C-ECHO to {}@{}:{}", node.ae_title, node.host, node.port);
-        
+        info!(
+            "Sending C-ECHO to {}@{}:{}",
+            node.ae_title, node.host, node.port
+        );
+
         // Validate the remote node configuration
         node.validate()?;
-        
+
         #[cfg(feature = "dcmtk_cli")]
         {
             use tokio::process::Command;
             // Use DCMTK echoscu as a real C-ECHO implementation
             let mut cmd = Command::new("echoscu");
-            cmd.arg("-aet").arg(&self.config.local_aet)
-                .arg("-aec").arg(&node.ae_title)
+            cmd.arg("-aet")
+                .arg(&self.config.local_aet)
+                .arg("-aec")
+                .arg(&node.ae_title)
                 .arg(&node.host)
                 .arg(node.port.to_string());
-            debug!("Running: echoscu -aet {} -aec {} {} {}", self.config.local_aet, node.ae_title, node.host, node.port);
-            let output = cmd.output().await.map_err(|e| DimseError::operation_failed(format!("Failed to spawn echoscu: {}", e)))?;
+            debug!(
+                "Running: echoscu -aet {} -aec {} {} {}",
+                self.config.local_aet, node.ae_title, node.host, node.port
+            );
+            let output = cmd.output().await.map_err(|e| {
+                DimseError::operation_failed(format!("Failed to spawn echoscu: {}", e))
+            })?;
             if output.status.success() {
                 info!("C-ECHO completed successfully");
-                return Ok(true);
+                Ok(true)
             } else {
                 let stderr = String::from_utf8_lossy(&output.stderr);
                 let stdout = String::from_utf8_lossy(&output.stdout);
-                error!("C-ECHO failed: status={:?}, stdout={}, stderr={}", output.status.code(), stdout, stderr);
-                return Err(DimseError::operation_failed(format!("echoscu failed: {:?} {}", output.status.code(), stderr)));
+                error!(
+                    "C-ECHO failed: status={:?}, stdout={}, stderr={}",
+                    output.status.code(),
+                    stdout,
+                    stderr
+                );
+                Err(DimseError::operation_failed(format!(
+                    "echoscu failed: {:?} {}",
+                    output.status.code(),
+                    stderr
+                )))
             }
         }
-        
+
         #[cfg(not(feature = "dcmtk_cli"))]
         {
-            return Err(DimseError::NotSupported("C-ECHO requires feature 'dcmtk_cli' or a native UL implementation".into()));
+            return Err(DimseError::NotSupported(
+                "C-ECHO requires feature 'dcmtk_cli' or a native UL implementation".into(),
+            ));
         }
     }
 
@@ -64,11 +85,7 @@ impl DimseScu {
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
         info!(
             "Sending C-FIND to {}@{}:{} (level: {}, max_results: {})",
-            node.ae_title,
-            node.host,
-            node.port,
-            query.query_level,
-            query.max_results
+            node.ae_title, node.host, node.port, query.query_level, query.max_results
         );
 
         node.validate()?;
@@ -82,18 +99,18 @@ impl DimseScu {
         node: &RemoteNode,
         query: FindQuery,
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
+        use std::path::PathBuf;
         use tokio::process::Command;
         use uuid::Uuid;
-        use std::path::PathBuf;
 
-        let mut args: Vec<String> = Vec::new();
-        args.push("-aet".into());
-        args.push(self.config.local_aet.clone());
-        args.push("-aec".into());
-        args.push(node.ae_title.clone());
-
-        // Use Patient Root (default) unless specified otherwise
-        args.push("-P".into());
+        let mut args: Vec<String> = vec![
+            "-aet".into(),
+            self.config.local_aet.clone(),
+            "-aec".into(),
+            node.ae_title.clone(),
+            // Use Patient Root (default) unless specified otherwise
+            "-P".into(),
+        ];
 
         // Set QueryRetrieveLevel via -k
         let level_str = match query.query_level {
@@ -150,16 +167,24 @@ impl DimseScu {
                         if let Ok(mut rd) = tokio::fs::read_dir(&out_dir_clone).await {
                             while let Ok(Some(entry)) = rd.next_entry().await {
                                 let path = entry.path();
-                                if path.extension().and_then(|s| s.to_str()).unwrap_or("") == "dcm" {
+                                if path.extension().and_then(|s| s.to_str()).unwrap_or("") == "dcm"
+                                {
                                     // Keep files for inspection; do not remove on drop
-                                    let _ = tx_clone.send(Ok(DatasetStream::from_file(path, false))).await;
+                                    let _ = tx_clone
+                                        .send(Ok(DatasetStream::from_file(path, false)))
+                                        .await;
                                 }
                             }
                         }
                     } else {
                         let stderr = String::from_utf8_lossy(&out.stderr);
                         let stdout = String::from_utf8_lossy(&out.stdout);
-                        warn!("findscu failed: status={:?}, stdout={}, stderr={}", out.status.code(), stdout, stderr);
+                        warn!(
+                            "findscu failed: status={:?}, stdout={}, stderr={}",
+                            out.status.code(),
+                            stdout,
+                            stderr
+                        );
                     }
                 }
                 Err(e) => {
@@ -193,11 +218,7 @@ impl DimseScu {
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
         info!(
             "Sending C-MOVE to {}@{}:{} (level: {}, dest: {})",
-            node.ae_title,
-            node.host,
-            node.port,
-            query.query_level,
-            query.destination_aet
+            node.ae_title, node.host, node.port, query.query_level, query.destination_aet
         );
 
         node.validate()?;
@@ -211,27 +232,25 @@ impl DimseScu {
         node: &RemoteNode,
         query: MoveQuery,
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
+        use std::path::PathBuf;
         use tokio::process::Command;
         use uuid::Uuid;
-        use std::path::PathBuf;
 
         // Build movescu args
-        let mut args: Vec<String> = Vec::new();
-        // Enable verbose output for diagnostics
-        args.push("-d".into());
-
-        // Use Study Root query model for C-MOVE so queries by StudyInstanceUID match in dcmqrscp
-        args.push("-S".into());
-
-        // Calling and called AETs
-        args.push("-aet".into());
-        args.push(self.config.local_aet.clone());
-        args.push("-aec".into());
-        args.push(node.ae_title.clone());
-
-        // Move destination AET (default to our local AET)
-        args.push("-aem".into());
-        args.push(query.destination_aet.clone());
+        let mut args: Vec<String> = vec![
+            // Enable verbose output for diagnostics
+            "-d".into(),
+            // Use Study Root query model for C-MOVE so queries by StudyInstanceUID match in dcmqrscp
+            "-S".into(),
+            // Calling and called AETs
+            "-aet".into(),
+            self.config.local_aet.clone(),
+            "-aec".into(),
+            node.ae_title.clone(),
+            // Move destination AET (default to our local AET)
+            "-aem".into(),
+            query.destination_aet.clone(),
+        ];
 
         // QueryRetrieveLevel via tag form 0008,0052
         let level_str = match query.query_level {
@@ -297,10 +316,10 @@ impl DimseScu {
                     });
                     if let Err(e) = tokio::fs::create_dir_all("./tmp").await {
                         warn!("Failed to ensure ./tmp exists: {}", e);
-                    } else {
-                        if let Err(e) = tokio::fs::write("./tmp/movescu_last.json", debug_payload.to_string()).await {
-                            warn!("Failed to write movescu_last.json: {}", e);
-                        }
+                    } else if let Err(e) =
+                        tokio::fs::write("./tmp/movescu_last.json", debug_payload.to_string()).await
+                    {
+                        warn!("Failed to write movescu_last.json: {}", e);
                     }
 
                     if out.status.success() {
@@ -311,7 +330,9 @@ impl DimseScu {
                                 let path = entry.path();
                                 if let Ok(meta) = tokio::fs::metadata(&path).await {
                                     if meta.is_file() {
-                                        let _ = tx_clone.send(Ok(DatasetStream::from_file(path, false))).await;
+                                        let _ = tx_clone
+                                            .send(Ok(DatasetStream::from_file(path, false)))
+                                            .await;
                                     }
                                 }
                             }
@@ -319,7 +340,12 @@ impl DimseScu {
                     } else {
                         let stderr = String::from_utf8_lossy(&out.stderr);
                         let stdout = String::from_utf8_lossy(&out.stdout);
-                        warn!("movescu failed: status={:?}, stdout=\n{}\nstderr=\n{}", out.status.code(), stdout, stderr);
+                        warn!(
+                            "movescu failed: status={:?}, stdout=\n{}\nstderr=\n{}",
+                            out.status.code(),
+                            stdout,
+                            stderr
+                        );
                     }
                 }
                 Err(e) => {
@@ -353,10 +379,7 @@ impl DimseScu {
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
         info!(
             "Sending C-GET to {}@{}:{} (level: {})",
-            node.ae_title,
-            node.host,
-            node.port,
-            query.query_level,
+            node.ae_title, node.host, node.port, query.query_level,
         );
 
         node.validate()?;
@@ -370,16 +393,18 @@ impl DimseScu {
         node: &RemoteNode,
         query: crate::types::GetQuery,
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
+        use std::path::PathBuf;
         use tokio::process::Command;
         use uuid::Uuid;
-        use std::path::PathBuf;
 
         let mut args: Vec<String> = Vec::new();
 
         // Use Patient Root by default or Study Root as per query level
         match query.query_level {
             crate::types::QueryLevel::Patient => args.push("-P".into()),
-            crate::types::QueryLevel::Study | crate::types::QueryLevel::Series | crate::types::QueryLevel::Image => args.push("-S".into()),
+            crate::types::QueryLevel::Study
+            | crate::types::QueryLevel::Series
+            | crate::types::QueryLevel::Image => args.push("-S".into()),
         }
 
         // Calling and called AETs
@@ -443,7 +468,9 @@ impl DimseScu {
                                 let path = entry.path();
                                 if let Ok(meta) = tokio::fs::metadata(&path).await {
                                     if meta.is_file() {
-                                        let _ = tx_clone.send(Ok(DatasetStream::from_file(path, false))).await;
+                                        let _ = tx_clone
+                                            .send(Ok(DatasetStream::from_file(path, false)))
+                                            .await;
                                     }
                                 }
                             }
@@ -451,7 +478,12 @@ impl DimseScu {
                     } else {
                         let stderr = String::from_utf8_lossy(&out.stderr);
                         let stdout = String::from_utf8_lossy(&out.stdout);
-                        warn!("getscu failed: status={:?}, stdout={}, stderr={}", out.status.code(), stdout, stderr);
+                        warn!(
+                            "getscu failed: status={:?}, stdout={}, stderr={}",
+                            out.status.code(),
+                            stdout,
+                            stderr
+                        );
                     }
                 }
                 Err(e) => {
@@ -479,19 +511,22 @@ impl DimseScu {
 
     /// Send a C-STORE request to a remote node
     pub async fn store(&self, node: &RemoteNode, dataset: DatasetStream) -> Result<bool> {
-        info!("Sending C-STORE to {}@{}:{}", node.ae_title, node.host, node.port);
-        
+        info!(
+            "Sending C-STORE to {}@{}:{}",
+            node.ae_title, node.host, node.port
+        );
+
         // Validate the remote node configuration
         node.validate()?;
-        
+
         debug!("C-STORE dataset: id={}", dataset.metadata().id);
-        
+
         // TODO: Implement actual DICOM association and C-STORE
         // This is a stub implementation
-        
+
         // Simulate sending the dataset
         tokio::time::sleep(Duration::from_millis(300)).await;
-        
+
         info!("C-STORE completed successfully");
         Ok(true)
     }
@@ -499,13 +534,13 @@ impl DimseScu {
     /// Test connectivity to a remote node with retry logic
     pub async fn test_connection(&self, node: &RemoteNode, max_retries: u32) -> Result<bool> {
         let mut retries = 0;
-        
+
         while retries <= max_retries {
             if retries > 0 {
                 info!("Connection test retry {} of {}", retries, max_retries);
                 tokio::time::sleep(Duration::from_secs(1 << retries)).await; // Exponential backoff
             }
-            
+
             match self.echo(node).await {
                 Ok(_) => {
                     info!("Connection test successful");
@@ -522,8 +557,10 @@ impl DimseScu {
                 }
             }
         }
-        
-        Err(DimseError::operation_failed("Connection test failed after all retries"))
+
+        Err(DimseError::operation_failed(
+            "Connection test failed after all retries",
+        ))
     }
 
     /// Get connection timeout for a node (uses node-specific or global setting)
@@ -597,7 +634,7 @@ mod tests {
             .connection_timeout(Duration::from_secs(10))
             .build()
             .unwrap();
-        
+
         assert_eq!(scu.config.local_aet, "TEST_SCU");
         assert_eq!(scu.config.connect_timeout_ms, 10_000);
     }
@@ -607,7 +644,7 @@ mod tests {
     async fn test_echo_stub() {
         let scu = DimseScu::new(DimseConfig::default());
         let node = RemoteNode::new("TEST_AET", "localhost", 11112);
-        
+
         // This should succeed with our stub implementation
         let result = scu.echo(&node).await;
         assert!(result.is_ok());
@@ -619,28 +656,34 @@ mod tests {
         let scu = DimseScu::new(DimseConfig::default());
         let node = RemoteNode::new("TEST_AET", "localhost", 11112);
         let query = FindQuery::patient(Some("12345".to_string()));
-        
+
         let mut stream = scu.find(&node, query).await.unwrap();
-        
+
         // The stub implementation should return an empty stream
         let first_result = stream.next().await;
         assert!(first_result.is_none());
     }
 
-    #[tokio::test] 
+    #[tokio::test]
     async fn test_connection_timeout_selection() {
         let scu = DimseScu::new(DimseConfig {
             connect_timeout_ms: 5000,
             ..Default::default()
         });
-        
+
         // Node without specific timeout should use global
         let node1 = RemoteNode::new("TEST1", "localhost", 11112);
-        assert_eq!(scu.get_connection_timeout(&node1), Duration::from_millis(5000));
-        
+        assert_eq!(
+            scu.get_connection_timeout(&node1),
+            Duration::from_millis(5000)
+        );
+
         // Node with specific timeout should use its own
         let node2 = RemoteNode::new("TEST2", "localhost", 11113).with_timeout(2000);
-        assert_eq!(scu.get_connection_timeout(&node2), Duration::from_millis(2000));
+        assert_eq!(
+            scu.get_connection_timeout(&node2),
+            Duration::from_millis(2000)
+        );
     }
 
     #[test]
@@ -648,7 +691,7 @@ mod tests {
         let result = ScuBuilder::new()
             .local_aet("") // Invalid empty AE title
             .build();
-        
+
         assert!(result.is_err());
     }
 }

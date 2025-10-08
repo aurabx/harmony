@@ -1,14 +1,14 @@
 pub mod chain;
 pub mod config;
+#[allow(clippy::module_inception)]
 pub mod middleware;
 pub mod types;
 
-
+use crate::models::middleware::config::*;
 use axum::response::Response;
 use http::Request;
 use serde::de::StdError;
 use tower::util::BoxCloneService;
-use crate::models::middleware::config::*;
 
 pub struct MiddlewareState {
     #[allow(dead_code)]

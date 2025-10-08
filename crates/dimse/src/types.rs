@@ -39,28 +39,28 @@ pub enum DatasetStream {
 pub struct DatasetMetadata {
     /// Unique identifier for this dataset
     pub id: Uuid,
-    
+
     /// Transfer syntax UID
     pub transfer_syntax: Option<String>,
-    
+
     /// SOP Class UID
     pub sop_class_uid: Option<String>,
-    
+
     /// SOP Instance UID
     pub sop_instance_uid: Option<String>,
-    
+
     /// Study Instance UID
     pub study_instance_uid: Option<String>,
-    
+
     /// Series Instance UID
     pub series_instance_uid: Option<String>,
-    
+
     /// Patient ID
     pub patient_id: Option<String>,
-    
+
     /// Timestamp when dataset was received/created
     pub timestamp: chrono::DateTime<chrono::Utc>,
-    
+
     /// Size of the dataset in bytes
     pub size_bytes: Option<u64>,
 }
@@ -83,10 +83,10 @@ pub enum DimseCommand {
 pub struct FindQuery {
     /// Query level (PATIENT, STUDY, SERIES, IMAGE)
     pub query_level: QueryLevel,
-    
+
     /// Query parameters as DICOM tags and values
     pub parameters: std::collections::HashMap<String, String>,
-    
+
     /// Maximum number of results to return (0 = unlimited)
     pub max_results: u32,
 }
@@ -96,13 +96,13 @@ pub struct FindQuery {
 pub struct MoveQuery {
     /// Query level (PATIENT, STUDY, SERIES, IMAGE)
     pub query_level: QueryLevel,
-    
+
     /// Query parameters as DICOM tags and values
     pub parameters: std::collections::HashMap<String, String>,
-    
+
     /// Destination AE Title for the move operation
     pub destination_aet: String,
-    
+
     /// Priority of the move operation
     pub priority: MovePriority,
 }
@@ -112,7 +112,7 @@ pub struct MoveQuery {
 pub struct GetQuery {
     /// Query level (PATIENT, STUDY, SERIES, IMAGE)
     pub query_level: QueryLevel,
-    
+
     /// Query parameters as DICOM tags and values
     pub parameters: std::collections::HashMap<String, String>,
 }
@@ -164,7 +164,7 @@ impl DatasetStream {
             metadata: DatasetMetadata::new(),
         }
     }
-    
+
     /// Create a new file-based dataset
     pub fn from_file(path: PathBuf, delete_on_drop: bool) -> Self {
         Self::File {
@@ -173,27 +173,27 @@ impl DatasetStream {
             delete_on_drop,
         }
     }
-    
+
     /// Create a new dataset from a parsed DICOM object
     pub fn from_object(object: InMemDicomObject) -> Self {
         let mut metadata = DatasetMetadata::new();
-        
+
         // Extract metadata from DICOM object
         if let Ok(sop_class) = object.element_by_name("SOPClassUID") {
             if let Ok(value) = sop_class.to_str() {
                 metadata.sop_class_uid = Some(value.to_string());
             }
         }
-        
+
         if let Ok(sop_instance) = object.element_by_name("SOPInstanceUID") {
             if let Ok(value) = sop_instance.to_str() {
                 metadata.sop_instance_uid = Some(value.to_string());
             }
         }
-        
+
         Self::Object { object, metadata }
     }
-    
+
     /// Get the metadata for this dataset
     pub fn metadata(&self) -> &DatasetMetadata {
         match self {
@@ -202,7 +202,7 @@ impl DatasetStream {
             Self::Object { metadata, .. } => metadata,
         }
     }
-    
+
     /// Get mutable metadata for this dataset
     pub fn metadata_mut(&mut self) -> &mut DatasetMetadata {
         match self {
@@ -211,7 +211,7 @@ impl DatasetStream {
             Self::Object { metadata, .. } => metadata,
         }
     }
-    
+
     /// Convert to bytes (loading from file if necessary)
     pub async fn to_bytes(&self) -> crate::error::Result<Bytes> {
         match self {
@@ -219,15 +219,15 @@ impl DatasetStream {
             Self::File { path, .. } => {
                 let bytes = tokio::fs::read(path).await?;
                 Ok(Bytes::from(bytes))
-            },
+            }
             Self::Object { .. } => {
                 // TODO: Implement proper DICOM object serialization
                 // For now, return empty bytes as placeholder
                 Ok(Bytes::new())
-            },
+            }
         }
     }
-    
+
     /// Convert to a parsed DICOM object
     pub async fn to_object(&self) -> crate::error::Result<InMemDicomObject> {
         match self {
@@ -236,24 +236,24 @@ impl DatasetStream {
                 // TODO: Implement proper DICOM object parsing
                 // For now, return empty object as placeholder
                 Ok(dicom_object::InMemDicomObject::new_empty())
-            },
+            }
         }
     }
-    
+
     /// Write to a temporary file in the specified directory
     pub async fn to_temp_file(&self, temp_dir: &std::path::Path) -> crate::error::Result<PathBuf> {
         let temp_file = temp_dir.join(format!("{}.dcm", self.metadata().id));
-        
+
         match self {
             Self::File { path, .. } => {
                 tokio::fs::copy(path, &temp_file).await?;
-            },
+            }
             _ => {
                 let bytes = self.to_bytes().await?;
                 tokio::fs::write(&temp_file, &bytes).await?;
-            },
+            }
         }
-        
+
         Ok(temp_file)
     }
 }
@@ -288,34 +288,34 @@ impl FindQuery {
         if let Some(id) = patient_id {
             parameters.insert("PatientID".to_string(), id);
         }
-        
+
         Self {
             query_level: QueryLevel::Patient,
             parameters,
             max_results: 0,
         }
     }
-    
+
     /// Create a new study-level query
     pub fn study(study_instance_uid: Option<String>) -> Self {
         let mut parameters = std::collections::HashMap::new();
         if let Some(uid) = study_instance_uid {
             parameters.insert("StudyInstanceUID".to_string(), uid);
         }
-        
+
         Self {
             query_level: QueryLevel::Study,
             parameters,
             max_results: 0,
         }
     }
-    
+
     /// Add a query parameter
     pub fn with_parameter(mut self, tag: impl Into<String>, value: impl Into<String>) -> Self {
         self.parameters.insert(tag.into(), value.into());
         self
     }
-    
+
     /// Set maximum number of results
     pub fn with_max_results(mut self, max: u32) -> Self {
         self.max_results = max;
@@ -333,13 +333,13 @@ impl MoveQuery {
             priority: MovePriority::Medium,
         }
     }
-    
+
     /// Add a query parameter
     pub fn with_parameter(mut self, tag: impl Into<String>, value: impl Into<String>) -> Self {
         self.parameters.insert(tag.into(), value.into());
         self
     }
-    
+
     /// Set the priority
     pub fn with_priority(mut self, priority: MovePriority) -> Self {
         self.priority = priority;
@@ -355,7 +355,7 @@ impl GetQuery {
             parameters: std::collections::HashMap::new(),
         }
     }
-    
+
     /// Add a query parameter
     pub fn with_parameter(mut self, tag: impl Into<String>, value: impl Into<String>) -> Self {
         self.parameters.insert(tag.into(), value.into());
@@ -376,14 +376,17 @@ impl std::fmt::Display for QueryLevel {
 
 impl std::str::FromStr for QueryLevel {
     type Err = crate::error::DimseError;
-    
+
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         match s.to_uppercase().as_str() {
             "PATIENT" => Ok(QueryLevel::Patient),
             "STUDY" => Ok(QueryLevel::Study),
             "SERIES" => Ok(QueryLevel::Series),
             "IMAGE" => Ok(QueryLevel::Image),
-            _ => Err(crate::error::DimseError::config(format!("Invalid query level: {}", s))),
+            _ => Err(crate::error::DimseError::config(format!(
+                "Invalid query level: {}",
+                s
+            ))),
         }
     }
 }
@@ -391,11 +394,20 @@ impl std::str::FromStr for QueryLevel {
 // Implement Drop for DatasetStream to handle file cleanup
 impl Drop for DatasetStream {
     fn drop(&mut self) {
-        if let DatasetStream::File { path, delete_on_drop, .. } = self {
+        if let DatasetStream::File {
+            path,
+            delete_on_drop,
+            ..
+        } = self
+        {
             if *delete_on_drop {
                 let path_clone = path.clone();
                 if let Err(e) = std::fs::remove_file(path) {
-                    tracing::warn!("Failed to delete temporary DICOM file {:?}: {}", path_clone, e);
+                    tracing::warn!(
+                        "Failed to delete temporary DICOM file {:?}: {}",
+                        path_clone,
+                        e
+                    );
                 }
             }
         }
@@ -418,16 +430,25 @@ mod tests {
         let query = FindQuery::patient(Some("12345".to_string()))
             .with_parameter("PatientName", "DOE^JOHN")
             .with_max_results(100);
-            
+
         assert_eq!(query.query_level, QueryLevel::Patient);
-        assert_eq!(query.parameters.get("PatientID"), Some(&"12345".to_string()));
-        assert_eq!(query.parameters.get("PatientName"), Some(&"DOE^JOHN".to_string()));
+        assert_eq!(
+            query.parameters.get("PatientID"),
+            Some(&"12345".to_string())
+        );
+        assert_eq!(
+            query.parameters.get("PatientName"),
+            Some(&"DOE^JOHN".to_string())
+        );
         assert_eq!(query.max_results, 100);
     }
 
     #[test]
     fn test_query_level_parsing() {
-        assert_eq!("PATIENT".parse::<QueryLevel>().unwrap(), QueryLevel::Patient);
+        assert_eq!(
+            "PATIENT".parse::<QueryLevel>().unwrap(),
+            QueryLevel::Patient
+        );
         assert_eq!("study".parse::<QueryLevel>().unwrap(), QueryLevel::Study);
         assert!("INVALID".parse::<QueryLevel>().is_err());
     }

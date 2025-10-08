@@ -1,8 +1,8 @@
-mod tests;
-mod proxy_config;
-mod logging_config;
+#[allow(clippy::module_inception)]
 pub mod config;
-
+mod logging_config;
+mod proxy_config;
+mod tests;
 
 /// Structure representing application startup arguments or metadata.
 #[derive(Debug)]

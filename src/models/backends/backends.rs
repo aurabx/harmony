@@ -1,7 +1,7 @@
-use std::collections::HashMap;
+use crate::models::services::services::{resolve_service, ServiceType};
 use serde::Deserialize;
 use serde_json::Value;
-use crate::models::services::services::{ServiceType, resolve_service};
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize)]
 pub struct Backend {
@@ -12,7 +12,7 @@ pub struct Backend {
 
 impl Backend {
     /// Resolves the service type using the centralized service resolver
-pub fn resolve_service(&self) -> Result<Box<dyn ServiceType<ReqBody=Value>>, String> {
+    pub fn resolve_service(&self) -> Result<Box<dyn ServiceType<ReqBody = Value>>, String> {
         resolve_service(&self.service)
     }
 }

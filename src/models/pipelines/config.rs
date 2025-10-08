@@ -4,15 +4,15 @@ use serde::Deserialize;
 #[serde(default)]
 pub struct Pipeline {
     #[serde(default = "default_description")]
-    pub description: String,              // Optional description of the pipeline
+    pub description: String, // Optional description of the pipeline
     #[serde(default)]
-    pub networks: Vec<String>,            // Networks the pipeline belongs to
+    pub networks: Vec<String>, // Networks the pipeline belongs to
     #[serde(default)]
-    pub endpoints: Vec<String>,           // List of endpoints associated with the pipeline
+    pub endpoints: Vec<String>, // List of endpoints associated with the pipeline
     #[serde(default)]
-    pub backends: Vec<String>,            // Backends linked to the pipeline
+    pub backends: Vec<String>, // Backends linked to the pipeline
     #[serde(default)]
-    pub middleware: Vec<String>,          // Ordered middleware or services middleware
+    pub middleware: Vec<String>, // Ordered middleware or services middleware
 }
 
 impl Default for Pipeline {

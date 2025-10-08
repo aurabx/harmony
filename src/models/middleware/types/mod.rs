@@ -1,5 +1,5 @@
-pub mod jwtauth;
 pub mod auth;
 pub mod connect;
-pub mod passthru;
 pub mod json_extractor;
+pub mod jwtauth;
+pub mod passthru;

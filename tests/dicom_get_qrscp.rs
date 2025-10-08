@@ -1,9 +1,9 @@
-use harmony::config::config::{Config, ConfigError};
-use axum::http::{Request, StatusCode};
 use axum::body::Body;
-use tower::ServiceExt;
-use std::sync::Arc;
+use axum::http::{Request, StatusCode};
+use harmony::config::config::{Config, ConfigError};
 use std::path::PathBuf;
+use std::sync::Arc;
+use tower::ServiceExt;
 
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(toml).expect("TOML parse error");
@@ -15,7 +15,11 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 async fn dicom_get_with_dcmqrscp() {
     // Skip if DCMTK tools are not present
     for bin in ["dcmqrscp", "storescu", "getscu"].iter() {
-        if std::process::Command::new(bin).arg("--version").output().is_err() {
+        if std::process::Command::new(bin)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             eprintln!("Skipping dcmqrscp C-GET test: {} not found", bin);
             return;
         }
@@ -49,7 +53,8 @@ async fn dicom_get_with_dcmqrscp() {
     // Start dcmqrscp
     let mut qr_child = tokio::process::Command::new("dcmqrscp")
         .arg("-d")
-        .arg("-c").arg(&cfg_path)
+        .arg("-c")
+        .arg(&cfg_path)
         .arg(port.to_string())
         .kill_on_drop(true)
         .spawn()
@@ -57,7 +62,12 @@ async fn dicom_get_with_dcmqrscp() {
 
     // Wait for port to be ready
     for _ in 0..60 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() { break; }
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
+            break;
+        }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
@@ -66,7 +76,12 @@ async fn dicom_get_with_dcmqrscp() {
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap();
-        format!("1.2.826.0.1.3680043.10.5432.{}.{}.{}", suf, now.as_secs(), now.subsec_nanos())
+        format!(
+            "1.2.826.0.1.3680043.10.5432.{}.{}.{}",
+            suf,
+            now.as_secs(),
+            now.subsec_nanos()
+        )
     };
     let study_uid = mkuid("study");
     let series_uid = mkuid("series");
@@ -91,11 +106,16 @@ async fn dicom_get_with_dcmqrscp() {
 
     // Send the dataset to QR via storescu
     let status = tokio::process::Command::new("storescu")
-        .arg("--aetitle").arg("HARMONY_SCU")
-        .arg("--call").arg("QR_SCP")
-        .arg("127.0.0.1").arg(port.to_string())
+        .arg("--aetitle")
+        .arg("HARMONY_SCU")
+        .arg("--call")
+        .arg("QR_SCP")
+        .arg("127.0.0.1")
+        .arg(port.to_string())
         .arg(&dicom_path)
-        .status().await.expect("run storescu");
+        .status()
+        .await
+        .expect("run storescu");
     if !status.success() {
         eprintln!("storescu failed; skipping assertions");
         let _ = qr_child.kill().await;
@@ -103,7 +123,8 @@ async fn dicom_get_with_dcmqrscp() {
     }
 
     // Build Harmony config with DICOM backend pointing to QR_SCP
-    let toml = format!(r#"
+    let toml = format!(
+        r#"
         [proxy]
         id = "dicom-get-test"
         log_level = "info"
@@ -142,7 +163,9 @@ async fn dicom_get_with_dcmqrscp() {
         module = ""
         [services.dicom]
         module = ""
-    "#, port=port);
+    "#,
+        port = port
+    );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
@@ -153,7 +176,8 @@ async fn dicom_get_with_dcmqrscp() {
             "0020000D": { "vr": "UI", "Value": [ study_uid ] }
         }
     });
-    let response = app.clone()
+    let response = app
+        .clone()
         .oneshot(
             Request::builder()
                 .uri("/dicom/get")
@@ -166,21 +190,43 @@ async fn dicom_get_with_dcmqrscp() {
         .expect("router handled request");
 
     assert_eq!(response.status(), StatusCode::OK);
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json parse");
     assert_eq!(json.get("operation").and_then(|v| v.as_str()), Some("get"));
     assert_eq!(json.get("success").and_then(|v| v.as_bool()), Some(true));
-    let instances = json.get("instances").and_then(|v| v.as_array()).cloned().unwrap_or_default();
-    assert!(instances.len() >= 1, "Expected at least one C-GET instance, got 0");
+    let instances = json
+        .get("instances")
+        .and_then(|v| v.as_array())
+        .cloned()
+        .unwrap_or_default();
+    assert!(
+        !instances.is_empty(),
+        "Expected at least one C-GET instance, got 0"
+    );
 
     // New assertions: verify pixel-data folder info is present and valid
-    let folder_id = json.get("folder_id").and_then(|v| v.as_str()).expect("missing folder_id");
+    let folder_id = json
+        .get("folder_id")
+        .and_then(|v| v.as_str())
+        .expect("missing folder_id");
     assert!(!folder_id.is_empty(), "folder_id should not be empty");
 
-    let folder_path = json.get("folder_path").and_then(|v| v.as_str()).expect("missing folder_path");
-    assert!(std::path::Path::new(folder_path).exists(), "folder_path does not exist: {}", folder_path);
+    let folder_path = json
+        .get("folder_path")
+        .and_then(|v| v.as_str())
+        .expect("missing folder_path");
+    assert!(
+        std::path::Path::new(folder_path).exists(),
+        "folder_path does not exist: {}",
+        folder_path
+    );
 
-    let file_count = json.get("file_count").and_then(|v| v.as_u64()).expect("missing file_count");
+    let file_count = json
+        .get("file_count")
+        .and_then(|v| v.as_u64())
+        .expect("missing file_count");
     assert!(file_count > 0, "file_count should be > 0");
 
     let _ = qr_child.kill().await;

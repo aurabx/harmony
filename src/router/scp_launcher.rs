@@ -1,11 +1,11 @@
+use crate::integrations::dimse::pipeline_query_provider::PipelineQueryProvider;
+use dimse::{DimseConfig, DEFAULT_DIMSE_PORT};
+use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::collections::HashSet;
-use std::sync::Arc;
-use once_cell::sync::Lazy;
-use std::sync::Mutex;
 use std::net::IpAddr;
-use dimse::{DimseConfig, DEFAULT_DIMSE_PORT};
-use crate::integrations::dimse::pipeline_query_provider::PipelineQueryProvider;
+use std::sync::Arc;
+use std::sync::Mutex;
 
 static STARTED_SCP: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
@@ -53,15 +53,22 @@ pub fn ensure_dimse_scp_started(
     }
 
     // Feature toggles
-    if let Some(b) = options.get("enable_echo").and_then(|v| v.as_bool()) { dimse_config.enable_echo = b; }
-    if let Some(b) = options.get("enable_find").and_then(|v| v.as_bool()) { dimse_config.enable_find = b; }
-    if let Some(b) = options.get("enable_move").and_then(|v| v.as_bool()) { dimse_config.enable_move = b; }
+    if let Some(b) = options.get("enable_echo").and_then(|v| v.as_bool()) {
+        dimse_config.enable_echo = b;
+    }
+    if let Some(b) = options.get("enable_find").and_then(|v| v.as_bool()) {
+        dimse_config.enable_find = b;
+    }
+    if let Some(b) = options.get("enable_move").and_then(|v| v.as_bool()) {
+        dimse_config.enable_move = b;
+    }
 
     let pipeline = pipeline_name.to_string();
     let endpoint = endpoint_name.to_string();
 
     tokio::spawn(async move {
-        let provider: Arc<dyn dimse::scp::QueryProvider> = Arc::new(PipelineQueryProvider::new(pipeline, endpoint));
+        let provider: Arc<dyn dimse::scp::QueryProvider> =
+            Arc::new(PipelineQueryProvider::new(pipeline, endpoint));
         let scp = dimse::DimseScp::new(dimse_config.clone(), provider);
         if let Err(e) = scp.run().await {
             tracing::error!("DIMSE SCP '{}' failed: {}", local_aet, e);

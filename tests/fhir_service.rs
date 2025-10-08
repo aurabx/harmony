@@ -1,11 +1,11 @@
 #![cfg(test)]
 
-use std::sync::Arc;
 use axum::Router;
-use http::{Method, Request, StatusCode};
-use tower::ServiceExt; // for `oneshot`
 use harmony::config::config::Config;
 use harmony::router::build_network_router;
+use http::{Method, Request, StatusCode};
+use std::sync::Arc;
+use tower::ServiceExt; // for `oneshot`
 
 fn load_config_from_str(toml_str: &str) -> Config {
     let cfg: Config = toml::from_str(toml_str).expect("TOML parse error");
@@ -60,7 +60,9 @@ async fn fhir_endpoint_handles_get_request() {
     let resp = router.oneshot(req).await.expect("router should respond");
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
     let json: serde_json::Value = serde_json::from_str(&body).expect("json");
     assert_eq!(json["message"], "FHIR endpoint received the request");
@@ -116,7 +118,9 @@ async fn fhir_put_is_supported() {
     let resp = router.oneshot(req).await.expect("router should respond");
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
     let json: serde_json::Value = serde_json::from_str(&body).expect("json");
     assert_eq!(json["message"], "FHIR endpoint received the request");
@@ -172,7 +176,9 @@ async fn fhir_delete_is_supported() {
     let resp = router.oneshot(req).await.expect("router should respond");
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
     let json: serde_json::Value = serde_json::from_str(&body).expect("json");
     assert_eq!(json["message"], "FHIR endpoint received the request");
@@ -233,7 +239,9 @@ async fn fhir_backend_is_invoked_in_pipeline() {
     let resp = router.oneshot(req).await.expect("router should respond");
     assert_eq!(resp.status(), StatusCode::OK);
 
-    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let body = String::from_utf8(bytes.to_vec()).unwrap();
     let json: serde_json::Value = serde_json::from_str(&body).expect("json");
     assert_eq!(json["message"], "FHIR endpoint received the request");
