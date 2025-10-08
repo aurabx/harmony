@@ -3,3 +3,4 @@ pub mod connect;
 pub mod json_extractor;
 pub mod jwtauth;
 pub mod passthru;
+pub mod jmix_builder;

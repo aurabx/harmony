@@ -430,41 +430,53 @@ impl DicomEndpoint {
                     move_q = move_q.with_parameter(k, v);
                 }
 
-                match scu.move_request(&remote_node, move_q).await {
+                // Determine storage target folder and pass to SCU if filesystem
+                let folder_id = Uuid::new_v4().to_string();
+                let (folder_path, is_fs_backend) = if let Some(storage) = get_storage() {
+                    let dir = storage
+                        .ensure_dir_str(&format!("dimse/{}", folder_id))
+                        .unwrap_or_else(|_| {
+                            let fallback = Path::new("./tmp").join("dimse").join(&folder_id);
+                            let _ = fs::create_dir_all(&fallback);
+                            fallback
+                        });
+                    (dir, storage.is_filesystem())
+                } else {
+                    let base = Path::new("./tmp").join("dimse");
+                    let _ = fs::create_dir_all(&base);
+                    let dir = base.join(&folder_id);
+                    let _ = fs::create_dir_all(&dir);
+                    (dir, true)
+                };
+
+                match scu.move_request(&remote_node, move_q, if is_fs_backend { Some(folder_path.clone()) } else { None }).await {
                     Ok(mut stream) => {
                         use futures_util::StreamExt;
                         let mut instances: Vec<serde_json::Value> = Vec::new();
-
-                        // Prepare unique folder using storage backend
-                        let folder_id = Uuid::new_v4().to_string();
-                        let folder_path = if let Some(storage) = get_storage() {
-                            storage
-                                .ensure_dir_str(&format!("dimse/{}", folder_id))
-                                .unwrap_or_else(|_| {
-                                    // Fallback to manual creation
-                                    let fallback =
-                                        Path::new("./tmp").join("dimse").join(&folder_id);
-                                    let _ = fs::create_dir_all(&fallback);
-                                    fallback
-                                })
-                        } else {
-                            // Fallback if storage not available
-                            let base = Path::new("./tmp").join("dimse");
-                            let _ = fs::create_dir_all(&base);
-                            let folder_path = base.join(&folder_id);
-                            let _ = fs::create_dir_all(&folder_path);
-                            folder_path
-                        };
                         let mut file_count = 0usize;
 
                         while let Some(item) = stream.next().await {
                             if let Ok(dimse::types::DatasetStream::File { ref path, .. }) = item {
-                                // Copy file into our unique folder
-                                if let Some(name) = Path::new(path).file_name() {
-                                    let dest = folder_path.join(name);
-                                    let _ = fs::copy(path, &dest);
-                                    file_count += 1;
+                                // For filesystem backend, files are already in folder_path.
+                                // For non-filesystem, stream and persist via storage backend.
+                                if !is_fs_backend {
+                                    if let Some(storage) = get_storage() {
+                                        let bytes = match tokio::fs::read(path).await { Ok(b) => b, Err(_) => Vec::new() };
+                                        // Normalize filename to .dcm
+                                        let src = Path::new(path);
+                                        let base = src.file_stem().and_then(|s| s.to_str()).unwrap_or("instance");
+                                        let mut name = base.to_string();
+                                        if !name.ends_with(".dcm") {
+                                            name.push_str(".dcm");
+                                        }
+                                        let rel = format!("dimse/{}/{}", folder_id, name);
+                                        let _ = storage.write_file_str(&rel, &bytes).await;
+                                        // Cleanup staged file
+                                        let _ = tokio::fs::remove_file(path).await;
+                                    }
                                 }
+                                file_count += 1;
+
                                 // Also capture identifier metadata
                                 if let Ok(obj) = dicom_object::open_file(path) {
                                     if let Ok(json) =
@@ -476,15 +488,32 @@ impl DicomEndpoint {
                             }
                         }
 
+                        // If filesystem backend, ensure .dcm extensions in-place
+                        if is_fs_backend {
+                            if let Ok(entries) = std::fs::read_dir(&folder_path) {
+                                for e in entries.flatten() {
+                                    let p = e.path();
+                                    if p.is_file() {
+                                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                                        if ext != "dcm" {
+                                            let mut new_p = p.clone();
+                                            new_p.set_extension("dcm");
+                                            let _ = std::fs::rename(&p, &new_p);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
                         // Optional debug attachment
                         let mut response = serde_json::json!({
                             "operation": "move",
                             "success": true,
                             "instances": instances,
                             "folder_id": folder_id,
-                            "folder_path": folder_path.to_string_lossy(),
                             "file_count": file_count
                         });
+                        if is_fs_backend { response["folder_path"] = serde_json::json!(folder_path.to_string_lossy()); }
                         if std::env::var("HARMONY_TEST_DEBUG").ok().as_deref() == Some("1") {
                             let debug_path = if let Some(storage) = get_storage() {
                                 storage.subpath_str("movescu_last.json")
@@ -544,41 +573,49 @@ impl DicomEndpoint {
                     get_q = get_q.with_parameter(k, v);
                 }
 
-                match scu.get_request(&remote_node, get_q).await {
+                // Determine storage target folder and pass to SCU if filesystem
+                let folder_id = Uuid::new_v4().to_string();
+                let (folder_path, is_fs_backend) = if let Some(storage) = get_storage() {
+                    let dir = storage
+                        .ensure_dir_str(&format!("dimse/{}", folder_id))
+                        .unwrap_or_else(|_| {
+                            let fallback = Path::new("./tmp").join("dimse").join(&folder_id);
+                            let _ = fs::create_dir_all(&fallback);
+                            fallback
+                        });
+                    (dir, storage.is_filesystem())
+                } else {
+                    let base = Path::new("./tmp").join("dimse");
+                    let _ = fs::create_dir_all(&base);
+                    let dir = base.join(&folder_id);
+                    let _ = fs::create_dir_all(&dir);
+                    (dir, true)
+                };
+
+                match scu.get_request(&remote_node, get_q, if is_fs_backend { Some(folder_path.clone()) } else { None }).await {
                     Ok(mut stream) => {
                         use futures_util::StreamExt;
                         let mut instances: Vec<serde_json::Value> = Vec::new();
-
-                        // Prepare unique folder using storage backend
-                        let folder_id = Uuid::new_v4().to_string();
-                        let folder_path = if let Some(storage) = get_storage() {
-                            storage
-                                .ensure_dir_str(&format!("dimse/{}", folder_id))
-                                .unwrap_or_else(|_| {
-                                    // Fallback to manual creation
-                                    let fallback =
-                                        Path::new("./tmp").join("dimse").join(&folder_id);
-                                    let _ = fs::create_dir_all(&fallback);
-                                    fallback
-                                })
-                        } else {
-                            // Fallback if storage not available
-                            let base = Path::new("./tmp").join("dimse");
-                            let _ = fs::create_dir_all(&base);
-                            let folder_path = base.join(&folder_id);
-                            let _ = fs::create_dir_all(&folder_path);
-                            folder_path
-                        };
                         let mut file_count = 0usize;
 
                         while let Some(item) = stream.next().await {
                             if let Ok(dimse::types::DatasetStream::File { ref path, .. }) = item {
-                                // Copy file into our unique folder
-                                if let Some(name) = Path::new(path).file_name() {
-                                    let dest = folder_path.join(name);
-                                    let _ = fs::copy(path, &dest);
-                                    file_count += 1;
+                                if !is_fs_backend {
+                                    if let Some(storage) = get_storage() {
+                                        let bytes = match tokio::fs::read(path).await { Ok(b) => b, Err(_) => Vec::new() };
+                                        let src = Path::new(path);
+                                        let base = src.file_stem().and_then(|s| s.to_str()).unwrap_or("instance");
+                                        let mut name = base.to_string();
+                                        if !name.ends_with(".dcm") {
+                                            name.push_str(".dcm");
+                                        }
+                                        let rel = format!("dimse/{}/{}", folder_id, name);
+                                        let _ = storage.write_file_str(&rel, &bytes).await;
+                                        let _ = tokio::fs::remove_file(path).await;
+                                    }
                                 }
+                                file_count += 1;
+
                                 // Also capture identifier metadata
                                 if let Ok(obj) = dicom_object::open_file(path) {
                                     if let Ok(json) =
@@ -589,14 +626,32 @@ impl DicomEndpoint {
                                 }
                             }
                         }
-                        serde_json::json!({
+
+                        if is_fs_backend {
+                            if let Ok(entries) = std::fs::read_dir(&folder_path) {
+                                for e in entries.flatten() {
+                                    let p = e.path();
+                                    if p.is_file() {
+                                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                                        if ext != "dcm" {
+                                            let mut new_p = p.clone();
+                                            new_p.set_extension("dcm");
+                                            let _ = std::fs::rename(&p, &new_p);
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        let mut resp = serde_json::json!({
                             "operation": "get",
                             "success": true,
                             "instances": instances,
                             "folder_id": folder_id,
-                            "folder_path": folder_path.to_string_lossy(),
                             "file_count": file_count
-                        })
+                        });
+                        if is_fs_backend { resp["folder_path"] = serde_json::json!(folder_path.to_string_lossy()); }
+                        resp
                     }
                     Err(e) => serde_json::json!({
                         "operation": "get",

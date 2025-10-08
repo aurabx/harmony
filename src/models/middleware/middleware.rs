@@ -107,6 +107,9 @@ fn create_builtin_middleware(
         "json_extractor" | "json" => Ok(Box::new(
             crate::models::middleware::types::json_extractor::JsonExtractorMiddleware::new(),
         )),
+        "jmix_builder" => Ok(Box::new(
+            crate::models::middleware::types::jmix_builder::JmixBuilderMiddleware::new(),
+        )),
         _ => Err(format!(
             "Unsupported built-in middleware type: {}",
             middleware_type

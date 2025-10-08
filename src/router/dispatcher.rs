@@ -322,6 +322,18 @@ impl Dispatcher {
         group: &Pipeline,
         config: &Config,
     ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+        // Allow endpoints to short-circuit backend processing by setting a metadata flag
+        if envelope
+            .request_details
+            .metadata
+            .get("skip_backends")
+            .map(|v| v == "true")
+            .unwrap_or(false)
+        {
+            tracing::info!("Skipping backends due to endpoint 'skip_backends' flag");
+            return Ok(envelope);
+        }
+
         tracing::info!("Processing through {} backends", group.backends.len());
 
         // Process each backend in the group

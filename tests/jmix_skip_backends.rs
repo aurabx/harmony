@@ -1,0 +1,124 @@
+use axum::body::Body;
+use axum::http::{Request, StatusCode};
+use harmony::config::config::{Config, ConfigError};
+use std::fs;
+use std::path::PathBuf;
+use std::sync::Arc;
+use tower::ServiceExt;
+use uuid::Uuid;
+
+fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
+    let config: Config = toml::from_str(toml).expect("TOML parse error");
+    config.validate()?;
+    Ok(config)
+}
+
+fn ensure_jmix_envelope(id: &str) -> PathBuf {
+    let root = PathBuf::from("./tmp/jmix-store");
+    let pkg = root.join(format!("{}.jmix", id));
+    let payload = pkg.join("payload");
+    fs::create_dir_all(&payload).expect("mkdir jmix payload");
+    let manifest = serde_json::json!({
+        "id": id,
+        "type": "envelope",
+        "version": 1,
+        "content": {"type": "directory", "path": "payload"}
+    });
+    fs::write(pkg.join("manifest.json"), serde_json::to_vec_pretty(&manifest).unwrap())
+        .expect("write manifest");
+    pkg
+}
+
+#[tokio::test]
+async fn jmix_manifest_and_archive_skip_backends() {
+    // Prepare a valid JMIX package on disk
+    let id = Uuid::new_v4().to_string();
+    let pkg_dir = ensure_jmix_envelope(&id);
+    assert!(pkg_dir.exists());
+
+    // Build config with an intentionally invalid DICOM backend (missing AET)
+    // If backends are not skipped for JMIX-served routes, requests would fail with 502.
+    let toml = format!(r#"
+        [proxy]
+        id = "jmix-skip-backends-test"
+        log_level = "info"
+
+        [storage]
+        backend = "filesystem"
+        path = "./tmp"
+
+        [network.default]
+        enable_wireguard = false
+        interface = "wg0"
+
+        [network.default.http]
+        bind_address = "127.0.0.1"
+        bind_port = 8090
+
+        [pipelines.bridge]
+        description = "JMIX routes, invalid backend present"
+        networks = ["default"]
+        endpoints = ["jmix_http"]
+        backends = ["dicom_bad"]
+
+        [endpoints.jmix_http]
+        service = "jmix"
+        [endpoints.jmix_http.options]
+        path_prefix = "/jmix"
+
+        [backends.dicom_bad]
+        service = "dicom"
+        [backends.dicom_bad.options]
+        host = "127.0.0.1"
+        port = 104
+
+        [services.http]
+        module = ""
+        [services.dicom]
+        module = ""
+        [services.jmix]
+        module = ""
+    "#);
+
+    let cfg: Config = load_config_from_str(&toml).expect("valid config");
+    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+
+    // 1) Manifest route should be served by JMIX with 200 OK and include id
+    let manifest_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/jmix/api/jmix/{}/manifest", id))
+                .method("GET")
+                .header("accept", "application/json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+    assert_eq!(manifest_resp.status(), StatusCode::OK);
+    let manifest_bytes = axum::body::to_bytes(manifest_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let manifest_json: serde_json::Value = serde_json::from_slice(&manifest_bytes).expect("json");
+    assert_eq!(manifest_json.get("id").and_then(|v| v.as_str()), Some(id.as_str()));
+
+    // 2) Archive route should also succeed with 200 OK and return a binary (zip by default)
+    let archive_resp = app
+        .clone()
+        .oneshot(
+            Request::builder()
+                .uri(format!("/jmix/api/jmix/{}", id))
+                .method("GET")
+                .header("accept", "application/zip")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+    assert_eq!(archive_resp.status(), StatusCode::OK);
+    let archive_bytes = axum::body::to_bytes(archive_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    assert!(!archive_bytes.is_empty(), "expected non-empty archive body");
+}

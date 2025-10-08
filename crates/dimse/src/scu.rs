@@ -215,6 +215,7 @@ impl DimseScu {
         &self,
         node: &RemoteNode,
         query: MoveQuery,
+        output_dir: Option<std::path::PathBuf>,
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
         info!(
             "Sending C-MOVE to {}@{}:{} (level: {}, dest: {})",
@@ -223,7 +224,7 @@ impl DimseScu {
 
         node.validate()?;
         debug!("C-MOVE query parameters: {:?}", query.parameters);
-        self.move_impl(node, query).await
+        self.move_impl(node, query, output_dir).await
     }
 
     #[cfg(feature = "dcmtk_cli")]
@@ -231,6 +232,7 @@ impl DimseScu {
         &self,
         node: &RemoteNode,
         query: MoveQuery,
+        output_dir: Option<std::path::PathBuf>,
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
         use std::path::PathBuf;
         use tokio::process::Command;
@@ -278,13 +280,20 @@ impl DimseScu {
         }
 
         // Output directory for received objects
-        let out_dir = PathBuf::from(format!("./tmp/dcmtk_move_{}", Uuid::new_v4()));
-        if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
-            warn!("Failed to create move output dir {:?}: {}", out_dir, e);
+        let out_dir = if let Some(dir) = output_dir {
+            if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+                warn!("Failed to ensure output dir {:?}: {}", dir, e);
+            }
+            dir
         } else {
-            args.push("-od".into());
-            args.push(out_dir.to_string_lossy().to_string());
-        }
+            let tmp = PathBuf::from(format!("./tmp/dcmtk_move_{}", Uuid::new_v4()));
+            if let Err(e) = tokio::fs::create_dir_all(&tmp).await {
+                warn!("Failed to create move output dir {:?}: {}", tmp, e);
+            }
+            tmp
+        };
+        args.push("-od".into());
+        args.push(out_dir.to_string_lossy().to_string());
 
         // Incoming C-STORE port (must match SCP's HostTable mapping for destination AET)
         let listen_port: u16 = self.config.incoming_store_port;
@@ -376,6 +385,7 @@ impl DimseScu {
         &self,
         node: &RemoteNode,
         query: crate::types::GetQuery,
+        output_dir: Option<std::path::PathBuf>,
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
         info!(
             "Sending C-GET to {}@{}:{} (level: {})",
@@ -384,7 +394,7 @@ impl DimseScu {
 
         node.validate()?;
         debug!("C-GET query parameters: {:?}", query.parameters);
-        self.get_impl(node, query).await
+        self.get_impl(node, query, output_dir).await
     }
 
     #[cfg(feature = "dcmtk_cli")]
@@ -392,6 +402,7 @@ impl DimseScu {
         &self,
         node: &RemoteNode,
         query: crate::types::GetQuery,
+        output_dir: Option<std::path::PathBuf>,
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
         use std::path::PathBuf;
         use tokio::process::Command;
@@ -439,13 +450,20 @@ impl DimseScu {
         }
 
         // Output directory for received objects
-        let out_dir = PathBuf::from(format!("./tmp/dcmtk_get_{}", Uuid::new_v4()));
-        if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
-            warn!("Failed to create get output dir {:?}: {}", out_dir, e);
+        let out_dir = if let Some(dir) = output_dir {
+            if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+                warn!("Failed to ensure output dir {:?}: {}", dir, e);
+            }
+            dir
         } else {
-            args.push("-od".into());
-            args.push(out_dir.to_string_lossy().to_string());
-        }
+            let tmp = PathBuf::from(format!("./tmp/dcmtk_get_{}", Uuid::new_v4()));
+            if let Err(e) = tokio::fs::create_dir_all(&tmp).await {
+                warn!("Failed to create get output dir {:?}: {}", tmp, e);
+            }
+            tmp
+        };
+        args.push("-od".into());
+        args.push(out_dir.to_string_lossy().to_string());
 
         // Host and port at the end
         args.push(node.host.clone());

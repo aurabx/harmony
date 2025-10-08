@@ -81,12 +81,14 @@ impl ServiceType for JmixEndpoint {
             },
         ];
 
-        // Optionally allow OPTIONS preflight automatically on each route
-        // Axum will respond to OPTIONS if added; include it explicitly for CORS/preflight support.
+        // Optionally allow OPTIONS preflight automatically on GET routes only
+        // to avoid duplicate OPTIONS handlers when multiple methods share the same path.
         routes = routes
             .into_iter()
             .map(|mut rc| {
-                if !rc.methods.contains(&http::Method::OPTIONS) {
+                if rc.methods.contains(&http::Method::GET)
+                    && !rc.methods.contains(&http::Method::OPTIONS)
+                {
                     rc.methods.push(http::Method::OPTIONS);
                 }
                 rc
@@ -355,6 +357,11 @@ impl ServiceHandler<Value> for JmixEndpoint {
                                 None,
                                 None,
                             );
+                            // Prevent forwarding to backends
+                            envelope
+                                .request_details
+                                .metadata
+                                .insert("skip_backends".to_string(), "true".to_string());
                             return Ok(envelope);
                         }
 
@@ -370,6 +377,11 @@ impl ServiceHandler<Value> for JmixEndpoint {
                                         None,
                                         None,
                                     );
+                                    // Prevent forwarding to backends
+                                    envelope
+                                        .request_details
+                                        .metadata
+                                        .insert("skip_backends".to_string(), "true".to_string());
                                     return Ok(envelope);
                                 }
                             }
@@ -384,6 +396,11 @@ impl ServiceHandler<Value> for JmixEndpoint {
                                         None,
                                         None,
                                     );
+                                    // Prevent forwarding to backends
+                                    envelope
+                                        .request_details
+                                        .metadata
+                                        .insert("skip_backends".to_string(), "true".to_string());
                                     return Ok(envelope);
                                 }
                             }
@@ -392,6 +409,11 @@ impl ServiceHandler<Value> for JmixEndpoint {
                         // Encode as base64 to emit safely through normalized_data
                         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
                         set_response(http::StatusCode::OK, hdrs, None, None, Some(b64));
+                        // Prevent forwarding to backends for JMIX-served routes
+                        envelope
+                            .request_details
+                            .metadata
+                            .insert("skip_backends".to_string(), "true".to_string());
                     }
                     None => {
                         set_response(
@@ -406,6 +428,7 @@ impl ServiceHandler<Value> for JmixEndpoint {
                 return Ok(envelope);
             }
         }
+
 
         // GET /api/jmix/{id}/manifest
         if method == "GET" && subpath.starts_with("api/jmix/") && subpath.ends_with("/manifest") {
@@ -433,8 +456,21 @@ impl ServiceHandler<Value> for JmixEndpoint {
                         .ok()
                         .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
                     {
-                        Some(json) => {
+                        Some(mut json) => {
+                            // Ensure manifest has id; inject if missing
+                            // Ensure the response JSON includes the envelope id
+                            let has_id = json.get("id").and_then(|v| v.as_str()).is_some();
+                            if !has_id {
+                                if let Some(obj) = json.as_object_mut() {
+                                    obj.insert("id".to_string(), serde_json::json!(id));
+                                }
+                            }
                             set_response(http::StatusCode::OK, hdrs, None, Some(json), None);
+                            // Prevent forwarding to backends for JMIX-served routes
+                            envelope
+                                .request_details
+                                .metadata
+                                .insert("skip_backends".to_string(), "true".to_string());
                         }
                         None => {
                             set_response(
@@ -460,12 +496,33 @@ impl ServiceHandler<Value> for JmixEndpoint {
                 .get("studyInstanceUid")
                 .and_then(|v| v.first())
                 .map(|s| s.to_string());
-            if let Some(uid) = study_uid {
+            if let Some(uid) = study_uid.clone() {
+                // Check local store first
                 let matches = query_by_study_uid(&store_root, &uid)?;
-                let mut hdrs = HashMap::new();
-                hdrs.insert("content-type".to_string(), "application/json".to_string());
-                let json = serde_json::json!({ "studyInstanceUid": uid, "results": matches });
-                set_response(http::StatusCode::OK, hdrs, None, Some(json), None);
+                if !matches.is_empty() {
+                    let mut hdrs = HashMap::new();
+                    hdrs.insert("content-type".to_string(), "application/json".to_string());
+                    let json = serde_json::json!({ "studyInstanceUid": uid, "results": matches });
+                    set_response(http::StatusCode::OK, hdrs, None, Some(json), None);
+                    // This route is fully served by JMIX (no backend needed when results exist)
+                    envelope
+                        .request_details
+                        .metadata
+                        .insert("skip_backends".to_string(), "true".to_string());
+                    return Ok(envelope);
+                }
+
+                // No existing JMIX; trigger a DICOM C-GET via backend by setting the DIMSE path and body
+                let identifier = serde_json::json!({
+                    "0020000D": { "vr": "UI", "Value": [ uid ] }
+                });
+                envelope.original_data = serde_json::to_vec(&identifier)
+                    .map_err(|e| Error::from(format!("identifier encode error: {}", e)))?;
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("path".to_string(), "get".to_string());
+                // Do NOT set a response here; allow backends + jmix_builder to run and produce it
                 return Ok(envelope);
             } else {
                 set_response(
@@ -475,6 +532,11 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     None,
                     None,
                 );
+                // This is fully served by JMIX
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("skip_backends".to_string(), "true".to_string());
                 return Ok(envelope);
             }
         }
@@ -594,6 +656,11 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     );
                 }
             }
+            // Prevent forwarding to backends
+            envelope
+                .request_details
+                .metadata
+                .insert("skip_backends".to_string(), "true".to_string());
             return Ok(envelope);
         }
 

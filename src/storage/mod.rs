@@ -44,6 +44,12 @@ pub trait StorageBackend: Send + Sync + std::fmt::Debug {
     /// Get the base path for this storage backend
     fn base_path(&self) -> &Path;
 
+    /// Whether this backend represents a writable local filesystem root
+    /// Defaults to false; concrete backends can override to opt-in.
+    fn is_filesystem(&self) -> bool {
+        false
+    }
+
     /// Create a subpath relative to the storage root
     fn subpath_str(&self, path: &str) -> PathBuf {
         self.base_path().join(path)

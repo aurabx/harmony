@@ -48,6 +48,10 @@ impl StorageBackend for FilesystemStorage {
     fn base_path(&self) -> &Path {
         &self.root_path
     }
+
+    fn is_filesystem(&self) -> bool {
+        true
+    }
 }
 
 #[cfg(test)]
