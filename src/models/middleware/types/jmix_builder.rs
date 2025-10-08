@@ -5,8 +5,7 @@ use crate::utils::Error;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
-use uuid::Uuid;
+use std::path::{PathBuf};
 
 /// Middleware that builds JMIX envelopes from DICOM operation responses
 ///
@@ -78,56 +77,38 @@ impl Middleware for JmixBuilderMiddleware {
             Some(p) => p,
             None => return Ok(envelope),
         };
-        let folder_id = folder_id.unwrap_or_else(|| "unknown".to_string());
 
-        // Create JMIX package in storage
-        let (_store_root, pkg_root, _payload_dir) = ensure_jmix_package_dirs().map_err(Error::from)?;
-        let jmix_id = Uuid::new_v4().to_string();
-        let pkg_dir = pkg_root.join(format!("{}.jmix", jmix_id));
-        let payload_dir = pkg_dir.join("payload");
-        fs::create_dir_all(&payload_dir).map_err(|e| Error::from(format!("mk payload: {}", e)))?;
+        // Create JMIX package using jmix-rs builder (manifest.json, metadata.json, files.json)
+        let (store_root, pkg_root, _payload_dir) = ensure_jmix_package_dirs().map_err(Error::from)?;
 
-        // Copy DICOM files into payload/
-        let src = Path::new(&folder_path);
-        if src.is_dir() {
-            for e in fs::read_dir(src)
-                .map_err(|e| Error::from(format!("readdir: {}", e)))?
-                .flatten()
-            {
-                let p = e.path();
-                if p.is_file() {
-                    let name = p.file_name().unwrap_or_default();
-                    let dest = payload_dir.join(name);
-                    let _ = fs::copy(&p, &dest);
-                }
-            }
-        }
+        // Prepare a minimal JMIX config. We don't enable validation/signing here.
+        let mut jcfg = jmix_rs::config::Config::default();
+        jcfg.sender.name = "Harmony Proxy".to_string();
+        jcfg.sender.id = "org:harmony-proxy".to_string();
+        jcfg.requester.name = "Harmony Proxy".to_string();
+        jcfg.requester.id = "org:harmony-proxy".to_string();
 
-        // Build minimal manifest.json
-        let manifest = serde_json::json!({
-            "id": jmix_id,
-            "type": "envelope",
-            "version": 1,
-            "content": {"type": "directory", "path": "payload"}
-        });
-        let manifest_path = pkg_dir.join("manifest.json");
-        fs::write(&manifest_path, serde_json::to_vec_pretty(&manifest).unwrap())
-            .map_err(|e| Error::from(format!("write manifest: {}", e)))?;
+        // Build envelope from the DICOM folder path provided by the DIMSE backend
+        let builder = jmix_rs::builder::JmixBuilder::new();
+        let (envelope_built, dicom_files) = builder
+            .build_from_dicom(&folder_path, &jcfg)
+            .map_err(|e| Error::from(format!("jmix build error: {}", e)))?;
 
-        // Build payload/metadata.json with minimal fields (attempt to extract StudyInstanceUID from instances)
-        let study_uid = extract_study_uid(&instances);
-        let metadata = serde_json::json!({
-            "id": jmix_id,
-            "source": "dimse",
-            "folder_id": folder_id,
-            "file_count": file_count,
-            "studies": { "study_uid": study_uid }
-        });
-        let md_path = payload_dir.join("metadata.json");
-        fs::write(&md_path, serde_json::to_vec_pretty(&metadata).unwrap())
-            .map_err(|e| Error::from(format!("write metadata: {}", e)))?;
+        // Persist envelope to the JMIX store root
+        let _saved = builder
+            .save_to_files(&envelope_built, &dicom_files, &pkg_root)
+            .map_err(|e| Error::from(format!("jmix save error: {}", e)))?;
 
-        // Set response so JMIX service can return the created IDs
+        // Prepare response JSON with the created envelope id and path
+        let jmix_id = envelope_built.manifest.id.clone();
+        let pkg_dir = store_root.join(format!("{}.jmix", jmix_id));
+        let study_uid = envelope_built
+            .metadata
+            .studies
+            .as_ref()
+            .and_then(|s| s.study_uid.clone())
+            .unwrap_or_else(|| extract_study_uid(&instances));
+
         let mut out_headers = HashMap::new();
         out_headers.insert("content-type".to_string(), "application/json".to_string());
         let response_json = serde_json::json!({
