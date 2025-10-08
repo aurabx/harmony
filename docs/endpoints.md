@@ -30,13 +30,16 @@ options = { path_prefix = "/<some-path>" }
 
 ### JMIX
 
-Extends the HTTP endpoint for JMIX
-- Defines standard JMIX API paths
+JMIX endpoint registers a strict, fixed set of routes. Only the following are handled (under the configured path_prefix):
+- GET {prefix}/api/jmix/{id}
+- GET {prefix}/api/jmix/{id}/manifest
+- GET {prefix}/api/jmix?studyInstanceUid=...
+- POST {prefix}/api/jmix
 
 ```
 [endpoints.<name>]
-type = "jmix"
-options = { path_prefix = "/<some-path>" } 
+ type = "jmix"
+ options = { path_prefix = "/<some-path>" }
 ```
 
 ### DICOMweb

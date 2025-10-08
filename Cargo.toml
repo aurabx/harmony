@@ -18,6 +18,7 @@ path = "src/lib.rs"
 [dependencies]
 dimse = { path = "crates/dimse" }
 dicom_json_tool = { path = "crates/dicom_json_tool" }
+
 dicom-object = "0.9"
 tokio = { version = "1", features = ["full"] }
 axum = "0.8.4"
@@ -33,12 +34,20 @@ jsonwebtoken = "9.3"
 base64 = "0.22.1" # Add this dependency
 http = "1"
 once_cell = "1.21.3"
-hyper = "1.7.0"
-router = "0.6.0"
 url = "2"
+flate2 = "1.0"
+tar = "0.4"
+zip = { version = "0.6", default-features = false, features = ["deflate"] }
+walkdir = "2.5"
+fs_extra = "1.3"
+tempfile = "3.10"
+uuid = { version = "1", features = ["v4"] }
+
+jmix-rs = { path = "../jmix/jmix-rust"}
 
 
 [dev-dependencies]
 tokio-test = "0.4"
 rsa = { version = "0.9", features = ["pem"] }
 rand = "0.8"
+dicom-dictionary-std = "0.9"

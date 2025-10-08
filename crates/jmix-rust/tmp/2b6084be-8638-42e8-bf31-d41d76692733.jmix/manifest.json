@@ -1,0 +1,26 @@
+{
+  "version": "1.0",
+  "id": "2b6084be-8638-42e8-bf31-d41d76692733",
+  "timestamp": "2025-10-04T06:10:39Z",
+  "sender": {
+    "name": "",
+    "id": "",
+    "contact": ""
+  },
+  "requester": {
+    "name": "",
+    "id": "",
+    "contact": ""
+  },
+  "receiver": [],
+  "security": {
+    "classification": "confidential",
+    "payload_hash": "sha256:bada398cc374b2b591ce764330559fd248afb0c2c7169df30394031eae24791f",
+    "encryption": {
+      "algorithm": "AES-256-GCM",
+      "ephemeral_public_key": "uo2vz6QNRQLaqi6mdNywMjBOt7jbcHScJhlfL3m1S28=",
+      "iv": "sUgWc0ZHrpKpu63v",
+      "auth_tag": "HIsmUwAbVqVcFPLDG5hN8g=="
+    }
+  }
+}

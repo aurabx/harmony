@@ -1,0 +1,59 @@
+{
+  "version": "1.0",
+  "id": "e2ba0ac5-d19c-4a9c-ab56-cbecec643343",
+  "timestamp": "2025-09-28T10:55:35Z",
+  "patient": {
+    "id": "PID156695",
+    "name": {
+      "family": "Brown",
+      "given": [
+        "Jane"
+      ],
+      "text": "Brown, Jane"
+    },
+    "dob": "1969-03-12",
+    "sex": "M",
+    "identifiers": [
+      {
+        "system": "http://ns.electronichealth.net.au/id/hi/ihi/1.0",
+        "value": "8003608166690503"
+      }
+    ]
+  },
+  "report": {
+    "file": "files/radiology-report.pdf"
+  },
+  "studies": {
+    "study_description": "CT Pulmonary Angiogram",
+    "study_uid": "1.2.826.0.1.3680043.9.7133.3280065491876470",
+    "series": [
+      {
+        "series_uid": "1.2.826.0.1.3680043.9.7133.2369827755580483",
+        "modality": "CT",
+        "body_part": "CHEST",
+        "instance_count": 15
+      }
+    ]
+  },
+  "extensions": {
+    "custom_tags": [
+      "radiology",
+      "urgent"
+    ],
+    "consent": {
+      "status": "granted",
+      "scope": [
+        "treatment",
+        "research"
+      ],
+      "method": "digital-signature",
+      "signed_on": "2025-09-28"
+    },
+    "deid": {
+      "keys": [
+        "PatientName",
+        "PatientID"
+      ]
+    }
+  }
+}

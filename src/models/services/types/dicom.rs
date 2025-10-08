@@ -12,6 +12,9 @@ use crate::router::route_config::RouteConfig;
 use dimse::{DimseConfig, RemoteNode, DimseScu};
 use dimse::types::{FindQuery, QueryLevel, GetQuery};
 use dicom_json_tool as djt;
+use std::fs;
+use std::path::{Path, PathBuf};
+use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
 pub struct DicomEndpoint {
@@ -395,9 +398,24 @@ impl DicomEndpoint {
                     Ok(mut stream) => {
                         use futures_util::StreamExt;
                         let mut instances: Vec<serde_json::Value> = Vec::new();
+                        // Prepare unique folder under ./tmp/dimse/<uuid>
+                        let base = Path::new("./tmp").join("dimse");
+                        let _ = fs::create_dir_all(&base);
+                        let folder_id = Uuid::new_v4().to_string();
+                        let folder_path = base.join(&folder_id);
+                        let _ = fs::create_dir_all(&folder_path);
+                        let mut file_count = 0usize;
+
                         while let Some(item) = stream.next().await {
                             if let Ok(ds) = item {
                                 if let dimse::types::DatasetStream::File { ref path, .. } = ds {
+                                    // Copy file into our unique folder
+                                    if let Some(name) = Path::new(path).file_name() {
+                                        let dest = folder_path.join(name);
+                                        let _ = fs::copy(path, &dest);
+                                        file_count += 1;
+                                    }
+                                    // Also capture identifier metadata
                                     if let Ok(obj) = dicom_object::open_file(path) {
                                         if let Ok(json) = dicom_json_tool::identifier_to_json_value(&obj) {
                                             instances.push(json);
@@ -406,11 +424,15 @@ impl DicomEndpoint {
                                 }
                             }
                         }
+
                         // Optional debug attachment
                         let mut response = serde_json::json!({
                             "operation": "move",
                             "success": true,
-                            "instances": instances
+                            "instances": instances,
+                            "folder_id": folder_id,
+                            "folder_path": folder_path.to_string_lossy(),
+                            "file_count": file_count
                         });
                         if std::env::var("HARMONY_TEST_DEBUG").ok().as_deref() == Some("1") {
                             if let Ok(debug_text) = std::fs::read_to_string("./tmp/movescu_last.json") {
@@ -466,9 +488,24 @@ impl DicomEndpoint {
                     Ok(mut stream) => {
                         use futures_util::StreamExt;
                         let mut instances: Vec<serde_json::Value> = Vec::new();
+                        // Prepare unique folder under ./tmp/dimse/<uuid>
+                        let base = Path::new("./tmp").join("dimse");
+                        let _ = fs::create_dir_all(&base);
+                        let folder_id = Uuid::new_v4().to_string();
+                        let folder_path = base.join(&folder_id);
+                        let _ = fs::create_dir_all(&folder_path);
+                        let mut file_count = 0usize;
+
                         while let Some(item) = stream.next().await {
                             if let Ok(ds) = item {
                                 if let dimse::types::DatasetStream::File { ref path, .. } = ds {
+                                    // Copy file into our unique folder
+                                    if let Some(name) = Path::new(path).file_name() {
+                                        let dest = folder_path.join(name);
+                                        let _ = fs::copy(path, &dest);
+                                        file_count += 1;
+                                    }
+                                    // Also capture identifier metadata
                                     if let Ok(obj) = dicom_object::open_file(path) {
                                         if let Ok(json) = dicom_json_tool::identifier_to_json_value(&obj) {
                                             instances.push(json);
@@ -480,7 +517,10 @@ impl DicomEndpoint {
                         serde_json::json!({
                             "operation": "get",
                             "success": true,
-                            "instances": instances
+                            "instances": instances,
+                            "folder_id": folder_id,
+                            "folder_path": folder_path.to_string_lossy(),
+                            "file_count": file_count
                         })
                     }
                     Err(e) => serde_json::json!({

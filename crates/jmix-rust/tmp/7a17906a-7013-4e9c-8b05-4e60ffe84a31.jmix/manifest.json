@@ -1,0 +1,20 @@
+{
+  "version": "1.0",
+  "id": "7a17906a-7013-4e9c-8b05-4e60ffe84a31",
+  "timestamp": "2025-10-04T06:02:25Z",
+  "sender": {
+    "name": "",
+    "id": "",
+    "contact": ""
+  },
+  "requester": {
+    "name": "",
+    "id": "",
+    "contact": ""
+  },
+  "receiver": [],
+  "security": {
+    "classification": "confidential",
+    "payload_hash": "sha256:674dcf897cc7659b7060df5da7bf124045c0eb1763be7e5a587f0167ac5d455b"
+  }
+}
