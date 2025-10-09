@@ -60,17 +60,18 @@ async fn dicom_move_with_dcmqrscp() {
 
     // Helper: send a single DICOM file to QR_SCP via storescu
     async fn send_via_storescu(file: &std::path::Path, port: u16) -> bool {
-        match tokio::process::Command::new("storescu")
+        let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
+        let mut st = tokio::process::Command::new("storescu");
+        let mut st = st
             .arg("--aetitle")
             .arg("HARMONY_SCU")
             .arg("--call")
             .arg("QR_SCP")
             .arg("127.0.0.1")
             .arg(port.to_string())
-            .arg(file)
-            .status()
-            .await
-        {
+            .arg(file);
+        if !verbose { st.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+        match st.status().await {
             Ok(status) => status.success(),
             Err(_) => false,
         }
@@ -166,12 +167,16 @@ async fn dicom_move_with_dcmqrscp() {
     std::fs::create_dir_all(&base).expect("create cfg dir");
     std::fs::write(&cfg_path, cfg).expect("write cfg");
 
-    // Start dcmqrscp
-    let mut qr_child = tokio::process::Command::new("dcmqrscp")
-        .arg("-d")
+    // Start dcmqrscp (quiet by default; enable verbose with HARMONY_TEST_VERBOSE_DCMTK=1)
+    let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
+    let mut dcmqr = tokio::process::Command::new("dcmqrscp");
+    if verbose { dcmqr.arg("-d"); }
+    let mut dcmqr = dcmqr
         .arg("-c")
         .arg(&cfg_path)
-        .arg(port.to_string())
+        .arg(port.to_string());
+    if !verbose { dcmqr.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+    let mut qr_child = dcmqr
         .kill_on_drop(true)
         .spawn()
         .expect("spawn dcmqrscp");
@@ -221,14 +226,17 @@ async fn dicom_move_with_dcmqrscp() {
     dicom_json_tool::write_part10(&dicom_path, &obj).expect("write seed");
 
     // Send the dataset to QR via storescu
-    let status = tokio::process::Command::new("storescu")
+    let mut st = tokio::process::Command::new("storescu");
+    let mut st = st
         .arg("--aetitle")
         .arg("HARMONY_SCU")
         .arg("--call")
         .arg("QR_SCP")
         .arg("127.0.0.1")
         .arg(port.to_string())
-        .arg(&dicom_path)
+        .arg(&dicom_path);
+    if !verbose { st.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+    let status = st
         .status()
         .await
         .expect("run storescu");

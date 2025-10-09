@@ -87,12 +87,16 @@ async fn dicom_get_writes_samples_to_tmp() {
     std::fs::create_dir_all(&base).expect("create cfg dir");
     std::fs::write(&cfg_path, cfg).expect("write cfg");
 
-    // Start dcmqrscp
-    let mut qr_child = tokio::process::Command::new("dcmqrscp")
-        .arg("-d")
+    // Start dcmqrscp (quiet by default; enable verbose with HARMONY_TEST_VERBOSE_DCMTK=1)
+    let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
+    let mut dcmqr = tokio::process::Command::new("dcmqrscp");
+    if verbose { dcmqr.arg("-d"); }
+    let mut dcmqr = dcmqr
         .arg("-c")
         .arg(&cfg_path)
-        .arg(port.to_string())
+        .arg(port.to_string());
+    if !verbose { dcmqr.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+    let mut qr_child = dcmqr
         .kill_on_drop(true)
         .spawn()
         .expect("spawn dcmqrscp");
@@ -110,7 +114,8 @@ async fn dicom_get_writes_samples_to_tmp() {
 
     // Send all sample files via storescu (recursive)
     // Not all storescu builds support -r; if unavailable, fall back to iterating files.
-    let try_recursive = tokio::process::Command::new("storescu")
+    let mut st = tokio::process::Command::new("storescu");
+    let mut st = st
         .arg("--aetitle")
         .arg("HARMONY_SCU")
         .arg("--call")
@@ -118,7 +123,9 @@ async fn dicom_get_writes_samples_to_tmp() {
         .arg("127.0.0.1")
         .arg(port.to_string())
         .arg("-r")
-        .arg(&samples_root)
+        .arg(&samples_root);
+    if !verbose { st.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+    let try_recursive = st
         .status()
         .await;
 
@@ -132,14 +139,17 @@ async fn dicom_get_writes_samples_to_tmp() {
             if entry.file_type().is_file()
                 && entry.path().extension().and_then(|e| e.to_str()) == Some("dcm")
             {
-                let status = tokio::process::Command::new("storescu")
+                let mut st2 = tokio::process::Command::new("storescu");
+                let mut st2 = st2
                     .arg("--aetitle")
                     .arg("HARMONY_SCU")
                     .arg("--call")
                     .arg("QR_SCP")
                     .arg("127.0.0.1")
                     .arg(port.to_string())
-                    .arg(entry.path())
+                    .arg(entry.path());
+                if !verbose { st2.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+                let status = st2
                     .status()
                     .await
                     .expect("run storescu");

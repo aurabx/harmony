@@ -9,7 +9,7 @@ Repository: harmony-proxy - Rust-based proxy/gateway for healthcare systems
 Harmony is a proxy/gateway that handles, transforms and proxies data between different healthcare systems. It provides secure communication with support for FHIR, JMIX, DICOM, and DICOMweb protocols, featuring configurable middleware, authentication (JWT), audit logging, and WireGuard networking.
 
 **Key Features:**
-- Multi-protocol support: HTTP passthrough, FHIR, JMIX, DICOM, DICOMweb
+- Multi-protocol support: HTTP passthrough, FHIR, JMIX, DICOM, DICOMweb (QIDO-RS/WADO-RS endpoints)
 - Configurable routing with groups, endpoints, backends, and middleware
 - JWT and basic authentication
 - Request/response transformation pipeline

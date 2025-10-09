@@ -1,0 +1,23 @@
+# ------------------------
+# DICOMweb endpoint example
+#-------------------------
+[pipelines.dicomweb_demo]
+description = "DICOMweb QIDO-RS and WADO-RS endpoint (skeleton implementation)"
+networks = ["default"]
+endpoints = ["dicomweb_endpoint"]
+middleware = []
+backends = []
+
+# ------------------------
+# Endpoints
+#-------------------------
+[endpoints.dicomweb_endpoint]
+service = "dicomweb"
+[endpoints.dicomweb_endpoint.options]
+path_prefix = "/dicomweb"
+
+# ------------------------
+# Service registration (should be in main config.toml)
+#-------------------------
+[services.dicomweb]
+module = ""

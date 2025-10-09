@@ -27,13 +27,11 @@ impl FilesystemStorage {
             })?;
         }
 
-        // Canonicalize the path to resolve relative paths like "./tmp"
-        let root_path = root_path.canonicalize().unwrap_or({
-            // If canonicalize fails, fall back to the original path
-            // This can happen in some test scenarios or if the directory was just created
-            root_path
-        });
-
+        // Do NOT canonicalize the path. On macOS, canonicalization may resolve
+        // symlinks like /var -> /private/var which breaks tests that compare
+        // against the exact provided parent directory. Preserve the user-provided
+        // path verbatim to ensure temp directories are created under the expected
+        // parent paths in tests and at runtime.
         Ok(Self { root_path })
     }
 

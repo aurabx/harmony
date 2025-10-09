@@ -71,7 +71,11 @@ pub fn resolve_middleware(
                 }
             }
         } else {
-            Err(format!("Unknown middleware type: {}", middleware_type))
+            // Registry is present but does not include this middleware. Attempt built-in fallback.
+            match create_builtin_middleware(middleware_type, options) {
+                Ok(mw) => Ok(mw),
+                Err(_) => Err(format!("Unknown middleware type: {}", middleware_type)),
+            }
         }
     } else {
         // Fallback to hardcoded types if registry isn't initialized
@@ -109,6 +113,12 @@ fn create_builtin_middleware(
         )),
         "jmix_builder" => Ok(Box::new(
             crate::models::middleware::types::jmix_builder::JmixBuilderMiddleware::new(),
+        )),
+        "dicomweb_to_dicom" | "dicomweb" => Ok(Box::new(
+            crate::models::middleware::types::dicomweb_to_dicom::DicomwebToDicomMiddleware::new(),
+        )),
+        "dicom_to_dicomweb" => Ok(Box::new(
+            crate::models::middleware::types::dicom_to_dicomweb::DicomToDicomwebMiddleware::new(),
         )),
         _ => Err(format!(
             "Unsupported built-in middleware type: {}",

@@ -502,7 +502,27 @@ impl ServiceHandler<Value> for JmixEndpoint {
                 if !matches.is_empty() {
                     let mut hdrs = HashMap::new();
                     hdrs.insert("content-type".to_string(), "application/json".to_string());
-                    let json = serde_json::json!({ "studyInstanceUid": uid, "results": matches });
+                    // Normalize to the same shape returned by the jmix_builder middleware
+                    let jmix_envelopes: Vec<serde_json::Value> = matches
+                        .into_iter()
+                        .map(|m| {
+                            let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                            let path = m.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                            let suid = m
+                                .get("studyInstanceUid")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("");
+                            serde_json::json!({
+                                "id": id,
+                                "storePath": path,
+                                "studyInstanceUid": suid
+                            })
+                        })
+                        .collect();
+                    let json = serde_json::json!({
+                        "studyInstanceUid": uid,
+                        "jmixEnvelopes": jmix_envelopes
+                    });
                     set_response(http::StatusCode::OK, hdrs, None, Some(json), None);
                     // This route is fully served by JMIX (no backend needed when results exist)
                     envelope

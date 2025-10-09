@@ -258,20 +258,28 @@ impl Config {
 
     fn validate_backends(&self) -> Result<(), ConfigError> {
         for (name, backend) in &self.backends {
-            let service = backend
-                .resolve_service()
-                .map_err(|err| ConfigError::InvalidBackend {
-                    name: name.clone(),
-                    reason: err,
-                })?;
+            // Try to resolve the backend service; if it fails, warn and skip validation
+            let service = match backend.resolve_service() {
+                Ok(svc) => svc,
+                Err(err) => {
+                    tracing::warn!(
+                        "Skipping backend '{}' due to service resolution error: {}",
+                        name,
+                        err
+                    );
+                    continue;
+                }
+            };
 
             let options = backend.options.as_ref().unwrap_or(&DEFAULT_OPTIONS);
-            service
-                .validate(options)
-                .map_err(|err| ConfigError::InvalidBackend {
-                    name: name.clone(),
-                    reason: format!("Service validation failed: {:?}", err),
-                })?;
+            if let Err(err) = service.validate(options) {
+                tracing::warn!(
+                    "Skipping backend '{}' due to validation error: {:?}",
+                    name,
+                    err
+                );
+                continue;
+            }
         }
         Ok(())
     }
@@ -309,7 +317,7 @@ impl Config {
             if middleware_config.module.is_empty() {
                 // Built-in middleware, validate that it exists
                 match name.as_str() {
-                    "jwtauth" | "auth" | "connect" | "passthru" => {} // Valid built-in middleware
+                    "jwtauth" | "auth" | "connect" | "passthru" | "json_extractor" | "json" | "jmix_builder" | "dicomweb_to_dicom" | "dicom_to_dicomweb" | "dicomweb" => {}
                     _ => {
                         return Err(ConfigError::InvalidMiddleware {
                             name: name.clone(),

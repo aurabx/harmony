@@ -57,7 +57,7 @@ impl Middleware for JmixBuilderMiddleware {
             .get("folder_path")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let folder_id = nd
+        let _folder_id = nd
             .get("folder_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
@@ -67,7 +67,7 @@ impl Middleware for JmixBuilderMiddleware {
             .unwrap_or(0) as usize;
         let instances = nd.get("instances").cloned().unwrap_or(serde_json::json!([]));
 
-        let is_dicom_result = (operation == "move" || operation == "get") && success && file_count > 0;
+        let is_dicom_result = (operation == "move" || operation == "get") && success && folder_path.is_some();
 
         if !is_dicom_result {
             return Ok(envelope);
@@ -129,9 +129,11 @@ impl Middleware for JmixBuilderMiddleware {
         if let Some(map) = new_nd.as_object_mut() {
             map.insert("response".to_string(), response_obj);
         }
-        // On the right chain, the pipeline copies original_data into the final envelope.normalized_data.
-        // Therefore, write our response into original_data to be preserved.
-        envelope.original_data = new_nd;
+        // Mirror response into both normalized_data and original_data so it is preserved
+        // by the pipeline and directly accessible in unit tests.
+        let out_nd = new_nd;
+        envelope.normalized_data = Some(out_nd.clone());
+        envelope.original_data = out_nd;
         Ok(envelope)
     }
 }

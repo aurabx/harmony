@@ -88,12 +88,16 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
     std::fs::create_dir_all(&base).expect("create cfg dir");
     std::fs::write(&cfg_path, cfg).expect("write cfg");
 
-    // Start dcmqrscp
-    let mut qr_child = tokio::process::Command::new("dcmqrscp")
-        .arg("-d")
+    // Start dcmqrscp (quiet by default; enable verbose with HARMONY_TEST_VERBOSE_DCMTK=1)
+    let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
+    let mut dcmqr = tokio::process::Command::new("dcmqrscp");
+    if verbose { dcmqr.arg("-d"); }
+    let mut dcmqr = dcmqr
         .arg("-c")
         .arg(&cfg_path)
-        .arg(port.to_string())
+        .arg(port.to_string());
+    if !verbose { dcmqr.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+    let mut qr_child = dcmqr
         .kill_on_drop(true)
         .spawn()
         .expect("spawn dcmqrscp");
@@ -110,24 +114,28 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
     }
 
     // Send sample study via storescu (-r if available)
-    let try_recursive = tokio::process::Command::new("storescu")
+    let mut st_cmd = tokio::process::Command::new("storescu");
+    let mut st_cmd = st_cmd
         .arg("--aetitle").arg("HARMONY_SCU")
         .arg("--call").arg("QR_SCP")
         .arg("127.0.0.1").arg(port.to_string())
-        .arg("-r").arg(&samples_root)
-        .status().await;
+        .arg("-r").arg(&samples_root);
+    if !verbose { st_cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+    let try_recursive = st_cmd.status().await;
 
     if !try_recursive.as_ref().map(|s| s.success()).unwrap_or(false) {
         // fallback iterate
         let mut any_ok = false;
         for e in walkdir::WalkDir::new(&samples_root).into_iter().filter_map(|e| e.ok()) {
             if e.file_type().is_file() && e.path().extension().and_then(|s| s.to_str()) == Some("dcm") {
-                let status = tokio::process::Command::new("storescu")
+                let mut st2 = tokio::process::Command::new("storescu");
+                let mut st2 = st2
                     .arg("--aetitle").arg("HARMONY_SCU")
                     .arg("--call").arg("QR_SCP")
                     .arg("127.0.0.1").arg(port.to_string())
-                    .arg(e.path())
-                    .status().await.expect("storescu");
+                    .arg(e.path());
+                if !verbose { st2.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+                let status = st2.status().await.expect("storescu");
                 any_ok |= status.success();
             }
         }

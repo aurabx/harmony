@@ -291,15 +291,21 @@ impl DicomEndpoint {
         // Create SCU client
         let scu = DimseScu::new(dimse_config);
 
-        // Extract path to determine operation type
+        // Extract path for context and resolve operation (prefer dimse_op set by middleware)
         let path = envelope
             .request_details
             .metadata
             .get("path")
             .cloned()
             .unwrap_or_default();
+        let op = envelope
+            .request_details
+            .metadata
+            .get("dimse_op")
+            .cloned()
+            .unwrap_or_else(|| path.clone());
 
-        let result = match path.as_str() {
+        let result = match op.as_str() {
             "echo" | "/echo" => {
                 // Perform C-ECHO
                 match scu.echo(&remote_node).await {
@@ -322,11 +328,19 @@ impl DicomEndpoint {
                 let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
                     .unwrap_or(serde_json::Value::Null);
 
-                // Extract identifier JSON
-                let (_cmd, identifier_json, _qmeta) = match body_json {
-                    serde_json::Value::Object(_) => djt::parse_wrapper_or_identifier(&body_json),
-                    _ => (None, serde_json::json!({}), None),
+                // Extract identifier JSON (allow override from normalized_data.dimse_identifier)
+                let mut identifier_json = match body_json {
+                    serde_json::Value::Object(_) => {
+                        let (_cmd, ident, _qmeta) = djt::parse_wrapper_or_identifier(&body_json);
+                        ident
+                    }
+                    _ => serde_json::json!({}),
                 };
+                if let Some(nd) = envelope.normalized_data.as_ref() {
+                    if let Some(ident) = nd.get("dimse_identifier") {
+                        if ident.is_object() { identifier_json = ident.clone(); }
+                    }
+                }
 
                 // Flatten identifier JSON into tag->string map for FindQuery parameters
                 let mut params: HashMap<String, String> = HashMap::new();
@@ -394,10 +408,18 @@ impl DicomEndpoint {
                 let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
                     .unwrap_or(serde_json::Value::Null);
 
-                let (_cmd, identifier_json, _qmeta) = match body_json {
-                    serde_json::Value::Object(_) => djt::parse_wrapper_or_identifier(&body_json),
-                    _ => (None, serde_json::json!({}), None),
+                let mut identifier_json = match body_json {
+                    serde_json::Value::Object(_) => {
+                        let (_cmd, ident, _qmeta) = djt::parse_wrapper_or_identifier(&body_json);
+                        ident
+                    }
+                    _ => serde_json::json!({}),
                 };
+                if let Some(nd) = envelope.normalized_data.as_ref() {
+                    if let Some(ident) = nd.get("dimse_identifier") {
+                        if ident.is_object() { identifier_json = ident.clone(); }
+                    }
+                }
 
                 // Flatten identifier JSON into tag->string map for MoveQuery parameters
                 let mut params: HashMap<String, String> = HashMap::new();
@@ -542,10 +564,18 @@ impl DicomEndpoint {
                 let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
                     .unwrap_or(serde_json::Value::Null);
 
-                let (_cmd, identifier_json, _qmeta) = match body_json {
-                    serde_json::Value::Object(_) => djt::parse_wrapper_or_identifier(&body_json),
-                    _ => (None, serde_json::json!({}), None),
+                let mut identifier_json = match body_json {
+                    serde_json::Value::Object(_) => {
+                        let (_cmd, ident, _qmeta) = djt::parse_wrapper_or_identifier(&body_json);
+                        ident
+                    }
+                    _ => serde_json::json!({}),
                 };
+                if let Some(nd) = envelope.normalized_data.as_ref() {
+                    if let Some(ident) = nd.get("dimse_identifier") {
+                        if ident.is_object() { identifier_json = ident.clone(); }
+                    }
+                }
 
                 let mut params: HashMap<String, String> = HashMap::new();
                 if let Some(map) = identifier_json.as_object() {

@@ -86,6 +86,9 @@ fn create_builtin_service(
                 use_tls: None,
             },
         )),
+        "dicomweb" => Ok(Box::new(
+            crate::models::services::types::dicomweb::DicomwebEndpoint {},
+        )),
         "echo" => Ok(Box::new(
             crate::models::services::types::echo::EchoEndpoint {},
         )),

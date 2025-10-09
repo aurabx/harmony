@@ -3,7 +3,7 @@
 This project is alpha quality and under active development.
 
 ## Overview
-- Harmony is a proxy/gateway for secure data meshes. It routes requests through endpoints, middleware, and backends, with support for FHIR, JMIX, DICOM/DICOMweb, and JWT-based auth.
+- Harmony is a proxy/gateway for secure data meshes. It routes requests through endpoints, middleware, and backends, with support for FHIR, JMIX, DICOM/DICOMweb (including DICOMweb endpoints), and JWT-based auth.
 
 ## Quick start
 - Build: cargo build
@@ -48,6 +48,24 @@ cargo test --no-fail-fast --test dimse_scp_starts -- --nocapture
 cargo test --no-fail-fast --test dicom_find_qrscp -- --nocapture
 cargo test --no-fail-fast --test dicom_get_qrscp -- --nocapture
 HARMONY_TEST_DEBUG=1 cargo test --no-fail-fast --test dicom_move_qrscp -- --nocapture
+```
+
+### DCMTK logs in tests
+
+- By default, integration tests that spawn DCMTK tools (dcmqrscp, storescu, etc.) run them quietly: stdout/stderr are suppressed and dcmqrscp is not started with the `-d` debug flag.
+- To enable verbose DCMTK output during tests, set the environment variable `HARMONY_TEST_VERBOSE_DCMTK=1`.
+
+Examples:
+
+```bash
+# Quiet (default)
+cargo test -- --nocapture
+
+# Verbose DCMTK logs for all tests
+HARMONY_TEST_VERBOSE_DCMTK=1 cargo test -- --nocapture
+
+# Combine with existing debug flag used in some tests
+HARMONY_TEST_VERBOSE_DCMTK=1 HARMONY_TEST_DEBUG=1 cargo test -- --nocapture
 ```
 
 ## Licence and Use

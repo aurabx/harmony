@@ -146,6 +146,7 @@ See `examples/default/pipelines/dimse-integration.toml` for a complete configura
   - C-MOVE: `./tmp/dcmtk_move_<uuid>/*`
   - Last MOVE debug payload: `./tmp/movescu_last.json`
 - Debugging: set `HARMONY_TEST_DEBUG=1` to attach the last `movescu` arguments/stdout/stderr to HTTP responses (where applicable).
+- Test verbosity: DCMTK child process output is suppressed in tests by default. Set `HARMONY_TEST_VERBOSE_DCMTK=1` to enable verbose DCMTK logs (adds `-d` to `dcmqrscp` and shows child stdout/stderr).
 - Test data: if `dev/samples` exists, tests may preload a limited number of `.dcm` files into the QR SCP via `storescu` prior to MOVE operations.
 
 ## Troubleshooting
