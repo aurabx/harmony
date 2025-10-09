@@ -187,6 +187,7 @@ impl ServiceType for DicomEndpoint {
             request_details: details,
             original_data: ctx.payload,
             normalized_data: normalized,
+            normalized_snapshot: None,
         })
     }
 }

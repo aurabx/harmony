@@ -3,6 +3,7 @@ members = [
     ".",
     "crates/dimse",
     "crates/dicom_json_tool",
+    "crates/transform",
 ]
 resolver = "2"
 
@@ -18,6 +19,7 @@ path = "src/lib.rs"
 [dependencies]
 dimse = { path = "crates/dimse" }
 dicom_json_tool = { path = "crates/dicom_json_tool" }
+harmony_transform = { path = "crates/transform" }
 
 dicom-object = "0.9"
 dicom-pixeldata = { version = "0.9", features = ["image", "rle", "jpeg"] }
@@ -55,3 +57,4 @@ rsa = { version = "0.9", features = ["pem"] }
 rand = "0.8"
 dicom-dictionary-std = "0.9"
 dicom-core = "0.9"
+tempfile = "3.10"

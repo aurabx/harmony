@@ -317,7 +317,7 @@ impl Config {
             if middleware_config.module.is_empty() {
                 // Built-in middleware, validate that it exists
                 match name.as_str() {
-                    "jwtauth" | "auth" | "connect" | "passthru" | "json_extractor" | "json" | "jmix_builder" | "dicomweb_to_dicom" | "dicom_to_dicomweb" | "dicomweb" => {}
+                    "jwtauth" | "auth" | "connect" | "passthru" | "json_extractor" | "json" | "jmix_builder" | "dicomweb_to_dicom" | "dicom_to_dicomweb" | "dicomweb" | "transform" => {}
                     _ => {
                         return Err(ConfigError::InvalidMiddleware {
                             name: name.clone(),

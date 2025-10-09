@@ -142,10 +142,14 @@ impl ServiceType for HttpEndpoint {
             metadata,
         };
 
+        // Try to parse payload as JSON for normalized_data
+        let normalized_data = serde_json::from_slice(&ctx.payload).ok();
+        
         Ok(RequestEnvelope {
             request_details,
             original_data: ctx.payload,
-            normalized_data: None,
+            normalized_data,
+            normalized_snapshot: None,
         })
     }
 }

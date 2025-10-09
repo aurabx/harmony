@@ -209,6 +209,7 @@ mod tests {
             },
             original_data: serde_json::json!({}),
             normalized_data: Some(nd),
+            normalized_snapshot: None,
         };
 
         let mw = JmixBuilderMiddleware::new();

@@ -391,6 +391,7 @@ impl Dispatcher {
                 serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
             }),
             normalized_data: envelope.normalized_data.clone(),
+            normalized_snapshot: envelope.normalized_snapshot.clone(),
         };
 
         // Build middleware instances from pipeline names + config options
@@ -415,6 +416,7 @@ impl Dispatcher {
             request_details: processed_json_envelope.request_details,
             original_data: envelope.original_data, // Keep original bytes
             normalized_data: processed_json_envelope.normalized_data,
+            normalized_snapshot: processed_json_envelope.normalized_snapshot,
         };
 
         Ok(processed_envelope)
@@ -436,6 +438,7 @@ impl Dispatcher {
                 serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
             }),
             normalized_data: envelope.normalized_data.clone(),
+            normalized_snapshot: envelope.normalized_snapshot.clone(),
         };
 
         // Build middleware instances from pipeline names + config options
@@ -460,6 +463,7 @@ impl Dispatcher {
             request_details: processed_json_envelope.request_details,
             original_data: envelope.original_data, // Keep original bytes
             normalized_data: Some(processed_json_envelope.original_data),
+            normalized_snapshot: processed_json_envelope.normalized_snapshot,
         };
 
         Ok(processed_envelope)

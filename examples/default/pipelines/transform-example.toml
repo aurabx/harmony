@@ -1,0 +1,60 @@
+# ------------------------
+# Transform Middleware Example
+#-------------------------
+[proxy]
+id = "transform-example"
+log_level = "debug"
+
+# ------------------------
+# Network
+#-------------------------
+[network.default]
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.http]
+bind_address = "0.0.0.0"
+bind_port = 8080
+
+# ------------------------
+# Pipeline with Transform
+#-------------------------
+[pipelines.transform_demo]
+description = "Demonstrates JOLT transform middleware"
+networks = ["default"]
+endpoints = ["http_endpoint"]
+middleware = [
+    'middleware.json_extractor',
+    'middleware.patient_transform',
+]
+backends = []
+
+# ------------------------
+# Middleware
+#-------------------------
+[middleware.json_extractor]
+# Extracts JSON from request body
+
+[middleware.patient_transform]
+type = "transform"
+[middleware.patient_transform.options]
+spec_path = "samples/jolt/patient_to_fhir.json"
+apply = "left"
+fail_on_error = true
+
+# ------------------------
+# Endpoints
+#-------------------------
+[endpoints.http_endpoint]
+service = "http"
+[endpoints.http_endpoint.options]
+path_prefix = "/transform"
+
+# ------------------------
+# Service Types
+#-------------------------
+[middleware_types.transform]
+module = ""
+
+[services.http]
+module = ""

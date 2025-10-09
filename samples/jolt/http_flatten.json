@@ -1,0 +1,9 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "message": "msg",
+      "original_data": "data"
+    }
+  }
+]

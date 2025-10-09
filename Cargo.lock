@@ -1302,6 +1302,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "fluvio-jolt"
+version = "0.3.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3888757e0a2abc783f3a8fd3edf1ca7944230d742d080ef1729e1ee730c0955b"
+dependencies = [
+ "serde",
+ "serde_json",
+ "thiserror 1.0.69",
+]
+
+[[package]]
 name = "fnv"
 version = "1.0.7"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1505,6 +1516,7 @@ dependencies = [
  "flate2",
  "fs_extra",
  "futures-util",
+ "harmony_transform",
  "http",
  "image 0.24.9",
  "jmix-rs",
@@ -1526,6 +1538,19 @@ dependencies = [
  "uuid",
  "walkdir",
  "zip",
+]
+
+[[package]]
+name = "harmony_transform"
+version = "0.1.0"
+dependencies = [
+ "fluvio-jolt",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "thiserror 1.0.69",
+ "tokio-test",
+ "tracing",
 ]
 
 [[package]]

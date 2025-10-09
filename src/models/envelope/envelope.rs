@@ -11,6 +11,10 @@ pub struct RequestEnvelope<T> {
     pub original_data: T,
     /// A normalized JSON representation of the original data.
     pub normalized_data: Option<serde_json::Value>,
+    /// Snapshot of normalized_data before any transform middleware is applied.
+    /// Only populated when transform middleware is used to preserve original state.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normalized_snapshot: Option<serde_json::Value>,
 }
 
 /// Details about the request being processed.
@@ -51,6 +55,9 @@ pub struct ResponseEnvelope<T> {
     #[allow(dead_code)]
     pub original_data: T,
     pub normalized_data: Option<serde_json::Value>,
+    /// Snapshot of normalized_data before any transform middleware is applied.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub normalized_snapshot: Option<serde_json::Value>,
 }
 
 impl<T> RequestEnvelope<T>
@@ -64,6 +71,7 @@ where
             request_details,
             original_data,
             normalized_data,
+            normalized_snapshot: None,
         }
     }
 }

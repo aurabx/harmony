@@ -128,13 +128,14 @@ The validator enforces strict requirements:
 
 - **Networks**: Must not be empty; each network needs `http.bind_address` and non-zero `http.bind_port`
 - **Groups**: At least one group; each group must reference existing networks
-- **Middleware**: Names must be recognized (`jwt_auth`, `auth_sidecar`, `aurabox_connect`)
+- **Middleware**: Names must be recognized (`jwt_auth`, `auth_sidecar`, `aurabox_connect`, `transform`)
 - **WireGuard**: If `enable_wireguard=true`, `interface` must be non-empty
 
 ## Known Pitfalls
 
 - Tests may fail against current validator - update test fixtures to include required groups/middleware configs
 - Unknown middleware names cause immediate failure - extend configuration if adding new middleware
+- Transform middleware requires valid JOLT specification files in JSON format
 - For WireGuard networks, `interface` field is mandatory when `enable_wireguard=true`
 - Default binary config path: `/etc/harmony/harmony-config.toml`
 
@@ -145,9 +146,12 @@ The validator enforces strict requirements:
 - **Logging**: tracing with env-filter; use `RUST_LOG=harmony=debug,info` locally
 - **Output Directory**: Use `./tmp` directory for temporary files (not system `/tmp`)
 - **Dynamic Loading**: libloading supports custom endpoints/middleware (see `examples/custom_endpoint`)
+- Items are only ready for production use if they are fully tested and contain no bugs.
+
 
 ## Change Management and PR Hygiene
 
+- Do not build PRs for commits unless specifically requested
 - Keep changes narrowly scoped. Do not mix unrelated work (e.g., storage refactors vs. Clippy/lint/format changes) in the same PR.
 - If you need to apply broad formatting or lint fixes, submit them as a separate PR from any functional changes.
 - When a large refactor is necessary, split into clearly labeled commits (e.g., "storage: introduce backend abstraction" vs. "lint: clippy fixes, no logic changes").
@@ -166,3 +170,106 @@ This proxy is part of the larger Runbeam ecosystem:
 - Compatible with Rust CLI tools that may consume its output
 
 For troubleshooting configuration issues, always check that `examples/test-config.toml` works as a baseline, then adapt your configuration to match its structure.
+
+## Transform Middleware
+
+The transform middleware uses [Fluvio JOLT](https://github.com/infinyon/fluvio-jolt) to perform JSON-to-JSON transformations on request/response data.
+
+### Configuration
+
+```toml
+[middleware.my_transform]
+type = "transform"
+[middleware.my_transform.options]
+spec_path = "path/to/jolt_spec.json"
+apply = "both"  # "left", "right", or "both" (default)
+fail_on_error = true  # true (default) or false
+```
+
+**Field Descriptions:**
+- `spec_path`: Path to the JOLT specification file (JSON format). Relative paths are resolved from the config directory.
+- `apply`: When to apply the transform - "left" (request to backend), "right" (response from backend), or "both" (default)
+- `fail_on_error`: Whether to fail the request on transformation errors (true) or log and continue (false)
+
+### JOLT Specification Example
+
+Example transformation from patient data to FHIR-like structure:
+
+**Input JSON:**
+```json
+{
+  "PatientID": "12345",
+  "PatientName": "John Doe",
+  "StudyInstanceUID": "1.2.3.4.5.6",
+  "StudyDate": "2024-01-15"
+}
+```
+
+**JOLT Spec (`samples/jolt/patient_to_fhir.json`):**
+```json
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "PatientID": "resource.identifier[0].value",
+      "PatientName": "resource.name[0].family",
+      "StudyInstanceUID": "resource.extension[0].valueString",
+      "StudyDate": "resource.extension[1].valueDate"
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "resourceType": "Patient",
+      "resource": {
+        "identifier": [{
+          "system": "http://example.com/patient-id"
+        }],
+        "name": [{
+          "use": "usual"
+        }]
+      }
+    }
+  }
+]
+```
+
+**Output JSON:**
+```json
+{
+  "resourceType": "Patient",
+  "resource": {
+    "identifier": [{
+      "system": "http://example.com/patient-id",
+      "value": "12345"
+    }],
+    "name": [{
+      "use": "usual",
+      "family": "John Doe"
+    }],
+    "extension": [
+      {
+        "url": "http://example.com/study-uid",
+        "valueString": "1.2.3.4.5.6"
+      },
+      {
+        "url": "http://example.com/study-date",
+        "valueDate": "2024-01-15"
+      }
+    ]
+  }
+}
+```
+
+### Pre-Transform Snapshot
+
+The transform middleware automatically preserves the original `normalized_data` in the `normalized_snapshot` field before applying any transformations. This allows other middleware or debugging tools to access the pre-transform state.
+
+### JOLT Operations Supported
+
+- **shift**: Copy data from input to output with path transformations
+- **default**: Apply default values where data is missing
+- **remove**: Remove fields from the output
+- **wildcards**: Use `*` and `&` for dynamic field matching
+
+See the [Fluvio JOLT documentation](https://github.com/infinyon/fluvio-jolt) for complete specification details.

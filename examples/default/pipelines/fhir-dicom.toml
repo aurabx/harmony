@@ -18,9 +18,9 @@ bind_address = "0.0.0.0"  # Listen on all interfaces
 bind_port = 8080          # Use port 8080
 
 # ------------------------
-# Endpoint groups
+# Endpoint pipelines
 #-------------------------
-[groups.fhir]
+[pipelines.fhir]
 description = "FHIR to DICOM example"
 networks = ["default"]
 endpoints = ["fhir_test"]

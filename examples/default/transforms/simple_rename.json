@@ -1,0 +1,11 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "name": "full_name",
+      "id": "patient_id",
+      "account": "financial_info",
+      "*": "other.&"
+    }
+  }
+]

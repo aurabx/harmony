@@ -83,3 +83,8 @@ Converts FHIR to DICOM.
 
 ### JMIX to DICOM
 Converts JMIX to DICOM.
+
+### Transform (JOLT)
+Applies JSON-to-JSON transformations using JOLT specifications. Supports configurable application on request/response sides with error handling options.
+
+See `warp.md` for detailed configuration and examples.

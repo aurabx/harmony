@@ -1,0 +1,15 @@
+[package]
+name = "harmony_transform"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+fluvio-jolt = "0.3"
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+thiserror = "1.0"
+tracing = "0.1"
+
+[dev-dependencies]
+tokio-test = "0.4"
+tempfile = "3.10"
