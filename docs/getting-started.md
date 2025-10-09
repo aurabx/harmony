@@ -16,6 +16,53 @@ Run
   - cargo run -- --config examples/default/config.toml
 - The default config references pipeline files under examples/default/pipelines
 
+Minimal pipeline example (HTTP -> Echo)
+```toml
+[proxy]
+id = "smoke-test"
+log_level = "info"
+
+[storage]
+backend = "filesystem"
+path = "./tmp"
+
+[network.default]
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+[pipelines.core]
+description = "HTTP->Echo smoke pipeline"
+networks = ["default"]
+endpoints = ["smoke_http"]
+backends = ["echo_backend"]
+middleware = ["middleware.passthru"]
+
+[endpoints.smoke_http]
+service = "http"
+[endpoints.smoke_http.options]
+path_prefix = "/smoke"
+
+[backends.echo_backend]
+service = "echo"
+[backends.echo_backend.options]
+path_prefix = "/echo-back"
+
+[services.http]
+module = ""
+[services.echo]
+module = ""
+
+[middleware_types.passthru]
+module = ""
+```
+
+Drive it locally (no server binding required in tests):
+- Use the router builder in tests to call routes via oneshot (see tests/smoke_http_echo.rs for examples)
+
 Conventions
 - Temporary files: prefer ./tmp within the working directory over /tmp
 - Logging: use RUST_LOG=harmony=debug,info for local debugging
