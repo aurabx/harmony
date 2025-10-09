@@ -20,12 +20,10 @@ This project is alpha quality and under active development.
 - Router: docs/router.md
 
 ## Notes
-- Prefer using ./tmp for temporary files within the working directory
 - See the examples/default directory for a working configuration layout
 
-## Test artifacts in ./tmp
+## Development
 
-- This repository writes test artifacts under `./tmp` instead of `/tmp`.
 - For DICOM integration tests using DCMTK, you will typically see:
   - `./tmp/qrscp/dcmqrscp.cfg` — generated dcmqrscp configuration
   - `./tmp/qrscp/seed*.dcm` — seeded Part 10 files stored via storescu
