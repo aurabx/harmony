@@ -1968,6 +1968,8 @@ dependencies = [
 [[package]]
 name = "jmix-rs"
 version = "0.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7bf0418221165701e67c9938f7826e3eb2fac52706cd20abb1fcd78a4f69bda0"
 dependencies = [
  "aes-gcm",
  "base64",
