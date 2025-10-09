@@ -36,7 +36,7 @@ tower = "0.5.2"
 futures-util = "0.3"
 async-trait = "0.1"
 toml = "0.8.22"
-tracing-subscriber = { version = "0.3.19", features = ["registry", "env-filter"] }
+tracing-subscriber = { version = "0.3.20", features = ["registry", "env-filter"] }
 jsonwebtoken = "9.3"
 base64 = "0.22.1" # Add this dependency
 http = "1"
