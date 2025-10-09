@@ -92,7 +92,7 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
     if verbose { dcmqr.arg("-d"); }
-    let mut dcmqr = dcmqr
+let dcmqr = dcmqr
         .arg("-c")
         .arg(&cfg_path)
         .arg(port.to_string());
@@ -115,7 +115,7 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
 
     // Send sample study via storescu (-r if available)
     let mut st_cmd = tokio::process::Command::new("storescu");
-    let mut st_cmd = st_cmd
+let st_cmd = st_cmd
         .arg("--aetitle").arg("HARMONY_SCU")
         .arg("--call").arg("QR_SCP")
         .arg("127.0.0.1").arg(port.to_string())
@@ -129,7 +129,7 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
         for e in walkdir::WalkDir::new(&samples_root).into_iter().filter_map(|e| e.ok()) {
             if e.file_type().is_file() && e.path().extension().and_then(|s| s.to_str()) == Some("dcm") {
                 let mut st2 = tokio::process::Command::new("storescu");
-                let mut st2 = st2
+let st2 = st2
                     .arg("--aetitle").arg("HARMONY_SCU")
                     .arg("--call").arg("QR_SCP")
                     .arg("127.0.0.1").arg(port.to_string())

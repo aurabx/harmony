@@ -53,7 +53,7 @@ async fn dicom_find_with_dcmqrscp() {
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
     if verbose { dcmqr.arg("-d"); }
-    let mut dcmqr = dcmqr
+let dcmqr = dcmqr
         .arg("-c")
         .arg(&cfg_path)
         .arg(port.to_string());
@@ -109,7 +109,7 @@ async fn dicom_find_with_dcmqrscp() {
 
     // Send the dataset to QR via storescu
     let mut st = tokio::process::Command::new("storescu");
-    let mut st = st
+let st = st
         .arg("--aetitle")
         .arg("HARMONY_SCU")
         .arg("--call")

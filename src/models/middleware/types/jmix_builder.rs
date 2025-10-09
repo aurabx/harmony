@@ -4,7 +4,6 @@ use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::fs;
 use std::path::{PathBuf};
 
 /// Middleware that builds JMIX envelopes from DICOM operation responses
@@ -61,7 +60,7 @@ impl Middleware for JmixBuilderMiddleware {
             .get("folder_id")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string());
-        let file_count = nd
+        let _file_count = nd
             .get("file_count")
             .and_then(|v| v.as_u64())
             .unwrap_or(0) as usize;
@@ -179,6 +178,7 @@ mod tests {
     use crate::storage::filesystem::FilesystemStorage;
     use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
     use std::sync::Arc;
+    use std::fs;
 
     #[test]
     fn test_builds_jmix_envelope_from_dicom_result() {

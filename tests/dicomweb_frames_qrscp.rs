@@ -43,7 +43,7 @@ async fn dicomweb_frames_with_dcmqrscp() {
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
     if verbose { dcmqr.arg("-d"); }
-    let mut dcmqr = dcmqr
+let dcmqr = dcmqr
         .arg("-c")
         .arg(&cfg_path)
         .arg(port.to_string());
@@ -74,7 +74,7 @@ async fn dicomweb_frames_with_dcmqrscp() {
     use dicom_core::header::{DataElement, Tag};
     use dicom_core::value::PrimitiveValue;
     use dicom_core::VR;
-    use dicom_object::{InMemDicomObject, DefaultDicomObject};
+use dicom_object::InMemDicomObject;
 
     let mut obj = InMemDicomObject::new_empty();
     let put = |o: &mut InMemDicomObject, tag: Tag, vr: VR, val: PrimitiveValue| {
@@ -105,7 +105,7 @@ async fn dicomweb_frames_with_dcmqrscp() {
 
     // Store into QR
     let mut st = tokio::process::Command::new("storescu");
-    let mut st = st
+let st = st
         .arg("--aetitle").arg("HARMONY_SCU")
         .arg("--call").arg("QR_SCP")
         .arg("127.0.0.1").arg(port.to_string())
@@ -227,7 +227,7 @@ async fn dicomweb_multiframes_with_dcmqrscp() {
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
     if verbose { dcmqr.arg("-d"); }
-    let mut dcmqr = dcmqr
+let dcmqr = dcmqr
         .arg("-c")
         .arg(&cfg_path)
         .arg(port.to_string());
@@ -287,7 +287,7 @@ async fn dicomweb_multiframes_with_dcmqrscp() {
 
     // Store into QR
     let mut st = tokio::process::Command::new("storescu");
-    let mut st = st
+let st = st
         .arg("--aetitle").arg("HARMONY_SCU")
         .arg("--call").arg("QR_SCP")
         .arg("127.0.0.1").arg(port.to_string())

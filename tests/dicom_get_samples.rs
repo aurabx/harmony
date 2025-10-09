@@ -91,7 +91,7 @@ async fn dicom_get_writes_samples_to_tmp() {
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
     if verbose { dcmqr.arg("-d"); }
-    let mut dcmqr = dcmqr
+let dcmqr = dcmqr
         .arg("-c")
         .arg(&cfg_path)
         .arg(port.to_string());
@@ -115,7 +115,7 @@ async fn dicom_get_writes_samples_to_tmp() {
     // Send all sample files via storescu (recursive)
     // Not all storescu builds support -r; if unavailable, fall back to iterating files.
     let mut st = tokio::process::Command::new("storescu");
-    let mut st = st
+let st = st
         .arg("--aetitle")
         .arg("HARMONY_SCU")
         .arg("--call")
@@ -140,7 +140,7 @@ async fn dicom_get_writes_samples_to_tmp() {
                 && entry.path().extension().and_then(|e| e.to_str()) == Some("dcm")
             {
                 let mut st2 = tokio::process::Command::new("storescu");
-                let mut st2 = st2
+let st2 = st2
                     .arg("--aetitle")
                     .arg("HARMONY_SCU")
                     .arg("--call")
