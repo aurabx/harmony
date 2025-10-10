@@ -1,4 +1,10 @@
+<div style="text-align:center;">
 # Harmony Proxy
+
+[![Rust](https://github.com/aurabx/harmony/actions/workflows/rust.yml/badge.svg)](https://github.com/aurabx/harmony/actions/workflows/rust.yml)
+</div>
+
+<br>
 
 This project is alpha quality and under active development.
 
