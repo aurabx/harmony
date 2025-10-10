@@ -1,8 +1,10 @@
 <div style="text-align:center;">
 <h1>Harmony Proxy</h1>
 <br>
-[![Rust](https://github.com/aurabx/harmony/actions/workflows/rust.yml/badge.svg)](https://github.com/aurabx/harmony/actions/workflows/rust.yml)
 </div>
+
+[![Rust](https://github.com/aurabx/harmony/actions/workflows/rust.yml/badge.svg)](https://github.com/aurabx/harmony/actions/workflows/rust.yml)
+
 
 <br>
 
