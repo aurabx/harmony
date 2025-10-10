@@ -1,14 +1,11 @@
-<div style="text-align:center;">
-<h1>Harmony Proxy</h1>
-<br>
+<div align="center">
+  <h1>Harmony</h1>
+  <br>
+  <br>
+
+  [![Rust](https://github.com/aurabx/harmony/actions/workflows/rust.yml/badge.svg)](https://github.com/aurabx/harmony/actions/workflows/rust.yml)
+  <br>
 </div>
-
-[![Rust](https://github.com/aurabx/harmony/actions/workflows/rust.yml/badge.svg)](https://github.com/aurabx/harmony/actions/workflows/rust.yml)
-
-
-<br>
-
-This project is alpha quality and under active development.
 
 ## Overview
 - Harmony is a proxy/gateway for secure data meshes. It routes requests through endpoints, middleware, and backends, with support for FHIR, JMIX, DICOM/DICOMweb (including DICOMweb endpoints), and JWT-based auth.
