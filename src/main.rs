@@ -18,12 +18,12 @@ fn parse_cli_config_path() -> String {
         }
     }
 
-    config_path.unwrap_or_else(|| "examples/config/config.toml".to_string())
+    config_path.unwrap_or_else(|| "./config/config.toml".to_string())
 }
 
 #[tokio::main]
 async fn main() {
-    // Parse --config/-c from CLI or fall back to the example config
+    // Parse --config/-c from CLI or fall back to ./config/config.toml
     let config_path = parse_cli_config_path();
     let cli = Cli::new(config_path);
     let config = Config::from_args(cli);
