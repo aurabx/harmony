@@ -119,13 +119,17 @@ impl Config {
     /// Merges multiple configurations into a single base configuration
     fn merge_configs(mut base: Config, additional: Vec<Config>) -> Config {
         for config in additional {
-            // Example merging logic: extend fields that are HashMaps
+            // Extend fields loaded from per-file configs
             base.network.extend(config.network);
             base.endpoints.extend(config.endpoints);
+            base.backends.extend(config.backends);
             base.pipelines.extend(config.pipelines);
             // base.transforms.extend(config.transforms);
             base.targets.extend(config.targets);
-            // Add other fields as necessary, depending on merging strategy
+            // Merge middleware registries if provided
+            base.middleware_types.extend(config.middleware_types);
+            // Merge services if provided
+            base.services.extend(config.services);
         }
         base
     }

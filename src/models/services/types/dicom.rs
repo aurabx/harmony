@@ -282,6 +282,15 @@ impl DicomEndpoint {
             ..Default::default()
         };
 
+        // If persistent Store SCP is requested, instruct SCU not to spawn a transient +P listener
+        let persistent_scp = options
+            .get("persistent_store_scp")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+        if persistent_scp {
+            dimse_config.external_store_scp = true;
+        }
+
         // Allow configuring incoming_store_port for C-MOVE via backend options
         if let Some(port_val) = options.get("incoming_store_port").and_then(|v| v.as_u64()) {
             if (1..=65535).contains(&port_val) {
@@ -306,7 +315,7 @@ impl DicomEndpoint {
             .cloned()
             .unwrap_or_else(|| path.clone());
 
-        let result = match op.as_str() {
+                let result = match op.as_str() {
             "echo" | "/echo" => {
                 // Perform C-ECHO
                 match scu.echo(&remote_node).await {
@@ -449,9 +458,40 @@ impl DicomEndpoint {
                     .get_local_aet(options)
                     .unwrap_or_else(|| "HARMONY_SCU".to_string());
                 let mut move_q = dimse::types::MoveQuery::new(QueryLevel::Study, destination_aet);
-                for (k, v) in params.into_iter() {
-                    move_q = move_q.with_parameter(k, v);
+                // Capture requested UID for relocation before consuming params
+                let requested_uid_for_relocate = params.get("0020000D").cloned();
+                for (k, v) in params.iter() {
+                    move_q = move_q.with_parameter(k.clone(), v.clone());
                 }
+
+                // Preflight: ensure the requested StudyInstanceUID exists via C-FIND
+                if let Some(uid) = requested_uid_for_relocate.clone() {
+                    if !uid.is_empty() {
+                        let mut find_q = FindQuery::patient(None);
+                        find_q.query_level = QueryLevel::Study;
+                        find_q = find_q.with_parameter("0020000D".to_string(), uid.clone());
+                        if let Ok(mut stream) = scu.find(&remote_node, find_q).await {
+                            use futures_util::StreamExt;
+                            let mut any = false;
+                            if let Some(_first) = stream.next().await { any = true; }
+                            if !any {
+                                // Return 404 early
+                                let mut hdrs = HashMap::new();
+                                hdrs.insert("content-type".to_string(), "application/json".to_string());
+                                let body = serde_json::json!({"error":"Study not found"}).to_string();
+                                let mut resp = serde_json::Map::new();
+                                resp.insert("status".into(), serde_json::json!(404u16));
+                                resp.insert("headers".into(), serde_json::json!(hdrs));
+                                resp.insert("body".into(), serde_json::json!(body));
+                                envelope.normalized_data = Some(serde_json::json!({"response": serde_json::Value::Object(resp)}));
+                                envelope.request_details.metadata.insert("skip_backends".into(), "true".into());
+                                return Ok(envelope.clone());
+                            }
+                        }
+                    }
+                }
+
+                // Determine storage target folder and pass to SCU if filesystem
 
                 // Determine storage target folder and pass to SCU if filesystem
                 let folder_id = Uuid::new_v4().to_string();
@@ -472,7 +512,23 @@ impl DicomEndpoint {
                     (dir, true)
                 };
 
-                match scu.move_request(&remote_node, move_q, if is_fs_backend { Some(folder_path.clone()) } else { None }).await {
+                // In persistent SCP mode, create a per-move subdirectory and direct the SCP to use it
+                let mut per_move_dir_opt: Option<std::path::PathBuf> = None;
+                if persistent_scp {
+                    let scp_root = options
+                        .get("storage_dir")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("./tmp/dimse");
+                    let per_move_dir = std::path::Path::new(scp_root).join(&folder_id);
+                    let _ = std::fs::create_dir_all(&per_move_dir);
+                    per_move_dir_opt = Some(per_move_dir.clone());
+                    // Set the current store dir for the persistent SCP QueryProvider (internal SCP)
+                    crate::integrations::dimse::pipeline_query_provider::set_current_store_dir(
+                        per_move_dir.clone(),
+                    );
+                }
+
+                match scu.move_request(&remote_node, move_q, if is_fs_backend && !persistent_scp { Some(folder_path.clone()) } else { None }).await {
                     Ok(mut stream) => {
                         use futures_util::StreamExt;
                         let mut instances: Vec<serde_json::Value> = Vec::new();
@@ -528,7 +584,7 @@ impl DicomEndpoint {
                             }
                         }
 
-                        // Optional debug attachment
+                        // Build response and attach folder_path/file_count
                         let mut response = serde_json::json!({
                             "operation": "move",
                             "success": true,
@@ -536,7 +592,97 @@ impl DicomEndpoint {
                             "folder_id": folder_id,
                             "file_count": file_count
                         });
-                        if is_fs_backend { response["folder_path"] = serde_json::json!(folder_path.to_string_lossy()); }
+
+                        if persistent_scp {
+                            // In persistent mode, ensure all matching files are under per-move directory
+                            let scp_root = options
+                                .get("storage_dir")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("./tmp/dimse");
+                            let mut per_move_dir = per_move_dir_opt
+                                .clone()
+                                .unwrap_or_else(|| std::path::Path::new(scp_root).join(&folder_id));
+                            let _ = std::fs::create_dir_all(&per_move_dir);
+
+                            // Extract requested StudyInstanceUID from parameters (0020000D)
+                            let requested_uid = requested_uid_for_relocate.clone().unwrap_or_default();
+                            if !requested_uid.is_empty() {
+                                // Recursively scan scp_root to find matching files, excluding the per-move directory itself
+                                for entry in walkdir::WalkDir::new(scp_root)
+                                    .into_iter()
+                                    .filter_map(|e| e.ok())
+                                {
+                                    let p = entry.path();
+                                    if p.is_dir() { continue; }
+                                    if p.starts_with(&per_move_dir) { continue; }
+                                    if let Ok(obj) = dicom_object::open_file(&p) {
+                                        if let Ok(json) = dicom_json_tool::identifier_to_json_value(&obj) {
+                                            let uid = json
+                                                .get("0020000D")
+                                                .and_then(|v| v.get("Value"))
+                                                .and_then(|v| v.as_array())
+                                                .and_then(|arr| arr.get(0))
+                                                .and_then(|v| v.as_str())
+                                                .unwrap_or("");
+                                            if uid == requested_uid {
+                                                let file_name = p
+                                                    .file_name()
+                                                    .map(|n| n.to_string_lossy().to_string())
+                                                    .unwrap_or_else(|| "instance.dcm".to_string());
+                                                let target = per_move_dir.join(file_name);
+                                                let _ = std::fs::rename(&p, &target).or_else(|_| {
+                                                    std::fs::copy(&p, &target)
+                                                        .map(|_| std::fs::remove_file(&p).ok())
+                                                        .map(|_| ())
+                                                });
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            // Ensure .dcm extension inside per_move_dir and count files
+                            let mut moved_count = 0usize;
+                            if let Ok(entries) = std::fs::read_dir(&per_move_dir) {
+                                for e in entries.flatten() {
+                                    let p = e.path();
+                                    if p.is_file() {
+                                        moved_count += 1;
+                                        let ext = p.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+                                        if ext != "dcm" {
+                                            let mut new_p = p.clone();
+                                            new_p.set_extension("dcm");
+                                            let _ = std::fs::rename(&p, &new_p);
+                                        }
+                                    }
+                                }
+                            }
+                            response["folder_path"] = serde_json::json!(per_move_dir.to_string_lossy());
+                            response["file_count"] = serde_json::json!(moved_count);
+                        } else if is_fs_backend {
+                            response["folder_path"] = serde_json::json!(folder_path.to_string_lossy());
+                        } else {
+                            // Transient mode: if no files were produced, attempt a fallback C-GET into per-move folder
+                            if file_count == 0 {
+                                let requested_uid = requested_uid_for_relocate.clone().unwrap_or_default();
+                                if !requested_uid.is_empty() {
+                                    let mut get_q = GetQuery::new(QueryLevel::Study);
+                                    get_q = get_q.with_parameter("0020000D".to_string(), requested_uid.clone());
+                                    if let Ok(mut stream2) = scu.get_request(&remote_node, get_q, Some(folder_path.clone())).await {
+                                        use futures_util::StreamExt;
+                                        let mut produced = 0usize;
+                                        while let Some(item2) = stream2.next().await {
+                                            if let Ok(dimse::types::DatasetStream::File { ref path, .. }) = item2 {
+                                                if path.is_file() { produced += 1; }
+                                            }
+                                        }
+                                        response["folder_path"] = serde_json::json!(folder_path.to_string_lossy());
+                                        response["file_count"] = serde_json::json!(produced);
+                                    }
+                                }
+                            }
+                        }
+
+                        // Optional debug attachment
                         if std::env::var("HARMONY_TEST_DEBUG").ok().as_deref() == Some("1") {
                             let debug_path = if let Some(storage) = get_storage() {
                                 storage.subpath_str("movescu_last.json")
@@ -544,13 +690,12 @@ impl DicomEndpoint {
                                 Path::new("./tmp").join("movescu_last.json")
                             };
                             if let Ok(debug_text) = std::fs::read_to_string(&debug_path) {
-                                if let Ok(debug_json) =
-                                    serde_json::from_str::<serde_json::Value>(&debug_text)
-                                {
+                                if let Ok(debug_json) = serde_json::from_str::<serde_json::Value>(&debug_text) {
                                     response["debug"] = debug_json;
                                 }
                             }
                         }
+
                         response
                     }
                     Err(e) => serde_json::json!({

@@ -30,6 +30,8 @@ impl Dispatcher {
         // Preflight: collect all planned (method, path) for this group and detect conflicts
         let mut planned: Vec<(String, crate::router::route_config::RouteConfig)> = Vec::new();
         let mut has_conflict = false;
+        // Track DICOM SCP endpoints (which have no HTTP routes) so we can start listeners
+        let mut scp_endpoints: Vec<(String, HashMap<String, serde_json::Value>)> = Vec::new();
 
         for endpoint_name in &group.endpoints {
             if let Some(endpoint) = self.config.endpoints.get(endpoint_name) {
@@ -45,8 +47,17 @@ impl Dispatcher {
                     }
                 };
 
-                let route_configs =
-                    service.build_router(endpoint.options.as_ref().unwrap_or(&HashMap::new()));
+                let opts_map: HashMap<String, serde_json::Value> =
+                    endpoint.options.clone().unwrap_or_default();
+                // Detect DICOM SCP endpoints (not backends)
+                if endpoint.service.eq_ignore_ascii_case("dicom") {
+                    let is_backend = opts_map.contains_key("host") || opts_map.contains_key("aet");
+                    if !is_backend {
+                        scp_endpoints.push((endpoint_name.clone(), opts_map.clone()));
+                    }
+                }
+
+                let route_configs = service.build_router(&opts_map);
 
                 for route_config in route_configs.clone() {
                     for m in &route_config.methods {
@@ -74,10 +85,35 @@ impl Dispatcher {
             return app;
         }
 
+        // Ensure any DICOM SCP listeners are started, even if no routes are registered
+        for (ep_name, opts) in scp_endpoints.iter() {
+            // Ensure a storage_dir for the SCP based on configured storage adapter if not provided
+            let mut opts_with_storage = opts.clone();
+            if !opts_with_storage.contains_key("storage_dir") {
+                let storage_root = self
+                    .config
+                    .storage
+                    .options
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("./tmp");
+                let dimse_root = std::path::Path::new(storage_root).join("dimse");
+                opts_with_storage.insert(
+                    "storage_dir".to_string(),
+                    serde_json::json!(dimse_root.to_string_lossy().to_string()),
+                );
+            }
+            crate::router::scp_launcher::ensure_dimse_scp_started(
+                ep_name,
+                group_name,
+                &opts_with_storage,
+            );
+        }
+
         // No conflicts: register routes and start any listeners
         for (endpoint_name, route_config) in planned {
             if let Some(endpoint) = self.config.endpoints.get(&endpoint_name) {
-                // Start DICOM SCP only when the group is accepted
+                // Start DICOM SCP for endpoint (SCP mode) — keep for safety; guarded by registry
                 if endpoint.service.eq_ignore_ascii_case("dicom") {
                     let opts_map: HashMap<String, serde_json::Value> =
                         endpoint.options.clone().unwrap_or_default();
@@ -141,6 +177,50 @@ impl Dispatcher {
                 }
             }
         }
+
+        // If requested, start a persistent Store SCP for any DICOM backends in this pipeline
+        for backend_name in &group.backends {
+            if let Some(backend) = self.config.backends.get(backend_name) {
+                if backend.service.eq_ignore_ascii_case("dicom") {
+                    let mut opts = backend.options.clone().unwrap_or_default();
+                    let persistent = opts
+                        .get("persistent_store_scp")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if persistent {
+                        // Map incoming_store_port -> port for SCP launcher
+                        if let Some(p) = opts.get("incoming_store_port").and_then(|v| v.as_u64()) {
+                            opts.insert("port".to_string(), serde_json::json!(p as u16));
+                        }
+                        // Ensure local_aet exists (fallback matches SCU default)
+                        if !opts.contains_key("local_aet") {
+                            opts.insert("local_aet".to_string(), serde_json::json!("HARMONY_SCU"));
+                        }
+                        // Ensure storage_dir is provided from storage adapter configuration
+                        if !opts.contains_key("storage_dir") {
+                            let storage_root = self
+                                .config
+                                .storage
+                                .options
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("./tmp");
+                            let dimse_root = std::path::Path::new(storage_root).join("dimse");
+                            opts.insert(
+                                "storage_dir".to_string(),
+                                serde_json::json!(dimse_root.to_string_lossy().to_string()),
+                            );
+                        }
+                        crate::router::scp_launcher::ensure_dimse_scp_started(
+                            backend_name,
+                            group_name,
+                            &opts,
+                        );
+                    }
+                }
+            }
+        }
+
         app
     }
 

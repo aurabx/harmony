@@ -1,6 +1,13 @@
 # DIMSE Integration
 
-The harmony-proxy now integrates with a dedicated `dimse` crate that provides native DICOM Message Service Element (DIMSE) protocol support. This integration allows the proxy to handle both DICOM endpoint operations (SCP - Service Class Provider) and backend operations (SCU - Service Class User).
+Harmony integrates DIMSE via a dedicated `dimse` crate that orchestrates DCMTK CLI tools for networking today (SCU/SCP). Native DIMSE networking is planned. This enables both DICOM endpoint operations (SCP - Service Class Provider) and backend operations (SCU - Service Class User).
+
+## Prerequisites
+
+- DCMTK must be installed and available on PATH when using DICOM DIMSE features
+  - Tools used: `echoscu`, `findscu`, `movescu`, `getscu`, and a persistent `storescp`
+  - macOS (Homebrew): `brew install dcmtk`
+  - Debian/Ubuntu: `sudo apt-get install dcmtk`
 
 ## Architecture
 
@@ -113,16 +120,16 @@ curl -X POST http://localhost:8080/dicom/find \
 ## Implementation Status
 
 ### ✅ Completed
-- **DIMSE Crate Foundation**: Separate crate with proper DICOM dependencies
+- **DIMSE Orchestration via DCMTK**: SCU operations (C-ECHO, C-FIND, C-GET, C-MOVE) use `echoscu`/`findscu`/`getscu`/`movescu`
+- **Persistent Store SCP**: By default Harmony launches a persistent `storescp` for C-STORE delivery when using a DICOM backend in persistent mode
 - **Dual Service Support**: Single service type supports both backend and endpoint usage
 - **Configuration Integration**: Seamlessly integrated with existing service architecture
-- **SCU Operations (via DCMTK)**: C-ECHO, C-FIND, C-GET, and C-MOVE wired through `echoscu`/`findscu`/`getscu`/`movescu`, exercised end-to-end in tests
 - **C-FIND Dataset Extraction/Streaming**: Responses extracted (`-X`) and streamed back as datasets; artifacts preserved under `./tmp`
 - **C-GET/C-MOVE Streaming**: All files written by DCMTK receivers in the operation output directory are streamed back (DCMTK may produce files without `.dcm` extensions, e.g. `SC.<SOPInstanceUID>`) 
 - **Validation**: Proper configuration validation for both usage patterns
 
 ### 🚧 Stub / Scaffold
-- Native DIMSE (non-DCMTK) networking
+- Native DIMSE (non-DCMTK) networking (planned)
 
 ### 📋 Planned Enhancements
 1. **Native DIMSE Protocol**: Implement SCU/SCP with `dicom-ul` (replace DCMTK CLI usage)
@@ -135,6 +142,7 @@ See `examples/default/pipelines/dimse-integration.toml` for a complete configura
 
 ## Notes and Tips
 
+- DCMTK requirement: Harmony relies on the DCMTK CLI for DIMSE networking. Ensure DCMTK is installed and on PATH before using DICOM endpoints/backends.
 - DCMTK CLI tag format: when passing keys via `-k`, use plain tag form `gggg,eeee` without parentheses. For example, set the QueryRetrieveLevel and keys like:
   - `-k 0008,0052=STUDY`
   - `-k 0020,000D=<StudyInstanceUID>`

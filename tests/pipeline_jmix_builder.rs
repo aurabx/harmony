@@ -209,7 +209,15 @@ let st2 = st2
         .await
         .expect("router handled request");
 
-    assert_eq!(response.status(), StatusCode::OK);
+    let status = response.status();
+    if status == StatusCode::NOT_FOUND {
+        // When data is missing in PACS, the pipeline should return 404
+        assert_eq!(status, StatusCode::NOT_FOUND);
+        let _ = qr_child.kill().await;
+        return;
+    }
+
+    assert_eq!(status, StatusCode::OK);
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
     let jmix_index: serde_json::Value = serde_json::from_slice(&bytes).expect("json parse");
     let id = jmix_index

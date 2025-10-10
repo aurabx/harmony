@@ -9,7 +9,7 @@ Welcome to Harmony Proxy’s documentation. Harmony is a general-purpose data me
 - Backends: backends.md
 - Router: router.md
 - Envelope: envelope.md
-- DIMSE integration (DICOM SCU/SCP): dimse-integration.md
+- DIMSE integration (DICOM SCU/SCP): dimse-integration.md (requires DCMTK)
 - Testing (including DCMTK verbosity): testing.md
 - Security: security.md
 - System description: system-description.md

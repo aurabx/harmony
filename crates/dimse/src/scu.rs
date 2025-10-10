@@ -279,26 +279,33 @@ impl DimseScu {
             }
         }
 
-        // Output directory for received objects
-        let out_dir = if let Some(dir) = output_dir {
-            if let Err(e) = tokio::fs::create_dir_all(&dir).await {
-                warn!("Failed to ensure output dir {:?}: {}", dir, e);
-            }
-            dir
-        } else {
-            let tmp = PathBuf::from(format!("./tmp/dcmtk_move_{}", Uuid::new_v4()));
-            if let Err(e) = tokio::fs::create_dir_all(&tmp).await {
-                warn!("Failed to create move output dir {:?}: {}", tmp, e);
-            }
-            tmp
-        };
-        args.push("-od".into());
-        args.push(out_dir.to_string_lossy().to_string());
+        // Output directory for received objects (only when using transient +P listener)
+        let mut out_dir_opt: Option<PathBuf> = None;
+        if !self.config.external_store_scp {
+            let out_dir = if let Some(dir) = output_dir {
+                if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+                    warn!("Failed to ensure output dir {:?}: {}", dir, e);
+                }
+                dir
+            } else {
+                let tmp = PathBuf::from(format!("./tmp/dcmtk_move_{}", Uuid::new_v4()));
+                if let Err(e) = tokio::fs::create_dir_all(&tmp).await {
+                    warn!("Failed to create move output dir {:?}: {}", tmp, e);
+                }
+                tmp
+            };
+            args.push("-od".into());
+            args.push(out_dir.to_string_lossy().to_string());
+            out_dir_opt = Some(out_dir);
+        }
 
-        // Incoming C-STORE port (must match SCP's HostTable mapping for destination AET)
-        let listen_port: u16 = self.config.incoming_store_port;
-        args.push("+P".into());
-        args.push(listen_port.to_string());
+        // Incoming C-STORE handling
+        // If using an external persistent Store SCP, do not open a transient listener (+P)
+        if !self.config.external_store_scp {
+            let listen_port: u16 = self.config.incoming_store_port;
+            args.push("+P".into());
+            args.push(listen_port.to_string());
+        }
 
         // Host and port at the end
         args.push(node.host.clone());
@@ -309,7 +316,7 @@ impl DimseScu {
 
         info!("Running movescu with args: {:?}", args);
         let tx_clone = tx.clone();
-        let out_dir_clone = out_dir.clone();
+        let out_dir_clone = out_dir_opt.clone();
         let args_for_debug = args.clone();
         tokio::spawn(async move {
             match Command::new("movescu").args(&args).output().await {
@@ -333,15 +340,17 @@ impl DimseScu {
 
                     if out.status.success() {
                         info!("C-MOVE completed (movescu success)");
-                        // Enumerate received files and stream them back
-                        if let Ok(mut rd) = tokio::fs::read_dir(&out_dir_clone).await {
-                            while let Ok(Some(entry)) = rd.next_entry().await {
-                                let path = entry.path();
-                                if let Ok(meta) = tokio::fs::metadata(&path).await {
-                                    if meta.is_file() {
-                                        let _ = tx_clone
-                                            .send(Ok(DatasetStream::from_file(path, false)))
-                                            .await;
+                        // Enumerate received files only when we used a transient out_dir
+                        if let Some(dir) = out_dir_clone {
+                            if let Ok(mut rd) = tokio::fs::read_dir(&dir).await {
+                                while let Ok(Some(entry)) = rd.next_entry().await {
+                                    let path = entry.path();
+                                    if let Ok(meta) = tokio::fs::metadata(&path).await {
+                                        if meta.is_file() {
+                                            let _ = tx_clone
+                                                .send(Ok(DatasetStream::from_file(path, false)))
+                                                .await;
+                                        }
                                     }
                                 }
                             }

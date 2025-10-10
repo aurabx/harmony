@@ -85,6 +85,9 @@ See [docs/configuration.md](docs/configuration.md), [docs/endpoints.md](docs/end
 ## System requirements
 - Rust (stable)
 - macOS or Linux runtime environment
+- DCMTK (required if you use DICOM DIMSE features)
+  - macOS (Homebrew): `brew install dcmtk`
+  - Debian/Ubuntu: `sudo apt-get install dcmtk`
 
 ## Security
 - JWT: prefer RS256 with strict algorithm enforcement; validate exp/nbf/iat and iss/aud where applicable

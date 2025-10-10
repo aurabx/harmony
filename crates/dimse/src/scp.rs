@@ -64,7 +64,21 @@ impl DimseScp {
     /// Start the SCP listener
     pub async fn run(self) -> Result<()> {
         let addr = SocketAddr::new(self.config.bind_addr, self.config.port);
-        let listener = TcpListener::bind(addr).await?;
+        // Use socket2 for reliable bind with SO_REUSEADDR (helps with ephemeral port races in tests)
+        let socket = socket2::Socket::new(
+            match addr {
+                SocketAddr::V4(_) => socket2::Domain::IPV4,
+                SocketAddr::V6(_) => socket2::Domain::IPV6,
+            },
+            socket2::Type::STREAM,
+            Some(socket2::Protocol::TCP),
+        )?;
+        socket.set_reuse_address(true)?;
+        socket.bind(&addr.into())?;
+        socket.listen(128)?;
+        let std_listener: std::net::TcpListener = socket.into();
+        std_listener.set_nonblocking(true)?;
+        let listener = TcpListener::from_std(std_listener)?;
 
         info!(
             "Starting DIMSE SCP on {} (AET: {})",

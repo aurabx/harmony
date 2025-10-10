@@ -64,6 +64,13 @@ pub struct DimseConfig {
     /// Enable C-MOVE service
     #[serde(default = "default_true")]
     pub enable_move: bool,
+
+    /// Use an external, persistent Store SCP for incoming C-STORE during C-MOVE
+    /// If true, the SCU will NOT open a transient +P listener; the QR SCP must
+    /// deliver C-STOREs to the externally configured AE/host/port (e.g., Orthanc
+    /// HostTable or DicomModalities).
+    #[serde(default)]
+    pub external_store_scp: bool,
 }
 
 /// Configuration for a remote DICOM node
@@ -123,6 +130,7 @@ impl Default for DimseConfig {
             enable_echo: true,
             enable_find: true,
             enable_move: true,
+            external_store_scp: false,
         }
     }
 }

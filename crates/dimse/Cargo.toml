@@ -2,6 +2,7 @@
 name = "dimse"
 version = "0.1.0"
 edition = "2021"
+
 description = "DIMSE protocol implementation for DICOM services"
 authors = ["runbeam"]
 
@@ -37,6 +38,7 @@ anyhow = "1.0"
 
 # Networking and streams
 bytes = "1.0"
+socket2 = "0.5"
 uuid = { version = "1.0", features = ["v4", "serde"] }
 chrono = { version = "0.4", features = ["serde"] }
 

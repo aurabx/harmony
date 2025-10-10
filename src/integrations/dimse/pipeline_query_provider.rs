@@ -9,6 +9,24 @@ use dimse::Result as DimseResult;
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use once_cell::sync::Lazy;
+use std::path::PathBuf;
+use std::sync::Mutex;
+
+static CURRENT_STORE_DIR: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
+
+pub fn set_current_store_dir<P: Into<PathBuf>>(dir: P) {
+    let mut guard = CURRENT_STORE_DIR.lock().expect("store dir mutex");
+    *guard = Some(dir.into());
+}
+
+fn get_current_store_dir() -> Option<PathBuf> {
+    CURRENT_STORE_DIR
+        .lock()
+        .ok()
+        .and_then(|g| g.clone())
+}
+
 pub struct PipelineQueryProvider {
     pipeline: String,
     endpoint: String,
@@ -177,13 +195,28 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         Ok(vec![])
     }
 
-    async fn store(&self, _dataset: DatasetStream) -> DimseResult<()> {
+    async fn store(&self, dataset: DatasetStream) -> DimseResult<()> {
+        // Write incoming dataset into the current per-move directory if set, otherwise default
+        let target_dir = get_current_store_dir().unwrap_or_else(|| PathBuf::from("./tmp/dimse"));
+        if let Err(e) = tokio::fs::create_dir_all(&target_dir).await {
+            return Err(DimseError::operation_failed(format!(
+                "ensure store dir: {}",
+                e
+            )));
+        }
+        let _temp = dataset
+            .to_temp_file(&target_dir)
+            .await
+            .map_err(|e| DimseError::operation_failed(format!("store dataset: {}", e)))?;
+
+        // Also emit a pipeline event for observability (optional)
         let mut meta = HashMap::new();
         meta.insert("dicom.operation".into(), "C-STORE".into());
         let body = serde_json::json!({
-            "operation": "store"
+            "operation": "store",
+            "dir": target_dir.to_string_lossy(),
         });
-        let _ = self.run("C-STORE", body, meta).await?;
+        let _ = self.run("C-STORE", body, meta).await;
         Ok(())
     }
 }

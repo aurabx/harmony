@@ -5,6 +5,9 @@ Status: alpha-quality software under active development. Some features are place
 Prerequisites
 - Rust (stable; repository currently targets recent stable toolchains)
 - macOS or Linux
+- DCMTK (required if you use DICOM DIMSE features: endpoints/backends performing C-ECHO/C-FIND/C-MOVE/C-GET)
+  - macOS (Homebrew): `brew install dcmtk`
+  - Debian/Ubuntu: `sudo apt-get install dcmtk`
 - Optional: WireGuard kernel module if you plan to use WireGuard features
 
 Build

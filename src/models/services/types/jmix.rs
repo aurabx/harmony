@@ -500,9 +500,80 @@ impl ServiceHandler<Value> for JmixEndpoint {
                 // Check local store first
                 let matches = query_by_study_uid(&store_root, &uid)?;
                 if !matches.is_empty() {
+                    // Negotiate Accept. If JSON explicitly requested, return index JSON.
+                    let accept_header = accept.unwrap_or("");
+                    let wants_json = accept_header.contains("application/json");
+                    let wants_gzip = accept_header.contains("application/gzip") || accept_header.contains("application/x-gtar");
+                    let wants_zip = accept_header.contains("application/zip");
+
+                    if !wants_json && matches.len() == 1 {
+                        // Return the package directly (zip default; gzip if explicitly requested)
+                        let m = &matches[0];
+                        let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
+                        let path = m.get("path").and_then(|v| v.as_str()).unwrap_or("");
+                        let package_dir = Path::new(path);
+                        let ct = if wants_gzip { "application/gzip" } else { "application/zip" };
+                        let mut hdrs = HashMap::new();
+                        hdrs.insert("content-type".to_string(), ct.to_string());
+                        let filename = if ct == "application/gzip" {
+                            format!("{}{}.tar.gz", "", id)
+                        } else {
+                            format!("{}{}.zip", "", id)
+                        };
+                        hdrs.insert(
+                            "content-disposition".to_string(),
+                            format!("attachment; filename=\"{}\"", filename),
+                        );
+
+                        let bytes = if ct == "application/gzip" {
+                            match make_targz(&package_dir) {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    set_response(
+                                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                                        HashMap::new(),
+                                        Some(format!("archive error: {}", e)),
+                                        None,
+                                        None,
+                                    );
+                                    envelope
+                                        .request_details
+                                        .metadata
+                                        .insert("skip_backends".to_string(), "true".to_string());
+                                    return Ok(envelope);
+                                }
+                            }
+                        } else {
+                            match make_zip(&package_dir) {
+                                Ok(b) => b,
+                                Err(e) => {
+                                    set_response(
+                                        http::StatusCode::INTERNAL_SERVER_ERROR,
+                                        HashMap::new(),
+                                        Some(format!("archive error: {}", e)),
+                                        None,
+                                        None,
+                                    );
+                                    envelope
+                                        .request_details
+                                        .metadata
+                                        .insert("skip_backends".to_string(), "true".to_string());
+                                    return Ok(envelope);
+                                }
+                            }
+                        };
+                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
+                        set_response(http::StatusCode::OK, hdrs, None, None, Some(b64));
+                        envelope
+                            .request_details
+                            .metadata
+                            .insert("skip_backends".to_string(), "true".to_string());
+                        return Ok(envelope);
+                    }
+
+                    // Otherwise, return an index of envelopes as JSON (multiple matches or JSON requested)
                     let mut hdrs = HashMap::new();
                     hdrs.insert("content-type".to_string(), "application/json".to_string());
-                    // Normalize to the same shape returned by the jmix_builder middleware
                     let jmix_envelopes: Vec<serde_json::Value> = matches
                         .into_iter()
                         .map(|m| {
@@ -524,7 +595,6 @@ impl ServiceHandler<Value> for JmixEndpoint {
                         "jmixEnvelopes": jmix_envelopes
                     });
                     set_response(http::StatusCode::OK, hdrs, None, Some(json), None);
-                    // This route is fully served by JMIX (no backend needed when results exist)
                     envelope
                         .request_details
                         .metadata
@@ -532,16 +602,25 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     return Ok(envelope);
                 }
 
-                // No existing JMIX; trigger a DICOM C-GET via backend by setting the DIMSE path and body
+                // No existing JMIX; trigger a DIMSE operation via backend by setting the identifier.
+                // Orthanc and many PACS do not serve as C-GET SCPs by default; prefer C-MOVE here so the
+                // PACS pushes instances to our local Store SCP. The jmix_builder middleware will then
+                // package the received instances into a JMIX envelope.
                 let identifier = serde_json::json!({
                     "0020000D": { "vr": "UI", "Value": [ uid ] }
                 });
                 envelope.original_data = serde_json::to_vec(&identifier)
                     .map_err(|e| Error::from(format!("identifier encode error: {}", e)))?;
+                // Signal the DICOM backend to perform a C-MOVE (preferred for Orthanc and most PACS)
                 envelope
                     .request_details
                     .metadata
-                    .insert("path".to_string(), "get".to_string());
+                    .insert("dimse_op".to_string(), "move".to_string());
+                // Also set path for compatibility, though dimse_op takes precedence
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("path".to_string(), "move".to_string());
                 // Do NOT set a response here; allow backends + jmix_builder to run and produce it
                 return Ok(envelope);
             } else {

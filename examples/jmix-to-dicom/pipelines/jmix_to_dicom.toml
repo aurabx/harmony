@@ -1,0 +1,46 @@
+# ------------------------
+# JMIX endpoint bridging to a remote DICOM PACS (SCU)
+#-------------------------
+[pipelines.jmix_dicom]
+description = "JMIX API backed by DIMSE SCU -> packages results into JMIX"
+networks = ["default"]
+endpoints = ["jmix_api"]
+middleware = [
+    'middleware.jmix_builder',
+]
+backends = ["dicom_pacs"]
+
+# ------------------------
+# JMIX HTTP endpoint
+# Routes:
+#   GET  /jmix/api/jmix?studyInstanceUid=...     -> if not locally stored, triggers DIMSE C-GET
+#   GET  /jmix/api/jmix/{id}                     -> download stored envelope (zip/gzip via Accept)
+#   GET  /jmix/api/jmix/{id}/manifest            -> fetch stored manifest.json
+#-------------------------
+[endpoints.jmix_api]
+service = "jmix"
+[endpoints.jmix_api.options]
+path_prefix = "/jmix"
+
+# ------------------------
+# DICOM backend (remote PACS)
+# Required: aet, host, port
+# Optional: local_aet (default: HARMONY_SCU), use_tls, incoming_store_port (for C-MOVE)
+#-------------------------
+[backends.dicom_pacs]
+service = "dicom"
+[backends.dicom_pacs.options]
+aet = "ORTHANC"              # Remote AE (Orthanc)
+host = "127.0.0.1"
+port = 4242
+local_aet = "HARMONY_SCU"    # Our AE title
+incoming_store_port = 11112  # Port Orthanc will push C-STORE to
+persistent_store_scp = true  # keep a persistent C-STORE SCP listening
+use_dcmtk_store = true
+
+# optional (for SCP)
+# bind_addr = "0.0.0.0"      # Defaults to 0.0.0.0
+# storage_dir = "./tmp/dimse" # Where incoming C-STOREs are saved
+# enable_echo = true
+# enable_find = true
+# enable_move = true
