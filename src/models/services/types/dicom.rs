@@ -599,7 +599,7 @@ impl DicomEndpoint {
                                 .get("storage_dir")
                                 .and_then(|v| v.as_str())
                                 .unwrap_or("./tmp/dimse");
-                            let mut per_move_dir = per_move_dir_opt
+                            let per_move_dir = per_move_dir_opt
                                 .clone()
                                 .unwrap_or_else(|| std::path::Path::new(scp_root).join(&folder_id));
                             let _ = std::fs::create_dir_all(&per_move_dir);

@@ -504,7 +504,7 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     let accept_header = accept.unwrap_or("");
                     let wants_json = accept_header.contains("application/json");
                     let wants_gzip = accept_header.contains("application/gzip") || accept_header.contains("application/x-gtar");
-                    let wants_zip = accept_header.contains("application/zip");
+                    // let wants_zip = accept_header.contains("application/zip");
 
                     if !wants_json && matches.len() == 1 {
                         // Return the package directly (zip default; gzip if explicitly requested)
