@@ -150,17 +150,52 @@ fn make_targz(dir: &Path) -> Result<Vec<u8>, Error> {
 }
 
 fn make_zip(dir: &Path) -> Result<Vec<u8>, Error> {
+    use std::time::SystemTime;
+    
     let mut buf = Vec::new();
     {
         let cursor = Cursor::new(&mut buf);
         let mut zip = ZipWriter::new(cursor);
-        let options =
-            ZipFileOptions::default().compression_method(zip::CompressionMethod::Deflated);
         let base = dir;
+        
         for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
             let path = entry.path();
             let rel = path.strip_prefix(base).unwrap_or(path);
             let name = rel.to_string_lossy();
+            
+            // Get file metadata to preserve timestamps
+            let metadata = entry.metadata().map_err(|e| Error::from(format!("metadata error: {}", e)))?;
+            let modified = metadata.modified().unwrap_or(SystemTime::now());
+            
+            // Convert SystemTime to zip::DateTime using a simple approach
+            // We'll convert unix timestamp to a basic date/time representation
+            let zip_time = match modified.duration_since(SystemTime::UNIX_EPOCH) {
+                Ok(duration) => {
+                    let secs = duration.as_secs();
+                    // Simple conversion: seconds since epoch to approximate date/time
+                    // This is a basic implementation to avoid 1980 timestamps
+                    let days_since_epoch = secs / 86400; // seconds per day
+                    let years_since_1970 = days_since_epoch / 365; // approximate
+                    let year = (1970 + years_since_1970).min(2107).max(1980) as u16; // ZIP year range
+                    
+                    let day_of_year = days_since_epoch % 365;
+                    let month = ((day_of_year / 30) + 1).min(12).max(1) as u8;
+                    let day = ((day_of_year % 30) + 1).min(31).max(1) as u8;
+                    
+                    let hour = ((secs % 86400) / 3600) as u8;
+                    let minute = ((secs % 3600) / 60) as u8;
+                    let second = (secs % 60) as u8;
+                    
+                    zip::DateTime::from_date_and_time(year, month, day, hour, minute, second)
+                        .unwrap_or_else(|_| zip::DateTime::default())
+                },
+                Err(_) => zip::DateTime::default(),
+            };
+            
+            let options = ZipFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated)
+                .last_modified_time(zip_time);
+            
             if entry.file_type().is_dir() {
                 if !name.is_empty() {
                     zip.add_directory(name.to_string(), options)
