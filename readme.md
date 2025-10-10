@@ -8,7 +8,12 @@
 </div>
 
 ## Overview
-- Harmony is a proxy/gateway for secure data meshes. It routes requests through endpoints, middleware, and backends, with support for FHIR, JMIX, DICOM/DICOMweb (including DICOMweb endpoints), and JWT-based auth.
+
+**Harmony** is a proxy/gateway for secure data meshes. It routes requests through endpoints, middleware, and backends, with support for FHIR, JMIX, DICOM/DICOMweb (including DICOMweb endpoints), and JWT-based auth.
+
+Harmony is under active development.
+
+For more information, visit [https://harmonyproxy.com](https://harmonyproxy.com).
 
 ## Quick start
 - Build: cargo build
