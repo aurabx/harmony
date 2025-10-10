@@ -1,6 +1,6 @@
 <div style="text-align:center;">
-# Harmony Proxy
-
+<h1>Harmony Proxy</h1>
+<br>
 [![Rust](https://github.com/aurabx/harmony/actions/workflows/rust.yml/badge.svg)](https://github.com/aurabx/harmony/actions/workflows/rust.yml)
 </div>
 
