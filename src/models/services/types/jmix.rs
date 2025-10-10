@@ -81,15 +81,18 @@ impl ServiceType for JmixEndpoint {
             },
         ];
 
-        // Optionally allow OPTIONS preflight automatically on GET routes only
-        // to avoid duplicate OPTIONS handlers when multiple methods share the same path.
+        // Optionally allow OPTIONS preflight and HEAD method automatically on GET routes
+        // to avoid duplicate handlers when multiple methods share the same path.
         routes = routes
             .into_iter()
             .map(|mut rc| {
-                if rc.methods.contains(&http::Method::GET)
-                    && !rc.methods.contains(&http::Method::OPTIONS)
-                {
-                    rc.methods.push(http::Method::OPTIONS);
+                if rc.methods.contains(&http::Method::GET) {
+                    if !rc.methods.contains(&http::Method::OPTIONS) {
+                        rc.methods.push(http::Method::OPTIONS);
+                    }
+                    if !rc.methods.contains(&http::Method::HEAD) {
+                        rc.methods.push(http::Method::HEAD);
+                    }
                 }
                 rc
             })
@@ -282,6 +285,8 @@ impl ServiceHandler<Value> for JmixEndpoint {
             .unwrap_or_default();
         let headers = &envelope.request_details.headers;
         let accept = headers.get("accept").map(|s| s.as_str());
+        
+        tracing::debug!("JMIX SERVICE: method='{}', subpath='{}', accept='{:?}'", method, subpath, accept);
 
         // Helper: set response meta into normalized_data
         let mut set_response = |status: http::StatusCode,
@@ -312,8 +317,8 @@ impl ServiceHandler<Value> for JmixEndpoint {
         let store_root = resolve_store_root(options);
 
         // Route matching
-        // GET /api/jmix/{id}
-        if method == "GET" && subpath.starts_with("api/jmix/") && !subpath.ends_with("/manifest") {
+        // GET/HEAD /api/jmix/{id}
+        if (method == "GET" || method == "HEAD") && subpath.starts_with("api/jmix/") && !subpath.ends_with("/manifest") {
             let rest = &subpath["api/jmix/".len()..];
             if !rest.is_empty() && !rest.contains('/') {
                 let id = rest;
@@ -338,9 +343,9 @@ impl ServiceHandler<Value> for JmixEndpoint {
                         let mut hdrs = HashMap::new();
                         hdrs.insert("content-type".to_string(), ct.to_string());
                         let filename = if ct == "application/gzip" {
-                            format!("{}{}.tar.gz", "", id)
+                            format!("{}.tar.gz", id)
                         } else {
-                            format!("{}{}.zip", "", id)
+                            format!("{}.zip", id)
                         };
                         hdrs.insert(
                             "content-disposition".to_string(),
@@ -430,8 +435,8 @@ impl ServiceHandler<Value> for JmixEndpoint {
         }
 
 
-        // GET /api/jmix/{id}/manifest
-        if method == "GET" && subpath.starts_with("api/jmix/") && subpath.ends_with("/manifest") {
+        // GET/HEAD /api/jmix/{id}/manifest
+        if (method == "GET" || method == "HEAD") && subpath.starts_with("api/jmix/") && subpath.ends_with("/manifest") {
             let rest = &subpath["api/jmix/".len()..];
             if let Some(id_part) = rest.strip_suffix("/manifest") {
                 let id = id_part.trim_end_matches('/');
@@ -487,8 +492,8 @@ impl ServiceHandler<Value> for JmixEndpoint {
             }
         }
 
-        // GET /api/jmix?studyInstanceUid=...
-        if method == "GET" && subpath == "api/jmix" {
+        // GET/HEAD /api/jmix?studyInstanceUid=...
+        if (method == "GET" || method == "HEAD") && subpath == "api/jmix" {
             // Extract studyInstanceUid
             let study_uid = envelope
                 .request_details
@@ -499,14 +504,19 @@ impl ServiceHandler<Value> for JmixEndpoint {
             if let Some(uid) = study_uid.clone() {
                 // Check local store first
                 let matches = query_by_study_uid(&store_root, &uid)?;
+                tracing::debug!("JMIX DEBUG: uid='{}', matches.len()={}", uid, matches.len());
                 if !matches.is_empty() {
                     // Negotiate Accept. If JSON explicitly requested, return index JSON.
                     let accept_header = accept.unwrap_or("");
                     let wants_json = accept_header.contains("application/json");
                     let wants_gzip = accept_header.contains("application/gzip") || accept_header.contains("application/x-gtar");
-                    // let wants_zip = accept_header.contains("application/zip");
+                    let wants_zip = accept_header.contains("application/zip");
+                    
+                    tracing::debug!("JMIX DEBUG: accept_header='{}', wants_json={}, wants_gzip={}, wants_zip={}, matches.len()={}", accept_header, wants_json, wants_gzip, wants_zip, matches.len());
 
-                    if !wants_json && matches.len() == 1 {
+                    let condition = (wants_zip || wants_gzip || !wants_json) && matches.len() == 1;
+                    tracing::debug!("JMIX DEBUG: condition result = {}", condition);
+                    if condition {
                         // Return the package directly (zip default; gzip if explicitly requested)
                         let m = &matches[0];
                         let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -516,9 +526,9 @@ impl ServiceHandler<Value> for JmixEndpoint {
                         let mut hdrs = HashMap::new();
                         hdrs.insert("content-type".to_string(), ct.to_string());
                         let filename = if ct == "application/gzip" {
-                            format!("{}{}.tar.gz", "", id)
+                            format!("{}.tar.gz", id)
                         } else {
-                            format!("{}{}.zip", "", id)
+                            format!("{}.zip", id)
                         };
                         hdrs.insert(
                             "content-disposition".to_string(),

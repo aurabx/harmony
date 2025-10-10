@@ -99,3 +99,26 @@ docker logs -f orthanc
 
 
 Look for messages about AE mismatches or missing modalities.
+
+Killing stuck processes
+
+Kill stuck storescp
+
+Find it:
+
+ps aux | grep storescp
+
+
+Kill it:
+
+sudo kill -9 <PID>
+
+
+or
+
+sudo pkill -f storescp
+
+
+Check port:
+
+sudo lsof -i :11112
