@@ -87,7 +87,6 @@ impl ServiceHandler<Value> for EchoEndpoint {
             .unwrap_or_default();
 
         envelope.normalized_data = Some(serde_json::json!({
-            "message": "Echo endpoint received the request",
             "path": subpath,
             "full_path": full_path,
             "headers": envelope.request_details.headers,

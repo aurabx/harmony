@@ -89,7 +89,6 @@ async fn smoke_http_get_echo_backend() {
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
     assert_eq!(json["path"], "ping");
     assert_eq!(json["full_path"], "/smoke/ping");
-    assert_eq!(json["message"], "Echo endpoint received the request");
     assert!(json["headers"].is_object());
 }
 
@@ -124,7 +123,6 @@ async fn smoke_http_post_echo_backend() {
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
     assert_eq!(json["path"], "echo");
     assert_eq!(json["full_path"], "/smoke/echo");
-    assert_eq!(json["message"], "Echo endpoint received the request");
     assert!(json["headers"].is_object());
 }
 
@@ -159,7 +157,6 @@ async fn smoke_http_put_echo_backend() {
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
     assert_eq!(json["path"], "resource/123");
     assert_eq!(json["full_path"], "/smoke/resource/123");
-    assert_eq!(json["message"], "Echo endpoint received the request");
     assert!(json["headers"].is_object());
 }
 
@@ -190,6 +187,5 @@ async fn smoke_http_delete_echo_backend() {
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
     assert_eq!(json["path"], "resource/123");
     assert_eq!(json["full_path"], "/smoke/resource/123");
-    assert_eq!(json["message"], "Echo endpoint received the request");
     assert!(json["headers"].is_object());
 }

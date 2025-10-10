@@ -163,10 +163,25 @@ impl ServiceHandler<Value> for HttpEndpoint {
         mut envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-        // Add or modify normalized data in the envelope
+        // Populate normalized data with real request context
+        let subpath = envelope
+            .request_details
+            .metadata
+            .get("path")
+            .cloned()
+            .unwrap_or_default();
+        let full_path = envelope
+            .request_details
+            .metadata
+            .get("full_path")
+            .cloned()
+            .unwrap_or_default();
+
         envelope.normalized_data = Some(serde_json::json!({
-            "message": "BasicEndpoint processed the request",
-            "original_data": envelope.original_data
+            "path": subpath,
+            "full_path": full_path,
+            "headers": envelope.request_details.headers,
+            "original_data": envelope.original_data,
         }));
 
         Ok(envelope)

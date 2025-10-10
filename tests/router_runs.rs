@@ -114,8 +114,9 @@ async fn router_handles_basic_request() {
         .expect("read response body");
     let body_str = String::from_utf8(body.to_vec()).expect("parse response body as string");
 
-    // The response should contain the processed message from HttpEndpoint
-    assert!(body_str.contains("BasicEndpoint processed the request"));
+    // The response should contain the computed subpath from HttpEndpoint
+    let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
+    assert_eq!(json["path"], "get-route");
 }
 
 #[tokio::test]
@@ -184,8 +185,8 @@ async fn router_selects_correct_endpoint_based_on_path() {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read response body");
-    let body_str = String::from_utf8(body.to_vec()).expect("parse response body as string");
-    assert!(body_str.contains("BasicEndpoint processed the request"));
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(json["path"], "get-route");
 
     // Test `/fhir/:path` endpoint
     let response = app
@@ -206,8 +207,8 @@ async fn router_selects_correct_endpoint_based_on_path() {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read response body");
-    let body_str = String::from_utf8(body.to_vec()).expect("parse response body as string");
-    assert!(body_str.contains("FHIR endpoint received the request"));
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    assert_eq!(json["path"], "patient");
 
     // Test a non-existent route
     let response = app
@@ -286,7 +287,8 @@ async fn router_handles_path_based_routing() {
         .await
         .expect("read response body");
     let body_str = String::from_utf8(body.to_vec()).expect("parse response body as string");
-    assert!(body_str.contains("Echo endpoint received the request"));
+    let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
+    assert_eq!(json["path"], "test");
 
     // Test second endpoint `/echo2/:path`
     let response = app
@@ -307,7 +309,8 @@ async fn router_handles_path_based_routing() {
         .await
         .expect("read response body");
     let body_str = String::from_utf8(body.to_vec()).expect("parse response body as string");
-    assert!(body_str.contains("Echo endpoint received the request"));
+    let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
+    assert_eq!(json["path"], "test");
 
     // Test non-existent route
     let response = app
