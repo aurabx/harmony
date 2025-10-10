@@ -19,10 +19,12 @@ fn default_log_level() -> String {
 
 /// Default pipelines path for the proxy configuration
 fn default_pipelines_path() -> String {
-    "examples/default/pipelines".to_string()
+    // Resolved relative to the directory of the base config file
+    "pipelines".to_string()
 }
 
 /// Default transforms path for the proxy configuration
 fn default_transforms_path() -> String {
-    "examples/default/transforms".to_string()
+    // Resolved relative to the directory of the base config file
+    "transforms".to_string()
 }
