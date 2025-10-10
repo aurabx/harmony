@@ -44,11 +44,11 @@ cargo build
 cargo run -- --config examples/config/config.toml
 ```
 
-Try the basic echo pipeline (loaded from examples/config/pipelines/basic-echo.toml):
+Try the basic echo pipeline (loaded from examples/config/pipelines/basic/basic-echo.toml):
 
 ```bash
 # In another shell
-curl -i http://127.0.0.1:8080/test/hello
+curl -i http://127.0.0.1:8080/echo/hello
 ```
 
 If configured, you should receive an echoed response from the sample backend. Explore more pipelines under examples/config/pipelines/.

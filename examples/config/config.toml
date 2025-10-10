@@ -24,7 +24,7 @@ bind_port = 8080          # Use port 8080
 # ------------------------
 # Pipelines
 #-------------------------
-pipelines_path = "pipelines"
+pipelines_path = "pipelines/basic"
 transforms_path = "transforms"
 
 # ------------------------

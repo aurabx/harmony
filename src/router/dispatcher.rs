@@ -6,8 +6,8 @@ use crate::models::pipelines::config::Pipeline;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::{response::Response, Router};
-use http::StatusCode;
-use std::collections::HashMap;
+use http::{Method, StatusCode};
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
 pub struct Dispatcher {
@@ -25,7 +25,12 @@ impl Dispatcher {
         mut app: Router<()>,
         group_name: &str,
         group: &Pipeline,
+        route_registry: &mut HashSet<(Method, String)>,
     ) -> Router<()> {
+        // Preflight: collect all planned (method, path) for this group and detect conflicts
+        let mut planned: Vec<(String, crate::router::route_config::RouteConfig)> = Vec::new();
+        let mut has_conflict = false;
+
         for endpoint_name in &group.endpoints {
             if let Some(endpoint) = self.config.endpoints.get(endpoint_name) {
                 let service = match endpoint.resolve_service() {
@@ -43,56 +48,95 @@ impl Dispatcher {
                 let route_configs =
                     service.build_router(endpoint.options.as_ref().unwrap_or(&HashMap::new()));
 
-                // If endpoint service is DICOM in endpoint (SCP) mode, start SCP listener
+                for route_config in route_configs.clone() {
+                    for m in &route_config.methods {
+                        let key = (m.clone(), route_config.path.clone());
+                        if route_registry.contains(&key) {
+                            tracing::warn!(
+                                "Dropping pipeline '{}' due to route conflict: {} {}",
+                                group_name,
+                                m,
+                                route_config.path
+                            );
+                            has_conflict = true;
+                            break;
+                        }
+                    }
+                    if has_conflict { break; }
+                    planned.push((endpoint_name.clone(), route_config));
+                }
+                if has_conflict { break; }
+            }
+        }
+
+        if has_conflict {
+            // Skip registering any routes for this group
+            return app;
+        }
+
+        // No conflicts: register routes and start any listeners
+        for (endpoint_name, route_config) in planned {
+            if let Some(endpoint) = self.config.endpoints.get(&endpoint_name) {
+                // Start DICOM SCP only when the group is accepted
                 if endpoint.service.eq_ignore_ascii_case("dicom") {
                     let opts_map: HashMap<String, serde_json::Value> =
                         endpoint.options.clone().unwrap_or_default();
                     let is_backend = opts_map.contains_key("host") || opts_map.contains_key("aet");
                     if !is_backend {
                         crate::router::scp_launcher::ensure_dimse_scp_started(
-                            endpoint_name,
+                            &endpoint_name,
                             group_name,
                             &opts_map,
                         );
                     }
                 }
 
-                for route_config in route_configs {
-                    let path = route_config.path.clone();
-                    let methods = route_config.methods.clone();
+                let path = route_config.path.clone();
+                let methods = route_config.methods.clone();
 
-                    let mut method_router = axum::routing::MethodRouter::new();
+                let mut method_router = axum::routing::MethodRouter::new();
+                let mut added_any = false;
 
-                    for method in methods {
-                        let endpoint_name = endpoint_name.clone();
-                        let config_ref = self.config.clone();
-
-                        let handler = move |mut req: Request| {
-                            let endpoint_name = endpoint_name.clone();
-                            let config_ref = config_ref.clone();
-
-                            async move {
-                                Dispatcher::handle_request_async(
-                                    &mut req,
-                                    config_ref,
-                                    endpoint_name,
-                                )
-                                .await
-                            }
-                        };
-
-                        method_router = match method {
-                            http::Method::GET => method_router.get(handler),
-                            http::Method::POST => method_router.post(handler),
-                            http::Method::PUT => method_router.put(handler),
-                            http::Method::DELETE => method_router.delete(handler),
-                            http::Method::PATCH => method_router.patch(handler),
-                            http::Method::HEAD => method_router.head(handler),
-                            http::Method::OPTIONS => method_router.options(handler),
-                            _ => method_router,
-                        };
+                for method in methods.clone() {
+                    let key = (method.clone(), path.clone());
+                    if route_registry.contains(&key) {
+                        // Shouldn't happen due to preflight, but guard anyway
+                        tracing::warn!("Skipping duplicate route: {} {}", method, path);
+                        continue;
                     }
 
+                    let endpoint_name2 = endpoint_name.clone();
+                    let config_ref = self.config.clone();
+
+                    let handler = move |mut req: Request| {
+                        let endpoint_name = endpoint_name2.clone();
+                        let config_ref = config_ref.clone();
+                        async move {
+                            Dispatcher::handle_request_async(
+                                &mut req,
+                                config_ref,
+                                endpoint_name,
+                            )
+                            .await
+                        }
+                    };
+
+                    method_router = match method {
+                        http::Method::GET => method_router.get(handler),
+                        http::Method::POST => method_router.post(handler),
+                        http::Method::PUT => method_router.put(handler),
+                        http::Method::DELETE => method_router.delete(handler),
+                        http::Method::PATCH => method_router.patch(handler),
+                        http::Method::HEAD => method_router.head(handler),
+                        http::Method::OPTIONS => method_router.options(handler),
+                        _ => method_router,
+                    };
+
+                    route_registry.insert(key);
+                    added_any = true;
+                }
+
+                if added_any {
                     app = app.route(&path, method_router);
                 }
             }
