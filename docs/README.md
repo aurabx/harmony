@@ -1,6 +1,6 @@
 # Documentation Index
 
-Welcome to Harmony Proxy’s documentation. Start here to explore concepts, configuration, and usage.
+Welcome to Harmony Proxy’s documentation. Harmony is a general-purpose data mesh proxy with first-class support for medical data (FHIR, DICOM/DICOMweb, JMIX). Start here to explore concepts, configuration, and usage.
 
 - Getting started: getting-started.md
 - Configuration: configuration.md

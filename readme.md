@@ -1,82 +1,106 @@
 <div align="center">
-  <h1>Harmony</h1>
-  <br>
-  <br>
-
-  [![Rust](https://github.com/aurabx/harmony/actions/workflows/rust.yml/badge.svg)](https://github.com/aurabx/harmony/actions/workflows/rust.yml)
-  <br>
+  <h1>Harmony Proxy</h1>
+  <p>
+    A secure, pluggable proxy for data meshes — with first-class healthcare support (FHIR, DICOM/DICOMweb, JMIX).
+  </p>
+  <p>
+    <a href="https://github.com/aurabx/harmony/actions/workflows/rust.yml">
+      <img alt="Rust CI" src="https://github.com/aurabx/harmony/actions/workflows/rust.yml/badge.svg" />
+    </a>
+  </p>
 </div>
 
 ## Overview
 
-**Harmony** is a proxy/gateway for secure data meshes. It routes requests through endpoints, middleware, and backends, with support for FHIR, JMIX, DICOM/DICOMweb (including DICOMweb endpoints), and JWT-based auth.
+Harmony Proxy is a production-ready, extensible data mesh proxy/gateway for heterogeneous systems. It routes requests through configurable endpoints, middleware, and services/backends to connect systems that speak HTTP/JSON, FHIR, DICOM/DICOMweb, and JMIX.
 
-Harmony is under active development.
+Highlights:
+- Multi-protocol: HTTP/JSON passthrough, FHIR, DICOM/DICOMweb (QIDO-RS/WADO-RS), JMIX
+- Configurable pipelines: endpoints + ordered middleware + services/backends
+- Authentication: JWT (recommend RS256 in production), optional Basic
+- Transformations: JSON transforms (JOLT), DICOM↔DICOMweb bridging, JMIX packaging
+- Operationally sound: structured logging, local ./tmp storage convention, file-system storage backend
 
-For more information, visit [https://harmonyproxy.com](https://harmonyproxy.com).
+Status: under active development. For more information, visit https://harmonyproxy.com.
+
+## Who is this for?
+- Platform teams building data meshes or integration hubs (healthcare and beyond)
+- Developers integrating HTTP/JSON services and healthcare protocols (FHIR, DICOM/DICOMweb)
+- Operators who need auditable, configurable request/response pipelines
 
 ## Quick start
-- Build: cargo build
-- Run (example config): cargo run -- --config examples/default/config.toml
-- Test: cargo test
+
+Prerequisites:
+- Rust (stable) via rustup
+- macOS or Linux
+
+Build and run with the example configuration:
+
+```bash
+# Build
+cargo build
+
+# Run
+cargo run -- --config examples/config/config.toml
+```
+
+Try the basic echo pipeline (loaded from examples/config/pipelines/basic-echo.toml):
+
+```bash
+# In another shell
+curl -i http://127.0.0.1:8080/test/hello
+```
+
+If configured, you should receive an echoed response from the sample backend. Explore more pipelines under examples/config/pipelines/.
+
+## Configuration
+Harmony’s configuration is file-based (TOML) and can include additional pipeline/transform files from a directory.
+- Example config: examples/config/config.toml
+- Pipelines: examples/config/pipelines/*
+- Transforms: examples/config/transforms/*
+
+Core building blocks:
+- Networks: bind addresses/ports and optional WireGuard
+- Endpoints: public-facing routes (HTTP/FHIR/DICOMweb)
+- Middleware: ordered request/response modifiers (e.g., JWT auth, transforms)
+- Services/Backends: where work is performed (e.g., DICOMweb client, echo service)
+- Storage: project-local filesystem path (./tmp by default)
+
+See [docs/configuration.md](docs/configuration.md), [docs/endpoints.md](docs/endpoints.md), [docs/middleware.md](docs/middleware.md), and [docs/backends.md](docs/backends.md) for details.
 
 ## Documentation
-- Getting started: docs/getting-started.md
-- Configuration: docs/configuration.md
-- Middleware (JWT, Basic): docs/middleware.md
-- Testing: docs/testing.md
-- Security: docs/security.md
-- Architecture overview: docs/system-description.md
-- Router: docs/router.md
+- Docs index: [docs/README.md](docs/README.md)
+- Getting started: [docs/getting-started.md](docs/getting-started.md)
+- Configuration: [docs/configuration.md](docs/configuration.md)
+- Endpoints: [docs/endpoints.md](docs/endpoints.md)
+- Middleware: [docs/middleware.md](docs/middleware.md)
+- Backends: [docs/backends.md](docs/backends.md)
+- Router: [docs/router.md](docs/router.md)
+- Envelope model: [docs/envelope.md](docs/envelope.md)
+- DIMSE integration: [docs/dimse-integration.md](docs/dimse-integration.md)
+- Testing: [docs/testing.md](docs/testing.md)
+- Security: [docs/security.md](docs/security.md)
+- System description: [docs/system-description.md](docs/system-description.md)
 
-## Notes
-- See the examples/default directory for a working configuration layout
+## System requirements
+- Rust (stable)
+- macOS or Linux runtime environment
 
-## Development
+## Security
+- JWT: prefer RS256 with strict algorithm enforcement; validate exp/nbf/iat and iss/aud where applicable
+- Encryption: where applicable, AES-256-GCM with ephemeral public key, IV, and authentication tag encoded in base64
+- Secrets: do not commit secrets; use environment variables or secret managers
+- Temporary files: prefer ./tmp within the working directory
+See docs/security.md for guidance.
 
-- For DICOM integration tests using DCMTK, you will typically see:
-  - `./tmp/qrscp/dcmqrscp.cfg` — generated dcmqrscp configuration
-  - `./tmp/qrscp/seed*.dcm` — seeded Part 10 files stored via storescu
-  - `./tmp/dcmtk_find_<uuid>/rspXXXX.dcm` — extracted C-FIND responses (preserved)
-  - `./tmp/dcmtk_get_<uuid>/*` — C-GET received objects (DCMTK may not use `.dcm` extension)
-  - `./tmp/dcmtk_move_<uuid>/*` — C-MOVE received objects (DCMTK may not use `.dcm` extension)
-  - `./tmp/movescu_last.json` — last movescu args/stdout/stderr and status for debugging
+## Contributing
+We welcome issues and pull requests! Please read [CONTRIBUTING.md](CONTRIBUTING.md) and [DEVELOPER.md](DEVELOPER.md) for workflow and development standards. Our community guidelines are defined in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).
 
-Cleanup helpers:
-
-```bash
-# Remove all DCMTK artifacts
-rm -rf ./tmp/dcmtk_find_* ./tmp/dcmtk_get_* ./tmp/dcmtk_move_* ./tmp/movescu_last.json
-```
-
-Run focused tests:
-
-```bash
-cargo test --no-fail-fast --test dimse_scp_starts -- --nocapture
-cargo test --no-fail-fast --test dicom_find_qrscp -- --nocapture
-cargo test --no-fail-fast --test dicom_get_qrscp -- --nocapture
-HARMONY_TEST_DEBUG=1 cargo test --no-fail-fast --test dicom_move_qrscp -- --nocapture
-```
-
-### DCMTK logs in tests
-
-- By default, integration tests that spawn DCMTK tools (dcmqrscp, storescu, etc.) run them quietly: stdout/stderr are suppressed and dcmqrscp is not started with the `-d` debug flag.
-- To enable verbose DCMTK output during tests, set the environment variable `HARMONY_TEST_VERBOSE_DCMTK=1`.
-
-Examples:
-
-```bash
-# Quiet (default)
-cargo test -- --nocapture
-
-# Verbose DCMTK logs for all tests
-HARMONY_TEST_VERBOSE_DCMTK=1 cargo test -- --nocapture
-
-# Combine with existing debug flag used in some tests
-HARMONY_TEST_VERBOSE_DCMTK=1 HARMONY_TEST_DEBUG=1 cargo test -- --nocapture
-```
-
-## Licence and Use
+## License and commercial use
 Harmony Proxy is licensed under the Apache License, Version 2.0.
 
 Important: You may freely download, use, and modify Harmony Proxy for internal use and self-hosted deployments. Reselling Harmony Proxy as a hosted service or embedding it in a commercial offering requires a commercial licence from Aurabox Pty Ltd. Contact support@aurabox.cloud for enquiries.
+
+## Support
+- General questions and support: hello@aurabox.cloud
+- Security or conduct concerns: hello@aurabox.cloud

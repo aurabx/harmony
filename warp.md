@@ -2,11 +2,11 @@
 
 This file provides guidance to WARP (warp.dev) when working with code in this repository.
 
-Repository: harmony-proxy - Rust-based proxy/gateway for healthcare systems
+Repository: harmony-proxy - Rust-based proxy/gateway for data meshes (with first-class healthcare support)
 
 ## What This Project Does
 
-Harmony is a proxy/gateway that handles, transforms and proxies data between different healthcare systems. It provides secure communication with support for FHIR, JMIX, DICOM, and DICOMweb protocols, featuring configurable middleware, authentication (JWT), audit logging, and WireGuard networking.
+Harmony is a proxy/gateway that handles, transforms and proxies data between systems. It provides secure communication with support for HTTP/JSON, FHIR, JMIX, DICOM, and DICOMweb protocols, featuring configurable middleware, authentication (JWT), audit logging, and WireGuard networking.
 
 **Key Features:**
 - Multi-protocol support: HTTP passthrough, FHIR, JMIX, DICOM, DICOMweb (QIDO-RS/WADO-RS endpoints)
@@ -165,7 +165,7 @@ Incident log:
 
 This proxy is part of the larger Runbeam ecosystem:
 - Works with JMIX schema files (configurable path, typically `../jmix`)
-- Integrates with other Runbeam components for healthcare data exchange
+- Integrates with other Runbeam components for data exchange across verticals (healthcare is a primary focus)
 - Uses shared `/samples` directory across implementations
 - Compatible with Rust CLI tools that may consume its output
 
