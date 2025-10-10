@@ -6,6 +6,9 @@
 id = "harmony-test"
 # The log level. Defaults to 'error'
 log_level = "debug"
+# Directories are resolved relative to this config file's directory
+pipelines_path = "pipelines/basic"
+transforms_path = "transforms"
 
 # ------------------------
 # Network
@@ -20,12 +23,6 @@ interface = "wg0"
 [network.default.http]
 bind_address = "0.0.0.0"  # Listen on all interfaces
 bind_port = 8080          # Use port 8080
-
-# ------------------------
-# Pipelines
-#-------------------------
-pipelines_path = "pipelines/basic"
-transforms_path = "transforms"
 
 # ------------------------
 # Logging
