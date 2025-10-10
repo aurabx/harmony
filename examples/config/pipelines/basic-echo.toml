@@ -1,6 +1,7 @@
 
 # ------------------------
-# Default pipeline
+# This demonstrates a basic pipeline with no backend
+# The echo endpoint just returns the original request.
 #-------------------------
 [pipelines.default]
 description = "Basic passthru test"     # Optional
@@ -22,42 +23,15 @@ backends = ["test_backend"]             # Optional, defaults to empty, should wa
 # Public endpoints
 #-------------------------
 [endpoints.basic_test]
-type = "http"                           # Required
-options = { path_prefix = "/test" }     # Required if type "http"
+service = "http"
+[endpoints.basic_test.options]
+path_prefix = "/test"
 
 # ------------------------
 # Backends
 #-------------------------
 [backends.test_backend]
-type = "http"
-targets = ["test_target"]
-
-# ------------------------
-# Targets
-#-------------------------
-[targets.test_target]
-type = "http"
-url = "http://localhost:8081/test"
-
-
-# Built-in types (empty module means built-in)
-[endpoint_types.http]
-module = ""
-
-[endpoint_types.fhir]
-module = ""
-
-# Custom types (specify module path)
-[endpoint_types.custom_api]
-module = "modules/custom_api"
-
-[endpoint_types.legacy_soap]
-module = "modules/soap_endpoint"
-
-# Service types
-[service_types.auth]
-module = "modules/auth_service"
-
-[service_types.rate_limiter]
-module = ""  # Built-in service
+service = "echo"
+[backends.test_backend.options]
+path_prefix = "/echo-back"
 

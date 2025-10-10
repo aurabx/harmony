@@ -1,0 +1,40 @@
+# ------------------------
+# Endpoint pipelines
+#-------------------------
+[pipelines.fhir]
+description = "FHIR to DICOM example"
+networks = ["default"]
+endpoints = ["fhir_test"]
+middleware = [
+    'middleware.jwt_auth',
+    'middleware.json_extractor',
+]
+backends = ["dicom_backend"]
+
+# ------------------------
+# Middleware
+#-------------------------
+
+[middleware.basic_auth]
+token_path = "./tmp/test_token"
+username = "test_user"
+password = "test_password"
+
+# ------------------------
+# Endpoints
+#-------------------------
+[endpoints.fhir_test]
+service = "http"
+[endpoints.fhir_test.options]
+path_prefix = "/test"
+
+# ------------------------
+# Backends
+#-------------------------
+[backends.dicom_backend]
+service = "dicom"
+[backends.dicom_backend.options]
+local_aet = "HM_DICOM_A"
+aet = "PACSCLINIC"
+host = "127.0.0.1"
+port = 104

@@ -1,0 +1,20 @@
+# ------------------------
+# DICOM Endpoint (SCP) Example
+#-------------------------
+[pipelines.dicom_scp_demo]
+description = "DICOM endpoint (SCP) that accepts DIMSE connections"
+networks = ["default"]
+endpoints = ["dicom_scp"]
+middleware = []
+backends = []
+
+# ------------------------
+# DICOM Endpoint (SCP)
+#-------------------------
+[endpoints.dicom_scp]
+service = "dicom"
+[endpoints.dicom_scp.options]
+local_aet = "HARMONY_SCP"
+# Optional listener details (router may manage lifecycle):
+# bind_addr = "0.0.0.0"
+# port = 11112

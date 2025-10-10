@@ -1,0 +1,40 @@
+# ------------------------
+# Endpoint groups
+#-------------------------
+[pipelines.fhir]
+description = "FHIR passthru test"
+networks = ["default"]
+endpoints = ["fhir_test"]
+middleware = [
+    'middleware.basic_auth',
+    'middleware.json_extractor',
+]
+backends = ["fhir_backend"]
+
+# ------------------------
+# Middleware
+#-------------------------
+
+[middleware.passthru]
+# This middleware has no configurable properties
+
+[middleware.basic_auth]
+token_path = "./tmp/test_token"
+username = "test_user"
+password = "test_password"
+
+# ------------------------
+# Endpoints
+#-------------------------
+[endpoints.fhir_test]
+service = "http"
+[endpoints.fhir_test.options]
+path_prefix = "/test"
+
+# ------------------------
+# Backends
+#-------------------------
+[backends.fhir_backend]
+service = "echo"
+[backends.fhir_backend.options]
+path_prefix = "/fhir-back"
