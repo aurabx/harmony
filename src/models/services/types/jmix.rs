@@ -7,8 +7,7 @@ use crate::utils::Error;
 use async_trait::async_trait;
 use axum::{body::Body, response::Response};
 use base64::Engine;
-use flate2::write::GzEncoder;
-use flate2::Compression;
+// Removed targz support
 use http::Method;
 use serde::Deserialize;
 use serde_json::Value;
@@ -16,7 +15,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
-use tar::Builder as TarBuilder;
+// Removed targz support
 use walkdir::WalkDir;
 use zip::write::FileOptions as ZipFileOptions;
 use zip::ZipWriter;
@@ -157,17 +156,69 @@ fn package_dir_for(store_root: &Path, id: &str) -> PathBuf {
     store_root.join(format!("{}.jmix", id))
 }
 
-fn make_targz(dir: &Path) -> Result<Vec<u8>, Error> {
-    let mut buf = Vec::new();
-    {
-        let gz = GzEncoder::new(&mut buf, Compression::default());
-        let mut tar = TarBuilder::new(gz);
-        tar.append_dir_all(".", dir)
-            .map_err(|e| Error::from(format!("tar error: {}", e)))?;
-        tar.finish()
-            .map_err(|e| Error::from(format!("tar finish error: {}", e)))?;
-    } // drop tar and gz encoder to flush into buf
-    Ok(buf)
+fn get_cached_zip(package_dir: &Path) -> Result<Vec<u8>, Error> {
+    let cache_file = package_dir.join(".cached.zip");
+    
+    tracing::debug!("🔍 Cache check for: {}", package_dir.display());
+    tracing::debug!("🔍 Cache file exists: {}", cache_file.exists());
+    
+    // Check if cached zip exists and is newer than the package contents
+    if cache_file.exists() {
+        let cache_modified = fs::metadata(&cache_file)
+            .and_then(|m| m.modified())
+            .ok();
+            
+        tracing::debug!("🔍 Cache modified time: {:?}", cache_modified);
+            
+        if let Some(cache_time) = cache_modified {
+            // Check if any file in the package is newer than the cache
+            let mut package_is_newer = false;
+            let mut newer_file_path = String::new();
+            
+            for entry in WalkDir::new(package_dir).into_iter().filter_map(|e| e.ok()) {
+                if entry.file_type().is_file() && entry.path() != cache_file {
+                    if let Ok(metadata) = entry.metadata() {
+                        if let Ok(modified) = metadata.modified() {
+                            if modified > cache_time {
+                                package_is_newer = true;
+                                newer_file_path = entry.path().display().to_string();
+                                tracing::debug!("🔍 Found newer file: {} (cache: {:?}, file: {:?})", newer_file_path, cache_time, modified);
+                                break;
+                            }
+                        }
+                    }
+                }
+            }
+            
+            tracing::debug!("🔍 Package is newer than cache: {}", package_is_newer);
+            
+            // If cache is still valid, return it
+            if !package_is_newer {
+                match fs::read(&cache_file) {
+                    Ok(cached_data) => {
+                        tracing::debug!("✅ Using cached zip for {} ({} bytes)", package_dir.display(), cached_data.len());
+                        return Ok(cached_data);
+                    }
+                    Err(e) => {
+                        tracing::debug!("⚠️ Cache file corrupted, rebuilding: {}", e);
+                    }
+                }
+            } else {
+                tracing::debug!("🔄 Cache invalid due to newer file: {}", newer_file_path);
+            }
+        }
+    } else {
+        tracing::debug!("🔄 No cache file found, creating new zip");
+    }
+    
+    // Create new zip and cache it
+    tracing::debug!("🔄 Creating new zip for {}", package_dir.display());
+    let zip_data = make_zip(package_dir)?;
+    
+    // Try to cache it (ignore errors - caching is optional)
+    let _ = fs::write(&cache_file, &zip_data);
+    
+    Ok(zip_data)
 }
 
 fn make_zip(dir: &Path) -> Result<Vec<u8>, Error> {
@@ -262,12 +313,7 @@ fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Error> {
     Ok(())
 }
 
-fn extract_targz(bytes: &[u8], dest: &Path) -> Result<(), Error> {
-    let gz = flate2::read::GzDecoder::new(Cursor::new(bytes));
-    let mut ar = tar::Archive::new(gz);
-    ar.unpack(dest)
-        .map_err(|e| Error::from(format!("targz unpack error: {}", e)))
-}
+// Removed targz support
 
 fn find_package_root_and_manifest(
     extracted_root: &Path,
@@ -378,31 +424,22 @@ impl ServiceHandler<Value> for JmixEndpoint {
             let rest = &subpath["api/jmix/".len()..];
             if !rest.is_empty() && !rest.contains('/') {
                 let id = rest;
-                // Negotiate Accept
-                let wants_gzip = accept
-                    .map(|a| a.contains("application/gzip") || a.contains("application/x-gtar"))
-                    .unwrap_or(false);
+                // Only support zip format now
                 let wants_zip = accept
-                    .map(|a| a.contains("application/zip"))
-                    .unwrap_or(false);
-                let negotiated =
-                    if accept.is_none() || wants_zip || (!wants_gzip && accept == Some("*/*")) {
-                        Some("application/zip")
-                    } else if wants_gzip {
-                        Some("application/gzip")
-                    } else {
-                        None
-                    };
+                    .map(|a| a.contains("application/zip") || a.contains("*/*"))
+                    .unwrap_or(true); // Default to zip if no Accept header
+                    
+                let negotiated = if wants_zip {
+                    Some("application/zip")
+                } else {
+                    None
+                };
 
                 match negotiated {
                     Some(ct) => {
                         let mut hdrs = HashMap::new();
                         hdrs.insert("content-type".to_string(), ct.to_string());
-                        let filename = if ct == "application/gzip" {
-                            format!("{}.tar.gz", id)
-                        } else {
-                            format!("{}.zip", id)
-                        };
+                        let filename = format!("{}.zip", id);
                         hdrs.insert(
                             "content-disposition".to_string(),
                             format!("attachment; filename=\"{}\"", filename),
@@ -426,44 +463,23 @@ impl ServiceHandler<Value> for JmixEndpoint {
                             return Ok(envelope);
                         }
 
-                        // Build archive bytes according to negotiated content type
-                        let bytes = if ct == "application/gzip" {
-                            match make_targz(&package_dir) {
-                                Ok(b) => b,
-                                Err(e) => {
-                                    set_response(
-                                        http::StatusCode::INTERNAL_SERVER_ERROR,
-                                        HashMap::new(),
-                                        Some(format!("archive error: {}", e)),
-                                        None,
-                                        None,
-                                    );
-                                    // Prevent forwarding to backends
-                                    envelope
-                                        .request_details
-                                        .metadata
-                                        .insert("skip_backends".to_string(), "true".to_string());
-                                    return Ok(envelope);
-                                }
-                            }
-                        } else {
-                            match make_zip(&package_dir) {
-                                Ok(b) => b,
-                                Err(e) => {
-                                    set_response(
-                                        http::StatusCode::INTERNAL_SERVER_ERROR,
-                                        HashMap::new(),
-                                        Some(format!("archive error: {}", e)),
-                                        None,
-                                        None,
-                                    );
-                                    // Prevent forwarding to backends
-                                    envelope
-                                        .request_details
-                                        .metadata
-                                        .insert("skip_backends".to_string(), "true".to_string());
-                                    return Ok(envelope);
-                                }
+                        // Use cached zip for much better performance
+                        let bytes = match get_cached_zip(&package_dir) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                set_response(
+                                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                                    HashMap::new(),
+                                    Some(format!("zip error: {}", e)),
+                                    None,
+                                    None,
+                                );
+                                // Prevent forwarding to backends
+                                envelope
+                                    .request_details
+                                    .metadata
+                                    .insert("skip_backends".to_string(), "true".to_string());
+                                return Ok(envelope);
                             }
                         };
 
@@ -565,67 +581,42 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     // Negotiate Accept. If JSON explicitly requested, return index JSON.
                     let accept_header = accept.unwrap_or("");
                     let wants_json = accept_header.contains("application/json");
-                    let wants_gzip = accept_header.contains("application/gzip") || accept_header.contains("application/x-gtar");
-                    let wants_zip = accept_header.contains("application/zip");
+                    let wants_zip = accept_header.contains("application/zip") || accept_header.contains("*/*") || accept_header.is_empty();
                     
-                    tracing::debug!("JMIX DEBUG: accept_header='{}', wants_json={}, wants_gzip={}, wants_zip={}, matches.len()={}", accept_header, wants_json, wants_gzip, wants_zip, matches.len());
+                    tracing::debug!("JMIX DEBUG: accept_header='{}', wants_json={}, wants_zip={}, matches.len()={}", accept_header, wants_json, wants_zip, matches.len());
 
-                    let condition = (wants_zip || wants_gzip || !wants_json) && matches.len() == 1;
+                    let condition = wants_zip && !wants_json && matches.len() == 1;
                     tracing::debug!("JMIX DEBUG: condition result = {}", condition);
                     if condition {
-                        // Return the package directly (zip default; gzip if explicitly requested)
+                        // Return the package directly as zip
                         let m = &matches[0];
                         let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
                         let path = m.get("path").and_then(|v| v.as_str()).unwrap_or("");
                         let package_dir = Path::new(path);
-                        let ct = if wants_gzip { "application/gzip" } else { "application/zip" };
                         let mut hdrs = HashMap::new();
-                        hdrs.insert("content-type".to_string(), ct.to_string());
-                        let filename = if ct == "application/gzip" {
-                            format!("{}.tar.gz", id)
-                        } else {
-                            format!("{}.zip", id)
-                        };
+                        hdrs.insert("content-type".to_string(), "application/zip".to_string());
+                        let filename = format!("{}.zip", id);
                         hdrs.insert(
                             "content-disposition".to_string(),
                             format!("attachment; filename=\"{}\"", filename),
                         );
 
-                        let bytes = if ct == "application/gzip" {
-                            match make_targz(&package_dir) {
-                                Ok(b) => b,
-                                Err(e) => {
-                                    set_response(
-                                        http::StatusCode::INTERNAL_SERVER_ERROR,
-                                        HashMap::new(),
-                                        Some(format!("archive error: {}", e)),
-                                        None,
-                                        None,
-                                    );
-                                    envelope
-                                        .request_details
-                                        .metadata
-                                        .insert("skip_backends".to_string(), "true".to_string());
-                                    return Ok(envelope);
-                                }
-                            }
-                        } else {
-                            match make_zip(&package_dir) {
-                                Ok(b) => b,
-                                Err(e) => {
-                                    set_response(
-                                        http::StatusCode::INTERNAL_SERVER_ERROR,
-                                        HashMap::new(),
-                                        Some(format!("archive error: {}", e)),
-                                        None,
-                                        None,
-                                    );
-                                    envelope
-                                        .request_details
-                                        .metadata
-                                        .insert("skip_backends".to_string(), "true".to_string());
-                                    return Ok(envelope);
-                                }
+                        // Use cached zip for much better performance
+                        let bytes = match get_cached_zip(&package_dir) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                set_response(
+                                    http::StatusCode::INTERNAL_SERVER_ERROR,
+                                    HashMap::new(),
+                                    Some(format!("zip error: {}", e)),
+                                    None,
+                                    None,
+                                );
+                                envelope
+                                    .request_details
+                                    .metadata
+                                    .insert("skip_backends".to_string(), "true".to_string());
+                                return Ok(envelope);
                             }
                         };
                         let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
@@ -686,6 +677,9 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     .get("skip_listing")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
+                    
+                tracing::info!("🚀 JMIX Service: Config defaults: skip_hashing={}, skip_listing={}", config_skip_hashing, config_skip_listing);
+                tracing::info!("🚀 JMIX Service: Available config options: {:?}", options.keys().collect::<Vec<_>>());
                 
                 let skip_hashing = envelope
                     .request_details
@@ -703,17 +697,20 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     .unwrap_or(config_skip_listing);
 
                 // Pass skip flags to middleware via metadata
+                tracing::info!("🚀 JMIX Service: Determined skip_hashing={}, skip_listing={}", skip_hashing, skip_listing);
                 if skip_hashing {
                     envelope
                         .request_details
                         .metadata
                         .insert("skip_hashing".to_string(), "true".to_string());
+                    tracing::info!("🚀 JMIX Service: Set skip_hashing=true in metadata");
                 }
                 if skip_listing {
                     envelope
                         .request_details
                         .metadata
                         .insert("skip_listing".to_string(), "true".to_string());
+                    tracing::info!("🚀 JMIX Service: Set skip_listing=true in metadata");
                 }
 
                 // Signal the DICOM backend to perform a C-MOVE (preferred for Orthanc and most PACS)
@@ -752,7 +749,17 @@ impl ServiceHandler<Value> for JmixEndpoint {
                 .map(|s| s.to_lowercase())
                 .unwrap_or_default();
             let is_zip = content_type.contains("zip");
-            let is_gzip = content_type.contains("gzip") || content_type.contains("x-gtar");
+
+            if !is_zip {
+                set_response(
+                    http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
+                    HashMap::new(),
+                    Some("Only application/zip content type is supported for JMIX upload".into()),
+                    None,
+                    None,
+                );
+                return Ok(envelope);
+            }
 
             // Create temp dir for upload extraction using storage backend
             let temp_extract_dir = if let Some(storage) = get_storage() {
@@ -769,16 +776,10 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     .map_err(|e| Error::from(format!("tempdir error: {}", e)))?
             };
 
-            // Extract archive
+            // Extract zip archive
             let extracted_root = temp_extract_dir.path().to_path_buf();
             let body = &envelope.original_data;
-            let extract_res = if is_zip {
-                extract_zip(body, &extracted_root)
-            } else if is_gzip {
-                extract_targz(body, &extracted_root)
-            } else {
-                Err(Error::from("Unsupported Content-Type for JMIX upload"))
-            };
+            let extract_res = extract_zip(body, &extracted_root);
 
             if let Err(e) = extract_res {
                 set_response(
