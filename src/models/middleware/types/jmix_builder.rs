@@ -87,15 +87,28 @@ impl Middleware for JmixBuilderMiddleware {
         jcfg.requester.name = "Harmony Proxy".to_string();
         jcfg.requester.id = "org:harmony-proxy".to_string();
 
+        // Extract skip flags from request metadata (defaults to false)
+        let skip_hashing = envelope.request_details.metadata
+            .get("skip_hashing")
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(false);
+        let skip_listing = envelope.request_details.metadata
+            .get("skip_listing")
+            .and_then(|v| v.parse::<bool>().ok())
+            .unwrap_or(false);
+            
+        tracing::info!("🚀 JMIX Builder: skip_hashing={}, skip_listing={}", skip_hashing, skip_listing);
+        tracing::info!("🚀 JMIX Builder: metadata keys: {:?}", envelope.request_details.metadata.keys().collect::<Vec<_>>());
+
         // Build envelope from the DICOM folder path provided by the DIMSE backend
         let builder = jmix_rs::builder::JmixBuilder::new();
         let (envelope_built, dicom_files) = builder
-            .build_from_dicom(&folder_path, &jcfg)
+            .build_from_dicom_with_options(&folder_path, &jcfg, skip_hashing, skip_listing)
             .map_err(|e| Error::from(format!("jmix build error: {}", e)))?;
 
         // Persist envelope to the JMIX store root
         let _saved = builder
-            .save_to_files(&envelope_built, &dicom_files, &pkg_root)
+            .save_to_files_with_options(&envelope_built, &dicom_files, &pkg_root, skip_hashing, skip_listing)
             .map_err(|e| Error::from(format!("jmix save error: {}", e)))?;
 
         // Prepare response JSON with the created envelope id and path

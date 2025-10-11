@@ -41,6 +41,27 @@ impl ServiceType for JmixEndpoint {
                 reason: "Jmix endpoint requires a non-empty 'path_prefix'".to_string(),
             });
         }
+
+        // Validate skip_hashing option if provided
+        if let Some(skip_hashing) = options.get("skip_hashing") {
+            if !skip_hashing.is_boolean() {
+                return Err(ConfigError::InvalidEndpoint {
+                    name: "jmix".to_string(),
+                    reason: "skip_hashing must be a boolean value".to_string(),
+                });
+            }
+        }
+
+        // Validate skip_listing option if provided  
+        if let Some(skip_listing) = options.get("skip_listing") {
+            if !skip_listing.is_boolean() {
+                return Err(ConfigError::InvalidEndpoint {
+                    name: "jmix".to_string(),
+                    reason: "skip_listing must be a boolean value".to_string(),
+                });
+            }
+        }
+
         Ok(())
     }
 
@@ -656,6 +677,45 @@ impl ServiceHandler<Value> for JmixEndpoint {
                 });
                 envelope.original_data = serde_json::to_vec(&identifier)
                     .map_err(|e| Error::from(format!("identifier encode error: {}", e)))?;
+                // Extract skip flags from config (defaults) and query parameters (overrides)
+                let config_skip_hashing = options
+                    .get("skip_hashing")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                let config_skip_listing = options
+                    .get("skip_listing")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+                
+                let skip_hashing = envelope
+                    .request_details
+                    .query_params
+                    .get("skip_hashing")
+                    .and_then(|v| v.first())
+                    .and_then(|s| s.parse::<bool>().ok())
+                    .unwrap_or(config_skip_hashing);
+                let skip_listing = envelope
+                    .request_details
+                    .query_params
+                    .get("skip_listing")
+                    .and_then(|v| v.first())
+                    .and_then(|s| s.parse::<bool>().ok())
+                    .unwrap_or(config_skip_listing);
+
+                // Pass skip flags to middleware via metadata
+                if skip_hashing {
+                    envelope
+                        .request_details
+                        .metadata
+                        .insert("skip_hashing".to_string(), "true".to_string());
+                }
+                if skip_listing {
+                    envelope
+                        .request_details
+                        .metadata
+                        .insert("skip_listing".to_string(), "true".to_string());
+                }
+
                 // Signal the DICOM backend to perform a C-MOVE (preferred for Orthanc and most PACS)
                 envelope
                     .request_details

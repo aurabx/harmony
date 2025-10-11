@@ -21,7 +21,7 @@ dimse = { path = "crates/dimse" }
 dicom_json_tool = { path = "crates/dicom_json_tool" }
 harmony_transform = { path = "crates/transform" }
 
-jmix-rs = "0.2.0"
+jmix-rs = { path = "../jmix/jmix-rust" }
 
 dicom-object = "0.9"
 dicom-pixeldata = { version = "0.9", features = ["image", "rle", "jpeg"] }
@@ -49,9 +49,6 @@ walkdir = "2.5"
 fs_extra = "1.3"
 tempfile = "3.10"
 uuid = { version = "1", features = ["v4"] }
-
-#jmix-rs = { path = "../jmix/jmix-rust"}
-
 
 [dev-dependencies]
 tokio-test = "0.4"
