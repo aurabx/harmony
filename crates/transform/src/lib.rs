@@ -43,9 +43,9 @@ impl JoltTransformEngine {
     pub fn new(config: TransformConfig) -> Result<Self, TransformError> {
         let spec_content = std::fs::read_to_string(&config.spec_path)?;
         let spec: TransformSpec = serde_json::from_str(&spec_content)?;
-        
+
         tracing::info!("Loaded JOLT transform spec from: {}", config.spec_path);
-        
+
         Ok(Self { spec, config })
     }
 

@@ -99,7 +99,6 @@ impl DimseScu {
         node: &RemoteNode,
         query: FindQuery,
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
-        use std::path::PathBuf;
         use tokio::process::Command;
         use uuid::Uuid;
 
@@ -137,8 +136,9 @@ impl DimseScu {
             }
         }
 
-        // Output directory for matches under ./tmp
-        let out_dir = PathBuf::from(format!("./tmp/dcmtk_find_{}", Uuid::new_v4()));
+        // Output directory for matches under storage_dir/dcmtk
+        let dcmtk_base = self.config.storage_dir.join("dcmtk");
+        let out_dir = dcmtk_base.join(format!("find_{}", Uuid::new_v4()));
         if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
             warn!("Failed to create output dir {:?}: {}", out_dir, e);
         } else {
@@ -159,6 +159,7 @@ impl DimseScu {
         let tx_clone = tx.clone();
         let out_dir_clone = out_dir.clone();
         tokio::spawn(async move {
+            let cleanup_dir;
             match Command::new("findscu").args(&args).output().await {
                 Ok(out) => {
                     if out.status.success() {
@@ -169,13 +170,14 @@ impl DimseScu {
                                 let path = entry.path();
                                 if path.extension().and_then(|s| s.to_str()).unwrap_or("") == "dcm"
                                 {
-                                    // Keep files for inspection; do not remove on drop
+                                    // Use remove_on_drop=true to clean up files after processing
                                     let _ = tx_clone
-                                        .send(Ok(DatasetStream::from_file(path, false)))
+                                        .send(Ok(DatasetStream::from_file(path, true)))
                                         .await;
                                 }
                             }
                         }
+                        cleanup_dir = out_dir_clone.clone();
                     } else {
                         let stderr = String::from_utf8_lossy(&out.stderr);
                         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -185,12 +187,22 @@ impl DimseScu {
                             stdout,
                             stderr
                         );
+                        cleanup_dir = out_dir_clone.clone();
                     }
                 }
                 Err(e) => {
                     warn!("Failed to spawn findscu: {}", e);
+                    cleanup_dir = out_dir_clone.clone();
                 }
             }
+            
+            // Clean up the temporary directory
+            if let Err(e) = tokio::fs::remove_dir_all(&cleanup_dir).await {
+                warn!("Failed to cleanup C-FIND temp directory {:?}: {}", cleanup_dir, e);
+            } else {
+                debug!("🧹 Cleaned up C-FIND temp directory: {:?}", cleanup_dir);
+            }
+            
             // drop sender to close stream
         });
 
@@ -281,17 +293,22 @@ impl DimseScu {
 
         // Output directory for received objects (only when using transient +P listener)
         let mut out_dir_opt: Option<PathBuf> = None;
+        let mut should_cleanup_move = false;
         if !self.config.external_store_scp {
             let out_dir = if let Some(dir) = output_dir {
+                // Use caller-provided directory - don't clean up after use
                 if let Err(e) = tokio::fs::create_dir_all(&dir).await {
                     warn!("Failed to ensure output dir {:?}: {}", dir, e);
                 }
                 dir
             } else {
-                let tmp = PathBuf::from(format!("./tmp/dcmtk_move_{}", Uuid::new_v4()));
+                // Create our own temporary directory - clean up after use
+                let dcmtk_base = self.config.storage_dir.join("dcmtk");
+                let tmp = dcmtk_base.join(format!("move_{}", Uuid::new_v4()));
                 if let Err(e) = tokio::fs::create_dir_all(&tmp).await {
                     warn!("Failed to create move output dir {:?}: {}", tmp, e);
                 }
+                should_cleanup_move = true;
                 tmp
             };
             args.push("-od".into());
@@ -318,22 +335,25 @@ impl DimseScu {
         let tx_clone = tx.clone();
         let out_dir_clone = out_dir_opt.clone();
         let args_for_debug = args.clone();
+        let storage_dir = self.config.storage_dir.clone();
         tokio::spawn(async move {
+            let mut cleanup_dir: Option<std::path::PathBuf> = None;
             match Command::new("movescu").args(&args).output().await {
                 Ok(out) => {
                     let stdout = String::from_utf8_lossy(&out.stdout).to_string();
                     let stderr = String::from_utf8_lossy(&out.stderr).to_string();
-                    // Write a debug artifact to ./tmp for test introspection
+                    // Write a debug artifact to storage_dir/dcmtk for test introspection
                     let debug_payload = serde_json::json!({
                         "args": args_for_debug,
                         "stdout": stdout,
                         "stderr": stderr,
                         "status_code": out.status.code()
                     });
-                    if let Err(e) = tokio::fs::create_dir_all("./tmp").await {
-                        warn!("Failed to ensure ./tmp exists: {}", e);
+                    let dcmtk_base = storage_dir.join("dcmtk");
+                    if let Err(e) = tokio::fs::create_dir_all(&dcmtk_base).await {
+                        warn!("Failed to ensure dcmtk base dir exists: {}", e);
                     } else if let Err(e) =
-                        tokio::fs::write("./tmp/movescu_last.json", debug_payload.to_string()).await
+                        tokio::fs::write(dcmtk_base.join("movescu_last.json"), debug_payload.to_string()).await
                     {
                         warn!("Failed to write movescu_last.json: {}", e);
                     }
@@ -341,19 +361,21 @@ impl DimseScu {
                     if out.status.success() {
                         info!("C-MOVE completed (movescu success)");
                         // Enumerate received files only when we used a transient out_dir
-                        if let Some(dir) = out_dir_clone {
-                            if let Ok(mut rd) = tokio::fs::read_dir(&dir).await {
+                        if let Some(ref dir) = out_dir_clone {
+                            if let Ok(mut rd) = tokio::fs::read_dir(dir).await {
                                 while let Ok(Some(entry)) = rd.next_entry().await {
                                     let path = entry.path();
                                     if let Ok(meta) = tokio::fs::metadata(&path).await {
                                         if meta.is_file() {
+                                            // Only auto-cleanup files when using our own temp directory
                                             let _ = tx_clone
-                                                .send(Ok(DatasetStream::from_file(path, false)))
+                                                .send(Ok(DatasetStream::from_file(path, should_cleanup_move)))
                                                 .await;
                                         }
                                     }
                                 }
                             }
+                            cleanup_dir = Some(dir.clone());
                         }
                     } else {
                         let stderr = String::from_utf8_lossy(&out.stderr);
@@ -364,12 +386,26 @@ impl DimseScu {
                             stdout,
                             stderr
                         );
+                        cleanup_dir = out_dir_clone.clone();
                     }
                 }
                 Err(e) => {
                     warn!("Failed to spawn movescu: {}", e);
+                    cleanup_dir = out_dir_clone.clone();
                 }
             }
+            
+            // Only clean up directories that we created ourselves
+            if should_cleanup_move {
+                if let Some(dir) = cleanup_dir {
+                    if let Err(e) = tokio::fs::remove_dir_all(&dir).await {
+                        warn!("Failed to cleanup C-MOVE temp directory {:?}: {}", dir, e);
+                    } else {
+                        debug!("🧹 Cleaned up C-MOVE temp directory: {:?}", dir);
+                    }
+                }
+            }
+            
             // drop sender to close stream
         });
 
@@ -413,7 +449,6 @@ impl DimseScu {
         query: crate::types::GetQuery,
         output_dir: Option<std::path::PathBuf>,
     ) -> Result<tokio_stream::wrappers::ReceiverStream<Result<DatasetStream>>> {
-        use std::path::PathBuf;
         use tokio::process::Command;
         use uuid::Uuid;
 
@@ -459,17 +494,20 @@ impl DimseScu {
         }
 
         // Output directory for received objects
-        let out_dir = if let Some(dir) = output_dir {
+        let (out_dir, should_cleanup) = if let Some(dir) = output_dir {
+            // Use caller-provided directory - don't clean up after use
             if let Err(e) = tokio::fs::create_dir_all(&dir).await {
                 warn!("Failed to ensure output dir {:?}: {}", dir, e);
             }
-            dir
+            (dir, false)
         } else {
-            let tmp = PathBuf::from(format!("./tmp/dcmtk_get_{}", Uuid::new_v4()));
+            // Create our own temporary directory - clean up after use
+            let dcmtk_base = self.config.storage_dir.join("dcmtk");
+            let tmp = dcmtk_base.join(format!("get_{}", Uuid::new_v4()));
             if let Err(e) = tokio::fs::create_dir_all(&tmp).await {
                 warn!("Failed to create get output dir {:?}: {}", tmp, e);
             }
-            tmp
+            (tmp, true)
         };
         args.push("-od".into());
         args.push(out_dir.to_string_lossy().to_string());
@@ -485,6 +523,7 @@ impl DimseScu {
         let tx_clone = tx.clone();
         let out_dir_clone = out_dir.clone();
         tokio::spawn(async move {
+            let cleanup_dir;
             match Command::new("getscu").args(&args).output().await {
                 Ok(out) => {
                     if out.status.success() {
@@ -495,13 +534,15 @@ impl DimseScu {
                                 let path = entry.path();
                                 if let Ok(meta) = tokio::fs::metadata(&path).await {
                                     if meta.is_file() {
+                                        // Only auto-cleanup files when using our own temp directory
                                         let _ = tx_clone
-                                            .send(Ok(DatasetStream::from_file(path, false)))
+                                            .send(Ok(DatasetStream::from_file(path, should_cleanup)))
                                             .await;
                                     }
                                 }
                             }
                         }
+                        cleanup_dir = out_dir_clone.clone();
                     } else {
                         let stderr = String::from_utf8_lossy(&out.stderr);
                         let stdout = String::from_utf8_lossy(&out.stdout);
@@ -511,12 +552,24 @@ impl DimseScu {
                             stdout,
                             stderr
                         );
+                        cleanup_dir = out_dir_clone.clone();
                     }
                 }
                 Err(e) => {
                     warn!("Failed to spawn getscu: {}", e);
+                    cleanup_dir = out_dir_clone.clone();
                 }
             }
+            
+            // Only clean up directories that we created ourselves
+            if should_cleanup {
+                if let Err(e) = tokio::fs::remove_dir_all(&cleanup_dir).await {
+                    warn!("Failed to cleanup C-GET temp directory {:?}: {}", cleanup_dir, e);
+                } else {
+                    debug!("🧹 Cleaned up C-GET temp directory: {:?}", cleanup_dir);
+                }
+            }
+            
             // drop sender to close stream
         });
 

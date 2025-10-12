@@ -35,9 +35,7 @@ impl DicomwebToDicomMiddleware {
     }
 
     fn qp_first(qp: &HashMap<String, Vec<String>>, key: &str) -> Option<String> {
-        qp.get(key)
-            .and_then(|v| v.first())
-            .map(|s| s.to_string())
+        qp.get(key).and_then(|v| v.first()).map(|s| s.to_string())
     }
 
     fn make_ident_entry(vr: &str, vals: Vec<String>) -> Value {
@@ -112,39 +110,81 @@ impl Middleware for DicomwebToDicomMiddleware {
             ["studies"] => {
                 op = Some("find");
                 // Include return keys for common attributes by using empty Value arrays
-                ident.entry("0020000D").or_insert_with(|| Self::make_ident_entry("UI", vec![])); // StudyInstanceUID
-                ident.entry("00080020").or_insert_with(|| Self::make_ident_entry("DA", vec![])); // StudyDate
-                ident.entry("00080061").or_insert_with(|| Self::make_ident_entry("CS", vec![])); // ModalitiesInStudy
-                ident.entry("00100020").or_insert_with(|| Self::make_ident_entry("LO", vec![])); // PatientID
-                ident.entry("00100010").or_insert_with(|| Self::make_ident_entry("PN", vec![])); // PatientName
+                ident
+                    .entry("0020000D")
+                    .or_insert_with(|| Self::make_ident_entry("UI", vec![])); // StudyInstanceUID
+                ident
+                    .entry("00080020")
+                    .or_insert_with(|| Self::make_ident_entry("DA", vec![])); // StudyDate
+                ident
+                    .entry("00080061")
+                    .or_insert_with(|| Self::make_ident_entry("CS", vec![])); // ModalitiesInStudy
+                ident
+                    .entry("00100020")
+                    .or_insert_with(|| Self::make_ident_entry("LO", vec![])); // PatientID
+                ident
+                    .entry("00100010")
+                    .or_insert_with(|| Self::make_ident_entry("PN", vec![])); // PatientName
             }
             // QIDO: /studies/{study}/series
             ["studies", study_uid, "series"] => {
                 op = Some("find");
                 Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
-                ident.entry("0020000E").or_insert_with(|| Self::make_ident_entry("UI", vec![])); // SeriesInstanceUID return key
-                ident.entry("00080060").or_insert_with(|| Self::make_ident_entry("CS", vec![])); // Modality
+                ident
+                    .entry("0020000E")
+                    .or_insert_with(|| Self::make_ident_entry("UI", vec![])); // SeriesInstanceUID return key
+                ident
+                    .entry("00080060")
+                    .or_insert_with(|| Self::make_ident_entry("CS", vec![])); // Modality
             }
             // QIDO: /studies/{study}/series/{series}/instances
             ["studies", study_uid, "series", series_uid, "instances"] => {
                 op = Some("find");
                 Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
-                Self::add_tag(&mut ident, "0020000E", "UI", vec![(*series_uid).to_string()]);
-                ident.entry("00080018").or_insert_with(|| Self::make_ident_entry("UI", vec![])); // SOPInstanceUID return key
+                Self::add_tag(
+                    &mut ident,
+                    "0020000E",
+                    "UI",
+                    vec![(*series_uid).to_string()],
+                );
+                ident
+                    .entry("00080018")
+                    .or_insert_with(|| Self::make_ident_entry("UI", vec![])); // SOPInstanceUID return key
             }
             // WADO: /studies/{study}/series/{series}/instances/{instance}
             ["studies", study_uid, "series", series_uid, "instances", instance_uid] => {
                 op = Some("get");
                 Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
-                Self::add_tag(&mut ident, "0020000E", "UI", vec![(*series_uid).to_string()]);
-                Self::add_tag(&mut ident, "00080018", "UI", vec![(*instance_uid).to_string()]);
+                Self::add_tag(
+                    &mut ident,
+                    "0020000E",
+                    "UI",
+                    vec![(*series_uid).to_string()],
+                );
+                Self::add_tag(
+                    &mut ident,
+                    "00080018",
+                    "UI",
+                    vec![(*instance_uid).to_string()],
+                );
             }
             // WADO: frames (map to get at instance level)
-            ["studies", study_uid, "series", series_uid, "instances", instance_uid, "frames", _frames] => {
+            ["studies", study_uid, "series", series_uid, "instances", instance_uid, "frames", _frames] =>
+            {
                 op = Some("get");
                 Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
-                Self::add_tag(&mut ident, "0020000E", "UI", vec![(*series_uid).to_string()]);
-                Self::add_tag(&mut ident, "00080018", "UI", vec![(*instance_uid).to_string()]);
+                Self::add_tag(
+                    &mut ident,
+                    "0020000E",
+                    "UI",
+                    vec![(*series_uid).to_string()],
+                );
+                Self::add_tag(
+                    &mut ident,
+                    "00080018",
+                    "UI",
+                    vec![(*instance_uid).to_string()],
+                );
             }
             // WADO bulkdata (map to get; actual subresource ignored for now)
             ["bulkdata", ..] => {

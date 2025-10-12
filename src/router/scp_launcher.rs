@@ -102,7 +102,12 @@ pub fn ensure_dimse_scp_started(
                 .arg("-aet")
                 .arg(local_aet.clone())
                 .arg(port.to_string());
-            tracing::info!("Starting DCMTK storescp AET='{}' on :{} -> {}", local_aet, port, storage_dir.display());
+            tracing::info!(
+                "Starting DCMTK storescp AET='{}' on :{} -> {}",
+                local_aet,
+                port,
+                storage_dir.display()
+            );
             match cmd.spawn() {
                 Ok(mut child) => {
                     if let Err(e) = child.wait().await {
@@ -112,7 +117,10 @@ pub fn ensure_dimse_scp_started(
                     }
                 }
                 Err(e) => {
-                    tracing::error!("Failed to spawn storescp: {} — falling back to internal SCP", e);
+                    tracing::error!(
+                        "Failed to spawn storescp: {} — falling back to internal SCP",
+                        e
+                    );
                     // Fallback to internal stub SCP so at least a listener exists
                     let provider: Arc<dyn dimse::scp::QueryProvider> =
                         Arc::new(PipelineQueryProvider::new(pipeline2, endpoint2));

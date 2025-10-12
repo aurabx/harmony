@@ -21,10 +21,7 @@ pub fn set_current_store_dir<P: Into<PathBuf>>(dir: P) {
 }
 
 fn get_current_store_dir() -> Option<PathBuf> {
-    CURRENT_STORE_DIR
-        .lock()
-        .ok()
-        .and_then(|g| g.clone())
+    CURRENT_STORE_DIR.lock().ok().and_then(|g| g.clone())
 }
 
 pub struct PipelineQueryProvider {

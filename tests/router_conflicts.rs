@@ -10,11 +10,15 @@ async fn router_builds_and_skips_conflicting_pipeline() {
     let mut cfg: harmony::config::config::Config = Default::default();
 
     // Network named "default" so the router includes these pipelines
-    cfg.network.insert("default".to_string(), Default::default());
+    cfg.network
+        .insert("default".to_string(), Default::default());
 
     // Two HTTP endpoints with the same path_prefix -> will produce identical routes
     let mut ep_opts: HashMap<String, serde_json::Value> = HashMap::new();
-    ep_opts.insert("path_prefix".into(), serde_json::Value::String("/conflict".into()));
+    ep_opts.insert(
+        "path_prefix".into(),
+        serde_json::Value::String("/conflict".into()),
+    );
 
     cfg.endpoints.insert(
         "ep1".into(),

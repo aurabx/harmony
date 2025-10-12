@@ -86,9 +86,9 @@ async fn test_transform_middleware_integration() {
     let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    
+
     let response_json: Value = serde_json::from_slice(&body_bytes).unwrap();
-    
+
     // The transform should rename fields according to simple_rename.json
     // name -> full_name, id -> patient_id, account -> financial_info
     // let expected_structure = json!({
@@ -104,10 +104,13 @@ async fn test_transform_middleware_integration() {
     // });
 
     // Check that the response contains the transformed structure
-    // Note: In a real scenario, the exact response format would depend on 
+    // Note: In a real scenario, the exact response format would depend on
     // how the HTTP service handles the transformed data
-    println!("Response: {}", serde_json::to_string_pretty(&response_json).unwrap());
-    
+    println!(
+        "Response: {}",
+        serde_json::to_string_pretty(&response_json).unwrap()
+    );
+
     // At minimum, verify we got a successful response
     // The exact assertion would depend on the specific service implementation
     assert!(response_json.is_object());
@@ -118,7 +121,7 @@ async fn test_transform_middleware_with_snapshot() {
     // This test validates the transform result using the JOLT engine directly,
     // ensuring we assert the output mapping logic.
     use harmony_transform::JoltTransformEngine;
-    
+
     // Write embedded spec to a temp file to avoid relative-path issues in tests
     let spec_text: &str = r#"[
       {
@@ -143,7 +146,10 @@ async fn test_transform_middleware_with_snapshot() {
 
     let out = engine.transform(input).expect("transform");
 
-    assert_eq!(out.get("full_name").and_then(|v| v.as_str()), Some("Jane Smith"));
+    assert_eq!(
+        out.get("full_name").and_then(|v| v.as_str()),
+        Some("Jane Smith")
+    );
     assert_eq!(out.get("patient_id").and_then(|v| v.as_i64()), Some(67890));
     assert!(out.get("financial_info").is_some());
     assert!(out.get("name").is_none());
@@ -197,10 +203,10 @@ async fn test_transform_middleware_error_handling() {
     "#;
 
     let config: Config = toml::from_str(config_toml).unwrap();
-    
+
     // This should fail during validation because the spec file doesn't exist
     let validation_result = config.validate();
-    
+
     // The config validation should pass, but middleware creation should fail at runtime
     // This is expected behavior - config validation doesn't check file existence
     assert!(validation_result.is_ok());

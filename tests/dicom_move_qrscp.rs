@@ -62,7 +62,7 @@ async fn dicom_move_with_dcmqrscp() {
     async fn send_via_storescu(file: &std::path::Path, port: u16) -> bool {
         let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
         let mut st = tokio::process::Command::new("storescu");
-let st = st
+        let st = st
             .arg("--aetitle")
             .arg("HARMONY_SCU")
             .arg("--call")
@@ -70,7 +70,10 @@ let st = st
             .arg("127.0.0.1")
             .arg(port.to_string())
             .arg(file);
-        if !verbose { st.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+        if !verbose {
+            st.stdout(std::process::Stdio::null())
+                .stderr(std::process::Stdio::null());
+        }
         match st.status().await {
             Ok(status) => status.success(),
             Err(_) => false,
@@ -170,16 +173,16 @@ let st = st
     // Start dcmqrscp (quiet by default; enable verbose with HARMONY_TEST_VERBOSE_DCMTK=1)
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
-    if verbose { dcmqr.arg("-d"); }
-let dcmqr = dcmqr
-        .arg("-c")
-        .arg(&cfg_path)
-        .arg(port.to_string());
-    if !verbose { dcmqr.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
-    let mut qr_child = dcmqr
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn dcmqrscp");
+    if verbose {
+        dcmqr.arg("-d");
+    }
+    let dcmqr = dcmqr.arg("-c").arg(&cfg_path).arg(port.to_string());
+    if !verbose {
+        dcmqr
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
+    let mut qr_child = dcmqr.kill_on_drop(true).spawn().expect("spawn dcmqrscp");
 
     // Wait for port to be ready
     for _ in 0..60 {
@@ -227,7 +230,7 @@ let dcmqr = dcmqr
 
     // Send the dataset to QR via storescu
     let mut st = tokio::process::Command::new("storescu");
-let st = st
+    let st = st
         .arg("--aetitle")
         .arg("HARMONY_SCU")
         .arg("--call")
@@ -235,11 +238,11 @@ let st = st
         .arg("127.0.0.1")
         .arg(port.to_string())
         .arg(&dicom_path);
-    if !verbose { st.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
-    let status = st
-        .status()
-        .await
-        .expect("run storescu");
+    if !verbose {
+        st.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
+    let status = st.status().await.expect("run storescu");
     if !status.success() {
         eprintln!("storescu failed; skipping assertions");
         let _ = qr_child.kill().await;

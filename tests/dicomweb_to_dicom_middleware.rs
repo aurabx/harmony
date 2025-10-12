@@ -78,5 +78,9 @@ async fn middleware_maps_studies_to_find() {
         .expect("handled");
 
     // Without a PACS running this will be 502 Bad Gateway from backend failure path
-    assert!(resp.status() == StatusCode::BAD_GATEWAY || resp.status() == StatusCode::OK || resp.status() == StatusCode::NOT_IMPLEMENTED);
+    assert!(
+        resp.status() == StatusCode::BAD_GATEWAY
+            || resp.status() == StatusCode::OK
+            || resp.status() == StatusCode::NOT_IMPLEMENTED
+    );
 }

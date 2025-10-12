@@ -2,13 +2,13 @@ use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use base64::Engine;
+use dicom_pixeldata::image as img;
+use dicom_pixeldata::PixelDecoder;
+use img::ImageEncoder;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
-use dicom_pixeldata::PixelDecoder;
-use dicom_pixeldata::image as img;
-use img::ImageEncoder;
 
 /// Right-side middleware: shapes DIMSE backend outputs into DICOMweb HTTP responses
 /// Supports:
@@ -37,9 +37,15 @@ impl DicomToDicomwebMiddleware {
         if !headers.is_empty() {
             resp.insert("headers".to_string(), serde_json::json!(headers));
         }
-        if let Some(s) = body { resp.insert("body".to_string(), serde_json::json!(s)); }
-        if let Some(b64) = body_b64 { resp.insert("body_b64".to_string(), serde_json::json!(b64)); }
-        if let Some(j) = json { resp.insert("json".to_string(), j); }
+        if let Some(s) = body {
+            resp.insert("body".to_string(), serde_json::json!(s));
+        }
+        if let Some(b64) = body_b64 {
+            resp.insert("body_b64".to_string(), serde_json::json!(b64));
+        }
+        if let Some(j) = json {
+            resp.insert("json".to_string(), j);
+        }
 
         // Merge into existing normalized_data and mirror into original_data so the
         // pipeline's right-side conversion preserves our response for the endpoint.
@@ -119,7 +125,14 @@ impl Middleware for DicomToDicomwebMiddleware {
             .metadata
             .get("full_path")
             .cloned()
-            .unwrap_or_else(|| envelope.request_details.metadata.get("path").cloned().unwrap_or_default());
+            .unwrap_or_else(|| {
+                envelope
+                    .request_details
+                    .metadata
+                    .get("path")
+                    .cloned()
+                    .unwrap_or_default()
+            });
         // Strip query string if present
         if let Some((p, _)) = raw_path.split_once('?') {
             raw_path = p.to_string();
@@ -145,8 +158,18 @@ impl Middleware for DicomToDicomwebMiddleware {
             let matches_val = nd.get("matches").cloned().unwrap_or(Value::Array(vec![]));
             let json = Self::build_qido_json(&matches_val);
             let mut hdrs = HashMap::new();
-            hdrs.insert("content-type".to_string(), "application/dicom+json".to_string());
-            Self::set_response(&mut envelope, http::StatusCode::OK, hdrs, None, None, Some(json));
+            hdrs.insert(
+                "content-type".to_string(),
+                "application/dicom+json".to_string(),
+            );
+            Self::set_response(
+                &mut envelope,
+                http::StatusCode::OK,
+                hdrs,
+                None,
+                None,
+                Some(json),
+            );
             return Ok(envelope);
         }
 
@@ -156,8 +179,18 @@ impl Middleware for DicomToDicomwebMiddleware {
             let datasets = nd.get("instances").or_else(|| nd.get("matches"));
             let json = datasets.cloned().unwrap_or(Value::Array(vec![]));
             let mut hdrs = HashMap::new();
-            hdrs.insert("content-type".to_string(), "application/dicom+json".to_string());
-            Self::set_response(&mut envelope, http::StatusCode::OK, hdrs, None, None, Some(json));
+            hdrs.insert(
+                "content-type".to_string(),
+                "application/dicom+json".to_string(),
+            );
+            Self::set_response(
+                &mut envelope,
+                http::StatusCode::OK,
+                hdrs,
+                None,
+                None,
+                Some(json),
+            );
             return Ok(envelope);
         }
 
@@ -170,7 +203,10 @@ impl Middleware for DicomToDicomwebMiddleware {
                         let mut hdrs = HashMap::new();
                         hdrs.insert(
                             "content-type".to_string(),
-                            format!("multipart/related; type=\"application/dicom\"; boundary={}", boundary),
+                            format!(
+                                "multipart/related; type=\"application/dicom\"; boundary={}",
+                                boundary
+                            ),
                         );
                         let b64 = base64::engine::general_purpose::STANDARD.encode(&body_bytes);
                         Self::set_response(
@@ -201,7 +237,13 @@ impl Middleware for DicomToDicomwebMiddleware {
                 .unwrap_or_default();
             let want_jpeg = accept.contains("image/jpeg") || accept.contains("*/*");
             let want_png = accept.contains("image/png");
-            let content_type = if want_jpeg { "image/jpeg" } else if want_png { "image/png" } else { "image/jpeg" };
+            let content_type = if want_jpeg {
+                "image/jpeg"
+            } else if want_png {
+                "image/png"
+            } else {
+                "image/jpeg"
+            };
 
             if let Some(folder_path) = nd.get("folder_path").and_then(|v| v.as_str()) {
                 // Parse instance UID and frame numbers from path
@@ -222,15 +264,22 @@ impl Middleware for DicomToDicomwebMiddleware {
                     if let Ok(rd) = std::fs::read_dir(&base) {
                         for e in rd.flatten() {
                             let p = e.path();
-                            if !p.is_file() { continue; }
+                            if !p.is_file() {
+                                continue;
+                            }
                             if let Ok(obj) = dicom_object::open_file(&p) {
                                 if let Ok(el) = obj.element_by_name("SOPInstanceUID") {
                                     if let Ok(uid) = el.to_str() {
-                                        if uid == instance_uid { chosen = Some(p.clone()); break; }
+                                        if uid == instance_uid {
+                                            chosen = Some(p.clone());
+                                            break;
+                                        }
                                     }
                                 }
                             }
-                            if chosen.is_none() { chosen = Some(p.clone()); }
+                            if chosen.is_none() {
+                                chosen = Some(p.clone());
+                            }
                         }
                     }
                     chosen
@@ -249,14 +298,28 @@ impl Middleware for DicomToDicomwebMiddleware {
                                     Ok(dyn_img) => {
                                         let mut buf: Vec<u8> = Vec::new();
                                         if content_type == "image/jpeg" {
-                                            let mut enc = img::codecs::jpeg::JpegEncoder::new_with_quality(&mut buf, 90);
+                                            let mut enc =
+                                                img::codecs::jpeg::JpegEncoder::new_with_quality(
+                                                    &mut buf, 90,
+                                                );
                                             if let Err(e) = enc.encode_image(&dyn_img) {
-                                                return Err(Error::from(format!("jpeg encode: {}", e)));
+                                                return Err(Error::from(format!(
+                                                    "jpeg encode: {}",
+                                                    e
+                                                )));
                                             }
                                         } else {
                                             let enc = img::codecs::png::PngEncoder::new(&mut buf);
-                                            if let Err(e) = enc.write_image(dyn_img.as_bytes(), dyn_img.width(), dyn_img.height(), dyn_img.color().into()) {
-                                                return Err(Error::from(format!("png encode: {}", e)));
+                                            if let Err(e) = enc.write_image(
+                                                dyn_img.as_bytes(),
+                                                dyn_img.width(),
+                                                dyn_img.height(),
+                                                dyn_img.color().into(),
+                                            ) {
+                                                return Err(Error::from(format!(
+                                                    "png encode: {}",
+                                                    e
+                                                )));
                                             }
                                         }
                                         images.push(buf);
@@ -268,15 +331,28 @@ impl Middleware for DicomToDicomwebMiddleware {
                             if images.len() == 1 {
                                 let mut hdrs = HashMap::new();
                                 hdrs.insert("content-type".to_string(), content_type.to_string());
-                                let b64 = base64::engine::general_purpose::STANDARD.encode(&images[0]);
-                                Self::set_response(&mut envelope, http::StatusCode::OK, hdrs, None, Some(b64), None);
+                                let b64 =
+                                    base64::engine::general_purpose::STANDARD.encode(&images[0]);
+                                Self::set_response(
+                                    &mut envelope,
+                                    http::StatusCode::OK,
+                                    hdrs,
+                                    None,
+                                    Some(b64),
+                                    None,
+                                );
                                 return Ok(envelope);
                             } else if !images.is_empty() {
                                 let boundary = format!("dicomweb_{}", uuid::Uuid::new_v4());
                                 let mut body: Vec<u8> = Vec::new();
                                 for img in images {
-                                    body.extend_from_slice(format!("--{}\r\n", &boundary).as_bytes());
-                                    body.extend_from_slice(format!("Content-Type: {}\r\n\r\n", content_type).as_bytes());
+                                    body.extend_from_slice(
+                                        format!("--{}\r\n", &boundary).as_bytes(),
+                                    );
+                                    body.extend_from_slice(
+                                        format!("Content-Type: {}\r\n\r\n", content_type)
+                                            .as_bytes(),
+                                    );
                                     body.extend_from_slice(&img);
                                     body.extend_from_slice(b"\r\n");
                                 }
@@ -284,10 +360,20 @@ impl Middleware for DicomToDicomwebMiddleware {
                                 let mut hdrs = HashMap::new();
                                 hdrs.insert(
                                     "content-type".to_string(),
-                                    format!("multipart/related; type=\"{}\"; boundary={}", content_type, boundary),
+                                    format!(
+                                        "multipart/related; type=\"{}\"; boundary={}",
+                                        content_type, boundary
+                                    ),
                                 );
                                 let b64 = base64::engine::general_purpose::STANDARD.encode(&body);
-                                Self::set_response(&mut envelope, http::StatusCode::OK, hdrs, None, Some(b64), None);
+                                Self::set_response(
+                                    &mut envelope,
+                                    http::StatusCode::OK,
+                                    hdrs,
+                                    None,
+                                    Some(b64),
+                                    None,
+                                );
                                 return Ok(envelope);
                             }
                         }
@@ -299,7 +385,14 @@ impl Middleware for DicomToDicomwebMiddleware {
                                 "error": "UnsupportedTransferSyntax",
                                 "message": "Unable to decode frames for requested instance",
                             });
-                            Self::set_response(&mut envelope, http::StatusCode::NOT_ACCEPTABLE, hdrs, None, None, Some(problem));
+                            Self::set_response(
+                                &mut envelope,
+                                http::StatusCode::NOT_ACCEPTABLE,
+                                hdrs,
+                                None,
+                                None,
+                                Some(problem),
+                            );
                             return Ok(envelope);
                         }
                     }

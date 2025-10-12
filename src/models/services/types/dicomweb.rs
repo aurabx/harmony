@@ -5,11 +5,11 @@ use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use async_trait::async_trait;
 use axum::{body::Body, response::Response};
+use base64::Engine;
 use http::Method;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use base64::Engine;
 
 #[derive(Debug, Deserialize)]
 pub struct DicomwebEndpoint {}
@@ -143,32 +143,39 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
             .unwrap_or_default();
 
         // Helper: set response meta into normalized_data
-        let mut set_response = |status: http::StatusCode,
-                                hdrs: HashMap<String, String>,
-                                body_str: Option<String>,
-                                json_obj: Option<serde_json::Value>| {
-            let mut resp = serde_json::Map::new();
-            resp.insert("status".to_string(), serde_json::json!(status.as_u16()));
-            if !hdrs.is_empty() {
-                resp.insert("headers".to_string(), serde_json::json!(hdrs));
-            }
-            if let Some(s) = body_str {
-                resp.insert("body".to_string(), serde_json::json!(s));
-            }
-            if let Some(j) = json_obj {
-                resp.insert("json".to_string(), j);
-            }
-            envelope.normalized_data = Some(serde_json::json!({
-                "response": serde_json::Value::Object(resp)
-            }));
-        };
+        let mut set_response =
+            |status: http::StatusCode,
+             hdrs: HashMap<String, String>,
+             body_str: Option<String>,
+             json_obj: Option<serde_json::Value>| {
+                let mut resp = serde_json::Map::new();
+                resp.insert("status".to_string(), serde_json::json!(status.as_u16()));
+                if !hdrs.is_empty() {
+                    resp.insert("headers".to_string(), serde_json::json!(hdrs));
+                }
+                if let Some(s) = body_str {
+                    resp.insert("body".to_string(), serde_json::json!(s));
+                }
+                if let Some(j) = json_obj {
+                    resp.insert("json".to_string(), j);
+                }
+                envelope.normalized_data = Some(serde_json::json!({
+                    "response": serde_json::Value::Object(resp)
+                }));
+            };
 
         // Handle OPTIONS requests for CORS
         if method == "OPTIONS" {
             let mut hdrs = HashMap::new();
             hdrs.insert("access-control-allow-origin".to_string(), "*".to_string());
-            hdrs.insert("access-control-allow-methods".to_string(), "GET, OPTIONS".to_string());
-            hdrs.insert("access-control-allow-headers".to_string(), "accept, content-type".to_string());
+            hdrs.insert(
+                "access-control-allow-methods".to_string(),
+                "GET, OPTIONS".to_string(),
+            );
+            hdrs.insert(
+                "access-control-allow-headers".to_string(),
+                "accept, content-type".to_string(),
+            );
             set_response(http::StatusCode::OK, hdrs, None, None);
             // Skip backends for OPTIONS requests
             envelope
@@ -182,7 +189,7 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
         // This is the skeleton implementation as requested
         let mut hdrs = HashMap::new();
         hdrs.insert("content-type".to_string(), "application/json".to_string());
-        
+
         let error_response = serde_json::json!({
             "error": "Not implemented",
             "message": format!("DICOMweb endpoint {} {} is not yet implemented", method, subpath),

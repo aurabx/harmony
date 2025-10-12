@@ -72,10 +72,13 @@ async fn dicomweb_qido_studies_returns_not_implemented() {
         .await
         .expect("read response body");
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
-    
+
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
     assert_eq!(json["error"], "Not implemented");
-    assert!(json["message"].as_str().unwrap().contains("not yet implemented"));
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("not yet implemented"));
     assert_eq!(json["path"], "studies");
     assert_eq!(json["method"], "GET");
 }
@@ -105,7 +108,10 @@ async fn dicomweb_qido_series_returns_not_implemented() {
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
     assert_eq!(json["error"], "Not implemented");
-    assert!(json["message"].as_str().unwrap().contains("not yet implemented"));
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("not yet implemented"));
     assert_eq!(json["path"], "studies/1.2.3.4.5/series");
     assert_eq!(json["method"], "GET");
 }
@@ -135,7 +141,10 @@ async fn dicomweb_qido_instances_returns_not_implemented() {
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
     assert_eq!(json["error"], "Not implemented");
-    assert!(json["message"].as_str().unwrap().contains("not yet implemented"));
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("not yet implemented"));
     assert_eq!(json["path"], "studies/1.2.3.4.5/series/1.2.3.4.6/instances");
     assert_eq!(json["method"], "GET");
 }
@@ -165,7 +174,10 @@ async fn dicomweb_wado_study_metadata_returns_not_implemented() {
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
     assert_eq!(json["error"], "Not implemented");
-    assert!(json["message"].as_str().unwrap().contains("not yet implemented"));
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("not yet implemented"));
     assert_eq!(json["path"], "studies/1.2.3.4.5/metadata");
     assert_eq!(json["method"], "GET");
 }
@@ -195,8 +207,14 @@ async fn dicomweb_wado_instance_returns_not_implemented() {
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
     assert_eq!(json["error"], "Not implemented");
-    assert!(json["message"].as_str().unwrap().contains("not yet implemented"));
-    assert_eq!(json["path"], "studies/1.2.3.4.5/series/1.2.3.4.6/instances/1.2.3.4.7");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("not yet implemented"));
+    assert_eq!(
+        json["path"],
+        "studies/1.2.3.4.5/series/1.2.3.4.6/instances/1.2.3.4.7"
+    );
     assert_eq!(json["method"], "GET");
 }
 
@@ -225,8 +243,14 @@ async fn dicomweb_wado_frames_returns_not_implemented() {
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
     assert_eq!(json["error"], "Not implemented");
-    assert!(json["message"].as_str().unwrap().contains("not yet implemented"));
-    assert_eq!(json["path"], "studies/1.2.3.4.5/series/1.2.3.4.6/instances/1.2.3.4.7/frames/1");
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("not yet implemented"));
+    assert_eq!(
+        json["path"],
+        "studies/1.2.3.4.5/series/1.2.3.4.6/instances/1.2.3.4.7/frames/1"
+    );
     assert_eq!(json["method"], "GET");
 }
 
@@ -255,7 +279,10 @@ async fn dicomweb_wado_bulkdata_returns_not_implemented() {
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
     assert_eq!(json["error"], "Not implemented");
-    assert!(json["message"].as_str().unwrap().contains("not yet implemented"));
+    assert!(json["message"]
+        .as_str()
+        .unwrap()
+        .contains("not yet implemented"));
     assert_eq!(json["path"], "bulkdata/some-bulk-uri");
     assert_eq!(json["method"], "GET");
 }

@@ -73,10 +73,14 @@ impl Dispatcher {
                             break;
                         }
                     }
-                    if has_conflict { break; }
+                    if has_conflict {
+                        break;
+                    }
                     planned.push((endpoint_name.clone(), route_config));
                 }
-                if has_conflict { break; }
+                if has_conflict {
+                    break;
+                }
             }
         }
 
@@ -148,12 +152,8 @@ impl Dispatcher {
                         let endpoint_name = endpoint_name2.clone();
                         let config_ref = config_ref.clone();
                         async move {
-                            Dispatcher::handle_request_async(
-                                &mut req,
-                                config_ref,
-                                endpoint_name,
-                            )
-                            .await
+                            Dispatcher::handle_request_async(&mut req, config_ref, endpoint_name)
+                                .await
                         }
                     };
 

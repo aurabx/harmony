@@ -90,16 +90,16 @@ async fn dicom_get_writes_samples_to_tmp() {
     // Start dcmqrscp (quiet by default; enable verbose with HARMONY_TEST_VERBOSE_DCMTK=1)
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
-    if verbose { dcmqr.arg("-d"); }
-let dcmqr = dcmqr
-        .arg("-c")
-        .arg(&cfg_path)
-        .arg(port.to_string());
-    if !verbose { dcmqr.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
-    let mut qr_child = dcmqr
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn dcmqrscp");
+    if verbose {
+        dcmqr.arg("-d");
+    }
+    let dcmqr = dcmqr.arg("-c").arg(&cfg_path).arg(port.to_string());
+    if !verbose {
+        dcmqr
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
+    let mut qr_child = dcmqr.kill_on_drop(true).spawn().expect("spawn dcmqrscp");
 
     // Wait for port to be ready
     for _ in 0..60 {
@@ -115,7 +115,7 @@ let dcmqr = dcmqr
     // Send all sample files via storescu (recursive)
     // Not all storescu builds support -r; if unavailable, fall back to iterating files.
     let mut st = tokio::process::Command::new("storescu");
-let st = st
+    let st = st
         .arg("--aetitle")
         .arg("HARMONY_SCU")
         .arg("--call")
@@ -124,10 +124,11 @@ let st = st
         .arg(port.to_string())
         .arg("-r")
         .arg(&samples_root);
-    if !verbose { st.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
-    let try_recursive = st
-        .status()
-        .await;
+    if !verbose {
+        st.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
+    let try_recursive = st.status().await;
 
     if !try_recursive.as_ref().map(|s| s.success()).unwrap_or(false) {
         // Fallback: iterate .dcm files
@@ -140,7 +141,7 @@ let st = st
                 && entry.path().extension().and_then(|e| e.to_str()) == Some("dcm")
             {
                 let mut st2 = tokio::process::Command::new("storescu");
-let st2 = st2
+                let st2 = st2
                     .arg("--aetitle")
                     .arg("HARMONY_SCU")
                     .arg("--call")
@@ -148,11 +149,11 @@ let st2 = st2
                     .arg("127.0.0.1")
                     .arg(port.to_string())
                     .arg(entry.path());
-                if !verbose { st2.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
-                let status = st2
-                    .status()
-                    .await
-                    .expect("run storescu");
+                if !verbose {
+                    st2.stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null());
+                }
+                let status = st2.status().await.expect("run storescu");
                 ok_any |= status.success();
             }
         }

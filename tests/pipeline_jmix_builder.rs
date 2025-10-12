@@ -91,16 +91,16 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
     // Start dcmqrscp (quiet by default; enable verbose with HARMONY_TEST_VERBOSE_DCMTK=1)
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
-    if verbose { dcmqr.arg("-d"); }
-let dcmqr = dcmqr
-        .arg("-c")
-        .arg(&cfg_path)
-        .arg(port.to_string());
-    if !verbose { dcmqr.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
-    let mut qr_child = dcmqr
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn dcmqrscp");
+    if verbose {
+        dcmqr.arg("-d");
+    }
+    let dcmqr = dcmqr.arg("-c").arg(&cfg_path).arg(port.to_string());
+    if !verbose {
+        dcmqr
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
+    let mut qr_child = dcmqr.kill_on_drop(true).spawn().expect("spawn dcmqrscp");
 
     // Wait until ready
     for _ in 0..60 {
@@ -115,26 +115,45 @@ let dcmqr = dcmqr
 
     // Send sample study via storescu (-r if available)
     let mut st_cmd = tokio::process::Command::new("storescu");
-let st_cmd = st_cmd
-        .arg("--aetitle").arg("HARMONY_SCU")
-        .arg("--call").arg("QR_SCP")
-        .arg("127.0.0.1").arg(port.to_string())
-        .arg("-r").arg(&samples_root);
-    if !verbose { st_cmd.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+    let st_cmd = st_cmd
+        .arg("--aetitle")
+        .arg("HARMONY_SCU")
+        .arg("--call")
+        .arg("QR_SCP")
+        .arg("127.0.0.1")
+        .arg(port.to_string())
+        .arg("-r")
+        .arg(&samples_root);
+    if !verbose {
+        st_cmd
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
     let try_recursive = st_cmd.status().await;
 
     if !try_recursive.as_ref().map(|s| s.success()).unwrap_or(false) {
         // fallback iterate
         let mut any_ok = false;
-        for e in walkdir::WalkDir::new(&samples_root).into_iter().filter_map(|e| e.ok()) {
-            if e.file_type().is_file() && e.path().extension().and_then(|s| s.to_str()) == Some("dcm") {
+        for e in walkdir::WalkDir::new(&samples_root)
+            .into_iter()
+            .filter_map(|e| e.ok())
+        {
+            if e.file_type().is_file()
+                && e.path().extension().and_then(|s| s.to_str()) == Some("dcm")
+            {
                 let mut st2 = tokio::process::Command::new("storescu");
-let st2 = st2
-                    .arg("--aetitle").arg("HARMONY_SCU")
-                    .arg("--call").arg("QR_SCP")
-                    .arg("127.0.0.1").arg(port.to_string())
+                let st2 = st2
+                    .arg("--aetitle")
+                    .arg("HARMONY_SCU")
+                    .arg("--call")
+                    .arg("QR_SCP")
+                    .arg("127.0.0.1")
+                    .arg(port.to_string())
                     .arg(e.path());
-                if !verbose { st2.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+                if !verbose {
+                    st2.stdout(std::process::Stdio::null())
+                        .stderr(std::process::Stdio::null());
+                }
                 let status = st2.status().await.expect("storescu");
                 any_ok |= status.success();
             }
@@ -147,7 +166,8 @@ let st2 = st2
     }
 
     // Build config: HTTP endpoint to DICOM backend, JMIX endpoint to serve JMIX, jmix_builder middleware
-    let toml = format!(r#"
+    let toml = format!(
+        r#"
         [proxy]
         id = "jmix-builder-pipeline-test"
         log_level = "info"
@@ -190,7 +210,9 @@ let st2 = st2
         module = ""
         [services.jmix]
         module = ""
-    "#, port = port);
+    "#,
+        port = port
+    );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
@@ -218,7 +240,9 @@ let st2 = st2
     }
 
     assert_eq!(status, StatusCode::OK);
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     let jmix_index: serde_json::Value = serde_json::from_slice(&bytes).expect("json parse");
     let id = jmix_index
         .get("jmixEnvelopes")
@@ -243,8 +267,11 @@ let st2 = st2
         .expect("router handled request");
 
     assert_eq!(manifest_resp.status(), StatusCode::OK);
-    let manifest_bytes = axum::body::to_bytes(manifest_resp.into_body(), usize::MAX).await.unwrap();
-    let manifest_json: serde_json::Value = serde_json::from_slice(&manifest_bytes).expect("manifest json");
+    let manifest_bytes = axum::body::to_bytes(manifest_resp.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let manifest_json: serde_json::Value =
+        serde_json::from_slice(&manifest_bytes).expect("manifest json");
     assert_eq!(manifest_json.get("id").and_then(|v| v.as_str()), Some(id));
 
     // Step 3: optionally fetch the JMIX archive (zip)

@@ -15,7 +15,11 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 async fn dicomweb_frames_with_dcmqrscp() {
     // Require dcmtk tools
     for bin in ["dcmqrscp", "storescu"].iter() {
-        if std::process::Command::new(bin).arg("--version").output().is_err() {
+        if std::process::Command::new(bin)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             eprintln!("Skipping frames test: {} not found", bin);
             return;
         }
@@ -31,7 +35,8 @@ async fn dicomweb_frames_with_dcmqrscp() {
     let dbdir = base.join("qrdb");
     std::fs::create_dir_all(&dbdir).expect("mkdir qr db");
     let cfg_path = base.join("dcmqrscp.cfg");
-    let abs_db = std::fs::canonicalize(&dbdir).unwrap_or_else(|_| std::env::current_dir().unwrap().join(&dbdir));
+    let abs_db = std::fs::canonicalize(&dbdir)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap().join(&dbdir));
     let cfg = format!(
         "# dcmqrscp cfg\nMaxPDUSize = 16384\nMaxAssociations = 16\n\nHostTable BEGIN\nHostTable END\n\nVendorTable BEGIN\nVendorTable END\n\nAETable BEGIN\nQR_SCP  {db}  RW  (9, 1024mb)  ANY\nAETable END\n",
         db = abs_db.to_string_lossy()
@@ -42,19 +47,22 @@ async fn dicomweb_frames_with_dcmqrscp() {
     // Start dcmqrscp (quiet by default; enable verbose with HARMONY_TEST_VERBOSE_DCMTK=1)
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
-    if verbose { dcmqr.arg("-d"); }
-let dcmqr = dcmqr
-        .arg("-c")
-        .arg(&cfg_path)
-        .arg(port.to_string());
-    if !verbose { dcmqr.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
-    let mut qr_child = dcmqr
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn dcmqrscp");
+    if verbose {
+        dcmqr.arg("-d");
+    }
+    let dcmqr = dcmqr.arg("-c").arg(&cfg_path).arg(port.to_string());
+    if !verbose {
+        dcmqr
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
+    let mut qr_child = dcmqr.kill_on_drop(true).spawn().expect("spawn dcmqrscp");
 
     for _ in 0..60 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -65,7 +73,12 @@ let dcmqr = dcmqr
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap();
-        format!("1.2.826.0.1.3680043.10.5432.{}.{}.{}", suf, now.as_secs(), now.subsec_nanos())
+        format!(
+            "1.2.826.0.1.3680043.10.5432.{}.{}.{}",
+            suf,
+            now.as_secs(),
+            now.subsec_nanos()
+        )
     };
     let study_uid = mkuid("study");
     let series_uid = mkuid("series");
@@ -74,43 +87,119 @@ let dcmqr = dcmqr
     use dicom_core::header::{DataElement, Tag};
     use dicom_core::value::PrimitiveValue;
     use dicom_core::VR;
-use dicom_object::InMemDicomObject;
+    use dicom_object::InMemDicomObject;
 
     let mut obj = InMemDicomObject::new_empty();
     let put = |o: &mut InMemDicomObject, tag: Tag, vr: VR, val: PrimitiveValue| {
         o.put(DataElement::new(tag, vr, val));
     };
 
-    put(&mut obj, Tag(0x0008, 0x0016), VR::UI, PrimitiveValue::from("1.2.840.10008.5.1.4.1.1.7")); // SC
-    put(&mut obj, Tag(0x0008, 0x0018), VR::UI, PrimitiveValue::from(sop_uid.as_str()));
-    put(&mut obj, Tag(0x0020, 0x000D), VR::UI, PrimitiveValue::from(study_uid.as_str()));
-    put(&mut obj, Tag(0x0020, 0x000E), VR::UI, PrimitiveValue::from(series_uid.as_str()));
-    put(&mut obj, Tag(0x0008, 0x0060), VR::CS, PrimitiveValue::from("OT"));
+    put(
+        &mut obj,
+        Tag(0x0008, 0x0016),
+        VR::UI,
+        PrimitiveValue::from("1.2.840.10008.5.1.4.1.1.7"),
+    ); // SC
+    put(
+        &mut obj,
+        Tag(0x0008, 0x0018),
+        VR::UI,
+        PrimitiveValue::from(sop_uid.as_str()),
+    );
+    put(
+        &mut obj,
+        Tag(0x0020, 0x000D),
+        VR::UI,
+        PrimitiveValue::from(study_uid.as_str()),
+    );
+    put(
+        &mut obj,
+        Tag(0x0020, 0x000E),
+        VR::UI,
+        PrimitiveValue::from(series_uid.as_str()),
+    );
+    put(
+        &mut obj,
+        Tag(0x0008, 0x0060),
+        VR::CS,
+        PrimitiveValue::from("OT"),
+    );
 
     // Image attributes
-    put(&mut obj, Tag(0x0028, 0x0002), VR::US, PrimitiveValue::from(1u16)); // SamplesPerPixel
-    put(&mut obj, Tag(0x0028, 0x0004), VR::CS, PrimitiveValue::from("MONOCHROME2"));
-    put(&mut obj, Tag(0x0028, 0x0010), VR::US, PrimitiveValue::from(1u16)); // Rows
-    put(&mut obj, Tag(0x0028, 0x0011), VR::US, PrimitiveValue::from(1u16)); // Columns
-    put(&mut obj, Tag(0x0028, 0x0100), VR::US, PrimitiveValue::from(8u16)); // BitsAllocated
-    put(&mut obj, Tag(0x0028, 0x0101), VR::US, PrimitiveValue::from(8u16)); // BitsStored
-    put(&mut obj, Tag(0x0028, 0x0102), VR::US, PrimitiveValue::from(7u16)); // HighBit
-    put(&mut obj, Tag(0x0028, 0x0103), VR::US, PrimitiveValue::from(0u16)); // PixelRepresentation
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0002),
+        VR::US,
+        PrimitiveValue::from(1u16),
+    ); // SamplesPerPixel
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0004),
+        VR::CS,
+        PrimitiveValue::from("MONOCHROME2"),
+    );
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0010),
+        VR::US,
+        PrimitiveValue::from(1u16),
+    ); // Rows
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0011),
+        VR::US,
+        PrimitiveValue::from(1u16),
+    ); // Columns
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0100),
+        VR::US,
+        PrimitiveValue::from(8u16),
+    ); // BitsAllocated
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0101),
+        VR::US,
+        PrimitiveValue::from(8u16),
+    ); // BitsStored
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0102),
+        VR::US,
+        PrimitiveValue::from(7u16),
+    ); // HighBit
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0103),
+        VR::US,
+        PrimitiveValue::from(0u16),
+    ); // PixelRepresentation
 
     // Pixel Data: single 8-bit pixel with value 128
-    put(&mut obj, Tag(0x7FE0, 0x0010), VR::OB, PrimitiveValue::U8(vec![128u8].into()));
+    put(
+        &mut obj,
+        Tag(0x7FE0, 0x0010),
+        VR::OB,
+        PrimitiveValue::U8(vec![128u8].into()),
+    );
 
     let dicom_path = base.join("seed_frame.dcm");
     dicom_json_tool::write_part10(&dicom_path, &obj).expect("write dicom");
 
     // Store into QR
     let mut st = tokio::process::Command::new("storescu");
-let st = st
-        .arg("--aetitle").arg("HARMONY_SCU")
-        .arg("--call").arg("QR_SCP")
-        .arg("127.0.0.1").arg(port.to_string())
+    let st = st
+        .arg("--aetitle")
+        .arg("HARMONY_SCU")
+        .arg("--call")
+        .arg("QR_SCP")
+        .arg("127.0.0.1")
+        .arg(port.to_string())
         .arg(&dicom_path);
-    if !verbose { st.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+    if !verbose {
+        st.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
     let status = st.status().await.expect("run storescu");
     if !status.success() {
         eprintln!("storescu failed; skipping");
@@ -119,7 +208,8 @@ let st = st
     }
 
     // Build config with DICOMweb endpoint, middlewares, and DICOM backend
-    let toml = format!(r#"
+    let toml = format!(
+        r#"
         [proxy]
         id = "dicomweb-frames-test"
         log_level = "info"
@@ -162,7 +252,9 @@ let st = st
         module = ""
         [middleware_types.dicom_to_dicomweb]
         module = ""
-    "#, port = port);
+    "#,
+        port = port
+    );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
@@ -186,10 +278,19 @@ let st = st
 
     assert_eq!(response.status(), StatusCode::OK);
     let headers = response.headers().clone();
-    let content_type = headers.get("content-type").and_then(|v| v.to_str().ok()).unwrap_or("");
-    assert!(content_type.starts_with("image/jpeg"), "unexpected content-type: {}", content_type);
+    let content_type = headers
+        .get("content-type")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+    assert!(
+        content_type.starts_with("image/jpeg"),
+        "unexpected content-type: {}",
+        content_type
+    );
 
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     assert!(!body.is_empty(), "Expected non-empty JPEG body");
 
     let _ = qr_child.kill().await;
@@ -199,7 +300,11 @@ let st = st
 async fn dicomweb_multiframes_with_dcmqrscp() {
     // Require dcmtk tools
     for bin in ["dcmqrscp", "storescu"].iter() {
-        if std::process::Command::new(bin).arg("--version").output().is_err() {
+        if std::process::Command::new(bin)
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             eprintln!("Skipping multi-frames test: {} not found", bin);
             return;
         }
@@ -215,7 +320,8 @@ async fn dicomweb_multiframes_with_dcmqrscp() {
     let dbdir = base.join("qrdb");
     std::fs::create_dir_all(&dbdir).expect("mkdir qr db");
     let cfg_path = base.join("dcmqrscp.cfg");
-    let abs_db = std::fs::canonicalize(&dbdir).unwrap_or_else(|_| std::env::current_dir().unwrap().join(&dbdir));
+    let abs_db = std::fs::canonicalize(&dbdir)
+        .unwrap_or_else(|_| std::env::current_dir().unwrap().join(&dbdir));
     let cfg = format!(
         "# dcmqrscp cfg\nMaxPDUSize = 16384\nMaxAssociations = 16\n\nHostTable BEGIN\nHostTable END\n\nVendorTable BEGIN\nVendorTable END\n\nAETable BEGIN\nQR_SCP  {db}  RW  (9, 1024mb)  ANY\nAETable END\n",
         db = abs_db.to_string_lossy()
@@ -226,19 +332,22 @@ async fn dicomweb_multiframes_with_dcmqrscp() {
     // Start dcmqrscp (quiet by default; enable verbose with HARMONY_TEST_VERBOSE_DCMTK=1)
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
-    if verbose { dcmqr.arg("-d"); }
-let dcmqr = dcmqr
-        .arg("-c")
-        .arg(&cfg_path)
-        .arg(port.to_string());
-    if !verbose { dcmqr.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
-    let mut qr_child = dcmqr
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn dcmqrscp");
+    if verbose {
+        dcmqr.arg("-d");
+    }
+    let dcmqr = dcmqr.arg("-c").arg(&cfg_path).arg(port.to_string());
+    if !verbose {
+        dcmqr
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
+    let mut qr_child = dcmqr.kill_on_drop(true).spawn().expect("spawn dcmqrscp");
 
     for _ in 0..60 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -249,7 +358,12 @@ let dcmqr = dcmqr
         let now = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap();
-        format!("1.2.826.0.1.3680043.10.5432.{}.{}.{}", suf, now.as_secs(), now.subsec_nanos())
+        format!(
+            "1.2.826.0.1.3680043.10.5432.{}.{}.{}",
+            suf,
+            now.as_secs(),
+            now.subsec_nanos()
+        )
     };
     let study_uid = mkuid("study");
     let series_uid = mkuid("series");
@@ -266,33 +380,114 @@ let dcmqr = dcmqr
     };
 
     // SC with Multi-frame
-    put(&mut obj, Tag(0x0008, 0x0016), VR::UI, PrimitiveValue::from("1.2.840.10008.5.1.4.1.1.7"));
-    put(&mut obj, Tag(0x0008, 0x0018), VR::UI, PrimitiveValue::from(sop_uid.as_str()));
-    put(&mut obj, Tag(0x0020, 0x000D), VR::UI, PrimitiveValue::from(study_uid.as_str()));
-    put(&mut obj, Tag(0x0020, 0x000E), VR::UI, PrimitiveValue::from(series_uid.as_str()));
-    put(&mut obj, Tag(0x0008, 0x0060), VR::CS, PrimitiveValue::from("OT"));
-    put(&mut obj, Tag(0x0028, 0x0002), VR::US, PrimitiveValue::from(1u16));
-    put(&mut obj, Tag(0x0028, 0x0004), VR::CS, PrimitiveValue::from("MONOCHROME2"));
-    put(&mut obj, Tag(0x0028, 0x0008), VR::IS, PrimitiveValue::from("2")); // NumberOfFrames
-    put(&mut obj, Tag(0x0028, 0x0010), VR::US, PrimitiveValue::from(1u16)); // Rows
-    put(&mut obj, Tag(0x0028, 0x0011), VR::US, PrimitiveValue::from(1u16)); // Columns
-    put(&mut obj, Tag(0x0028, 0x0100), VR::US, PrimitiveValue::from(8u16));
-    put(&mut obj, Tag(0x0028, 0x0101), VR::US, PrimitiveValue::from(8u16));
-    put(&mut obj, Tag(0x0028, 0x0102), VR::US, PrimitiveValue::from(7u16));
-    put(&mut obj, Tag(0x0028, 0x0103), VR::US, PrimitiveValue::from(0u16));
-    put(&mut obj, Tag(0x7FE0, 0x0010), VR::OB, PrimitiveValue::U8(vec![120u8, 80u8].into()));
+    put(
+        &mut obj,
+        Tag(0x0008, 0x0016),
+        VR::UI,
+        PrimitiveValue::from("1.2.840.10008.5.1.4.1.1.7"),
+    );
+    put(
+        &mut obj,
+        Tag(0x0008, 0x0018),
+        VR::UI,
+        PrimitiveValue::from(sop_uid.as_str()),
+    );
+    put(
+        &mut obj,
+        Tag(0x0020, 0x000D),
+        VR::UI,
+        PrimitiveValue::from(study_uid.as_str()),
+    );
+    put(
+        &mut obj,
+        Tag(0x0020, 0x000E),
+        VR::UI,
+        PrimitiveValue::from(series_uid.as_str()),
+    );
+    put(
+        &mut obj,
+        Tag(0x0008, 0x0060),
+        VR::CS,
+        PrimitiveValue::from("OT"),
+    );
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0002),
+        VR::US,
+        PrimitiveValue::from(1u16),
+    );
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0004),
+        VR::CS,
+        PrimitiveValue::from("MONOCHROME2"),
+    );
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0008),
+        VR::IS,
+        PrimitiveValue::from("2"),
+    ); // NumberOfFrames
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0010),
+        VR::US,
+        PrimitiveValue::from(1u16),
+    ); // Rows
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0011),
+        VR::US,
+        PrimitiveValue::from(1u16),
+    ); // Columns
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0100),
+        VR::US,
+        PrimitiveValue::from(8u16),
+    );
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0101),
+        VR::US,
+        PrimitiveValue::from(8u16),
+    );
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0102),
+        VR::US,
+        PrimitiveValue::from(7u16),
+    );
+    put(
+        &mut obj,
+        Tag(0x0028, 0x0103),
+        VR::US,
+        PrimitiveValue::from(0u16),
+    );
+    put(
+        &mut obj,
+        Tag(0x7FE0, 0x0010),
+        VR::OB,
+        PrimitiveValue::U8(vec![120u8, 80u8].into()),
+    );
 
     let dicom_path = base.join("seed_multiframe.dcm");
     dicom_json_tool::write_part10(&dicom_path, &obj).expect("write dicom");
 
     // Store into QR
     let mut st = tokio::process::Command::new("storescu");
-let st = st
-        .arg("--aetitle").arg("HARMONY_SCU")
-        .arg("--call").arg("QR_SCP")
-        .arg("127.0.0.1").arg(port.to_string())
+    let st = st
+        .arg("--aetitle")
+        .arg("HARMONY_SCU")
+        .arg("--call")
+        .arg("QR_SCP")
+        .arg("127.0.0.1")
+        .arg(port.to_string())
         .arg(&dicom_path);
-    if !verbose { st.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null()); }
+    if !verbose {
+        st.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
     let status = st.status().await.expect("run storescu");
     if !status.success() {
         eprintln!("storescu failed; skipping");
@@ -301,7 +496,8 @@ let st = st
     }
 
     // Build pipeline config
-    let toml = format!(r#"
+    let toml = format!(
+        r#"
         [proxy]
         id = "dicomweb-multiframes-test"
         log_level = "info"
@@ -344,7 +540,9 @@ let st = st
         module = ""
         [middleware_types.dicom_to_dicomweb]
         module = ""
-    "#, port = port);
+    "#,
+        port = port
+    );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
@@ -373,7 +571,11 @@ let st = st
         .and_then(|v| v.to_str().ok())
         .unwrap_or("")
         .to_string();
-    assert!(content_type.starts_with("multipart/related"), "unexpected content-type: {}", content_type);
+    assert!(
+        content_type.starts_with("multipart/related"),
+        "unexpected content-type: {}",
+        content_type
+    );
 
     // Extract boundary from header
     let boundary = content_type
@@ -385,10 +587,15 @@ let st = st
         .to_string();
     assert!(!boundary.is_empty(), "Missing boundary in content-type");
 
-    let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
     // Count boundary occurrences
     let marker = format!("--{}\r\n", boundary);
-    let count = body.windows(marker.len()).filter(|w| *w == marker.as_bytes()).count();
+    let count = body
+        .windows(marker.len())
+        .filter(|w| *w == marker.as_bytes())
+        .count();
     assert!(count >= 2, "Expected at least 2 parts, found {}", count);
 
     let _ = qr_child.kill().await;

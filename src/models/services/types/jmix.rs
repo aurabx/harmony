@@ -1,4 +1,5 @@
 use crate::config::config::ConfigError;
+use crate::file;
 use crate::globals::get_storage;
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::services::services::{ServiceHandler, ServiceType};
@@ -7,21 +8,13 @@ use crate::utils::Error;
 use async_trait::async_trait;
 use axum::{body::Body, response::Response};
 use base64::Engine;
-// Removed targz support
 use http::Method;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::fs;
-use std::io::{Cursor, Write};
 use std::path::{Path, PathBuf};
-// Removed targz support
 use walkdir::WalkDir;
-use zip::write::FileOptions as ZipFileOptions;
-use zip::ZipWriter;
-
-// jmix-rs types for optional parsing
-use jmix_rs::types::Metadata as JmixMetadata;
 
 #[derive(Debug, Deserialize)]
 pub struct JmixEndpoint {}
@@ -51,7 +44,7 @@ impl ServiceType for JmixEndpoint {
             }
         }
 
-        // Validate skip_listing option if provided  
+        // Validate skip_listing option if provided
         if let Some(skip_listing) = options.get("skip_listing") {
             if !skip_listing.is_boolean() {
                 return Err(ConfigError::InvalidEndpoint {
@@ -138,183 +131,6 @@ impl ServiceType for JmixEndpoint {
     }
 }
 
-fn resolve_store_root(options: &HashMap<String, Value>) -> PathBuf {
-    if let Some(p) = options.get("store_dir").and_then(|v| v.as_str()) {
-        return PathBuf::from(p);
-    }
-
-    // Use global storage backend with jmix-store subdirectory
-    if let Some(storage) = get_storage() {
-        return storage.subpath_str("jmix-store");
-    }
-
-    // Fallback to ./tmp/jmix-store if storage not available
-    PathBuf::from("./tmp/jmix-store")
-}
-
-fn package_dir_for(store_root: &Path, id: &str) -> PathBuf {
-    store_root.join(format!("{}.jmix", id))
-}
-
-fn get_cached_zip(package_dir: &Path) -> Result<Vec<u8>, Error> {
-    let cache_file = package_dir.join(".cached.zip");
-    
-    tracing::debug!("🔍 Cache check for: {}", package_dir.display());
-    tracing::debug!("🔍 Cache file exists: {}", cache_file.exists());
-    
-    // Check if cached zip exists and is newer than the package contents
-    if cache_file.exists() {
-        let cache_modified = fs::metadata(&cache_file)
-            .and_then(|m| m.modified())
-            .ok();
-            
-        tracing::debug!("🔍 Cache modified time: {:?}", cache_modified);
-            
-        if let Some(cache_time) = cache_modified {
-            // Check if any file in the package is newer than the cache
-            let mut package_is_newer = false;
-            let mut newer_file_path = String::new();
-            
-            for entry in WalkDir::new(package_dir).into_iter().filter_map(|e| e.ok()) {
-                if entry.file_type().is_file() && entry.path() != cache_file {
-                    if let Ok(metadata) = entry.metadata() {
-                        if let Ok(modified) = metadata.modified() {
-                            if modified > cache_time {
-                                package_is_newer = true;
-                                newer_file_path = entry.path().display().to_string();
-                                tracing::debug!("🔍 Found newer file: {} (cache: {:?}, file: {:?})", newer_file_path, cache_time, modified);
-                                break;
-                            }
-                        }
-                    }
-                }
-            }
-            
-            tracing::debug!("🔍 Package is newer than cache: {}", package_is_newer);
-            
-            // If cache is still valid, return it
-            if !package_is_newer {
-                match fs::read(&cache_file) {
-                    Ok(cached_data) => {
-                        tracing::debug!("✅ Using cached zip for {} ({} bytes)", package_dir.display(), cached_data.len());
-                        return Ok(cached_data);
-                    }
-                    Err(e) => {
-                        tracing::debug!("⚠️ Cache file corrupted, rebuilding: {}", e);
-                    }
-                }
-            } else {
-                tracing::debug!("🔄 Cache invalid due to newer file: {}", newer_file_path);
-            }
-        }
-    } else {
-        tracing::debug!("🔄 No cache file found, creating new zip");
-    }
-    
-    // Create new zip and cache it
-    tracing::debug!("🔄 Creating new zip for {}", package_dir.display());
-    let zip_data = make_zip(package_dir)?;
-    
-    // Try to cache it (ignore errors - caching is optional)
-    let _ = fs::write(&cache_file, &zip_data);
-    
-    Ok(zip_data)
-}
-
-fn make_zip(dir: &Path) -> Result<Vec<u8>, Error> {
-    use std::time::SystemTime;
-    
-    let mut buf = Vec::new();
-    {
-        let cursor = Cursor::new(&mut buf);
-        let mut zip = ZipWriter::new(cursor);
-        let base = dir;
-        
-        for entry in WalkDir::new(dir).into_iter().filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let rel = path.strip_prefix(base).unwrap_or(path);
-            let name = rel.to_string_lossy();
-            
-            // Get file metadata to preserve timestamps
-            let metadata = entry.metadata().map_err(|e| Error::from(format!("metadata error: {}", e)))?;
-            let modified = metadata.modified().unwrap_or(SystemTime::now());
-            
-            // Convert SystemTime to zip::DateTime using a simple approach
-            // We'll convert unix timestamp to a basic date/time representation
-            let zip_time = match modified.duration_since(SystemTime::UNIX_EPOCH) {
-                Ok(duration) => {
-                    let secs = duration.as_secs();
-                    // Simple conversion: seconds since epoch to approximate date/time
-                    // This is a basic implementation to avoid 1980 timestamps
-                    let days_since_epoch = secs / 86400; // seconds per day
-                    let years_since_1970 = days_since_epoch / 365; // approximate
-                    let year = (1970 + years_since_1970).min(2107).max(1980) as u16; // ZIP year range
-                    
-                    let day_of_year = days_since_epoch % 365;
-                    let month = ((day_of_year / 30) + 1).min(12).max(1) as u8;
-                    let day = ((day_of_year % 30) + 1).min(31).max(1) as u8;
-                    
-                    let hour = ((secs % 86400) / 3600) as u8;
-                    let minute = ((secs % 3600) / 60) as u8;
-                    let second = (secs % 60) as u8;
-                    
-                    zip::DateTime::from_date_and_time(year, month, day, hour, minute, second)
-                        .unwrap_or_else(|_| zip::DateTime::default())
-                },
-                Err(_) => zip::DateTime::default(),
-            };
-            
-            let options = ZipFileOptions::default()
-                .compression_method(zip::CompressionMethod::Deflated)
-                .last_modified_time(zip_time);
-            
-            if entry.file_type().is_dir() {
-                if !name.is_empty() {
-                    zip.add_directory(name.to_string(), options)
-                        .map_err(|e| Error::from(format!("zip dir error: {}", e)))?;
-                }
-            } else if entry.file_type().is_file() {
-                zip.start_file(name.to_string(), options)
-                    .map_err(|e| Error::from(format!("zip file error: {}", e)))?;
-                let data =
-                    fs::read(path).map_err(|e| Error::from(format!("zip read error: {}", e)))?;
-                zip.write_all(&data)
-                    .map_err(|e| Error::from(format!("zip write error: {}", e)))?;
-            }
-        }
-        zip.finish()
-            .map_err(|e| Error::from(format!("zip finish error: {}", e)))?;
-    }
-    Ok(buf)
-}
-
-fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Error> {
-    let reader = Cursor::new(bytes);
-    let mut zip =
-        zip::ZipArchive::new(reader).map_err(|e| Error::from(format!("zip open error: {}", e)))?;
-    for i in 0..zip.len() {
-        let mut file = zip
-            .by_index(i)
-            .map_err(|e| Error::from(format!("zip idx error: {}", e)))?;
-        let outpath = dest.join(file.mangled_name());
-        if file.name().ends_with('/') {
-            fs::create_dir_all(&outpath).map_err(|e| Error::from(format!("mkdir error: {}", e)))?;
-        } else {
-            if let Some(parent) = outpath.parent() {
-                fs::create_dir_all(parent)
-                    .map_err(|e| Error::from(format!("mkparent error: {}", e)))?;
-            }
-            let mut outfile = fs::File::create(&outpath)
-                .map_err(|e| Error::from(format!("create error: {}", e)))?;
-            std::io::copy(&mut file, &mut outfile)
-                .map_err(|e| Error::from(format!("write error: {}", e)))?;
-        }
-    }
-    Ok(())
-}
-
-// Removed targz support
-
 fn find_package_root_and_manifest(
     extracted_root: &Path,
 ) -> Result<(PathBuf, serde_json::Value), Error> {
@@ -335,40 +151,6 @@ fn find_package_root_and_manifest(
     Err(Error::from("manifest.json not found in uploaded archive"))
 }
 
-fn query_by_study_uid(store_root: &Path, study_uid: &str) -> Result<Vec<serde_json::Value>, Error> {
-    let mut results = Vec::new();
-    if !store_root.exists() {
-        return Ok(results);
-    }
-    for entry in
-        fs::read_dir(store_root).map_err(|e| Error::from(format!("readdir error: {}", e)))?
-    {
-        let entry = entry.map_err(|e| Error::from(format!("direntry error: {}", e)))?;
-        let path = entry.path();
-        if path.is_dir() && path.extension().and_then(|e| e.to_str()) == Some("jmix") {
-            let metadata_path = path.join("payload").join("metadata.json");
-            if metadata_path.exists() {
-                if let Ok(s) = fs::read_to_string(&metadata_path) {
-                    if let Ok(md) = serde_json::from_str::<JmixMetadata>(&s) {
-                        if let Some(studies) = md.studies {
-                            if let Some(uid) = studies.study_uid {
-                                if uid == study_uid {
-                                    results.push(serde_json::json!({
-                                        "id": md.id,
-                                        "path": path.to_string_lossy().to_string(),
-                                        "studyInstanceUid": uid
-                                    }));
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    Ok(results)
-}
-
 #[async_trait]
 impl ServiceHandler<Value> for JmixEndpoint {
     type ReqBody = Value;
@@ -385,180 +167,58 @@ impl ServiceHandler<Value> for JmixEndpoint {
             .get("path")
             .cloned()
             .unwrap_or_default();
-        let headers = &envelope.request_details.headers;
-        let accept = headers.get("accept").map(|s| s.as_str());
-        
-        tracing::debug!("JMIX SERVICE: method='{}', subpath='{}', accept='{:?}'", method, subpath, accept);
 
-        // Helper: set response meta into normalized_data
-        let mut set_response = |status: http::StatusCode,
-                                hdrs: HashMap<String, String>,
-                                body_str: Option<String>,
-                                json_obj: Option<serde_json::Value>,
-                                body_b64: Option<String>| {
-            let mut resp = serde_json::Map::new();
-            resp.insert("status".to_string(), serde_json::json!(status.as_u16()));
-            if !hdrs.is_empty() {
-                resp.insert("headers".to_string(), serde_json::json!(hdrs));
-            }
-            if let Some(s) = body_str {
-                resp.insert("body".to_string(), serde_json::json!(s));
-            }
-            if let Some(j) = json_obj {
-                resp.insert("json".to_string(), j);
-            }
-            if let Some(b) = body_b64 {
-                resp.insert("body_b64".to_string(), serde_json::json!(b));
-            }
-            envelope.normalized_data = Some(serde_json::json!({
-                "response": serde_json::Value::Object(resp)
-            }));
-        };
+        tracing::debug!("JMIX SERVICE: method='{}', subpath='{}'", method, subpath);
 
-        // Resolve storage root (default to ./tmp/jmix-store per project rule)
-        let store_root = resolve_store_root(options);
+        // Pass endpoint options to middleware via metadata
+        envelope
+            .request_details
+            .metadata
+            .insert("jmix_method".to_string(), method.clone());
+        if let Some(store_dir) = options.get("store_dir").and_then(|v| v.as_str()) {
+            envelope
+                .request_details
+                .metadata
+                .insert("endpoint_store_dir".to_string(), store_dir.to_string());
+        }
 
         // Route matching
         // GET/HEAD /api/jmix/{id}
-        if (method == "GET" || method == "HEAD") && subpath.starts_with("api/jmix/") && !subpath.ends_with("/manifest") {
+        if (method == "GET" || method == "HEAD")
+            && subpath.starts_with("api/jmix/")
+            && !subpath.ends_with("/manifest")
+        {
             let rest = &subpath["api/jmix/".len()..];
             if !rest.is_empty() && !rest.contains('/') {
                 let id = rest;
-                // Only support zip format now
-                let wants_zip = accept
-                    .map(|a| a.contains("application/zip") || a.contains("*/*"))
-                    .unwrap_or(true); // Default to zip if no Accept header
-                    
-                let negotiated = if wants_zip {
-                    Some("application/zip")
-                } else {
-                    None
-                };
-
-                match negotiated {
-                    Some(ct) => {
-                        let mut hdrs = HashMap::new();
-                        hdrs.insert("content-type".to_string(), ct.to_string());
-                        let filename = format!("{}.zip", id);
-                        hdrs.insert(
-                            "content-disposition".to_string(),
-                            format!("attachment; filename=\"{}\"", filename),
-                        );
-
-                        // Locate envelope directory
-                        let package_dir = package_dir_for(&store_root, id);
-                        if !package_dir.exists() {
-                            set_response(
-                                http::StatusCode::NOT_FOUND,
-                                HashMap::new(),
-                                Some("Envelope not found".into()),
-                                None,
-                                None,
-                            );
-                            // Prevent forwarding to backends
-                            envelope
-                                .request_details
-                                .metadata
-                                .insert("skip_backends".to_string(), "true".to_string());
-                            return Ok(envelope);
-                        }
-
-                        // Use cached zip for much better performance
-                        let bytes = match get_cached_zip(&package_dir) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                set_response(
-                                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                                    HashMap::new(),
-                                    Some(format!("zip error: {}", e)),
-                                    None,
-                                    None,
-                                );
-                                // Prevent forwarding to backends
-                                envelope
-                                    .request_details
-                                    .metadata
-                                    .insert("skip_backends".to_string(), "true".to_string());
-                                return Ok(envelope);
-                            }
-                        };
-
-                        // Encode as base64 to emit safely through normalized_data
-                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                        set_response(http::StatusCode::OK, hdrs, None, None, Some(b64));
-                        // Prevent forwarding to backends for JMIX-served routes
-                        envelope
-                            .request_details
-                            .metadata
-                            .insert("skip_backends".to_string(), "true".to_string());
-                    }
-                    None => {
-                        set_response(
-                            http::StatusCode::NOT_ACCEPTABLE,
-                            HashMap::new(),
-                            Some(String::from("unsupported media type in Accept")),
-                            None,
-                            None,
-                        );
-                    }
-                }
+                // Set metadata for middleware to handle
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("jmix_id".to_string(), id.to_string());
+                // Let middleware check if package exists and serve it
                 return Ok(envelope);
             }
         }
 
-
         // GET/HEAD /api/jmix/{id}/manifest
-        if (method == "GET" || method == "HEAD") && subpath.starts_with("api/jmix/") && subpath.ends_with("/manifest") {
+        if (method == "GET" || method == "HEAD")
+            && subpath.starts_with("api/jmix/")
+            && subpath.ends_with("/manifest")
+        {
             let rest = &subpath["api/jmix/".len()..];
             if let Some(id_part) = rest.strip_suffix("/manifest") {
                 let id = id_part.trim_end_matches('/');
                 if !id.is_empty() && !id.contains('/') {
-                    let mut hdrs = HashMap::new();
-                    hdrs.insert("content-type".to_string(), "application/json".to_string());
-
-                    // Load manifest.json
-                    let package_dir = package_dir_for(&store_root, id);
-                    let manifest_path = package_dir.join("manifest.json");
-                    if !manifest_path.exists() {
-                        set_response(
-                            http::StatusCode::NOT_FOUND,
-                            HashMap::new(),
-                            Some("manifest.json not found".into()),
-                            None,
-                            None,
-                        );
-                        return Ok(envelope);
-                    }
-                    match fs::read_to_string(&manifest_path)
-                        .ok()
-                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                    {
-                        Some(mut json) => {
-                            // Ensure manifest has id; inject if missing
-                            // Ensure the response JSON includes the envelope id
-                            let has_id = json.get("id").and_then(|v| v.as_str()).is_some();
-                            if !has_id {
-                                if let Some(obj) = json.as_object_mut() {
-                                    obj.insert("id".to_string(), serde_json::json!(id));
-                                }
-                            }
-                            set_response(http::StatusCode::OK, hdrs, None, Some(json), None);
-                            // Prevent forwarding to backends for JMIX-served routes
-                            envelope
-                                .request_details
-                                .metadata
-                                .insert("skip_backends".to_string(), "true".to_string());
-                        }
-                        None => {
-                            set_response(
-                                http::StatusCode::INTERNAL_SERVER_ERROR,
-                                HashMap::new(),
-                                Some("failed to parse manifest.json".into()),
-                                None,
-                                None,
-                            );
-                        }
-                    }
+                    // Set metadata for middleware to handle
+                    envelope
+                        .request_details
+                        .metadata
+                        .insert("jmix_id".to_string(), id.to_string());
+                    envelope
+                        .request_details
+                        .metadata
+                        .insert("jmix_wants_manifest".to_string(), "true".to_string());
                     return Ok(envelope);
                 }
             }
@@ -573,101 +233,21 @@ impl ServiceHandler<Value> for JmixEndpoint {
                 .get("studyInstanceUid")
                 .and_then(|v| v.first())
                 .map(|s| s.to_string());
-            if let Some(uid) = study_uid.clone() {
-                // Check local store first
-                let matches = query_by_study_uid(&store_root, &uid)?;
-                tracing::debug!("JMIX DEBUG: uid='{}', matches.len()={}", uid, matches.len());
-                if !matches.is_empty() {
-                    // Negotiate Accept. If JSON explicitly requested, return index JSON.
-                    let accept_header = accept.unwrap_or("");
-                    let wants_json = accept_header.contains("application/json");
-                    let wants_zip = accept_header.contains("application/zip") || accept_header.contains("*/*") || accept_header.is_empty();
-                    
-                    tracing::debug!("JMIX DEBUG: accept_header='{}', wants_json={}, wants_zip={}, matches.len()={}", accept_header, wants_json, wants_zip, matches.len());
 
-                    let condition = wants_zip && !wants_json && matches.len() == 1;
-                    tracing::debug!("JMIX DEBUG: condition result = {}", condition);
-                    if condition {
-                        // Return the package directly as zip
-                        let m = &matches[0];
-                        let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                        let path = m.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                        let package_dir = Path::new(path);
-                        let mut hdrs = HashMap::new();
-                        hdrs.insert("content-type".to_string(), "application/zip".to_string());
-                        let filename = format!("{}.zip", id);
-                        hdrs.insert(
-                            "content-disposition".to_string(),
-                            format!("attachment; filename=\"{}\"", filename),
-                        );
+            if let Some(uid) = study_uid {
+                // Set metadata for middleware to check
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("jmix_study_uid".to_string(), uid.clone());
 
-                        // Use cached zip for much better performance
-                        let bytes = match get_cached_zip(&package_dir) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                set_response(
-                                    http::StatusCode::INTERNAL_SERVER_ERROR,
-                                    HashMap::new(),
-                                    Some(format!("zip error: {}", e)),
-                                    None,
-                                    None,
-                                );
-                                envelope
-                                    .request_details
-                                    .metadata
-                                    .insert("skip_backends".to_string(), "true".to_string());
-                                return Ok(envelope);
-                            }
-                        };
-                        let b64 = base64::engine::general_purpose::STANDARD.encode(&bytes);
-                        set_response(http::StatusCode::OK, hdrs, None, None, Some(b64));
-                        envelope
-                            .request_details
-                            .metadata
-                            .insert("skip_backends".to_string(), "true".to_string());
-                        return Ok(envelope);
-                    }
-
-                    // Otherwise, return an index of envelopes as JSON (multiple matches or JSON requested)
-                    let mut hdrs = HashMap::new();
-                    hdrs.insert("content-type".to_string(), "application/json".to_string());
-                    let jmix_envelopes: Vec<serde_json::Value> = matches
-                        .into_iter()
-                        .map(|m| {
-                            let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
-                            let path = m.get("path").and_then(|v| v.as_str()).unwrap_or("");
-                            let suid = m
-                                .get("studyInstanceUid")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("");
-                            serde_json::json!({
-                                "id": id,
-                                "storePath": path,
-                                "studyInstanceUid": suid
-                            })
-                        })
-                        .collect();
-                    let json = serde_json::json!({
-                        "studyInstanceUid": uid,
-                        "jmixEnvelopes": jmix_envelopes
-                    });
-                    set_response(http::StatusCode::OK, hdrs, None, Some(json), None);
-                    envelope
-                        .request_details
-                        .metadata
-                        .insert("skip_backends".to_string(), "true".to_string());
-                    return Ok(envelope);
-                }
-
-                // No existing JMIX; trigger a DIMSE operation via backend by setting the identifier.
-                // Orthanc and many PACS do not serve as C-GET SCPs by default; prefer C-MOVE here so the
-                // PACS pushes instances to our local Store SCP. The jmix_builder middleware will then
-                // package the received instances into a JMIX envelope.
+                // Prepare DICOM identifier for backend in case middleware doesn't find local match
                 let identifier = serde_json::json!({
                     "0020000D": { "vr": "UI", "Value": [ uid ] }
                 });
                 envelope.original_data = serde_json::to_vec(&identifier)
                     .map_err(|e| Error::from(format!("identifier encode error: {}", e)))?;
+
                 // Extract skip flags from config (defaults) and query parameters (overrides)
                 let config_skip_hashing = options
                     .get("skip_hashing")
@@ -677,10 +257,7 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     .get("skip_listing")
                     .and_then(|v| v.as_bool())
                     .unwrap_or(false);
-                    
-                tracing::info!("🚀 JMIX Service: Config defaults: skip_hashing={}, skip_listing={}", config_skip_hashing, config_skip_listing);
-                tracing::info!("🚀 JMIX Service: Available config options: {:?}", options.keys().collect::<Vec<_>>());
-                
+
                 let skip_hashing = envelope
                     .request_details
                     .query_params
@@ -697,20 +274,17 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     .unwrap_or(config_skip_listing);
 
                 // Pass skip flags to middleware via metadata
-                tracing::info!("🚀 JMIX Service: Determined skip_hashing={}, skip_listing={}", skip_hashing, skip_listing);
                 if skip_hashing {
                     envelope
                         .request_details
                         .metadata
                         .insert("skip_hashing".to_string(), "true".to_string());
-                    tracing::info!("🚀 JMIX Service: Set skip_hashing=true in metadata");
                 }
                 if skip_listing {
                     envelope
                         .request_details
                         .metadata
                         .insert("skip_listing".to_string(), "true".to_string());
-                    tracing::info!("🚀 JMIX Service: Set skip_listing=true in metadata");
                 }
 
                 // Signal the DICOM backend to perform a C-MOVE (preferred for Orthanc and most PACS)
@@ -718,22 +292,22 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     .request_details
                     .metadata
                     .insert("dimse_op".to_string(), "move".to_string());
-                // Also set path for compatibility, though dimse_op takes precedence
                 envelope
                     .request_details
                     .metadata
                     .insert("path".to_string(), "move".to_string());
-                // Do NOT set a response here; allow backends + jmix_builder to run and produce it
+
+                // Let middleware check if local JMIX exists; if not, backends will handle it
                 return Ok(envelope);
             } else {
-                set_response(
-                    http::StatusCode::BAD_REQUEST,
-                    HashMap::new(),
-                    Some("missing studyInstanceUid".into()),
-                    None,
-                    None,
+                let mut resp = serde_json::Map::new();
+                resp.insert("status".to_string(), serde_json::json!(400));
+                resp.insert(
+                    "body".to_string(),
+                    serde_json::json!("missing studyInstanceUid"),
                 );
-                // This is fully served by JMIX
+                envelope.normalized_data =
+                    Some(serde_json::json!({"response": serde_json::Value::Object(resp)}));
                 envelope
                     .request_details
                     .metadata
@@ -744,6 +318,7 @@ impl ServiceHandler<Value> for JmixEndpoint {
 
         // POST /api/jmix (upload envelope)
         if method == "POST" && subpath == "api/jmix" {
+            let headers = &envelope.request_details.headers;
             let content_type = headers
                 .get("content-type")
                 .map(|s| s.to_lowercase())
@@ -751,13 +326,20 @@ impl ServiceHandler<Value> for JmixEndpoint {
             let is_zip = content_type.contains("zip");
 
             if !is_zip {
-                set_response(
-                    http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    HashMap::new(),
-                    Some("Only application/zip content type is supported for JMIX upload".into()),
-                    None,
-                    None,
+                let mut resp = serde_json::Map::new();
+                resp.insert("status".to_string(), serde_json::json!(415));
+                resp.insert(
+                    "body".to_string(),
+                    serde_json::json!(
+                        "Only application/zip content type is supported for JMIX upload"
+                    ),
                 );
+                envelope.normalized_data =
+                    Some(serde_json::json!({"response": serde_json::Value::Object(resp)}));
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("skip_backends".to_string(), "true".to_string());
                 return Ok(envelope);
             }
 
@@ -779,18 +361,32 @@ impl ServiceHandler<Value> for JmixEndpoint {
             // Extract zip archive
             let extracted_root = temp_extract_dir.path().to_path_buf();
             let body = &envelope.original_data;
-            let extract_res = extract_zip(body, &extracted_root);
+            let extract_res = file::extract_zip(body, &extracted_root);
 
             if let Err(e) = extract_res {
-                set_response(
-                    http::StatusCode::UNSUPPORTED_MEDIA_TYPE,
-                    HashMap::new(),
-                    Some(format!("extract error: {}", e)),
-                    None,
-                    None,
+                let mut resp = serde_json::Map::new();
+                resp.insert("status".to_string(), serde_json::json!(415));
+                resp.insert(
+                    "body".to_string(),
+                    serde_json::json!(format!("extract error: {}", e)),
                 );
+                envelope.normalized_data =
+                    Some(serde_json::json!({"response": serde_json::Value::Object(resp)}));
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("skip_backends".to_string(), "true".to_string());
                 return Ok(envelope);
             }
+
+            // Resolve store root
+            let store_root = if let Some(p) = options.get("store_dir").and_then(|v| v.as_str()) {
+                PathBuf::from(p)
+            } else if let Some(storage) = get_storage() {
+                storage.subpath_str("jmix-store")
+            } else {
+                PathBuf::from("./tmp/jmix-store")
+            };
 
             // Find manifest.json in extracted content
             let (pkg_dir, manifest_json) = find_package_root_and_manifest(&extracted_root)?;
@@ -799,26 +395,33 @@ impl ServiceHandler<Value> for JmixEndpoint {
                 .and_then(|v| v.as_str())
                 .unwrap_or("");
             if id.is_empty() {
-                set_response(
-                    http::StatusCode::BAD_REQUEST,
-                    HashMap::new(),
-                    Some("manifest.id missing".into()),
-                    None,
-                    None,
-                );
+                let mut resp = serde_json::Map::new();
+                resp.insert("status".to_string(), serde_json::json!(400));
+                resp.insert("body".to_string(), serde_json::json!("manifest.id missing"));
+                envelope.normalized_data =
+                    Some(serde_json::json!({"response": serde_json::Value::Object(resp)}));
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("skip_backends".to_string(), "true".to_string());
                 return Ok(envelope);
             }
 
-            // Move into store_root/{id}.jmix
-            let dest_dir = package_dir_for(&store_root, id);
+            // Move into store_root/{id}
+            let dest_dir = store_root.join(id);
             if dest_dir.exists() {
-                set_response(
-                    http::StatusCode::CONFLICT,
-                    HashMap::new(),
-                    Some("envelope id already exists".into()),
-                    None,
-                    None,
+                let mut resp = serde_json::Map::new();
+                resp.insert("status".to_string(), serde_json::json!(409));
+                resp.insert(
+                    "body".to_string(),
+                    serde_json::json!("envelope id already exists"),
                 );
+                envelope.normalized_data =
+                    Some(serde_json::json!({"response": serde_json::Value::Object(resp)}));
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("skip_backends".to_string(), "true".to_string());
                 return Ok(envelope);
             }
             fs::create_dir_all(&store_root)
@@ -844,21 +447,28 @@ impl ServiceHandler<Value> for JmixEndpoint {
             };
             match jmix_rs::validate_package(&dest_dir, &opts) {
                 Ok(_report) => {
+                    let mut resp = serde_json::Map::new();
+                    resp.insert("status".to_string(), serde_json::json!(201));
                     let mut hdrs = HashMap::new();
                     hdrs.insert("content-type".to_string(), "application/json".to_string());
+                    resp.insert("headers".to_string(), serde_json::json!(hdrs));
                     let json = serde_json::json!({ "id": id, "status": "stored" });
-                    set_response(http::StatusCode::CREATED, hdrs, None, Some(json), None);
+                    resp.insert("json".to_string(), json);
+                    envelope.normalized_data = Some(serde_json::json!({
+                        "response": serde_json::Value::Object(resp)
+                    }));
                 }
                 Err(e) => {
                     // Cleanup on failure
                     let _ = fs::remove_dir_all(&dest_dir);
-                    set_response(
-                        http::StatusCode::BAD_REQUEST,
-                        HashMap::new(),
-                        Some(format!("validation failed: {}", e)),
-                        None,
-                        None,
+                    let mut resp = serde_json::Map::new();
+                    resp.insert("status".to_string(), serde_json::json!(400));
+                    resp.insert(
+                        "body".to_string(),
+                        serde_json::json!(format!("validation failed: {}", e)),
                     );
+                    envelope.normalized_data =
+                        Some(serde_json::json!({"response": serde_json::Value::Object(resp)}));
                 }
             }
             // Prevent forwarding to backends
@@ -870,23 +480,85 @@ impl ServiceHandler<Value> for JmixEndpoint {
         }
 
         // Fallback: 404 for any other JMIX path not handled above
-        set_response(
-            http::StatusCode::NOT_FOUND,
-            HashMap::new(),
-            Some(String::from("Not Found")),
-            None,
-            None,
-        );
+        let mut resp = serde_json::Map::new();
+        resp.insert("status".to_string(), serde_json::json!(404));
+        resp.insert("body".to_string(), serde_json::json!("Not Found"));
+        envelope.normalized_data =
+            Some(serde_json::json!({"response": serde_json::Value::Object(resp)}));
+        envelope
+            .request_details
+            .metadata
+            .insert("skip_backends".to_string(), "true".to_string());
         Ok(envelope)
     }
 
     async fn transform_response(
         &self,
         envelope: RequestEnvelope<Vec<u8>>,
-        _options: &HashMap<String, Value>,
+        options: &HashMap<String, Value>,
     ) -> Result<Response, Error> {
         let nd = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
         let response_meta = nd.get("response");
+        
+
+        // Check if response has jmix metadata - if so, return the zip instead
+        if let Some(jmix_id) = response_meta.and_then(|m| m.get("jmix_id")).and_then(|id| id.as_str()) {
+            let zip_ready = response_meta
+                .and_then(|m| m.get("zip_ready"))
+                .and_then(|ready| ready.as_bool())
+                .unwrap_or(false);
+            
+            if zip_ready {
+                // Load the zip file and return it
+                tracing::info!("📦 Serving zip file for JMIX package: {}", jmix_id);
+                
+                let store_root = if let Some(p) = options.get("store_dir").and_then(|v| v.as_str()) {
+                    PathBuf::from(p)
+                } else if let Some(storage) = get_storage() {
+                    storage.subpath_str("jmix-store")
+                } else {
+                    PathBuf::from("./tmp/jmix-store")
+                };
+                
+                // Look for zip file in the package directory (where jmix-rs creates it)
+                let package_dir = store_root.join(jmix_id);
+                let zip_file = package_dir.join(format!("{}.zip", jmix_id));
+                
+                if zip_file.exists() {
+                    match fs::read(&zip_file) {
+                        Ok(zip_bytes) => {
+                            let filename = format!("{}.zip", jmix_id);
+                            return Response::builder()
+                                .status(http::StatusCode::OK)
+                                .header("content-type", "application/zip")
+                                .header("content-disposition", format!("attachment; filename=\"{}\"", filename))
+                                .body(Body::from(zip_bytes))
+                                .map_err(|_| Error::from("Failed to construct zip response"));
+                        }
+                        Err(e) => {
+                            tracing::error!("❌ Failed to read zip file {}: {}", zip_file.display(), e);
+                            return Response::builder()
+                                .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                                .body(Body::from(format!("Failed to read zip file: {}", e)))
+                                .map_err(|_| Error::from("Failed to construct error response"));
+                        }
+                    }
+                } else {
+                    tracing::error!("⚠️ Zip file not found: {}", zip_file.display());
+                    return Response::builder()
+                        .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::from("JMIX zip file not found"))
+                        .map_err(|_| Error::from("Failed to construct error response"));
+                }
+            } else {
+                // zip_ready is false - return error
+                tracing::error!("❌ JMIX package {} is not ready (zip build failed)", jmix_id);
+                return Response::builder()
+                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                    .body(Body::from("JMIX package build failed"))
+                    .map_err(|_| Error::from("Failed to construct error response"));
+            }
+        }
 
         let status = response_meta
             .and_then(|m| m.get("status"))
@@ -910,7 +582,7 @@ impl ServiceHandler<Value> for JmixEndpoint {
             }
         }
 
-        // body as base64 (binary)
+        // body as base64 (binary) - only if we didn't already handle jmixEnvelopes above
         if let Some(body_b64) = response_meta
             .and_then(|m| m.get("body_b64"))
             .and_then(|b| b.as_str())

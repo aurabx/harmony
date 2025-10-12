@@ -29,7 +29,7 @@ async fn dicom_move_persistent_relocates_into_per_move_dir() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind port");
     let qr_port = listener.local_addr().unwrap().port();
     drop(listener);
-    
+
     let listener2 = std::net::TcpListener::bind("127.0.0.1:0").expect("bind store port");
     let store_port = listener2.local_addr().unwrap().port();
     drop(listener2);
@@ -58,22 +58,23 @@ async fn dicom_move_persistent_relocates_into_per_move_dir() {
     // Start dcmqrscp
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
-    if verbose { dcmqr.arg("-d"); }
-    let dcmqr = dcmqr
-        .arg("-c")
-        .arg(&cfg_path)
-        .arg(qr_port.to_string());
-    if !verbose {
-        dcmqr.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+    if verbose {
+        dcmqr.arg("-d");
     }
-    let mut qr_child = dcmqr
-        .kill_on_drop(true)
-        .spawn()
-        .expect("spawn dcmqrscp");
+    let dcmqr = dcmqr.arg("-c").arg(&cfg_path).arg(qr_port.to_string());
+    if !verbose {
+        dcmqr
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
+    }
+    let mut qr_child = dcmqr.kill_on_drop(true).spawn().expect("spawn dcmqrscp");
 
     // Wait for port to be ready
     for _ in 0..60 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", qr_port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", qr_port))
+            .await
+            .is_ok()
+        {
             break;
         }
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
@@ -118,7 +119,8 @@ async fn dicom_move_persistent_relocates_into_per_move_dir() {
         .arg(qr_port.to_string())
         .arg(&dicom_path);
     if !verbose {
-        st.stdout(std::process::Stdio::null()).stderr(std::process::Stdio::null());
+        st.stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null());
     }
     let status = st.status().await.expect("run storescu");
     if !status.success() {
@@ -206,7 +208,9 @@ async fn dicom_move_persistent_relocates_into_per_move_dir() {
             .await
             .expect("router handled request");
         if resp.status() == StatusCode::OK {
-            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+            let bytes = axum::body::to_bytes(resp.into_body(), usize::MAX)
+                .await
+                .unwrap();
             let json: serde_json::Value = serde_json::from_slice(&bytes).expect("json parse");
             break json;
         } else if resp.status() == StatusCode::NOT_FOUND && attempt < 10 {
@@ -214,12 +218,19 @@ async fn dicom_move_persistent_relocates_into_per_move_dir() {
             tokio::time::sleep(std::time::Duration::from_millis(200)).await;
             continue;
         } else {
-            eprintln!("MOVE failed with status {} after {} attempts", resp.status(), attempt + 1);
+            eprintln!(
+                "MOVE failed with status {} after {} attempts",
+                resp.status(),
+                attempt + 1
+            );
             let _ = qr_child.kill().await;
             return; // skip assertions in flakey environments
         }
     };
-    eprintln!("Persistent move response: {}", serde_json::to_string_pretty(&json).unwrap());
+    eprintln!(
+        "Persistent move response: {}",
+        serde_json::to_string_pretty(&json).unwrap()
+    );
 
     // Extract folder_path and validate contents
     let folder_path = json
@@ -240,12 +251,17 @@ async fn dicom_move_persistent_relocates_into_per_move_dir() {
             }
         }
     }
-    assert!(dcm_count > 0, "Expected at least one .dcm in per-move directory");
+    assert!(
+        dcm_count > 0,
+        "Expected at least one .dcm in per-move directory"
+    );
 
     // Ensure per-move directory is under ./tmp/dimse (storage adapter path)
     let canonical = folder_path.to_string_lossy().to_string();
     assert!(
-        canonical.contains("/tmp/dimse/") || canonical.contains("./tmp/dimse/") || canonical.contains("tmp/dimse/"),
+        canonical.contains("/tmp/dimse/")
+            || canonical.contains("./tmp/dimse/")
+            || canonical.contains("tmp/dimse/"),
         "folder_path should be under storage adapter root ./tmp/dimse; got {}",
         canonical
     );

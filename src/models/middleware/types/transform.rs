@@ -46,7 +46,7 @@ impl JoltTransformMiddleware {
         let transform_config: TransformConfig = config.into();
         let engine = JoltTransformEngine::new(transform_config)
             .map_err(|e| format!("Failed to create JOLT transform engine: {}", e))?;
-        
+
         tracing::info!("JOLT transform middleware initialized");
         Ok(Self { engine })
     }
@@ -72,7 +72,10 @@ impl Middleware for JoltTransformMiddleware {
             match self.engine.transform(normalized_data.clone()) {
                 Ok(transformed) => {
                     envelope.normalized_data = Some(transformed);
-                    envelope.original_data = envelope.normalized_data.clone().unwrap_or(serde_json::Value::Null);
+                    envelope.original_data = envelope
+                        .normalized_data
+                        .clone()
+                        .unwrap_or(serde_json::Value::Null);
                     tracing::debug!("Applied JOLT transform on left side");
                 }
                 Err(e) => {
@@ -108,7 +111,10 @@ impl Middleware for JoltTransformMiddleware {
             match self.engine.transform(normalized_data.clone()) {
                 Ok(transformed) => {
                     envelope.normalized_data = Some(transformed);
-                    envelope.original_data = envelope.normalized_data.clone().unwrap_or(serde_json::Value::Null);
+                    envelope.original_data = envelope
+                        .normalized_data
+                        .clone()
+                        .unwrap_or(serde_json::Value::Null);
                     tracing::debug!("Applied JOLT transform on right side");
                 }
                 Err(e) => {
@@ -128,7 +134,9 @@ impl Middleware for JoltTransformMiddleware {
 }
 
 /// Parse configuration from HashMap for middleware registry
-pub fn parse_config(options: &HashMap<String, Value>) -> Result<JoltTransformMiddlewareConfig, String> {
+pub fn parse_config(
+    options: &HashMap<String, Value>,
+) -> Result<JoltTransformMiddlewareConfig, String> {
     let spec_path = options
         .get("spec_path")
         .and_then(|v| v.as_str())
@@ -251,7 +259,7 @@ mod tests {
 
         let input = json!({"test": "value"});
         let envelope = create_test_envelope(input.clone());
-        
+
         // Should be unchanged on left
         let left_result = middleware.left(envelope).await.unwrap();
         assert_eq!(left_result.normalized_data, Some(input.clone()));
