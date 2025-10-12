@@ -1,6 +1,8 @@
+use once_cell::sync::OnceCell;
 use redb::{Database, ReadableTable, TableDefinition};
 use serde::{Deserialize, Serialize};
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::SystemTime;
 
 /// JMIX package metadata stored in the index
@@ -17,40 +19,27 @@ const PACKAGES_BY_ID: TableDefinition<&str, &str> = TableDefinition::new("packag
 const PACKAGES_BY_STUDY_UID: TableDefinition<&str, &str> =
     TableDefinition::new("packages_by_study_uid");
 
+/// Global shared database instances mapped by database path
+/// This allows multiple storage locations in tests while sharing instances per path
+static GLOBAL_JMIX_DB: OnceCell<std::sync::Mutex<std::collections::HashMap<PathBuf, Arc<Database>>>> = OnceCell::new();
+
 /// JMIX package index for fast lookups without filesystem walks
+/// Now uses a shared database instance to prevent concurrent access issues
 pub struct JmixIndex {
-    db: Database,
+    db: Arc<Database>,
 }
 
 impl JmixIndex {
-    /// Open or create the index database
+    /// Open or create the index database using the shared global instance
     pub fn open(db_path: &Path) -> Result<Self, String> {
-        // Ensure parent directory exists
-        if let Some(parent) = db_path.parent() {
-            std::fs::create_dir_all(parent)
-                .map_err(|e| format!("Failed to create index directory: {}", e))?;
-        }
-        
-        let db = Database::create(db_path)
-            .map_err(|e| format!("Failed to open JMIX index database: {}", e))?;
-
-        // Initialize tables
-        let write_txn = db
-            .begin_write()
-            .map_err(|e| format!("Failed to begin write transaction: {}", e))?;
-        {
-            let _ = write_txn
-                .open_table(PACKAGES_BY_ID)
-                .map_err(|e| format!("Failed to open packages_by_id table: {}", e))?;
-            let _ = write_txn
-                .open_table(PACKAGES_BY_STUDY_UID)
-                .map_err(|e| format!("Failed to open packages_by_study_uid table: {}", e))?;
-        }
-        write_txn
-            .commit()
-            .map_err(|e| format!("Failed to commit table initialization: {}", e))?;
-
+        let db = get_or_create_shared_database(db_path)?;
         Ok(Self { db })
+    }
+
+    /// Create a new JmixIndex with the provided shared database (used for testing)
+    #[cfg(test)]
+    pub fn with_shared_db(db: Arc<Database>) -> Self {
+        Self { db }
     }
 
     /// Index a new JMIX package
@@ -206,10 +195,76 @@ impl JmixIndex {
     }
 }
 
+/// Get or create the shared database instance for a specific path
+fn get_or_create_shared_database(db_path: &Path) -> Result<Arc<Database>, String> {
+    let db_path_buf = db_path.to_path_buf();
+    
+    // Get or initialize the global database map
+    let db_map = GLOBAL_JMIX_DB.get_or_init(|| {
+        std::sync::Mutex::new(std::collections::HashMap::new())
+    });
+    
+    // Lock the map and check if we already have a database for this path
+    let mut map = db_map.lock().map_err(|e| format!("Failed to lock database map: {}", e))?;
+    
+    if let Some(existing_db) = map.get(&db_path_buf) {
+        // Return existing database instance for this path
+        tracing::debug!("🔄 Reusing existing database instance for: {}", db_path_buf.display());
+        Ok(existing_db.clone())
+    } else {
+        // Create new database instance for this path
+        tracing::debug!("🆕 Creating new database instance for: {}", db_path_buf.display());
+        let db = init_database(&db_path_buf)?;
+        map.insert(db_path_buf.clone(), db.clone());
+        Ok(db)
+    }
+}
+
+/// Initialize a new database instance
+fn init_database(db_path: &Path) -> Result<Arc<Database>, String> {
+    // Ensure parent directory exists
+    if let Some(parent) = db_path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create index directory: {}", e))?;
+    }
+    
+    tracing::info!("🗄️  Initializing shared JMIX index database: {}", db_path.display());
+    
+    let db = Database::create(db_path)
+        .map_err(|e| format!("Failed to open JMIX index database: {}", e))?;
+
+    // Initialize tables
+    let write_txn = db
+        .begin_write()
+        .map_err(|e| format!("Failed to begin write transaction: {}", e))?;
+    {
+        let _ = write_txn
+            .open_table(PACKAGES_BY_ID)
+            .map_err(|e| format!("Failed to open packages_by_id table: {}", e))?;
+        let _ = write_txn
+            .open_table(PACKAGES_BY_STUDY_UID)
+            .map_err(|e| format!("Failed to open packages_by_study_uid table: {}", e))?;
+    }
+    write_txn
+        .commit()
+        .map_err(|e| format!("Failed to commit table initialization: {}", e))?;
+
+    tracing::info!("✅ JMIX index database initialized successfully");
+    Ok(Arc::new(db))
+}
+
 /// Get or create the global JMIX index
+/// Now uses a shared database instance to prevent concurrent access issues
 pub fn get_jmix_index(store_root: &Path) -> Result<JmixIndex, String> {
     let db_path = store_root.join("jmix-index.redb");
     JmixIndex::open(&db_path)
+}
+
+/// Create a new database instance directly (for testing)
+#[cfg(test)]
+pub fn create_test_index(db_path: &Path) -> Result<JmixIndex, String> {
+    let db = init_database(db_path)?;
+    Ok(JmixIndex::with_shared_db(db))
 }
 
 /// Helper to get current Unix timestamp
@@ -229,7 +284,7 @@ mod tests {
     fn test_index_and_query() {
         let temp_dir = TempDir::new().unwrap();
         let db_path = temp_dir.path().join("test.redb");
-        let index = JmixIndex::open(&db_path).unwrap();
+        let index = create_test_index(&db_path).unwrap();
 
         // Index a package
         let info = JmixPackageInfo {
@@ -258,8 +313,8 @@ mod tests {
     #[test]
     fn test_multiple_packages_per_study() {
         let temp_dir = TempDir::new().unwrap();
-        let db_path = temp_dir.path().join("test.redb");
-        let index = JmixIndex::open(&db_path).unwrap();
+        let db_path = temp_dir.path().join("test2.redb");
+        let index = create_test_index(&db_path).unwrap();
 
         // Index multiple packages with same study UID
         for i in 1..=3 {
