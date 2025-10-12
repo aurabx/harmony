@@ -211,3 +211,540 @@ impl Middleware for JwtAuthMiddleware {
         Ok(envelope)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use serde::Serialize;
+    use std::collections::HashMap;
+    use tempfile::NamedTempFile;
+    use std::io::Write;
+    use rsa::{RsaPrivateKey, RsaPublicKey};
+    use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+    use rand::thread_rng;
+
+    #[derive(Serialize)]
+    struct TestClaims {
+        sub: Option<String>,
+        iss: Option<String>,
+        aud: Option<String>,
+        exp: i64,
+        iat: i64,
+        nbf: Option<i64>,
+    }
+
+    fn create_test_envelope_with_auth(auth_header: Option<&str>) -> RequestEnvelope<JsonValue> {
+        let mut headers = HashMap::new();
+        if let Some(auth) = auth_header {
+            headers.insert("authorization".to_string(), auth.to_string());
+        }
+        
+        RequestEnvelope {
+            request_details: RequestDetails {
+                method: "GET".to_string(),
+                uri: "/test".to_string(),
+                headers,
+                cookies: HashMap::new(),
+                query_params: HashMap::new(),
+                cache_status: None,
+                metadata: HashMap::new(),
+            },
+            original_data: serde_json::json!({}),
+            normalized_data: Some(serde_json::json!({"test": "data"})),
+            normalized_snapshot: None,
+        }
+    }
+
+    fn get_current_timestamp() -> i64 {
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64
+    }
+
+    #[test]
+    fn test_parse_config_hs256() {
+        let mut options = HashMap::new();
+        options.insert("use_hs256".to_string(), JsonValue::Bool(true));
+        options.insert("hs256_secret".to_string(), JsonValue::String("my-secret".to_string()));
+        options.insert("issuer".to_string(), JsonValue::String("test-issuer".to_string()));
+        options.insert("audience".to_string(), JsonValue::String("test-audience".to_string()));
+        options.insert("leeway_secs".to_string(), JsonValue::Number(30.into()));
+
+        let config = parse_config(&options).unwrap();
+        assert!(config.use_hs256);
+        assert_eq!(config.hs256_secret, Some("my-secret".to_string()));
+        assert_eq!(config.issuer, Some("test-issuer".to_string()));
+        assert_eq!(config.audience, Some("test-audience".to_string()));
+        assert_eq!(config.leeway_secs, Some(30));
+    }
+
+    #[test]
+    fn test_parse_config_rs256() {
+        let mut options = HashMap::new();
+        options.insert("public_key_path".to_string(), JsonValue::String("/path/to/key.pem".to_string()));
+        options.insert("use_hs256".to_string(), JsonValue::Bool(false));
+        options.insert("issuer".to_string(), JsonValue::String("test-issuer".to_string()));
+
+        let config = parse_config(&options).unwrap();
+        assert!(!config.use_hs256);
+        assert_eq!(config.public_key_path, "/path/to/key.pem");
+        assert_eq!(config.issuer, Some("test-issuer".to_string()));
+        assert_eq!(config.hs256_secret, None);
+    }
+
+    #[test]
+    fn test_parse_config_defaults() {
+        let options = HashMap::new();
+        let config = parse_config(&options).unwrap();
+        
+        assert!(!config.use_hs256);
+        assert_eq!(config.public_key_path, "");
+        assert_eq!(config.issuer, None);
+        assert_eq!(config.audience, None);
+        assert_eq!(config.leeway_secs, None);
+        assert_eq!(config.hs256_secret, None);
+    }
+
+    #[test]
+    fn test_jwt_auth_middleware_new_hs256() {
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: Some("test-issuer".to_string()),
+            audience: Some("test-audience".to_string()),
+            leeway_secs: Some(60),
+            use_hs256: true,
+            hs256_secret: Some("test-secret".to_string()),
+        };
+
+        let middleware = JwtAuthMiddleware::new(config);
+        assert_eq!(middleware.algorithm, Algorithm::HS256);
+        assert_eq!(middleware.config.issuer, Some("test-issuer".to_string()));
+        assert_eq!(middleware.config.audience, Some("test-audience".to_string()));
+    }
+
+    #[test]
+    fn test_jwt_auth_middleware_new_hs256_fallback_secret() {
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: None,
+            audience: None,
+            leeway_secs: None,
+            use_hs256: true,
+            hs256_secret: None, // Should use fallback secret
+        };
+
+        let middleware = JwtAuthMiddleware::new(config);
+        assert_eq!(middleware.algorithm, Algorithm::HS256);
+    }
+
+    #[test]
+    fn test_extract_token_from_envelope_success() {
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: None,
+            audience: None,
+            leeway_secs: None,
+            use_hs256: true,
+            hs256_secret: Some("test-secret".to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let envelope = create_test_envelope_with_auth(Some("Bearer my-jwt-token"));
+        let token = middleware.extract_token_from_envelope(&envelope).unwrap();
+        assert_eq!(token, "my-jwt-token");
+    }
+
+    #[test]
+    fn test_extract_token_from_envelope_missing_header() {
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: None,
+            audience: None,
+            leeway_secs: None,
+            use_hs256: true,
+            hs256_secret: Some("test-secret".to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let envelope = create_test_envelope_with_auth(None);
+        let result = middleware.extract_token_from_envelope(&envelope);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Missing Authorization header"));
+    }
+
+    #[test]
+    fn test_extract_token_from_envelope_invalid_format() {
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: None,
+            audience: None,
+            leeway_secs: None,
+            use_hs256: true,
+            hs256_secret: Some("test-secret".to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let envelope = create_test_envelope_with_auth(Some("Basic dXNlcjpwYXNz"));
+        let result = middleware.extract_token_from_envelope(&envelope);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Authorization header must start with 'Bearer '"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_token_success_hs256() {
+        let secret = "test-secret-key";
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: Some("test-issuer".to_string()),
+            audience: Some("test-audience".to_string()),
+            leeway_secs: Some(60),
+            use_hs256: true,
+            hs256_secret: Some(secret.to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let now = get_current_timestamp();
+        let claims = TestClaims {
+            sub: Some("test-user".to_string()),
+            iss: Some("test-issuer".to_string()),
+            aud: Some("test-audience".to_string()),
+            exp: now + 3600, // 1 hour from now
+            iat: now,
+            nbf: Some(now),
+        };
+
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+
+        let result = middleware.validate_token(&token).await;
+        assert!(result.is_ok());
+        assert!(result.unwrap());
+    }
+
+    #[tokio::test]
+    async fn test_validate_token_expired() {
+        let secret = "test-secret-key";
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: None,
+            audience: None,
+            leeway_secs: Some(60),
+            use_hs256: true,
+            hs256_secret: Some(secret.to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let now = get_current_timestamp();
+        let claims = TestClaims {
+            sub: Some("test-user".to_string()),
+            iss: None,
+            aud: None,
+            exp: now - 3600, // 1 hour ago (expired)
+            iat: now - 7200, // 2 hours ago
+            nbf: None,
+        };
+
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+
+        let result = middleware.validate_token(&token).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("jwt verify failed"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_token_wrong_issuer() {
+        let secret = "test-secret-key";
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: Some("expected-issuer".to_string()),
+            audience: None,
+            leeway_secs: Some(60),
+            use_hs256: true,
+            hs256_secret: Some(secret.to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let now = get_current_timestamp();
+        let claims = TestClaims {
+            sub: Some("test-user".to_string()),
+            iss: Some("wrong-issuer".to_string()), // Wrong issuer
+            aud: None,
+            exp: now + 3600,
+            iat: now,
+            nbf: None,
+        };
+
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+
+        let result = middleware.validate_token(&token).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("jwt verify failed"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_token_wrong_audience_string() {
+        let secret = "test-secret-key";
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: None,
+            audience: Some("expected-audience".to_string()),
+            leeway_secs: Some(60),
+            use_hs256: true,
+            hs256_secret: Some(secret.to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let now = get_current_timestamp();
+        let claims = TestClaims {
+            sub: Some("test-user".to_string()),
+            iss: None,
+            aud: Some("wrong-audience".to_string()), // Wrong audience
+            exp: now + 3600,
+            iat: now,
+            nbf: None,
+        };
+
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+
+        let result = middleware.validate_token(&token).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("jwt verify failed"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_token_wrong_algorithm() {
+        let secret = "test-secret-key";
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: None,
+            audience: None,
+            leeway_secs: Some(60),
+            use_hs256: true, // Expecting HS256
+            hs256_secret: Some(secret.to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let now = get_current_timestamp();
+        let claims = TestClaims {
+            sub: Some("test-user".to_string()),
+            iss: None,
+            aud: None,
+            exp: now + 3600,
+            iat: now,
+            nbf: None,
+        };
+
+        // Create token with HS512 algorithm instead of HS256
+        let token = encode(
+            &Header::new(Algorithm::HS512),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+
+        let result = middleware.validate_token(&token).await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("unexpected JWT alg"));
+    }
+
+    #[tokio::test]
+    async fn test_validate_token_invalid_format() {
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: None,
+            audience: None,
+            leeway_secs: Some(60),
+            use_hs256: true,
+            hs256_secret: Some("test-secret".to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let result = middleware.validate_token("invalid-jwt-token").await;
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid JWT header"));
+    }
+
+    #[tokio::test]
+    async fn test_left_middleware_success() {
+        let secret = "test-secret-key";
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: Some("test-issuer".to_string()),
+            audience: Some("test-audience".to_string()),
+            leeway_secs: Some(60),
+            use_hs256: true,
+            hs256_secret: Some(secret.to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let now = get_current_timestamp();
+        let claims = TestClaims {
+            sub: Some("test-user".to_string()),
+            iss: Some("test-issuer".to_string()),
+            aud: Some("test-audience".to_string()),
+            exp: now + 3600,
+            iat: now,
+            nbf: Some(now),
+        };
+
+        let token = encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap();
+
+        let envelope = create_test_envelope_with_auth(Some(&format!("Bearer {}", token)));
+        let result = middleware.left(envelope).await;
+        
+        assert!(result.is_ok());
+        let returned_envelope = result.unwrap();
+        assert_eq!(returned_envelope.request_details.method, "GET");
+        assert_eq!(returned_envelope.request_details.uri, "/test");
+    }
+
+    #[tokio::test]
+    async fn test_left_middleware_missing_token() {
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: None,
+            audience: None,
+            leeway_secs: Some(60),
+            use_hs256: true,
+            hs256_secret: Some("test-secret".to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let envelope = create_test_envelope_with_auth(None);
+        let result = middleware.left(envelope).await;
+        
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("Missing Authorization header"));
+    }
+
+    #[tokio::test]
+    async fn test_left_middleware_invalid_token() {
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: None,
+            audience: None,
+            leeway_secs: Some(60),
+            use_hs256: true,
+            hs256_secret: Some("test-secret".to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let envelope = create_test_envelope_with_auth(Some("Bearer invalid-token"));
+        let result = middleware.left(envelope).await;
+        
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("invalid JWT header"));
+    }
+
+    #[tokio::test]
+    async fn test_right_middleware_passthrough() {
+        let config = JwtAuthConfig {
+            public_key_path: "".to_string(),
+            issuer: None,
+            audience: None,
+            leeway_secs: Some(60),
+            use_hs256: true,
+            hs256_secret: Some("test-secret".to_string()),
+        };
+        let middleware = JwtAuthMiddleware::new(config);
+
+        let envelope = create_test_envelope_with_auth(None);
+        let original_method = envelope.request_details.method.clone();
+        let original_uri = envelope.request_details.uri.clone();
+        
+        let result = middleware.right(envelope).await;
+        
+        assert!(result.is_ok());
+        let returned_envelope = result.unwrap();
+        assert_eq!(returned_envelope.request_details.method, original_method);
+        assert_eq!(returned_envelope.request_details.uri, original_uri);
+    }
+
+    #[test]
+    fn test_jwt_auth_middleware_new_rs256_with_valid_key() {
+        // Generate a temporary RSA key pair for testing
+        let mut rng = thread_rng();
+        let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
+        let public_key = RsaPublicKey::from(&private_key);
+        let public_pem = public_key.to_public_key_pem(rsa::pkcs8::LineEnding::LF).unwrap();
+
+        // Write public key to a temporary file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(public_pem.as_bytes()).unwrap();
+        let temp_path = temp_file.path().to_string_lossy().to_string();
+
+        let config = JwtAuthConfig {
+            public_key_path: temp_path,
+            issuer: Some("test-issuer".to_string()),
+            audience: Some("test-audience".to_string()),
+            leeway_secs: Some(60),
+            use_hs256: false, // RS256 mode
+            hs256_secret: None,
+        };
+
+        let middleware = JwtAuthMiddleware::new(config);
+        assert_eq!(middleware.algorithm, Algorithm::RS256);
+    }
+
+    #[test]
+    #[should_panic(expected = "JWT: failed to read RSA public key")]
+    fn test_jwt_auth_middleware_new_rs256_missing_key() {
+        let config = JwtAuthConfig {
+            public_key_path: "/nonexistent/path/key.pem".to_string(),
+            issuer: None,
+            audience: None,
+            leeway_secs: None,
+            use_hs256: false,
+            hs256_secret: None,
+        };
+
+        JwtAuthMiddleware::new(config);
+    }
+
+    #[test]
+    #[should_panic(expected = "JWT: failed to parse RSA public key")]
+    fn test_jwt_auth_middleware_new_rs256_invalid_key() {
+        // Write invalid PEM content to temporary file
+        let mut temp_file = NamedTempFile::new().unwrap();
+        temp_file.write_all(b"invalid pem content").unwrap();
+        let temp_path = temp_file.path().to_string_lossy().to_string();
+
+        let config = JwtAuthConfig {
+            public_key_path: temp_path,
+            issuer: None,
+            audience: None,
+            leeway_secs: None,
+            use_hs256: false,
+            hs256_secret: None,
+        };
+
+        JwtAuthMiddleware::new(config);
+    }
+}
