@@ -31,11 +31,14 @@ impl JmixIndex {
     pub fn open(db_path: &Path) -> Result<Self, String> {
         let db_path_buf = db_path.to_path_buf();
         let db = DatabaseManager::global().get_or_create_database(&db_path_buf)?;
-        
+
         // Initialize tables if this is a new database
-        let instance = Self { db: db.clone(), db_path: db_path_buf };
+        let instance = Self {
+            db: db.clone(),
+            db_path: db_path_buf,
+        };
         instance.initialize_tables(&db)?;
-        
+
         Ok(instance)
     }
 
@@ -151,7 +154,7 @@ impl JmixIndex {
     pub fn remove_package(&self, id: &str, study_uid: &str) -> Result<(), String> {
         let id_owned = id.to_string();
         let study_uid_owned = study_uid.to_string();
-        
+
         DatabaseOperation::write(&self.db, |write_txn| {
             {
                 // Remove from ID index
@@ -192,7 +195,7 @@ impl DatabaseBackend for JmixIndex {
     fn database_path(&self) -> PathBuf {
         self.db_path.clone()
     }
-    
+
     fn initialize_tables(&self, db: &Database) -> Result<(), String> {
         let table_definitions = &[&PACKAGES_BY_ID, &PACKAGES_BY_STUDY_UID];
         DatabaseManager::global().initialize_tables(db, table_definitions)

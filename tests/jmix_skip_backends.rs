@@ -13,14 +13,17 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-fn create_test_zip(source_dir: &PathBuf, zip_path: &PathBuf) -> Result<(), Box<dyn std::error::Error>> {
+fn create_test_zip(
+    source_dir: &PathBuf,
+    zip_path: &PathBuf,
+) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
     use zip::write::FileOptions;
-    
+
     let zip_file = std::fs::File::create(zip_path)?;
     let mut zip = zip::ZipWriter::new(zip_file);
     let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
-    
+
     // Add manifest.json to zip
     let manifest_path = source_dir.join("manifest.json");
     if manifest_path.exists() {
@@ -28,7 +31,7 @@ fn create_test_zip(source_dir: &PathBuf, zip_path: &PathBuf) -> Result<(), Box<d
         let manifest_content = std::fs::read(&manifest_path)?;
         zip.write_all(&manifest_content)?;
     }
-    
+
     // Add payload/metadata.json to zip
     let metadata_path = source_dir.join("payload").join("metadata.json");
     if metadata_path.exists() {
@@ -36,7 +39,7 @@ fn create_test_zip(source_dir: &PathBuf, zip_path: &PathBuf) -> Result<(), Box<d
         let metadata_content = std::fs::read(&metadata_path)?;
         zip.write_all(&metadata_content)?;
     }
-    
+
     zip.finish()?;
     Ok(())
 }
@@ -57,7 +60,7 @@ fn ensure_jmix_envelope(id: &str) -> PathBuf {
         serde_json::to_vec_pretty(&manifest).unwrap(),
     )
     .expect("write manifest");
-    
+
     // Also write a minimal metadata.json for completeness
     let metadata = serde_json::json!({
         "id": id,
@@ -70,11 +73,11 @@ fn ensure_jmix_envelope(id: &str) -> PathBuf {
         serde_json::to_vec_pretty(&metadata).unwrap(),
     )
     .expect("write metadata");
-    
+
     // Create a minimal zip file for the package (as expected by JMIX middleware)
     let zip_path = pkg.join(format!("{}.zip", id));
     create_test_zip(&pkg, &zip_path).expect("create test zip");
-    
+
     pkg
 }
 

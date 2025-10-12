@@ -745,7 +745,7 @@ impl DicomEndpoint {
                                 }
                             }
                         }
-                        
+
                         response
                     }
                     Err(e) => serde_json::json!({

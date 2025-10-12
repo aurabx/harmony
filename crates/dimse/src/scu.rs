@@ -195,14 +195,17 @@ impl DimseScu {
                     cleanup_dir = out_dir_clone.clone();
                 }
             }
-            
+
             // Clean up the temporary directory
             if let Err(e) = tokio::fs::remove_dir_all(&cleanup_dir).await {
-                warn!("Failed to cleanup C-FIND temp directory {:?}: {}", cleanup_dir, e);
+                warn!(
+                    "Failed to cleanup C-FIND temp directory {:?}: {}",
+                    cleanup_dir, e
+                );
             } else {
                 debug!("🧹 Cleaned up C-FIND temp directory: {:?}", cleanup_dir);
             }
-            
+
             // drop sender to close stream
         });
 
@@ -352,8 +355,11 @@ impl DimseScu {
                     let dcmtk_base = storage_dir.join("dcmtk");
                     if let Err(e) = tokio::fs::create_dir_all(&dcmtk_base).await {
                         warn!("Failed to ensure dcmtk base dir exists: {}", e);
-                    } else if let Err(e) =
-                        tokio::fs::write(dcmtk_base.join("movescu_last.json"), debug_payload.to_string()).await
+                    } else if let Err(e) = tokio::fs::write(
+                        dcmtk_base.join("movescu_last.json"),
+                        debug_payload.to_string(),
+                    )
+                    .await
                     {
                         warn!("Failed to write movescu_last.json: {}", e);
                     }
@@ -369,7 +375,10 @@ impl DimseScu {
                                         if meta.is_file() {
                                             // Only auto-cleanup files when using our own temp directory
                                             let _ = tx_clone
-                                                .send(Ok(DatasetStream::from_file(path, should_cleanup_move)))
+                                                .send(Ok(DatasetStream::from_file(
+                                                    path,
+                                                    should_cleanup_move,
+                                                )))
                                                 .await;
                                         }
                                     }
@@ -394,7 +403,7 @@ impl DimseScu {
                     cleanup_dir = out_dir_clone.clone();
                 }
             }
-            
+
             // Only clean up directories that we created ourselves
             if should_cleanup_move {
                 if let Some(dir) = cleanup_dir {
@@ -405,7 +414,7 @@ impl DimseScu {
                     }
                 }
             }
-            
+
             // drop sender to close stream
         });
 
@@ -536,7 +545,10 @@ impl DimseScu {
                                     if meta.is_file() {
                                         // Only auto-cleanup files when using our own temp directory
                                         let _ = tx_clone
-                                            .send(Ok(DatasetStream::from_file(path, should_cleanup)))
+                                            .send(Ok(DatasetStream::from_file(
+                                                path,
+                                                should_cleanup,
+                                            )))
                                             .await;
                                     }
                                 }
@@ -560,16 +572,19 @@ impl DimseScu {
                     cleanup_dir = out_dir_clone.clone();
                 }
             }
-            
+
             // Only clean up directories that we created ourselves
             if should_cleanup {
                 if let Err(e) = tokio::fs::remove_dir_all(&cleanup_dir).await {
-                    warn!("Failed to cleanup C-GET temp directory {:?}: {}", cleanup_dir, e);
+                    warn!(
+                        "Failed to cleanup C-GET temp directory {:?}: {}",
+                        cleanup_dir, e
+                    );
                 } else {
                     debug!("🧹 Cleaned up C-GET temp directory: {:?}", cleanup_dir);
                 }
             }
-            
+
             // drop sender to close stream
         });
 
