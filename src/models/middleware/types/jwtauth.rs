@@ -5,6 +5,7 @@ use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::sync::Arc;
+use std::slice::from_ref;
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct JwtAuthConfig {
@@ -135,10 +136,10 @@ impl JwtAuthMiddleware {
         validation.leeway = self.config.leeway_secs.unwrap_or(60);
 
         if let Some(ref iss) = self.config.issuer {
-            validation.set_issuer(&[iss.clone()]);
+            validation.set_issuer(from_ref(iss));
         }
         if let Some(ref aud) = self.config.audience {
-            validation.set_audience(&[aud.clone()]);
+            validation.set_audience(from_ref(aud));
         }
 
         let token_data = decode::<Claims>(token, &self.decoding_key, &validation)
@@ -218,7 +219,7 @@ mod tests {
     use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use rand::thread_rng;
-    use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
+    use rsa::pkcs8::{EncodePublicKey};
     use rsa::{RsaPrivateKey, RsaPublicKey};
     use serde::Serialize;
     use std::collections::HashMap;

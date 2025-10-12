@@ -84,7 +84,11 @@ module=""
 [middleware_types.transform]
 module=""
 
-# DICOMweb <-> DICOM bridge middleware
+# DICOMweb <-> DICOM bridge middleware (RECOMMENDED - replaces both middlewares below)
+[middleware_types.dicomweb_bridge]
+module=""
+
+# Legacy DICOMweb middleware (kept for backward compatibility)
 [middleware_types.dicomweb_to_dicom]
 module=""
 

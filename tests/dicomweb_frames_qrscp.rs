@@ -227,7 +227,7 @@ async fn dicomweb_frames_with_dcmqrscp() {
         description = "DICOMweb -> DICOM bridge with frames"
         networks = ["default"]
         endpoints = ["dicomweb"]
-        middleware = ["dicomweb_to_dicom", "dicom_to_dicomweb"]
+        middleware = ["dicomweb_bridge"]
         backends = ["dicom_pacs"]
 
         [endpoints.dicomweb]
@@ -248,9 +248,7 @@ async fn dicomweb_frames_with_dcmqrscp() {
         [services.dicom]
         module = ""
 
-        [middleware_types.dicomweb_to_dicom]
-        module = ""
-        [middleware_types.dicom_to_dicomweb]
+        [middleware_types.dicomweb_bridge]
         module = ""
     "#,
         port = port
@@ -515,7 +513,7 @@ async fn dicomweb_multiframes_with_dcmqrscp() {
         description = "DICOMweb -> DICOM bridge with multiframes"
         networks = ["default"]
         endpoints = ["dicomweb"]
-        middleware = ["dicomweb_to_dicom", "dicom_to_dicomweb"]
+        middleware = ["dicomweb_bridge"]
         backends = ["dicom_pacs"]
 
         [endpoints.dicomweb]
@@ -536,9 +534,7 @@ async fn dicomweb_multiframes_with_dcmqrscp() {
         [services.dicom]
         module = ""
 
-        [middleware_types.dicomweb_to_dicom]
-        module = ""
-        [middleware_types.dicom_to_dicomweb]
+        [middleware_types.dicomweb_bridge]
         module = ""
     "#,
         port = port

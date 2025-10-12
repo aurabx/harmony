@@ -1,7 +1,6 @@
 pub mod auth;
 pub mod connect;
-pub mod dicom_to_dicomweb;
-pub mod dicomweb_to_dicom;
+pub mod dicomweb_bridge;
 pub mod jmix_builder;
 pub mod jmix_index;
 pub mod json_extractor;

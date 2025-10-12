@@ -5,23 +5,52 @@ use base64::Engine;
 use dicom_pixeldata::image as img;
 use dicom_pixeldata::PixelDecoder;
 use img::ImageEncoder;
-use serde_json::Value;
+use serde_json::{json, Value};
 use std::collections::HashMap;
 use std::fs;
 use std::path::PathBuf;
 
-/// Right-side middleware: shapes DIMSE backend outputs into DICOMweb HTTP responses
-/// Supports:
-/// - QIDO-RS list responses as application/dicom+json
-/// - WADO-RS instance retrieval as multipart/related (application/dicom parts) when files are on filesystem
-/// - WADO-RS metadata as application/dicom+json using identifier JSON (minimal)
+/// Bridge middleware that maps DICOMweb HTTP requests (QIDO/WADO) into DIMSE operations
+/// and converts DICOM responses back to DICOMweb format.
+///
+/// LEFT side: Converts DICOMweb requests to DIMSE operations
+/// RIGHT side: Converts DICOM backend responses to DICOMweb JSON/binary
 #[derive(Default, Debug)]
-pub struct DicomToDicomwebMiddleware;
+pub struct DicomwebBridgeMiddleware;
 
-impl DicomToDicomwebMiddleware {
+impl DicomwebBridgeMiddleware {
     pub fn new() -> Self {
-        Self::default()
+        Self
     }
+
+    // --- LEFT SIDE HELPERS (DICOMweb → DICOM) ---
+
+    fn set_backend_path(metadata: &mut HashMap<String, String>, op: &str) {
+        // Store intended DIMSE operation without overwriting the routing path
+        metadata.insert("dimse_op".to_string(), op.to_string());
+        // Ensure backends are not skipped
+        metadata.insert("skip_backends".to_string(), "false".to_string());
+    }
+
+    fn clear_endpoint_response(nd: &mut Value) {
+        if let Some(obj) = nd.as_object_mut() {
+            obj.remove("response");
+        }
+    }
+
+    fn qp_first(qp: &HashMap<String, Vec<String>>, key: &str) -> Option<String> {
+        qp.get(key).and_then(|v| v.first()).map(|s| s.to_string())
+    }
+
+    fn make_ident_entry(vr: &str, vals: Vec<String>) -> Value {
+        json!({ "vr": vr, "Value": vals })
+    }
+
+    fn add_tag(map: &mut serde_json::Map<String, Value>, tag: &str, vr: &str, vals: Vec<String>) {
+        map.insert(tag.to_string(), Self::make_ident_entry(vr, vals));
+    }
+
+    // --- RIGHT SIDE HELPERS (DICOM → DICOMweb) ---
 
     fn set_response(
         envelope: &mut RequestEnvelope<Value>,
@@ -60,11 +89,41 @@ impl DicomToDicomwebMiddleware {
         envelope.original_data = new_nd;
     }
 
-    fn build_qido_json(matches: &Value) -> Value {
-        // DICOMweb QIDO JSON is an array of DICOM JSON datasets
+    fn build_qido_json_from_matches(matches: &Value) -> Value {
+        // Convert identifier JSON objects to full DICOMweb JSON objects
         match matches {
-            Value::Array(arr) => Value::Array(arr.clone()),
-            other => Value::Array(vec![other.clone()]),
+            Value::Array(arr) => {
+                let mut dicomweb_objects = Vec::new();
+                for item in arr {
+                    // Each item should be a DICOM identifier JSON from the backend
+                    // Convert it to full DICOMweb format
+                    if let Ok(dicom_obj) = dicom_json_tool::json_value_to_identifier(item) {
+                        if let Ok(full_json) = dicom_json_tool::identifier_to_json_value(&dicom_obj)
+                        {
+                            dicomweb_objects.push(full_json);
+                        } else {
+                            // Fallback: use the identifier as-is
+                            dicomweb_objects.push(item.clone());
+                        }
+                    } else {
+                        // Fallback: use the identifier as-is
+                        dicomweb_objects.push(item.clone());
+                    }
+                }
+                Value::Array(dicomweb_objects)
+            }
+            other => {
+                // Single object case
+                if let Ok(dicom_obj) = dicom_json_tool::json_value_to_identifier(other) {
+                    if let Ok(full_json) = dicom_json_tool::identifier_to_json_value(&dicom_obj) {
+                        Value::Array(vec![full_json])
+                    } else {
+                        Value::Array(vec![other.clone()])
+                    }
+                } else {
+                    Value::Array(vec![other.clone()])
+                }
+            }
         }
     }
 
@@ -104,12 +163,173 @@ impl DicomToDicomwebMiddleware {
 }
 
 #[async_trait::async_trait]
-impl Middleware for DicomToDicomwebMiddleware {
+impl Middleware for DicomwebBridgeMiddleware {
     async fn left(
         &self,
-        envelope: RequestEnvelope<serde_json::Value>,
+        mut envelope: RequestEnvelope<serde_json::Value>,
     ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
-        // no-op
+        let method = envelope.request_details.method.to_uppercase();
+        let subpath = envelope
+            .request_details
+            .metadata
+            .get("path")
+            .cloned()
+            .unwrap_or_default();
+        let qp = &envelope.request_details.query_params;
+
+        // Only act on GET requests from DICOMweb endpoints
+        if method != "GET" {
+            return Ok(envelope);
+        }
+
+        // Parse path segments (already relative to path_prefix)
+        let parts: Vec<&str> = subpath.split('/').filter(|s| !s.is_empty()).collect();
+        if parts.is_empty() {
+            return Ok(envelope);
+        }
+
+        // Build DICOM identifier JSON using hex tags
+        // Common tag mappings
+        // StudyInstanceUID -> 0020000D (UI)
+        // SeriesInstanceUID -> 0020000E (UI)
+        // SOPInstanceUID -> 00080018 (UI)
+        // PatientID -> 00100020 (LO)
+        // AccessionNumber -> 00080050 (SH)
+        // Modality -> 00080060 (CS)
+        let mut ident = serde_json::Map::<String, Value>::new();
+
+        // Pull selected QIDO query params
+        if let Some(v) = Self::qp_first(qp, "StudyInstanceUID") {
+            Self::add_tag(&mut ident, "0020000D", "UI", vec![v]);
+        }
+        if let Some(v) = Self::qp_first(qp, "SeriesInstanceUID") {
+            Self::add_tag(&mut ident, "0020000E", "UI", vec![v]);
+        }
+        if let Some(v) = Self::qp_first(qp, "SOPInstanceUID") {
+            Self::add_tag(&mut ident, "00080018", "UI", vec![v]);
+        }
+        if let Some(v) = Self::qp_first(qp, "PatientID") {
+            Self::add_tag(&mut ident, "00100020", "LO", vec![v]);
+        }
+        if let Some(v) = Self::qp_first(qp, "AccessionNumber") {
+            Self::add_tag(&mut ident, "00080050", "SH", vec![v]);
+        }
+        if let Some(v) = Self::qp_first(qp, "Modality") {
+            Self::add_tag(&mut ident, "00080060", "CS", vec![v]);
+        }
+
+        // Route-based mapping
+        let mut op = None::<&str>;
+        match parts.as_slice() {
+            // QIDO: /studies
+            ["studies"] => {
+                op = Some("find");
+                // Include return keys for common attributes by using empty Value arrays
+                ident
+                    .entry("0020000D")
+                    .or_insert_with(|| Self::make_ident_entry("UI", vec![])); // StudyInstanceUID
+                ident
+                    .entry("00080020")
+                    .or_insert_with(|| Self::make_ident_entry("DA", vec![])); // StudyDate
+                ident
+                    .entry("00080061")
+                    .or_insert_with(|| Self::make_ident_entry("CS", vec![])); // ModalitiesInStudy
+                ident
+                    .entry("00100020")
+                    .or_insert_with(|| Self::make_ident_entry("LO", vec![])); // PatientID
+                ident
+                    .entry("00100010")
+                    .or_insert_with(|| Self::make_ident_entry("PN", vec![])); // PatientName
+            }
+            // QIDO: /studies/{study}/series
+            ["studies", study_uid, "series"] => {
+                op = Some("find");
+                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                ident
+                    .entry("0020000E")
+                    .or_insert_with(|| Self::make_ident_entry("UI", vec![])); // SeriesInstanceUID return key
+                ident
+                    .entry("00080060")
+                    .or_insert_with(|| Self::make_ident_entry("CS", vec![])); // Modality
+            }
+            // QIDO: /studies/{study}/series/{series}/instances
+            ["studies", study_uid, "series", series_uid, "instances"] => {
+                op = Some("find");
+                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                Self::add_tag(
+                    &mut ident,
+                    "0020000E",
+                    "UI",
+                    vec![(*series_uid).to_string()],
+                );
+                ident
+                    .entry("00080018")
+                    .or_insert_with(|| Self::make_ident_entry("UI", vec![])); // SOPInstanceUID return key
+            }
+            // WADO: /studies/{study}/series/{series}/instances/{instance}
+            ["studies", study_uid, "series", series_uid, "instances", instance_uid] => {
+                op = Some("get");
+                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                Self::add_tag(
+                    &mut ident,
+                    "0020000E",
+                    "UI",
+                    vec![(*series_uid).to_string()],
+                );
+                Self::add_tag(
+                    &mut ident,
+                    "00080018",
+                    "UI",
+                    vec![(*instance_uid).to_string()],
+                );
+            }
+            // WADO: frames (map to get at instance level)
+            ["studies", study_uid, "series", series_uid, "instances", instance_uid, "frames", _frames] =>
+            {
+                op = Some("get");
+                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                Self::add_tag(
+                    &mut ident,
+                    "0020000E",
+                    "UI",
+                    vec![(*series_uid).to_string()],
+                );
+                Self::add_tag(
+                    &mut ident,
+                    "00080018",
+                    "UI",
+                    vec![(*instance_uid).to_string()],
+                );
+            }
+            // WADO bulkdata (map to get; actual subresource ignored for now)
+            ["bulkdata", ..] => {
+                op = Some("get");
+            }
+            _ => {}
+        }
+
+        if let Some(op_name) = op {
+            // Ensure metadata prepared for backend
+            Self::set_backend_path(&mut envelope.request_details.metadata, op_name);
+
+            // Clear any response set by upstream endpoint
+            let mut nd = envelope
+                .normalized_data
+                .clone()
+                .unwrap_or_else(|| json!({}));
+            Self::clear_endpoint_response(&mut nd);
+
+            // Attach identifier for backend to consume
+            if let Some(obj) = nd.as_object_mut() {
+                obj.insert("dimse_identifier".to_string(), Value::Object(ident));
+            } else {
+                let mut map = serde_json::Map::new();
+                map.insert("dimse_identifier".to_string(), Value::Object(ident));
+                nd = Value::Object(map);
+            }
+            envelope.normalized_data = Some(nd);
+        }
+
         Ok(envelope)
     }
 
@@ -156,20 +376,21 @@ impl Middleware for DicomToDicomwebMiddleware {
         // QIDO lists -> application/dicom+json
         if operation == "find" {
             let matches_val = nd.get("matches").cloned().unwrap_or(Value::Array(vec![]));
-            let json = Self::build_qido_json(&matches_val);
+            let json = Self::build_qido_json_from_matches(&matches_val);
             let mut hdrs = HashMap::new();
             hdrs.insert(
                 "content-type".to_string(),
                 "application/dicom+json".to_string(),
             );
-            Self::set_response(
-                &mut envelope,
-                http::StatusCode::OK,
-                hdrs,
-                None,
-                None,
-                Some(json),
-            );
+
+            // Return 200 if we have results, 204 if empty
+            let status = if json.as_array().is_some_and(|arr| !arr.is_empty()) {
+                http::StatusCode::OK
+            } else {
+                http::StatusCode::NO_CONTENT
+            };
+
+            Self::set_response(&mut envelope, status, hdrs, None, None, Some(json));
             return Ok(envelope);
         }
 
@@ -249,8 +470,8 @@ impl Middleware for DicomToDicomwebMiddleware {
                 // Parse instance UID and frame numbers from path
                 let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
                 // expected: studies/{study}/series/{series}/instances/{instance}/frames/{frames}
-                let instance_uid = parts.get(5).map(|s| *s).unwrap_or("");
-                let frames_str = parts.get(7).map(|s| *s).unwrap_or("");
+                let instance_uid = parts.get(5).copied().unwrap_or("");
+                let frames_str = parts.get(7).copied().unwrap_or("");
                 let frame_numbers: Vec<usize> = frames_str
                     .split(',')
                     .filter_map(|s| s.parse::<usize>().ok())

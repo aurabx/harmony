@@ -36,7 +36,7 @@ impl JmixBuilderMiddleware {
 impl Middleware for JmixBuilderMiddleware {
     async fn left(
         &self,
-        mut envelope: RequestEnvelope<serde_json::Value>,
+        mut envelope: RequestEnvelope<Value>,
     ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         // Read metadata set by endpoint
         let jmix_id = envelope.request_details.metadata.get("jmix_id").cloned();
@@ -401,7 +401,7 @@ impl Middleware for JmixBuilderMiddleware {
         // Clean up DIMSE files now that the zip has been successfully created
         let dimse_folder = std::path::Path::new(&folder_path);
         if dimse_folder.exists() {
-            match fs::remove_dir_all(&dimse_folder) {
+            match fs::remove_dir_all(dimse_folder) {
                 Ok(_) => {
                     tracing::info!("🧹 Cleaned up DIMSE files from: {}", folder_path);
                 }

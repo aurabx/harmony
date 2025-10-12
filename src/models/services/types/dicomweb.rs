@@ -185,8 +185,22 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
             return Ok(envelope);
         }
 
-        // For now, all DICOMweb endpoints return 501 Not Implemented
-        // This is the skeleton implementation as requested
+        // Check if this is a QIDO endpoint (query operations)
+        let parts: Vec<&str> = subpath.split('/').filter(|s| !s.is_empty()).collect();
+        let is_qido = match parts.as_slice() {
+            ["studies"] => true,
+            ["studies", _, "series"] => true,
+            ["studies", _, "series", _, "instances"] => true,
+            _ => false,
+        };
+
+        if is_qido {
+            // QIDO endpoints are implemented - allow backend processing
+            // Do not set skip_backends, let the middleware and backend handle it
+            return Ok(envelope);
+        }
+
+        // All other DICOMweb endpoints (WADO) return 501 Not Implemented
         let mut hdrs = HashMap::new();
         hdrs.insert("content-type".to_string(), "application/json".to_string());
 
@@ -204,7 +218,7 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
             Some(error_response),
         );
 
-        // Skip backends for now since this is just the skeleton
+        // Skip backends for WADO endpoints that are not yet implemented
         envelope
             .request_details
             .metadata

@@ -566,10 +566,7 @@ impl DicomEndpoint {
                                 // For non-filesystem, stream and persist via storage backend.
                                 if !is_fs_backend {
                                     if let Some(storage) = get_storage() {
-                                        let bytes = match tokio::fs::read(path).await {
-                                            Ok(b) => b,
-                                            Err(_) => Vec::new(),
-                                        };
+                                        let bytes = tokio::fs::read(path).await.unwrap_or_else(|_| Vec::new());
                                         // Normalize filename to .dcm
                                         let src = Path::new(path);
                                         let base = src
@@ -656,7 +653,7 @@ impl DicomEndpoint {
                                     if p.starts_with(&per_move_dir) {
                                         continue;
                                     }
-                                    if let Ok(obj) = dicom_object::open_file(&p) {
+                                    if let Ok(obj) = dicom_object::open_file(p) {
                                         if let Ok(json) =
                                             dicom_json_tool::identifier_to_json_value(&obj)
                                         {
@@ -664,7 +661,7 @@ impl DicomEndpoint {
                                                 .get("0020000D")
                                                 .and_then(|v| v.get("Value"))
                                                 .and_then(|v| v.as_array())
-                                                .and_then(|arr| arr.get(0))
+                                                .and_then(|arr| arr.first())
                                                 .and_then(|v| v.as_str())
                                                 .unwrap_or("");
                                             if uid == requested_uid {
@@ -674,9 +671,9 @@ impl DicomEndpoint {
                                                     .unwrap_or_else(|| "instance.dcm".to_string());
                                                 let target = per_move_dir.join(file_name);
                                                 let _ =
-                                                    std::fs::rename(&p, &target).or_else(|_| {
-                                                        std::fs::copy(&p, &target)
-                                                            .map(|_| std::fs::remove_file(&p).ok())
+                                                    std::fs::rename(p, &target).or_else(|_| {
+                                                        std::fs::copy(p, &target)
+                                                            .map(|_| std::fs::remove_file(p).ok())
                                                             .map(|_| ())
                                                     });
                                             }
@@ -841,10 +838,7 @@ impl DicomEndpoint {
                             if let Ok(dimse::types::DatasetStream::File { ref path, .. }) = item {
                                 if !is_fs_backend {
                                     if let Some(storage) = get_storage() {
-                                        let bytes = match tokio::fs::read(path).await {
-                                            Ok(b) => b,
-                                            Err(_) => Vec::new(),
-                                        };
+                                        let bytes = tokio::fs::read(path).await.unwrap_or_else(|_| Vec::new());
                                         let src = Path::new(path);
                                         let base = src
                                             .file_stem()

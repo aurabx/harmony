@@ -75,10 +75,10 @@ impl DatabaseManager {
     }
 
     /// Initialize tables in a database (helper method for specific implementations)
-    pub fn initialize_tables<'a>(
+    pub fn initialize_tables(
         &self,
         db: &Database,
-        table_definitions: &[&'a TableDefinition<&'static str, &'static str>],
+        table_definitions: &[&TableDefinition<&'static str, &'static str>],
     ) -> Result<(), String> {
         let write_txn = db
             .begin_write()

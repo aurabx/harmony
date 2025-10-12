@@ -3,11 +3,11 @@
 #-------------------------
 [proxy]
 # The name of the proxy, required
-id = "harmony-test"
+id = "harmony-dicomweb"
 # The log level. Defaults to 'error'
 log_level = "debug"
 # Directories are resolved relative to this config file's directory
-pipelines_path = "pipelines/basic"
+pipelines_path = "pipelines"
 transforms_path = "transforms"
 
 # ------------------------
@@ -45,62 +45,10 @@ path = "./tmp"
 # ------------------------
 # Service types
 #-------------------------
-[services.http]
-module=""
-
-[services.fhir]
-module=""
-
 [services.dicom]
 module=""
 
-[services.echo]
-module=""
-
-[services.jmix]
-module=""
-
 [services.dicomweb]
-module=""
-
-# ------------------------
-# Available middleware
-#-------------------------
-[middleware_types.jwtauth]
-module=""
-
-[middleware_types.auth]
-module=""
-
-[middleware_types.connect]
-module=""
-
-[middleware_types.json_extractor]
-module=""
-
-[middleware_types.passthru]
-module=""
-
-[middleware_types.transform]
-module=""
-
-# DICOMweb <-> DICOM bridge middleware (RECOMMENDED - replaces both middlewares below)
-[middleware_types.dicomweb_bridge]
-module=""
-
-# Legacy DICOMweb middleware (kept for backward compatibility)
-[middleware_types.dicomweb_to_dicom]
-module=""
-
-[middleware_types.dicom_to_dicomweb]
-module=""
-
-# JMIX builder middleware
-[middleware_types.jmix_builder]
-module=""
-
-# Aliases
-[middleware_types.json]
 module=""
 
 [middleware_types.dicomweb]
