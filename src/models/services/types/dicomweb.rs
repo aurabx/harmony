@@ -27,14 +27,32 @@ impl DicomwebEndpoint {
         match response_type {
             "qido_json" => {
                 // QIDO-RS responses: application/dicom+json
-                // According to DICOMweb spec, successful queries should return 200 OK
-                // even if no results are found. 204 should only be used for specific cases.
+                // According to DICOMweb spec, return 204 No Content for successful queries with no results
                 let json_data = data.cloned().unwrap_or(Value::Array(vec![]));
+                
+                // Check metadata to determine if results were found
+                let has_results = metadata
+                    .and_then(|m| m.get("has_results"))
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or_else(|| {
+                        // Fallback: check data content if metadata is missing
+                        match &json_data {
+                            Value::Array(arr) => !arr.is_empty(),
+                            _ => true,
+                        }
+                    });
+                
+                let status = if has_results {
+                    http::StatusCode::OK
+                } else {
+                    http::StatusCode::NO_CONTENT
+                };
+                
                 let body_str = serde_json::to_string(&json_data)
                     .map_err(|_| Error::from("Failed to serialize QIDO JSON"))?;
                 
                 Response::builder()
-                    .status(http::StatusCode::OK)  // Always return 200 for successful queries
+                    .status(status)
                     .header("content-type", "application/dicom+json")
                     .body(Body::from(body_str))
                     .map_err(|_| Error::from("Failed to construct QIDO response"))

@@ -346,9 +346,15 @@ impl Middleware for DicomwebBridgeMiddleware {
         }
 
         // Parse includefield query parameter for attribute filtering
+        // DICOMweb spec allows comma-separated values in a single parameter value
         let includefield: Option<Vec<String>> = qp
             .get("includefield")
-            .map(|values| values.iter().map(|s| s.to_string()).collect());
+            .map(|values| {
+                values.iter()
+                    .flat_map(|s| s.split(',').map(|t| t.trim().to_string()))
+                    .filter(|t| !t.is_empty())
+                    .collect()
+            });
 
         // Store includefield parameter in request metadata for right-side processing
         if let Some(ref fields) = includefield {
@@ -417,27 +423,21 @@ impl Middleware for DicomwebBridgeMiddleware {
             }
             // Handle /studies/{study}/series/{series}/instances/{instance} for both QIDO and WADO
             ["studies", study_uid, "series", series_uid, "instances", instance_uid] => {
-                // Check if this is a QIDO query (exactly 6 parts) vs WADO (for instance retrieval)
-                let subpath = envelope
+                // Check Accept header to determine if this is WADO instance retrieval
+                let accept = envelope
                     .request_details
-                    .metadata
-                    .get("path")
-                    .cloned()
+                    .headers
+                    .get("accept")
+                    .map(|s| s.to_lowercase())
                     .unwrap_or_default();
-                let parts_count = subpath.split('/').filter(|s| !s.is_empty()).count();
                 
-                if parts_count == 6 { // exactly /studies/{study}/series/{series}/instances/{instance}
-                    op = Some("find"); // QIDO find for specific instance
-                    let study_vr = Self::infer_vr_for_tag("0020000D");
-                    let series_vr = Self::infer_vr_for_tag("0020000E");
-                    let instance_vr = Self::infer_vr_for_tag("00080018");
-                    Self::add_tag(&mut ident, "0020000D", &study_vr, vec![(*study_uid).to_string()]);
-                    Self::add_tag(&mut ident, "0020000E", &series_vr, vec![(*series_uid).to_string()]);
-                    Self::add_tag(&mut ident, "00080018", &instance_vr, vec![(*instance_uid).to_string()]);
-                    add_return_keys(&mut ident, "instance");
-                } else {
-                    // For WADO instance retrieval (when path has more than 6 parts or no suffix)
-                    // This handles cases where instance route is used for binary retrieval
+                // WADO instance retrieval if Accept header requests binary DICOM or multipart
+                // Distinguish between application/dicom (binary) and application/dicom+json (JSON)
+                let is_wado_retrieval = (accept.contains("application/dicom") && !accept.contains("application/dicom+json")) 
+                    || accept.contains("multipart/related");
+                
+                if is_wado_retrieval {
+                    // For WADO instance retrieval (binary DICOM data)
                     op = Some("get"); 
                     let study_vr = Self::infer_vr_for_tag("0020000D");
                     let series_vr = Self::infer_vr_for_tag("0020000E");
@@ -445,6 +445,16 @@ impl Middleware for DicomwebBridgeMiddleware {
                     Self::add_tag(&mut ident, "0020000D", &study_vr, vec![(*study_uid).to_string()]);
                     Self::add_tag(&mut ident, "0020000E", &series_vr, vec![(*series_uid).to_string()]);
                     Self::add_tag(&mut ident, "00080018", &instance_vr, vec![(*instance_uid).to_string()]);
+                } else {
+                    // QIDO find for specific instance (JSON metadata)
+                    op = Some("find"); 
+                    let study_vr = Self::infer_vr_for_tag("0020000D");
+                    let series_vr = Self::infer_vr_for_tag("0020000E");
+                    let instance_vr = Self::infer_vr_for_tag("00080018");
+                    Self::add_tag(&mut ident, "0020000D", &study_vr, vec![(*study_uid).to_string()]);
+                    Self::add_tag(&mut ident, "0020000E", &series_vr, vec![(*series_uid).to_string()]);
+                    Self::add_tag(&mut ident, "00080018", &instance_vr, vec![(*instance_uid).to_string()]);
+                    add_return_keys(&mut ident, "instance");
                 }
             }
             // WADO metadata: /studies/{study}/metadata
@@ -586,8 +596,16 @@ impl Middleware for DicomwebBridgeMiddleware {
             let matches_val = nd.get("matches").cloned().unwrap_or(Value::Array(vec![]));
             let json = Self::build_qido_json_from_matches(&matches_val, includefield.as_ref());
             
+            // Create metadata indicating whether results were found
+            let has_results = match &json {
+                Value::Array(arr) => !arr.is_empty(),
+                _ => true, // Non-array responses are considered to have results
+            };
             
-            Self::set_dicomweb_data(&mut envelope, "qido_json", json, None);
+            let mut metadata = serde_json::Map::new();
+            metadata.insert("has_results".to_string(), Value::Bool(has_results));
+            
+            Self::set_dicomweb_data(&mut envelope, "qido_json", json, Some(metadata));
             return Ok(envelope);
         }
 
@@ -787,8 +805,22 @@ impl Middleware for DicomwebBridgeMiddleware {
             }
         }
 
-        // If backend failed for non-frame requests, do not override
+        // Handle backend failures for frame and instance requests
         if !success {
+            if path.contains("/frames/") {
+                // Frame retrieval failed - return appropriate error response
+                let error_msg = nd.get("error")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("Frame retrieval failed");
+                
+                let mut metadata = serde_json::Map::new();
+                metadata.insert("error".to_string(), Value::String("FrameRetrievalFailed".to_string()));
+                metadata.insert("message".to_string(), Value::String(error_msg.to_string()));
+                
+                Self::set_dicomweb_data(&mut envelope, "wado_frames_error", Value::Null, Some(metadata));
+                return Ok(envelope);
+            }
+            // For other failed requests, let the original response pass through
             return Ok(envelope);
         }
 

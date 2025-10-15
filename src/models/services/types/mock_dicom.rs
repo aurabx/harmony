@@ -225,6 +225,10 @@ impl MockDicomData {
                 "vr": "LO", 
                 "Value": [self.patient_id]
             },
+            "00100010": {
+                "vr": "PN",
+                "Value": [{ "Alphabetic": "Doe^John" }]
+            },
             "00080020": {
                 "vr": "DA",
                 "Value": ["20241015"]
@@ -515,6 +519,134 @@ impl ServiceHandler<Value> for MockDicomEndpoint {
 }
 
 impl MockDicomEndpoint {
+    /// Handle C-FIND operations
+    async fn handle_c_find(&self, envelope: &RequestEnvelope<Vec<u8>>, path: &str) -> serde_json::Value {
+        // Parse request body as either wrapper or raw identifier JSON
+        let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
+            .unwrap_or(serde_json::Value::Null);
+
+        // Extract identifier JSON
+        let mut identifier_json = match body_json {
+            serde_json::Value::Object(_) => {
+                use dicom_json_tool as djt;
+                let (_cmd, ident, _qmeta) = djt::parse_wrapper_or_identifier(&body_json);
+                ident
+            }
+            _ => serde_json::json!({}),
+        };
+        
+        if let Some(nd) = envelope.normalized_data.as_ref() {
+            if let Some(ident) = nd.get("dimse_identifier") {
+                if ident.is_object() {
+                    identifier_json = ident.clone();
+                }
+            }
+        }
+
+        // Flatten identifier JSON into tag->string map for query parameters
+        let mut params: HashMap<String, String> = HashMap::new();
+        if let Some(map) = identifier_json.as_object() {
+            for (tag, entry) in map.iter() {
+                // Expect { vr: ..., Value: [...] }
+                if let Some(val_array) = entry.get("Value").and_then(|v| v.as_array()) {
+                    if let Some(first) = val_array.first() {
+                        if let Some(s) = first.as_str() {
+                            params.insert(tag.clone(), s.to_string());
+                        } else if let Some(obj) = first.as_object() {
+                            // PN case: { Alphabetic: "..." }
+                            if let Some(alpha) =
+                                obj.get("Alphabetic").and_then(|v| v.as_str())
+                            {
+                                params.insert(tag.clone(), alpha.to_string());
+                            }
+                        }
+                    } else {
+                        // Empty array indicates return key
+                        params.insert(tag.clone(), String::new());
+                    }
+                }
+            }
+        }
+
+        // Debug logging for series and instances queries
+        if path.contains("/series") || path.contains("/instances") {
+            debug!("[MOCK DICOM] C-FIND Query:");
+            debug!("[MOCK DICOM]   Path: {}", path);
+            debug!("[MOCK DICOM]   Query: {:?}", params);
+        }
+
+        // Handle query using mock data
+        let matches = MockDicomData::instance().handle_find_query(&params);
+
+        if path.contains("/series") || path.contains("/instances") {
+            debug!("[MOCK DICOM] Results:");
+            debug!("[MOCK DICOM]   Matches found: {}", matches.len());
+        }
+
+        serde_json::json!({
+            "operation": "find",
+            "success": true,
+            "matches": matches
+        })
+    }
+
+    /// Handle C-GET operations for WADO-RS instance/frame retrieval
+    async fn handle_c_get(&self, _envelope: &RequestEnvelope<Vec<u8>>, path: &str) -> serde_json::Value {
+        debug!("[MOCK DICOM] C-GET Operation - Path: {}", path);
+        
+        // Create mock DICOM data directory and file
+        let mock_dir = std::path::Path::new("/tmp/mock_dicom_data");
+        if !mock_dir.exists() {
+            if let Err(e) = std::fs::create_dir_all(mock_dir) {
+                debug!("[MOCK DICOM] Failed to create mock dir: {}", e);
+            } else {
+                // Create a minimal mock DICOM file
+                let mock_file = mock_dir.join("instance1.dcm");
+                if let Err(e) = std::fs::write(&mock_file, b"MOCK DICOM FILE DATA") {
+                    debug!("[MOCK DICOM] Failed to create mock DICOM file: {}", e);
+                }
+            }
+        }
+        
+        // Check if this is a frame request
+        if path.contains("/frames/") {
+            // Handle frame retrieval - return error for out-of-range frames
+            let parts: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+            if let Some(frame_part) = parts.last() {
+                if let Ok(frame_num) = frame_part.parse::<u32>() {
+                    if frame_num >= 9999 {
+                        // Out of range frame - mock error
+                        return serde_json::json!({
+                            "operation": "get",
+                            "success": false,
+                            "error": "Frame number out of range"
+                        });
+                    } else if frame_num >= 1 {
+                        // Normal frame request - mock success
+                        return serde_json::json!({
+                            "operation": "get",
+                            "success": true,
+                            "folder_path": "/tmp/mock_dicom_data"
+                        });
+                    }
+                }
+            }
+        }
+
+        // For regular instance retrieval, return mock success with folder path
+        serde_json::json!({
+            "operation": "get",
+            "success": true,
+            "folder_path": "/tmp/mock_dicom_data",
+            "instances": [
+                {
+                    "sop_instance_uid": MockDicomData::instance().series[0].instances[0].instance_uid,
+                    "file_path": "/tmp/mock_dicom_data/instance1.dcm"
+                }
+            ]
+        })
+    }
+
     /// Handle backend (SCU) request processing for mock DICOM
     async fn handle_backend_request(
         &self,
@@ -547,73 +679,10 @@ impl MockDicomEndpoint {
                 })
             }
             "find" | "/find" => {
-                // Parse request body as either wrapper or raw identifier JSON
-                let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
-                    .unwrap_or(serde_json::Value::Null);
-
-                // Extract identifier JSON
-                let mut identifier_json = match body_json {
-                    serde_json::Value::Object(_) => {
-                        use dicom_json_tool as djt;
-                        let (_cmd, ident, _qmeta) = djt::parse_wrapper_or_identifier(&body_json);
-                        ident
-                    }
-                    _ => serde_json::json!({}),
-                };
-                
-                if let Some(nd) = envelope.normalized_data.as_ref() {
-                    if let Some(ident) = nd.get("dimse_identifier") {
-                        if ident.is_object() {
-                            identifier_json = ident.clone();
-                        }
-                    }
-                }
-
-                // Flatten identifier JSON into tag->string map for query parameters
-                let mut params: HashMap<String, String> = HashMap::new();
-                if let Some(map) = identifier_json.as_object() {
-                    for (tag, entry) in map.iter() {
-                        // Expect { vr: ..., Value: [...] }
-                        if let Some(val_array) = entry.get("Value").and_then(|v| v.as_array()) {
-                            if let Some(first) = val_array.first() {
-                                if let Some(s) = first.as_str() {
-                                    params.insert(tag.clone(), s.to_string());
-                                } else if let Some(obj) = first.as_object() {
-                                    // PN case: { Alphabetic: "..." }
-                                    if let Some(alpha) =
-                                        obj.get("Alphabetic").and_then(|v| v.as_str())
-                                    {
-                                        params.insert(tag.clone(), alpha.to_string());
-                                    }
-                                }
-                            } else {
-                                // Empty array indicates return key
-                                params.insert(tag.clone(), String::new());
-                            }
-                        }
-                    }
-                }
-
-                // Debug logging for series and instances queries
-                if path.contains("/series") || path.contains("/instances") {
-                    debug!("[MOCK DICOM] C-FIND Query:");
-                    debug!("[MOCK DICOM]   Path: {}", path);
-                    debug!("[MOCK DICOM]   Query: {:?}", params);
-                }
-
-                // Handle query using mock data
-                let matches = MockDicomData::instance().handle_find_query(&params);
-
-                if path.contains("/series") || path.contains("/instances") {
-                    debug!("[MOCK DICOM] Results:");
-                    debug!("[MOCK DICOM]   Matches found: {}", matches.len());
-                }
-
-                serde_json::json!({
-                    "operation": "find",
-                    "success": true,
-                    "matches": matches
-                })
+                self.handle_c_find(envelope, &path).await
+            }
+            "get" | "/get" => {
+                self.handle_c_get(envelope, &path).await
             }
             _ => {
                 serde_json::json!({
