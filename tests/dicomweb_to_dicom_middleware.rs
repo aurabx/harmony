@@ -80,7 +80,9 @@ async fn middleware_maps_studies_to_find() {
     // With the new dicomweb_bridge middleware, QIDO endpoints are fully supported
     // The response will depend on backend availability - could be BAD_GATEWAY (no backend),
     // OK (successful), INTERNAL_SERVER_ERROR (backend error), etc.
-    // The key is that it's NOT 501 Not Implemented anymore
-    assert_ne!(resp.status(), StatusCode::NOT_IMPLEMENTED, 
-        "QIDO /studies endpoint should be supported with dicomweb_bridge middleware");
+    assert_ne!(
+        resp.status(),
+        StatusCode::NOT_IMPLEMENTED,
+        "QIDO /studies endpoint should be supported with dicomweb_bridge middleware"
+    );
 }

@@ -41,9 +41,6 @@ impl DicomwebBridgeMiddleware {
         }
     }
 
-    fn qp_first(qp: &HashMap<String, Vec<String>>, key: &str) -> Option<String> {
-        qp.get(key).and_then(|v| v.first()).map(|s| s.to_string())
-    }
 
     fn make_ident_entry(vr: &str, vals: Vec<String>) -> Value {
         json!({ "vr": vr, "Value": vals })
@@ -55,38 +52,28 @@ impl DicomwebBridgeMiddleware {
 
     // --- RIGHT SIDE HELPERS (DICOM → DICOMweb) ---
 
-    fn set_response(
+    fn set_dicomweb_data(
         envelope: &mut RequestEnvelope<Value>,
-        status: http::StatusCode,
-        headers: HashMap<String, String>,
-        body: Option<String>,
-        body_b64: Option<String>,
-        json: Option<Value>,
+        response_type: &str,
+        data: Value,
+        metadata: Option<serde_json::Map<String, Value>>,
     ) {
-        // Build response meta map
-        let mut resp = serde_json::Map::new();
-        resp.insert("status".to_string(), serde_json::json!(status.as_u16()));
-        if !headers.is_empty() {
-            resp.insert("headers".to_string(), serde_json::json!(headers));
-        }
-        if let Some(s) = body {
-            resp.insert("body".to_string(), serde_json::json!(s));
-        }
-        if let Some(b64) = body_b64 {
-            resp.insert("body_b64".to_string(), serde_json::json!(b64));
-        }
-        if let Some(j) = json {
-            resp.insert("json".to_string(), j);
-        }
-
-        // Merge into existing normalized_data and mirror into original_data so the
-        // pipeline's right-side conversion preserves our response for the endpoint.
+        // Set the processed data in normalized_data for the endpoint to handle HTTP concerns
         let nd = envelope
             .normalized_data
             .take()
             .unwrap_or_else(|| serde_json::json!({}));
         let mut map = nd.as_object().cloned().unwrap_or_default();
-        map.insert("response".to_string(), Value::Object(resp));
+        
+        // Set the response type for endpoint to determine proper HTTP handling
+        map.insert("dicomweb_response_type".to_string(), Value::String(response_type.to_string()));
+        map.insert("dicomweb_data".to_string(), data);
+        
+        // Include any additional metadata
+        if let Some(meta) = metadata {
+            map.insert("dicomweb_metadata".to_string(), Value::Object(meta));
+        }
+        
         let new_nd = Value::Object(map);
         envelope.normalized_data = Some(new_nd.clone());
         envelope.original_data = new_nd;
@@ -99,56 +86,42 @@ impl DicomwebBridgeMiddleware {
             Value::Array(arr) => {
                 let mut dicomweb_objects = Vec::new();
                 for item in arr {
-                    let processed_item = match includefield {
-                        Some(_fields) => {
-                            // If filtering is requested, work with the identifier as-is instead of
-                            // converting to full JSON first, to avoid including unwanted attributes
-                            Self::filter_dicom_json(item, includefield)
-                        }
-                        None => {
-                            // No filtering requested, convert to full DICOMweb JSON
-                            if let Ok(dicom_obj) = dicom_json_tool::json_value_to_identifier(item) {
-                                if let Ok(full_json) =
-                                    dicom_json_tool::identifier_to_json_value(&dicom_obj)
-                                {
-                                    full_json
-                                } else {
-                                    item.clone()
-                                }
-                            } else {
-                                item.clone()
-                            }
-                        }
-                    };
+                    let processed_item = Self::process_item(includefield, item);
                     dicomweb_objects.push(processed_item);
                 }
                 Value::Array(dicomweb_objects)
             }
             other => {
                 // Single object case
-                let processed_item = match includefield {
-                    Some(_fields) => {
-                        // If filtering is requested, filter the identifier directly
-                        Self::filter_dicom_json(other, includefield)
-                    }
-                    None => {
-                        // No filtering requested, convert to full DICOMweb JSON
-                        if let Ok(dicom_obj) = dicom_json_tool::json_value_to_identifier(other) {
-                            if let Ok(full_json) =
-                                dicom_json_tool::identifier_to_json_value(&dicom_obj)
-                            {
-                                full_json
-                            } else {
-                                other.clone()
-                            }
-                        } else {
-                            other.clone()
-                        }
-                    }
-                };
+                let processed_item = Self::process_item(includefield, other);
                 Value::Array(vec![processed_item])
             }
         }
+    }
+
+    fn process_item(includefield: Option<&Vec<String>>, item: &Value) -> Value {
+        let processed_item = match includefield {
+            Some(_fields) => {
+                // If filtering is requested, work with the identifier as-is instead of
+                // converting to full JSON first, to avoid including unwanted attributes
+                Self::filter_dicom_json(item, includefield)
+            }
+            None => {
+                // No filtering requested, convert to full DICOMweb JSON
+                if let Ok(dicom_obj) = dicom_json_tool::json_value_to_identifier(item) {
+                    if let Ok(full_json) =
+                        dicom_json_tool::identifier_to_json_value(&dicom_obj)
+                    {
+                        full_json
+                    } else {
+                        item.clone()
+                    }
+                } else {
+                    item.clone()
+                }
+            }
+        };
+        processed_item
     }
 
     /// Filter DICOM JSON attributes based on includefield parameter
@@ -347,33 +320,24 @@ impl Middleware for DicomwebBridgeMiddleware {
         }
 
         // Build DICOM identifier JSON using hex tags
-        // Common tag mappings
-        // StudyInstanceUID -> 0020000D (UI)
-        // SeriesInstanceUID -> 0020000E (UI)
-        // SOPInstanceUID -> 00080018 (UI)
-        // PatientID -> 00100020 (LO)
-        // AccessionNumber -> 00080050 (SH)
-        // Modality -> 00080060 (CS)
         let mut ident = serde_json::Map::<String, Value>::new();
 
-        // Pull selected QIDO query params
-        if let Some(v) = Self::qp_first(qp, "StudyInstanceUID") {
-            Self::add_tag(&mut ident, "0020000D", "UI", vec![v]);
-        }
-        if let Some(v) = Self::qp_first(qp, "SeriesInstanceUID") {
-            Self::add_tag(&mut ident, "0020000E", "UI", vec![v]);
-        }
-        if let Some(v) = Self::qp_first(qp, "SOPInstanceUID") {
-            Self::add_tag(&mut ident, "00080018", "UI", vec![v]);
-        }
-        if let Some(v) = Self::qp_first(qp, "PatientID") {
-            Self::add_tag(&mut ident, "00100020", "LO", vec![v]);
-        }
-        if let Some(v) = Self::qp_first(qp, "AccessionNumber") {
-            Self::add_tag(&mut ident, "00080050", "SH", vec![v]);
-        }
-        if let Some(v) = Self::qp_first(qp, "Modality") {
-            Self::add_tag(&mut ident, "00080060", "CS", vec![v]);
+        // Process all query parameters (except special ones like includefield)
+        for (param_name, param_values) in qp {
+            // Skip special DICOMweb parameters that aren't DICOM tags
+            if matches!(param_name.as_str(), "includefield" | "limit" | "offset" | "fuzzymatching") {
+                continue;
+            }
+            
+            // Convert parameter name to DICOM hex tag
+            let tag_hex = Self::dicom_name_to_hex(param_name);
+            let vr = Self::infer_vr_for_tag(&tag_hex);
+            
+            // Use all values for this parameter (DICOMweb allows multiple values)
+            let values: Vec<String> = param_values.iter().cloned().collect();
+            if !values.is_empty() {
+                Self::add_tag(&mut ident, &tag_hex, &vr, values);
+            }
         }
 
         // Parse includefield query parameter for attribute filtering
@@ -588,28 +552,21 @@ impl Middleware for DicomwebBridgeMiddleware {
             .get("dicomweb_includefield")
             .and_then(|json_str| serde_json::from_str(json_str).ok());
 
-        // QIDO lists -> application/dicom+json
+        // QIDO lists -> DICOMweb JSON data
         if operation == "find" {
             let matches_val = nd.get("matches").cloned().unwrap_or(Value::Array(vec![]));
             let json = Self::build_qido_json_from_matches(&matches_val, includefield.as_ref());
-            let mut hdrs = HashMap::new();
-            hdrs.insert(
-                "content-type".to_string(),
-                "application/dicom+json".to_string(),
-            );
-
-            // Return 200 if we have results, 204 if empty
-            let status = if json.as_array().is_some_and(|arr| !arr.is_empty()) {
-                http::StatusCode::OK
-            } else {
-                http::StatusCode::NO_CONTENT
-            };
-
-            Self::set_response(&mut envelope, status, hdrs, None, None, Some(json));
+            
+            let mut metadata = serde_json::Map::new();
+            metadata.insert("has_results".to_string(), Value::Bool(
+                json.as_array().is_some_and(|arr| !arr.is_empty())
+            ));
+            
+            Self::set_dicomweb_data(&mut envelope, "qido_json", json, Some(metadata));
             return Ok(envelope);
         }
 
-        // WADO metadata -> application/dicom+json
+        // WADO metadata -> DICOMweb JSON data
         if path.ends_with("/metadata") {
             // Prefer instances array; otherwise matches
             let datasets = nd.get("instances").or_else(|| nd.get("matches"));
@@ -627,45 +584,23 @@ impl Middleware for DicomwebBridgeMiddleware {
                 other => Self::filter_dicom_json(&other, includefield.as_ref()),
             };
 
-            let mut hdrs = HashMap::new();
-            hdrs.insert(
-                "content-type".to_string(),
-                "application/dicom+json".to_string(),
-            );
-            Self::set_response(
-                &mut envelope,
-                http::StatusCode::OK,
-                hdrs,
-                None,
-                None,
-                Some(filtered_json),
-            );
+            Self::set_dicomweb_data(&mut envelope, "wado_metadata", filtered_json, None);
             return Ok(envelope);
         }
 
-        // WADO instance retrieval -> multipart/related if we have folder_path
+        // WADO instance retrieval -> multipart DICOM data
         if operation == "get" && path.contains("/instances/") && !path.contains("/frames/") {
             if let Some(folder_path) = nd.get("folder_path").and_then(|v| v.as_str()) {
                 match Self::read_instance_bytes(folder_path) {
                     Ok(parts) => {
                         let (boundary, body_bytes) = Self::build_multipart(parts);
-                        let mut hdrs = HashMap::new();
-                        hdrs.insert(
-                            "content-type".to_string(),
-                            format!(
-                                "multipart/related; type=\"application/dicom\"; boundary={}",
-                                boundary
-                            ),
-                        );
                         let b64 = base64::engine::general_purpose::STANDARD.encode(&body_bytes);
-                        Self::set_response(
-                            &mut envelope,
-                            http::StatusCode::OK,
-                            hdrs,
-                            None,
-                            Some(b64),
-                            None,
-                        );
+                        
+                        let mut metadata = serde_json::Map::new();
+                        metadata.insert("boundary".to_string(), Value::String(boundary));
+                        metadata.insert("body_b64".to_string(), Value::String(b64));
+                        
+                        Self::set_dicomweb_data(&mut envelope, "wado_instance", Value::Null, Some(metadata));
                         return Ok(envelope);
                     }
                     Err(_e) => {
@@ -675,9 +610,9 @@ impl Middleware for DicomwebBridgeMiddleware {
             }
         }
 
-        // WADO frames -> decode and encode to image/jpeg or image/png
+        // WADO frames -> decode and encode image data
         if operation == "get" && (path.contains("/frames/") || path.contains("frames/")) {
-            // Accept negotiation
+            // Accept negotiation - store preferred format for endpoint to use
             let accept = envelope
                 .request_details
                 .headers
@@ -778,18 +713,13 @@ impl Middleware for DicomwebBridgeMiddleware {
                             }
 
                             if images.len() == 1 {
-                                let mut hdrs = HashMap::new();
-                                hdrs.insert("content-type".to_string(), content_type.to_string());
-                                let b64 =
-                                    base64::engine::general_purpose::STANDARD.encode(&images[0]);
-                                Self::set_response(
-                                    &mut envelope,
-                                    http::StatusCode::OK,
-                                    hdrs,
-                                    None,
-                                    Some(b64),
-                                    None,
-                                );
+                                let b64 = base64::engine::general_purpose::STANDARD.encode(&images[0]);
+                                let mut metadata = serde_json::Map::new();
+                                metadata.insert("content_type".to_string(), Value::String(content_type.to_string()));
+                                metadata.insert("body_b64".to_string(), Value::String(b64));
+                                metadata.insert("is_single_frame".to_string(), Value::Bool(true));
+                                
+                                Self::set_dicomweb_data(&mut envelope, "wado_frames", Value::Null, Some(metadata));
                                 return Ok(envelope);
                             } else if !images.is_empty() {
                                 let boundary = format!("dicomweb_{}", uuid::Uuid::new_v4());
@@ -806,42 +736,25 @@ impl Middleware for DicomwebBridgeMiddleware {
                                     body.extend_from_slice(b"\r\n");
                                 }
                                 body.extend_from_slice(format!("--{}--\r\n", &boundary).as_bytes());
-                                let mut hdrs = HashMap::new();
-                                hdrs.insert(
-                                    "content-type".to_string(),
-                                    format!(
-                                        "multipart/related; type=\"{}\"; boundary={}",
-                                        content_type, boundary
-                                    ),
-                                );
                                 let b64 = base64::engine::general_purpose::STANDARD.encode(&body);
-                                Self::set_response(
-                                    &mut envelope,
-                                    http::StatusCode::OK,
-                                    hdrs,
-                                    None,
-                                    Some(b64),
-                                    None,
-                                );
+                                
+                                let mut metadata = serde_json::Map::new();
+                                metadata.insert("content_type".to_string(), Value::String(content_type.to_string()));
+                                metadata.insert("boundary".to_string(), Value::String(boundary));
+                                metadata.insert("body_b64".to_string(), Value::String(b64));
+                                metadata.insert("is_single_frame".to_string(), Value::Bool(false));
+                                
+                                Self::set_dicomweb_data(&mut envelope, "wado_frames", Value::Null, Some(metadata));
                                 return Ok(envelope);
                             }
                         }
                         Err(_e) => {
-                            // Unsupported TS or decoding error
-                            let mut hdrs = HashMap::new();
-                            hdrs.insert("content-type".to_string(), "application/json".to_string());
-                            let problem = serde_json::json!({
-                                "error": "UnsupportedTransferSyntax",
-                                "message": "Unable to decode frames for requested instance",
-                            });
-                            Self::set_response(
-                                &mut envelope,
-                                http::StatusCode::NOT_ACCEPTABLE,
-                                hdrs,
-                                None,
-                                None,
-                                Some(problem),
-                            );
+                            // Unsupported TS or decoding error - let endpoint handle the error response
+                            let mut metadata = serde_json::Map::new();
+                            metadata.insert("error".to_string(), Value::String("UnsupportedTransferSyntax".to_string()));
+                            metadata.insert("message".to_string(), Value::String("Unable to decode frames for requested instance".to_string()));
+                            
+                            Self::set_dicomweb_data(&mut envelope, "wado_frames_error", Value::Null, Some(metadata));
                             return Ok(envelope);
                         }
                     }
@@ -865,7 +778,7 @@ mod tests {
     use std::collections::HashMap;
 
     #[tokio::test]
-    async fn test_includefield_adds_return_keys() {
+    async fn test_left_includefield_adds_return_keys() {
         let bridge = DicomwebBridgeMiddleware::new();
 
         // Create a mock request envelope with includefield parameters
@@ -930,10 +843,22 @@ mod tests {
             .request_details
             .metadata
             .contains_key("dicomweb_includefield"));
+        
+        // Verify that dimse_op is set for backend processing
+        assert_eq!(
+            processed_envelope.request_details.metadata.get("dimse_op"),
+            Some(&"find".to_string())
+        );
+        
+        // Verify skip_backends is set to false
+        assert_eq!(
+            processed_envelope.request_details.metadata.get("skip_backends"),
+            Some(&"false".to_string())
+        );
     }
 
     #[tokio::test]
-    async fn test_no_includefield_uses_defaults() {
+    async fn test_left_no_includefield_uses_defaults() {
         let bridge = DicomwebBridgeMiddleware::new();
 
         // Create a mock request envelope without includefield
@@ -988,10 +913,16 @@ mod tests {
             .request_details
             .metadata
             .contains_key("dicomweb_includefield"));
+        
+        // Verify that dimse_op is set for backend processing
+        assert_eq!(
+            processed_envelope.request_details.metadata.get("dimse_op"),
+            Some(&"find".to_string())
+        );
     }
 
     #[tokio::test]
-    async fn test_includefield_preserves_search_criteria() {
+    async fn test_left_includefield_preserves_search_criteria() {
         let bridge = DicomwebBridgeMiddleware::new();
 
         // Create a mock request with both search params and includefield
@@ -1043,5 +974,136 @@ mod tests {
             name_value_array.is_empty(),
             "PatientName should be return key with empty value"
         );
+    }
+    
+    #[tokio::test]
+    async fn test_right_qido_transformation() {
+        let bridge = DicomwebBridgeMiddleware::new();
+        
+        // Create a mock right-side request with DICOM find results
+        let mut metadata: HashMap<String, String> = HashMap::new();
+        metadata.insert("path".to_string(), "studies".to_string());
+        metadata.insert("full_path".to_string(), "/dicomweb/studies".to_string());
+        
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata,
+        };
+        
+        // Mock DICOM find results
+        let matches = serde_json::json!([
+            {
+                "00100020": {"vr": "LO", "Value": ["12345"]},
+                "00100010": {"vr": "PN", "Value": ["Doe^John"]},
+                "0020000D": {"vr": "UI", "Value": ["1.2.3.4.5"]}
+            }
+        ]);
+        
+        let normalized_data = serde_json::json!({
+            "operation": "find",
+            "success": true,
+            "matches": matches
+        });
+        
+        let envelope = RequestEnvelope {
+            request_details,
+            original_data: serde_json::json!({}),
+            normalized_data: Some(normalized_data),
+            normalized_snapshot: None,
+        };
+        
+        // Process through the right-side middleware
+        let result = bridge.right(envelope).await;
+        assert!(result.is_ok());
+        
+        let processed_envelope = result.unwrap();
+        let nd = processed_envelope.normalized_data.unwrap();
+        
+        // Verify that DICOMweb response type is set
+        assert_eq!(
+            nd.get("dicomweb_response_type").and_then(|v| v.as_str()),
+            Some("qido_json")
+        );
+        
+        // Verify DICOMweb data is present
+        assert!(nd.get("dicomweb_data").is_some());
+        
+        // Verify metadata indicates results are present
+        let metadata = nd.get("dicomweb_metadata").and_then(|v| v.as_object());
+        assert!(metadata.is_some());
+        assert_eq!(
+            metadata.unwrap().get("has_results").and_then(|v| v.as_bool()),
+            Some(true)
+        );
+    }
+    
+    #[tokio::test]
+    async fn test_left_processes_all_query_parameters() {
+        let bridge = DicomwebBridgeMiddleware::new();
+        
+        // Create a mock request with various DICOM query parameters
+        let mut query_params: HashMap<String, Vec<String>> = HashMap::new();
+        query_params.insert("PatientName".to_string(), vec!["Doe^John".to_string()]);
+        query_params.insert("StudyDate".to_string(), vec!["20231015".to_string()]);
+        query_params.insert("Modality".to_string(), vec!["CT".to_string(), "MR".to_string()]); // Multiple values
+        query_params.insert("StudyDescription".to_string(), vec!["Brain Study".to_string()]);
+        query_params.insert("SeriesNumber".to_string(), vec!["1".to_string()]);
+        query_params.insert("includefield".to_string(), vec!["PatientName".to_string()]); // Should be skipped
+        query_params.insert("limit".to_string(), vec!["100".to_string()]); // Should be skipped
+        
+        let mut metadata: HashMap<String, String> = HashMap::new();
+        metadata.insert("path".to_string(), "studies".to_string());
+        
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params,
+            cache_status: None,
+            metadata,
+        };
+        
+        let envelope = RequestEnvelope {
+            request_details,
+            original_data: serde_json::json!({}),
+            normalized_data: None,
+            normalized_snapshot: None,
+        };
+        
+        // Process through the middleware
+        let result = bridge.left(envelope).await;
+        assert!(result.is_ok());
+        
+        let processed_envelope = result.unwrap();
+        let nd = processed_envelope.normalized_data.unwrap();
+        let identifier = nd.get("dimse_identifier").unwrap().as_object().unwrap();
+        
+        // Verify all query parameters were processed
+        assert!(identifier.contains_key("00100010"), "PatientName should be present");
+        assert!(identifier.contains_key("00080020"), "StudyDate should be present");
+        assert!(identifier.contains_key("00080060"), "Modality should be present");
+        assert!(identifier.contains_key("00081030"), "StudyDescription should be present");
+        assert!(identifier.contains_key("00200011"), "SeriesNumber should be present");
+        
+        // Verify multiple values are preserved
+        let modality_values = identifier.get("00080060")
+            .and_then(|m| m.get("Value"))
+            .and_then(|v| v.as_array())
+            .unwrap();
+        assert_eq!(modality_values.len(), 2);
+        assert!(modality_values.contains(&serde_json::json!("CT")));
+        assert!(modality_values.contains(&serde_json::json!("MR")));
+        
+        // Verify special parameters were skipped (not present as DICOM tags)
+        // These would have nonsensical hex representations if processed
+        let all_keys: Vec<&String> = identifier.keys().collect();
+        assert!(!all_keys.iter().any(|k| k.starts_with("include")), "includefield should not be processed as DICOM tag");
+        assert!(!all_keys.iter().any(|k| k.starts_with("limit")), "limit should not be processed as DICOM tag");
     }
 }

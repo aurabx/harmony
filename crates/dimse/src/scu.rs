@@ -164,16 +164,21 @@ impl DimseScu {
                 Ok(out) => {
                     if out.status.success() {
                         info!("C-FIND completed (findscu success)");
-                        // Read produced files
+                        // Read produced files and convert to in-memory streams immediately
                         if let Ok(mut rd) = tokio::fs::read_dir(&out_dir_clone).await {
                             while let Ok(Some(entry)) = rd.next_entry().await {
                                 let path = entry.path();
                                 if path.extension().and_then(|s| s.to_str()).unwrap_or("") == "dcm"
                                 {
-                                    // Use remove_on_drop=true to clean up files after processing
-                                    let _ = tx_clone
-                                        .send(Ok(DatasetStream::from_file(path, true)))
-                                        .await;
+                                    // Read file contents immediately to avoid race condition with cleanup
+                                    if let Ok(bytes) = tokio::fs::read(&path).await {
+                                        use bytes::Bytes;
+                                        let _ = tx_clone
+                                            .send(Ok(DatasetStream::from_bytes(Bytes::from(bytes))))
+                                            .await;
+                                    } else {
+                                        warn!("Failed to read C-FIND result file: {:?}", path);
+                                    }
                                 }
                             }
                         }

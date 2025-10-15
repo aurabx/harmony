@@ -4,8 +4,8 @@ use crate::utils::Error;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::sync::Arc;
 use std::slice::from_ref;
+use std::sync::Arc;
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
 pub struct JwtAuthConfig {
@@ -219,7 +219,7 @@ mod tests {
     use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use rand::thread_rng;
-    use rsa::pkcs8::{EncodePublicKey};
+    use rsa::pkcs8::EncodePublicKey;
     use rsa::{RsaPrivateKey, RsaPublicKey};
     use serde::Serialize;
     use std::collections::HashMap;

@@ -25,6 +25,8 @@ jmix-rs = { path = "../jmix/jmix-rust" }
 
 dicom-object = "0.9"
 dicom-pixeldata = { version = "0.9", features = ["image", "rle", "jpeg"] }
+dicom-core = "0.9"
+dicom-dictionary-std = "0.9"
 image = { version = "0.24", default-features = false, features = ["jpeg", "png"] }
 
 tokio = { version = "1", features = ["full"] }

@@ -15,6 +15,7 @@ use dimse::types::{FindQuery, GetQuery, QueryLevel};
 use dimse::{DimseConfig, DimseScu, RemoteNode};
 use std::fs;
 use std::path::Path;
+use tracing::warn;
 use uuid::Uuid;
 
 #[derive(Debug, Deserialize)]
@@ -379,9 +380,37 @@ impl DicomEndpoint {
                     }
                 }
 
-                // Choose query level (default: Patient)
+                // Determine appropriate query level based on filters and return keys
+                let query_level = if params.get("00080018").is_some_and(|v| !v.is_empty()) {
+                    // SOPInstanceUID filter present -> IMAGE level
+                    QueryLevel::Image
+                } else if params.get("0020000E").is_some_and(|v| !v.is_empty()) {
+                    // SeriesInstanceUID filter present -> SERIES level
+                    QueryLevel::Series
+                } else if params.contains_key("0020000E")
+                    && params.get("0020000D").is_some_and(|v| !v.is_empty())
+                {
+                    // SeriesInstanceUID return key + StudyInstanceUID filter -> query for series (SERIES level)
+                    QueryLevel::Series
+                } else if params.contains_key("00080018")
+                    && (params.get("0020000D").is_some_and(|v| !v.is_empty())
+                        || params.get("0020000E").is_some_and(|v| !v.is_empty()))
+                {
+                    // SOPInstanceUID return key + Study/Series filter -> query for instances (IMAGE level)
+                    QueryLevel::Image
+                } else if params.get("0020000D").is_some_and(|v| !v.is_empty()) {
+                    // StudyInstanceUID filter present -> STUDY level (for specific study)
+                    QueryLevel::Study
+                } else if params.contains_key("0020000D") {
+                    // StudyInstanceUID return key present (but empty) -> query for studies (STUDY level)
+                    QueryLevel::Study
+                } else {
+                    // Default to PATIENT level
+                    QueryLevel::Patient
+                };
+
                 let mut query = FindQuery::patient(params.get("00100020").cloned()); // PatientID if present
-                query.query_level = QueryLevel::Patient;
+                query.query_level = query_level;
                 for (k, v) in params.into_iter() {
                     query = query.with_parameter(k, v);
                 }
@@ -392,13 +421,36 @@ impl DicomEndpoint {
                         use futures_util::StreamExt;
                         let mut matches: Vec<serde_json::Value> = Vec::new();
                         while let Some(item) = stream.next().await {
-                            if let Ok(dimse::types::DatasetStream::File { ref path, .. }) = item {
-                                if let Ok(obj) = dicom_object::open_file(path) {
+                            match item {
+                                Ok(dimse::types::DatasetStream::File { ref path, .. }) => {
+                                    if let Ok(obj) = dicom_object::open_file(path) {
+                                        if let Ok(json) =
+                                            dicom_json_tool::identifier_to_json_value(&obj)
+                                        {
+                                            matches.push(json);
+                                        }
+                                    }
+                                }
+                                Ok(dimse::types::DatasetStream::Memory { ref data, .. }) => {
+                                    // Handle in-memory DICOM data
+                                    if let Ok(obj) = dicom_object::from_reader(&**data) {
+                                        if let Ok(json) =
+                                            dicom_json_tool::identifier_to_json_value(&obj)
+                                        {
+                                            matches.push(json);
+                                        }
+                                    }
+                                }
+                                Ok(dimse::types::DatasetStream::Object { ref object, .. }) => {
+                                    // Handle DICOM object directly
                                     if let Ok(json) =
-                                        dicom_json_tool::identifier_to_json_value(&obj)
+                                        dicom_json_tool::identifier_to_json_value(object)
                                     {
                                         matches.push(json);
                                     }
+                                }
+                                Err(e) => {
+                                    warn!("Error in dataset stream: {}", e);
                                 }
                             }
                         }
@@ -566,7 +618,9 @@ impl DicomEndpoint {
                                 // For non-filesystem, stream and persist via storage backend.
                                 if !is_fs_backend {
                                     if let Some(storage) = get_storage() {
-                                        let bytes = tokio::fs::read(path).await.unwrap_or_else(|_| Vec::new());
+                                        let bytes = tokio::fs::read(path)
+                                            .await
+                                            .unwrap_or_else(|_| Vec::new());
                                         // Normalize filename to .dcm
                                         let src = Path::new(path);
                                         let base = src
@@ -670,12 +724,11 @@ impl DicomEndpoint {
                                                     .map(|n| n.to_string_lossy().to_string())
                                                     .unwrap_or_else(|| "instance.dcm".to_string());
                                                 let target = per_move_dir.join(file_name);
-                                                let _ =
-                                                    std::fs::rename(p, &target).or_else(|_| {
-                                                        std::fs::copy(p, &target)
-                                                            .map(|_| std::fs::remove_file(p).ok())
-                                                            .map(|_| ())
-                                                    });
+                                                let _ = std::fs::rename(p, &target).or_else(|_| {
+                                                    std::fs::copy(p, &target)
+                                                        .map(|_| std::fs::remove_file(p).ok())
+                                                        .map(|_| ())
+                                                });
                                             }
                                         }
                                     }
@@ -838,7 +891,9 @@ impl DicomEndpoint {
                             if let Ok(dimse::types::DatasetStream::File { ref path, .. }) = item {
                                 if !is_fs_backend {
                                     if let Some(storage) = get_storage() {
-                                        let bytes = tokio::fs::read(path).await.unwrap_or_else(|_| Vec::new());
+                                        let bytes = tokio::fs::read(path)
+                                            .await
+                                            .unwrap_or_else(|_| Vec::new());
                                         let src = Path::new(path);
                                         let base = src
                                             .file_stem()
