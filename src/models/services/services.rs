@@ -92,6 +92,9 @@ fn create_builtin_service(
         "echo" => Ok(Box::new(
             crate::models::services::types::echo::EchoEndpoint {},
         )),
+        "mock_dicom" => Ok(Box::new(
+            crate::models::services::types::mock_dicom::MockDicomEndpoint {},
+        )),
         _ => Err(format!(
             "Unsupported built-in service type: {}",
             service_type
