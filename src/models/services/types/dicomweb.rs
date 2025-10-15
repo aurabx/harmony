@@ -27,23 +27,14 @@ impl DicomwebEndpoint {
         match response_type {
             "qido_json" => {
                 // QIDO-RS responses: application/dicom+json
-                let has_results = metadata
-                    .and_then(|m| m.get("has_results"))
-                    .and_then(|v| v.as_bool())
-                    .unwrap_or(false);
-                
-                let status = if has_results {
-                    http::StatusCode::OK
-                } else {
-                    http::StatusCode::NO_CONTENT
-                };
-                
+                // According to DICOMweb spec, successful queries should return 200 OK
+                // even if no results are found. 204 should only be used for specific cases.
                 let json_data = data.cloned().unwrap_or(Value::Array(vec![]));
                 let body_str = serde_json::to_string(&json_data)
                     .map_err(|_| Error::from("Failed to serialize QIDO JSON"))?;
                 
                 Response::builder()
-                    .status(status)
+                    .status(http::StatusCode::OK)  // Always return 200 for successful queries
                     .header("content-type", "application/dicom+json")
                     .body(Body::from(body_str))
                     .map_err(|_| Error::from("Failed to construct QIDO response"))
@@ -51,11 +42,25 @@ impl DicomwebEndpoint {
             "wado_metadata" => {
                 // WADO-RS metadata responses: application/dicom+json
                 let json_data = data.cloned().unwrap_or(Value::Array(vec![]));
+                
+                // Determine status based on whether we have data
+                let has_data = match &json_data {
+                    Value::Array(arr) => !arr.is_empty(),
+                    Value::Object(_) => true, // Single object is considered data
+                    _ => false,
+                };
+                
+                let status = if has_data {
+                    http::StatusCode::OK
+                } else {
+                    http::StatusCode::NO_CONTENT
+                };
+                
                 let body_str = serde_json::to_string(&json_data)
                     .map_err(|_| Error::from("Failed to serialize WADO metadata JSON"))?;
                 
                 Response::builder()
-                    .status(http::StatusCode::OK)
+                    .status(status)
                     .header("content-type", "application/dicom+json")
                     .body(Body::from(body_str))
                     .map_err(|_| Error::from("Failed to construct WADO metadata response"))
@@ -207,6 +212,12 @@ impl ServiceType for DicomwebEndpoint {
                 methods: vec![Method::GET],
                 description: Some("DICOMweb QIDO-RS: Query for series".to_string()),
             },
+            // QIDO-RS: Query for specific series
+            RouteConfig {
+                path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}", base),
+                methods: vec![Method::GET],
+                description: Some("DICOMweb QIDO-RS: Query for specific series".to_string()),
+            },
             // QIDO-RS: Query for instances within a series
             RouteConfig {
                 path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}/instances", base),
@@ -347,12 +358,13 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
             ["studies"] => true,
             ["studies", _] => true,
             ["studies", _, "series"] => true,
+            ["studies", _, "series", _] => true, // Specific series
             ["studies", _, "series", _, "instances"] => true,
+            ["studies", _, "series", _, "instances", _] => true, // Specific instance
             // WADO endpoints
             ["studies", _, "metadata"] => true,
             ["studies", _, "series", _, "metadata"] => true,
             ["studies", _, "series", _, "instances", _, "metadata"] => true,
-            ["studies", _, "series", _, "instances", _] => true,
             ["studies", _, "series", _, "instances", _, "frames", _] => true,
             ["bulkdata", ..] => true,
             _ => false,

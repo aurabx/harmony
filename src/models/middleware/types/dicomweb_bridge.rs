@@ -2,7 +2,7 @@ use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use base64::Engine;
-use dicom_core::dictionary::DataDictionary;
+use dicom_core::dictionary::{DataDictionary, VirtualVr};
 use dicom_core::Tag;
 use dicom_dictionary_std::StandardDataDictionary;
 use dicom_pixeldata::image as img;
@@ -204,12 +204,17 @@ impl DicomwebBridgeMiddleware {
             let tag = Tag(group, element);
             // Use dicom-rs StandardDataDictionary to get VR
             if let Some(entry) = StandardDataDictionary.by_tag(tag) {
-                return format!("{:?}", entry.vr); // Use Debug format for VirtualVr
+                // Convert VirtualVr to string and format consistently
+                let vr_str = match entry.vr {
+                    VirtualVr::Exact(vr) => format!("{:?}", vr),
+                    _ => "LO".to_string(),
+                };
+                return format!("Exact({})", vr_str);
             }
         }
 
-        // Fallback to LO for unknown tags
-        "LO".to_string()
+        // Fallback to Exact(LO) for unknown tags
+        "Exact(LO)".to_string()
     }
 
     /// Add a return key to the identifier if not already present
@@ -381,26 +386,66 @@ impl Middleware for DicomwebBridgeMiddleware {
             // QIDO: /studies/{study}
             ["studies", study_uid] => {
                 op = Some("find");
-                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                let vr = Self::infer_vr_for_tag("0020000D");
+                Self::add_tag(&mut ident, "0020000D", &vr, vec![(*study_uid).to_string()]);
                 add_return_keys(&mut ident, "study");
             }
             // QIDO: /studies/{study}/series
             ["studies", study_uid, "series"] => {
                 op = Some("find");
-                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                let vr = Self::infer_vr_for_tag("0020000D");
+                Self::add_tag(&mut ident, "0020000D", &vr, vec![(*study_uid).to_string()]);
+                add_return_keys(&mut ident, "series");
+            }
+            // QIDO: /studies/{study}/series/{series} (specific series)
+            ["studies", study_uid, "series", series_uid] => {
+                op = Some("find");
+                let study_vr = Self::infer_vr_for_tag("0020000D");
+                let series_vr = Self::infer_vr_for_tag("0020000E");
+                Self::add_tag(&mut ident, "0020000D", &study_vr, vec![(*study_uid).to_string()]);
+                Self::add_tag(&mut ident, "0020000E", &series_vr, vec![(*series_uid).to_string()]);
                 add_return_keys(&mut ident, "series");
             }
             // QIDO: /studies/{study}/series/{series}/instances
             ["studies", study_uid, "series", series_uid, "instances"] => {
                 op = Some("find");
-                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
-                Self::add_tag(
-                    &mut ident,
-                    "0020000E",
-                    "UI",
-                    vec![(*series_uid).to_string()],
-                );
+                let study_vr = Self::infer_vr_for_tag("0020000D");
+                let series_vr = Self::infer_vr_for_tag("0020000E");
+                Self::add_tag(&mut ident, "0020000D", &study_vr, vec![(*study_uid).to_string()]);
+                Self::add_tag(&mut ident, "0020000E", &series_vr, vec![(*series_uid).to_string()]);
                 add_return_keys(&mut ident, "instance");
+            }
+            // Handle /studies/{study}/series/{series}/instances/{instance} for both QIDO and WADO
+            ["studies", study_uid, "series", series_uid, "instances", instance_uid] => {
+                // Check if this is a QIDO query (exactly 6 parts) vs WADO (for instance retrieval)
+                let subpath = envelope
+                    .request_details
+                    .metadata
+                    .get("path")
+                    .cloned()
+                    .unwrap_or_default();
+                let parts_count = subpath.split('/').filter(|s| !s.is_empty()).count();
+                
+                if parts_count == 6 { // exactly /studies/{study}/series/{series}/instances/{instance}
+                    op = Some("find"); // QIDO find for specific instance
+                    let study_vr = Self::infer_vr_for_tag("0020000D");
+                    let series_vr = Self::infer_vr_for_tag("0020000E");
+                    let instance_vr = Self::infer_vr_for_tag("00080018");
+                    Self::add_tag(&mut ident, "0020000D", &study_vr, vec![(*study_uid).to_string()]);
+                    Self::add_tag(&mut ident, "0020000E", &series_vr, vec![(*series_uid).to_string()]);
+                    Self::add_tag(&mut ident, "00080018", &instance_vr, vec![(*instance_uid).to_string()]);
+                    add_return_keys(&mut ident, "instance");
+                } else {
+                    // For WADO instance retrieval (when path has more than 6 parts or no suffix)
+                    // This handles cases where instance route is used for binary retrieval
+                    op = Some("get"); 
+                    let study_vr = Self::infer_vr_for_tag("0020000D");
+                    let series_vr = Self::infer_vr_for_tag("0020000E");
+                    let instance_vr = Self::infer_vr_for_tag("00080018");
+                    Self::add_tag(&mut ident, "0020000D", &study_vr, vec![(*study_uid).to_string()]);
+                    Self::add_tag(&mut ident, "0020000E", &series_vr, vec![(*series_uid).to_string()]);
+                    Self::add_tag(&mut ident, "00080018", &instance_vr, vec![(*instance_uid).to_string()]);
+                }
             }
             // WADO metadata: /studies/{study}/metadata
             ["studies", study_uid, "metadata"] => {
@@ -438,23 +483,6 @@ impl Middleware for DicomwebBridgeMiddleware {
                 );
                 add_return_keys(&mut ident, "instance");
             }
-            // WADO: /studies/{study}/series/{series}/instances/{instance}
-            ["studies", study_uid, "series", series_uid, "instances", instance_uid] => {
-                op = Some("get");
-                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
-                Self::add_tag(
-                    &mut ident,
-                    "0020000E",
-                    "UI",
-                    vec![(*series_uid).to_string()],
-                );
-                Self::add_tag(
-                    &mut ident,
-                    "00080018",
-                    "UI",
-                    vec![(*instance_uid).to_string()],
-                );
-            }
             // WADO: frames (map to get at instance level)
             ["studies", study_uid, "series", series_uid, "instances", instance_uid, "frames", _frames] =>
             {
@@ -481,6 +509,7 @@ impl Middleware for DicomwebBridgeMiddleware {
         }
 
         if let Some(op_name) = op {
+            
             // Ensure metadata prepared for backend
             Self::set_backend_path(&mut envelope.request_details.metadata, op_name);
 
@@ -557,12 +586,8 @@ impl Middleware for DicomwebBridgeMiddleware {
             let matches_val = nd.get("matches").cloned().unwrap_or(Value::Array(vec![]));
             let json = Self::build_qido_json_from_matches(&matches_val, includefield.as_ref());
             
-            let mut metadata = serde_json::Map::new();
-            metadata.insert("has_results".to_string(), Value::Bool(
-                json.as_array().is_some_and(|arr| !arr.is_empty())
-            ));
             
-            Self::set_dicomweb_data(&mut envelope, "qido_json", json, Some(metadata));
+            Self::set_dicomweb_data(&mut envelope, "qido_json", json, None);
             return Ok(envelope);
         }
 

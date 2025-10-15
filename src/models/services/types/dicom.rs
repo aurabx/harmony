@@ -380,9 +380,17 @@ impl DicomEndpoint {
                     }
                 }
 
+
                 // Determine appropriate query level based on filters and return keys
                 let query_level = if params.get("00080018").is_some_and(|v| !v.is_empty()) {
                     // SOPInstanceUID filter present -> IMAGE level
+                    QueryLevel::Image
+                } else if params.contains_key("00080018")
+                    && (params.get("0020000D").is_some_and(|v| !v.is_empty())
+                        || params.get("0020000E").is_some_and(|v| !v.is_empty()))
+                {
+                    // SOPInstanceUID return key + Study/Series filter -> query for instances (IMAGE level)
+                    // This must come BEFORE the Series condition to take precedence
                     QueryLevel::Image
                 } else if params.get("0020000E").is_some_and(|v| !v.is_empty()) {
                     // SeriesInstanceUID filter present -> SERIES level
@@ -392,12 +400,6 @@ impl DicomEndpoint {
                 {
                     // SeriesInstanceUID return key + StudyInstanceUID filter -> query for series (SERIES level)
                     QueryLevel::Series
-                } else if params.contains_key("00080018")
-                    && (params.get("0020000D").is_some_and(|v| !v.is_empty())
-                        || params.get("0020000E").is_some_and(|v| !v.is_empty()))
-                {
-                    // SOPInstanceUID return key + Study/Series filter -> query for instances (IMAGE level)
-                    QueryLevel::Image
                 } else if params.get("0020000D").is_some_and(|v| !v.is_empty()) {
                     // StudyInstanceUID filter present -> STUDY level (for specific study)
                     QueryLevel::Study
@@ -409,10 +411,19 @@ impl DicomEndpoint {
                     QueryLevel::Patient
                 };
 
+
                 let mut query = FindQuery::patient(params.get("00100020").cloned()); // PatientID if present
                 query.query_level = query_level;
                 for (k, v) in params.into_iter() {
                     query = query.with_parameter(k, v);
+                }
+
+                // Debug logging for series and instances queries
+                if path.contains("/series") || path.contains("/instances") {
+                    eprintln!("[DEBUG] DIMSE C-FIND Query:");
+                    eprintln!("[DEBUG]   Path: {}", path);
+                    eprintln!("[DEBUG]   Query Level: {:?}", query.query_level);
+                    eprintln!("[DEBUG]   Query: {:?}", query);
                 }
 
                 // Perform C-FIND and collect results
@@ -420,7 +431,9 @@ impl DicomEndpoint {
                     Ok(mut stream) => {
                         use futures_util::StreamExt;
                         let mut matches: Vec<serde_json::Value> = Vec::new();
+                        let mut item_count = 0;
                         while let Some(item) = stream.next().await {
+                            item_count += 1;
                             match item {
                                 Ok(dimse::types::DatasetStream::File { ref path, .. }) => {
                                     if let Ok(obj) = dicom_object::open_file(path) {
@@ -454,6 +467,16 @@ impl DicomEndpoint {
                                 }
                             }
                         }
+                        
+                        if path.contains("/series") || path.contains("/instances") {
+                            eprintln!("[DEBUG] DIMSE Results:");
+                            eprintln!("[DEBUG]   Stream items received: {}", item_count);
+                            eprintln!("[DEBUG]   Matches processed: {}", matches.len());
+                            if !matches.is_empty() {
+                                eprintln!("[DEBUG]   First match: {:?}", matches[0]);
+                            }
+                        }
+                        
                         serde_json::json!({
                             "operation": "find",
                             "success": true,
