@@ -7,6 +7,7 @@ pub struct ManagementConfig {
     pub enabled: bool,
     #[serde(default = "default_admin_base_path")]
     pub base_path: String,
+    pub network: Option<String>,
 }
 
 pub fn default_admin_base_path() -> String {
@@ -18,6 +19,7 @@ impl Default for ManagementConfig {
         Self {
             enabled: false,
             base_path: default_admin_base_path(),
+            network: None,
         }
     }
 }

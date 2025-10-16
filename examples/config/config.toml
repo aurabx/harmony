@@ -36,11 +36,12 @@ bind_port = 8080           # Client traffic port
 # ------------------------
 # Management API
 # 
-# Automatically binds to the first defined network (management)
+# Explicitly specify which network to use for management endpoints
 #-------------------------
 [management]
-enabled = true        # Enable management endpoints
-base_path = "admin"   # Base path for management endpoints
+enabled = true              # Enable management endpoints
+base_path = "admin"         # Base path for management endpoints
+network = "management"      # Use the management network
 
 # ------------------------
 # Logging

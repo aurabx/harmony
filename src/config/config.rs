@@ -84,13 +84,18 @@ impl Config {
 
         // Inject management pipeline if not already present
         if !self.pipelines.contains_key("management") {
-            // Find first available network, defaulting to "default"
-            let network = self
-                .network
-                .keys()
-                .next()
-                .cloned()
-                .unwrap_or_else(|| "default".to_string());
+            // Use specified network or fail if not provided
+            let network = match &self.management.network {
+                Some(network_name) => {
+                    if !self.network.contains_key(network_name) {
+                        panic!("Management network '{}' not found in configuration", network_name);
+                    }
+                    network_name.clone()
+                }
+                None => {
+                    panic!("Management API is enabled but no network is specified. Please set management.network in your configuration.");
+                }
+            };
 
             self.pipelines.insert(
                 "management".to_string(),

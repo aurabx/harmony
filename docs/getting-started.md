@@ -47,10 +47,11 @@ interface = "wg0"
 bind_address = "0.0.0.0"
 bind_port = 8080
 
-# Enable management API (automatically uses first network: management)
+# Enable management API (explicitly specify which network to use)
 [management]
 enabled = true
 base_path = "admin"
+network = "management"
 
 [pipelines.core]
 description = "HTTP->Echo smoke pipeline"

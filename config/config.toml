@@ -18,6 +18,7 @@ transforms_path = "transforms"
 enabled = true
 # The base path for management endpoints. Defaults to "admin".
 base_path = "admin"
+network ="management"
 
 # ------------------------
 # Network
@@ -32,6 +33,15 @@ interface = "wg0"
 [network.default.http]
 bind_address = "0.0.0.0"  # Listen on all interfaces
 bind_port = 8080          # Use port 8080
+
+[network.management]
+# Management-only listener
+enable_wireguard = false
+interface = "wg0"
+
+[network.management.http]
+bind_address = "127.0.0.1"  # Management connections only
+bind_port = 9090            # Management API port
 
 # ------------------------
 # Logging

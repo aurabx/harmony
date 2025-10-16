@@ -12,6 +12,8 @@ The Management API is configured through the `[management]` section in your conf
 enabled = true
 # The base path for management endpoints. Defaults to "admin".
 base_path = "admin"
+# The network to use for management endpoints. Required when enabled.
+network = "management"
 ```
 
 ### Configuration Options
@@ -20,16 +22,17 @@ base_path = "admin"
 |--------|------|---------|-------------|
 | `enabled` | boolean | `false` | Whether the management API is enabled |
 | `base_path` | string | `"admin"` | Base path for all management endpoints |
+| `network` | string | none | Network name to bind management endpoints to (required when enabled) |
 
 ## Automatic Service Injection
 
 When the management API is enabled (`enabled = true`), Harmony automatically injects:
 
 - A management endpoint of type `management`
-- A management pipeline connected to the first available network
+- A management pipeline connected to the specified network
 - The service registration for the management endpoint
 
-No manual pipeline or endpoint configuration is required - everything is handled automatically based on the management configuration.
+No manual pipeline or endpoint configuration is required - everything is handled automatically based on the management configuration. You must specify which network to use via the `network` configuration option.
 
 ## Endpoints
 
