@@ -4,6 +4,7 @@ use crate::utils::Error;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
+use std::slice::from_ref;
 use std::sync::Arc;
 
 #[derive(Debug, Deserialize, Clone, Serialize)]
@@ -135,10 +136,10 @@ impl JwtAuthMiddleware {
         validation.leeway = self.config.leeway_secs.unwrap_or(60);
 
         if let Some(ref iss) = self.config.issuer {
-            validation.set_issuer(&[iss.clone()]);
+            validation.set_issuer(from_ref(iss));
         }
         if let Some(ref aud) = self.config.audience {
-            validation.set_audience(&[aud.clone()]);
+            validation.set_audience(from_ref(aud));
         }
 
         let token_data = decode::<Claims>(token, &self.decoding_key, &validation)
@@ -217,13 +218,13 @@ mod tests {
     use super::*;
     use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use rand::thread_rng;
+    use rsa::pkcs8::EncodePublicKey;
+    use rsa::{RsaPrivateKey, RsaPublicKey};
     use serde::Serialize;
     use std::collections::HashMap;
-    use tempfile::NamedTempFile;
     use std::io::Write;
-    use rsa::{RsaPrivateKey, RsaPublicKey};
-    use rsa::pkcs8::{EncodePrivateKey, EncodePublicKey};
-    use rand::thread_rng;
+    use tempfile::NamedTempFile;
 
     #[derive(Serialize)]
     struct TestClaims {
@@ -240,7 +241,7 @@ mod tests {
         if let Some(auth) = auth_header {
             headers.insert("authorization".to_string(), auth.to_string());
         }
-        
+
         RequestEnvelope {
             request_details: RequestDetails {
                 method: "GET".to_string(),
@@ -268,9 +269,18 @@ mod tests {
     fn test_parse_config_hs256() {
         let mut options = HashMap::new();
         options.insert("use_hs256".to_string(), JsonValue::Bool(true));
-        options.insert("hs256_secret".to_string(), JsonValue::String("my-secret".to_string()));
-        options.insert("issuer".to_string(), JsonValue::String("test-issuer".to_string()));
-        options.insert("audience".to_string(), JsonValue::String("test-audience".to_string()));
+        options.insert(
+            "hs256_secret".to_string(),
+            JsonValue::String("my-secret".to_string()),
+        );
+        options.insert(
+            "issuer".to_string(),
+            JsonValue::String("test-issuer".to_string()),
+        );
+        options.insert(
+            "audience".to_string(),
+            JsonValue::String("test-audience".to_string()),
+        );
         options.insert("leeway_secs".to_string(), JsonValue::Number(30.into()));
 
         let config = parse_config(&options).unwrap();
@@ -284,9 +294,15 @@ mod tests {
     #[test]
     fn test_parse_config_rs256() {
         let mut options = HashMap::new();
-        options.insert("public_key_path".to_string(), JsonValue::String("/path/to/key.pem".to_string()));
+        options.insert(
+            "public_key_path".to_string(),
+            JsonValue::String("/path/to/key.pem".to_string()),
+        );
         options.insert("use_hs256".to_string(), JsonValue::Bool(false));
-        options.insert("issuer".to_string(), JsonValue::String("test-issuer".to_string()));
+        options.insert(
+            "issuer".to_string(),
+            JsonValue::String("test-issuer".to_string()),
+        );
 
         let config = parse_config(&options).unwrap();
         assert!(!config.use_hs256);
@@ -299,7 +315,7 @@ mod tests {
     fn test_parse_config_defaults() {
         let options = HashMap::new();
         let config = parse_config(&options).unwrap();
-        
+
         assert!(!config.use_hs256);
         assert_eq!(config.public_key_path, "");
         assert_eq!(config.issuer, None);
@@ -322,7 +338,10 @@ mod tests {
         let middleware = JwtAuthMiddleware::new(config);
         assert_eq!(middleware.algorithm, Algorithm::HS256);
         assert_eq!(middleware.config.issuer, Some("test-issuer".to_string()));
-        assert_eq!(middleware.config.audience, Some("test-audience".to_string()));
+        assert_eq!(
+            middleware.config.audience,
+            Some("test-audience".to_string())
+        );
     }
 
     #[test]
@@ -372,7 +391,10 @@ mod tests {
         let envelope = create_test_envelope_with_auth(None);
         let result = middleware.extract_token_from_envelope(&envelope);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Missing Authorization header"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing Authorization header"));
     }
 
     #[test]
@@ -390,7 +412,10 @@ mod tests {
         let envelope = create_test_envelope_with_auth(Some("Basic dXNlcjpwYXNz"));
         let result = middleware.extract_token_from_envelope(&envelope);
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Authorization header must start with 'Bearer '"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Authorization header must start with 'Bearer '"));
     }
 
     #[tokio::test]
@@ -460,7 +485,10 @@ mod tests {
 
         let result = middleware.validate_token(&token).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("jwt verify failed"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("jwt verify failed"));
     }
 
     #[tokio::test]
@@ -495,7 +523,10 @@ mod tests {
 
         let result = middleware.validate_token(&token).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("jwt verify failed"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("jwt verify failed"));
     }
 
     #[tokio::test]
@@ -530,7 +561,10 @@ mod tests {
 
         let result = middleware.validate_token(&token).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("jwt verify failed"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("jwt verify failed"));
     }
 
     #[tokio::test]
@@ -566,7 +600,10 @@ mod tests {
 
         let result = middleware.validate_token(&token).await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("unexpected JWT alg"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("unexpected JWT alg"));
     }
 
     #[tokio::test]
@@ -583,7 +620,10 @@ mod tests {
 
         let result = middleware.validate_token("invalid-jwt-token").await;
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid JWT header"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid JWT header"));
     }
 
     #[tokio::test]
@@ -618,7 +658,7 @@ mod tests {
 
         let envelope = create_test_envelope_with_auth(Some(&format!("Bearer {}", token)));
         let result = middleware.left(envelope).await;
-        
+
         assert!(result.is_ok());
         let returned_envelope = result.unwrap();
         assert_eq!(returned_envelope.request_details.method, "GET");
@@ -639,9 +679,12 @@ mod tests {
 
         let envelope = create_test_envelope_with_auth(None);
         let result = middleware.left(envelope).await;
-        
+
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("Missing Authorization header"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("Missing Authorization header"));
     }
 
     #[tokio::test]
@@ -658,9 +701,12 @@ mod tests {
 
         let envelope = create_test_envelope_with_auth(Some("Bearer invalid-token"));
         let result = middleware.left(envelope).await;
-        
+
         assert!(result.is_err());
-        assert!(result.unwrap_err().to_string().contains("invalid JWT header"));
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("invalid JWT header"));
     }
 
     #[tokio::test]
@@ -678,9 +724,9 @@ mod tests {
         let envelope = create_test_envelope_with_auth(None);
         let original_method = envelope.request_details.method.clone();
         let original_uri = envelope.request_details.uri.clone();
-        
+
         let result = middleware.right(envelope).await;
-        
+
         assert!(result.is_ok());
         let returned_envelope = result.unwrap();
         assert_eq!(returned_envelope.request_details.method, original_method);
@@ -693,7 +739,9 @@ mod tests {
         let mut rng = thread_rng();
         let private_key = RsaPrivateKey::new(&mut rng, 2048).unwrap();
         let public_key = RsaPublicKey::from(&private_key);
-        let public_pem = public_key.to_public_key_pem(rsa::pkcs8::LineEnding::LF).unwrap();
+        let public_pem = public_key
+            .to_public_key_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
 
         // Write public key to a temporary file
         let mut temp_file = NamedTempFile::new().unwrap();

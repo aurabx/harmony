@@ -3,11 +3,11 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-pub mod filesystem;
 pub mod database_manager;
+pub mod filesystem;
 
+pub use database_manager::{DatabaseBackend, DatabaseManager, DatabaseOperation, DatabaseStats};
 pub use filesystem::FilesystemStorage;
-pub use database_manager::{DatabaseManager, DatabaseBackend, DatabaseOperation, DatabaseStats};
 
 /// Error type for storage operations
 #[derive(Debug)]

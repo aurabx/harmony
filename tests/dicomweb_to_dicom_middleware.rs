@@ -29,7 +29,7 @@ fn cfg() -> &'static str {
         description = "DICOMweb -> DIMSE bridge"
         networks = ["default"]
         endpoints = ["dicomweb"]
-        middleware = ["dicomweb_to_dicom"]
+        middleware = ["dicomweb_bridge"]
         backends = ["dicom_pacs"]
 
         [endpoints.dicomweb]
@@ -50,7 +50,7 @@ fn cfg() -> &'static str {
         [services.dicom]
         module = ""
 
-        [middleware_types.dicomweb_to_dicom]
+        [middleware_types.dicomweb_bridge]
         module = ""
     "#
 }
@@ -77,10 +77,12 @@ async fn middleware_maps_studies_to_find() {
         .await
         .expect("handled");
 
-    // Without a PACS running this will be 502 Bad Gateway from backend failure path
-    assert!(
-        resp.status() == StatusCode::BAD_GATEWAY
-            || resp.status() == StatusCode::OK
-            || resp.status() == StatusCode::NOT_IMPLEMENTED
+    // With the new dicomweb_bridge middleware, QIDO endpoints are fully supported
+    // The response will depend on backend availability - could be BAD_GATEWAY (no backend),
+    // OK (successful), INTERNAL_SERVER_ERROR (backend error), etc.
+    assert_ne!(
+        resp.status(),
+        StatusCode::NOT_IMPLEMENTED,
+        "QIDO /studies endpoint should be supported with dicomweb_bridge middleware"
     );
 }

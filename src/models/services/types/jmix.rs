@@ -499,31 +499,34 @@ impl ServiceHandler<Value> for JmixEndpoint {
     ) -> Result<Response, Error> {
         let nd = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
         let response_meta = nd.get("response");
-        
 
         // Check if response has jmix metadata - if so, return the zip instead
-        if let Some(jmix_id) = response_meta.and_then(|m| m.get("jmix_id")).and_then(|id| id.as_str()) {
+        if let Some(jmix_id) = response_meta
+            .and_then(|m| m.get("jmix_id"))
+            .and_then(|id| id.as_str())
+        {
             let zip_ready = response_meta
                 .and_then(|m| m.get("zip_ready"))
                 .and_then(|ready| ready.as_bool())
                 .unwrap_or(false);
-            
+
             if zip_ready {
                 // Load the zip file and return it
                 tracing::info!("📦 Serving zip file for JMIX package: {}", jmix_id);
-                
-                let store_root = if let Some(p) = options.get("store_dir").and_then(|v| v.as_str()) {
+
+                let store_root = if let Some(p) = options.get("store_dir").and_then(|v| v.as_str())
+                {
                     PathBuf::from(p)
                 } else if let Some(storage) = get_storage() {
                     storage.subpath_str("jmix-store")
                 } else {
                     PathBuf::from("./tmp/jmix-store")
                 };
-                
+
                 // Look for zip file in the package directory (where jmix-rs creates it)
                 let package_dir = store_root.join(jmix_id);
                 let zip_file = package_dir.join(format!("{}.zip", jmix_id));
-                
+
                 if zip_file.exists() {
                     match fs::read(&zip_file) {
                         Ok(zip_bytes) => {
@@ -531,12 +534,19 @@ impl ServiceHandler<Value> for JmixEndpoint {
                             return Response::builder()
                                 .status(http::StatusCode::OK)
                                 .header("content-type", "application/zip")
-                                .header("content-disposition", format!("attachment; filename=\"{}\"", filename))
+                                .header(
+                                    "content-disposition",
+                                    format!("attachment; filename=\"{}\"", filename),
+                                )
                                 .body(Body::from(zip_bytes))
                                 .map_err(|_| Error::from("Failed to construct zip response"));
                         }
                         Err(e) => {
-                            tracing::error!("❌ Failed to read zip file {}: {}", zip_file.display(), e);
+                            tracing::error!(
+                                "❌ Failed to read zip file {}: {}",
+                                zip_file.display(),
+                                e
+                            );
                             return Response::builder()
                                 .status(http::StatusCode::INTERNAL_SERVER_ERROR)
                                 .body(Body::from(format!("Failed to read zip file: {}", e)))
@@ -552,7 +562,10 @@ impl ServiceHandler<Value> for JmixEndpoint {
                 }
             } else {
                 // zip_ready is false - return error
-                tracing::error!("❌ JMIX package {} is not ready (zip build failed)", jmix_id);
+                tracing::error!(
+                    "❌ JMIX package {} is not ready (zip build failed)",
+                    jmix_id
+                );
                 return Response::builder()
                     .status(http::StatusCode::INTERNAL_SERVER_ERROR)
                     .body(Body::from("JMIX package build failed"))

@@ -36,7 +36,7 @@ impl JmixBuilderMiddleware {
 impl Middleware for JmixBuilderMiddleware {
     async fn left(
         &self,
-        mut envelope: RequestEnvelope<serde_json::Value>,
+        mut envelope: RequestEnvelope<Value>,
     ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         // Read metadata set by endpoint
         let jmix_id = envelope.request_details.metadata.get("jmix_id").cloned();
@@ -162,7 +162,7 @@ impl Middleware for JmixBuilderMiddleware {
 
             // Just verify the zip exists and set metadata - jmix service will handle serving
             let zip_file = package_dir.join(format!("{}.zip", id));
-            
+
             if !zip_file.exists() {
                 set_response_and_skip(
                     500,
@@ -176,7 +176,14 @@ impl Middleware for JmixBuilderMiddleware {
             }
 
             // Set jmix metadata - service will handle zip serving with proper headers
-            set_response_and_skip(200, HashMap::new(), None, None, Some(id.to_string()), Some(true));
+            set_response_and_skip(
+                200,
+                HashMap::new(),
+                None,
+                None,
+                Some(id.to_string()),
+                Some(true),
+            );
             return Ok(envelope);
         }
 
@@ -196,10 +203,10 @@ impl Middleware for JmixBuilderMiddleware {
             let path = m.get("path").and_then(|v| v.as_str()).unwrap_or("");
             let _package_dir = Path::new(path);
 
-            // Just verify the zip exists and set metadata - jmix service will handle serving  
+            // Just verify the zip exists and set metadata - jmix service will handle serving
             let package_dir = store_root.join(id);
             let zip_file = package_dir.join(format!("{}.zip", id));
-            
+
             if !zip_file.exists() {
                 set_response_and_skip(
                     500,
@@ -213,7 +220,14 @@ impl Middleware for JmixBuilderMiddleware {
             }
 
             // Set jmix metadata - service will handle zip serving with proper headers
-            set_response_and_skip(200, HashMap::new(), None, None, Some(id.to_string()), Some(true));
+            set_response_and_skip(
+                200,
+                HashMap::new(),
+                None,
+                None,
+                Some(id.to_string()),
+                Some(true),
+            );
             return Ok(envelope);
         }
 
@@ -314,10 +328,15 @@ impl Middleware for JmixBuilderMiddleware {
         // Create package-specific directory for this envelope
         let jmix_id = envelope_built.manifest.id.clone();
         let pkg_dir = store_root.join(&jmix_id);
-        
+
         // Ensure the package directory exists
-        fs::create_dir_all(&pkg_dir)
-            .map_err(|e| Error::from(format!("Failed to create package dir {}: {}", pkg_dir.display(), e)))?;
+        fs::create_dir_all(&pkg_dir).map_err(|e| {
+            Error::from(format!(
+                "Failed to create package dir {}: {}",
+                pkg_dir.display(),
+                e
+            ))
+        })?;
 
         // Persist envelope to the specific package directory
         let _saved = builder
@@ -353,46 +372,58 @@ impl Middleware for JmixBuilderMiddleware {
 
         // jmix-rs should have created a zip file in the package directory
         let zip_file = pkg_dir.join(format!("{}.zip", jmix_id));
-        
+
         if !zip_file.exists() {
             return Err(Error::from(format!(
-                "jmix-rs did not create expected zip file: {}", 
+                "jmix-rs did not create expected zip file: {}",
                 zip_file.display()
             )));
         }
-        
+
         // Verify the zip file has content
         match fs::metadata(&zip_file) {
             Ok(metadata) => {
-                tracing::info!("✅ JMIX zip file ready: {} ({} bytes)", zip_file.display(), metadata.len());
+                tracing::info!(
+                    "✅ JMIX zip file ready: {} ({} bytes)",
+                    zip_file.display(),
+                    metadata.len()
+                );
             }
             Err(e) => {
                 return Err(Error::from(format!(
-                    "Failed to access jmix zip file {}: {}", 
-                    zip_file.display(), e
+                    "Failed to access jmix zip file {}: {}",
+                    zip_file.display(),
+                    e
                 )));
             }
         }
-        
+
         // Clean up DIMSE files now that the zip has been successfully created
         let dimse_folder = std::path::Path::new(&folder_path);
         if dimse_folder.exists() {
-            match fs::remove_dir_all(&dimse_folder) {
+            match fs::remove_dir_all(dimse_folder) {
                 Ok(_) => {
                     tracing::info!("🧹 Cleaned up DIMSE files from: {}", folder_path);
                 }
                 Err(e) => {
-                    tracing::warn!("⚠️ Failed to cleanup DIMSE files from {}: {}", folder_path, e);
+                    tracing::warn!(
+                        "⚠️ Failed to cleanup DIMSE files from {}: {}",
+                        folder_path,
+                        e
+                    );
                     // Don't fail the entire operation if cleanup fails - just log warning
                 }
             }
         } else {
-            tracing::debug!("📁 DIMSE folder {} does not exist (already cleaned up?)", folder_path);
+            tracing::debug!(
+                "📁 DIMSE folder {} does not exist (already cleaned up?)",
+                folder_path
+            );
         }
 
         // Set metadata for jmix service to use - endpoint will handle HTTP headers
         let mut new_nd = nd;
-        
+
         let response_obj = serde_json::json!({
             "status": 200u16,
             "jmix_id": jmix_id,
@@ -431,7 +462,6 @@ fn package_dir_for(store_root: &Path, id: &str) -> PathBuf {
     store_root.join(id)
 }
 
-
 /// Query JMIX envelopes by StudyInstanceUID using the redb index
 fn query_by_study_uid(store_root: &Path, study_uid: &str) -> Result<Vec<serde_json::Value>, Error> {
     let index = get_jmix_index(store_root)
@@ -462,11 +492,16 @@ fn ensure_store_root() -> Result<PathBuf, String> {
     } else {
         PathBuf::from("./tmp/jmix-store")
     };
-    
+
     // Ensure the store root exists
-    fs::create_dir_all(&store_root)
-        .map_err(|e| format!("Failed to create store root {}: {}", store_root.display(), e))?;
-    
+    fs::create_dir_all(&store_root).map_err(|e| {
+        format!(
+            "Failed to create store root {}: {}",
+            store_root.display(),
+            e
+        )
+    })?;
+
     Ok(store_root)
 }
 
@@ -554,11 +589,17 @@ mod tests {
         // Validate response contains jmix metadata
         let nd2 = out.normalized_data.expect("nd");
         let response = nd2.get("response").expect("response");
-        
+
         // Check for jmix_id and zip_ready metadata
-        let jmix_id = response.get("jmix_id").and_then(|id| id.as_str()).expect("jmix_id");
-        let zip_ready = response.get("zip_ready").and_then(|r| r.as_bool()).expect("zip_ready");
-        
+        let jmix_id = response
+            .get("jmix_id")
+            .and_then(|id| id.as_str())
+            .expect("jmix_id");
+        let zip_ready = response
+            .get("zip_ready")
+            .and_then(|r| r.as_bool())
+            .expect("zip_ready");
+
         assert!(!jmix_id.is_empty(), "jmix_id should not be empty");
         assert!(zip_ready, "zip_ready should be true");
     }
@@ -568,7 +609,7 @@ mod tests {
     fn test_zip_file_contains_expected_files() {
         use std::io::Cursor;
         use zip::ZipArchive;
-        
+
         // Create unique storage for this test
         let storage = create_test_storage();
         set_storage(storage.clone());
@@ -610,7 +651,7 @@ mod tests {
         let mw = JmixBuilderMiddleware::new();
         let rt = tokio::runtime::Runtime::new().unwrap();
         let result = rt.block_on(async move { mw.right(env).await });
-        
+
         // Check if the middleware ran successfully
         match &result {
             Ok(_) => println!("✅ Middleware executed successfully"),
@@ -619,39 +660,46 @@ mod tests {
                 panic!("Middleware execution failed: {}", e);
             }
         }
-        
+
         let out = result.expect("middleware should succeed");
-        
+
         // Get the jmix_id from the response
         let nd2 = out.normalized_data.expect("nd");
         let response = nd2.get("response").expect("response");
-        let jmix_id = response.get("jmix_id").and_then(|id| id.as_str()).expect("jmix_id");
-        
+        let jmix_id = response
+            .get("jmix_id")
+            .and_then(|id| id.as_str())
+            .expect("jmix_id");
+
         // Find the created zip file using the local storage instance
         let store_root = storage.subpath_str("jmix-store");
-        
+
         // Look for zip file in the package directory (where jmix-rs creates it)
         let package_dir = store_root.join(jmix_id);
         let zip_file = package_dir.join(format!("{}.zip", jmix_id));
         println!("🔍 Looking for zip file at: {}", zip_file.display());
-        
+
         // Check if zip file exists and has content
-        assert!(zip_file.exists(), "Zip file should exist at {}", zip_file.display());
-        
+        assert!(
+            zip_file.exists(),
+            "Zip file should exist at {}",
+            zip_file.display()
+        );
+
         let zip_data = fs::read(&zip_file).expect("Should be able to read zip file");
         println!("📦 Zip file size: {} bytes", zip_data.len());
         assert!(zip_data.len() > 0, "Zip file should not be empty");
-        
+
         // Check the package directory contents
         let pkg_dir = store_root.join(jmix_id);
         println!("📁 Package directory: {}", pkg_dir.display());
-        
+
         if pkg_dir.exists() {
             let entries: Vec<_> = fs::read_dir(&pkg_dir)
                 .expect("Should read package dir")
                 .collect::<Result<Vec<_>, _>>()
                 .expect("Should collect entries");
-            
+
             let file_names: Vec<String> = entries
                 .iter()
                 .map(|e| e.file_name().to_string_lossy().to_string())
@@ -660,11 +708,11 @@ mod tests {
         } else {
             println!("❌ Package directory does not exist!");
         }
-        
+
         // Extract and examine zip contents
         let cursor = Cursor::new(&zip_data);
         let mut archive = ZipArchive::new(cursor).expect("Should be able to open zip");
-        
+
         println!("📦 Zip contains {} files:", archive.len());
         let mut zip_file_names = Vec::new();
         for i in 0..archive.len() {
@@ -673,17 +721,21 @@ mod tests {
             println!("   - {} ({} bytes)", name, file.size());
             zip_file_names.push(name);
         }
-        
+
         // Verify we have expected JMIX files
-        let has_manifest = zip_file_names.iter().any(|name| name.contains("manifest.json"));
-        let has_metadata = zip_file_names.iter().any(|name| name.contains("metadata.json"));
+        let has_manifest = zip_file_names
+            .iter()
+            .any(|name| name.contains("manifest.json"));
+        let has_metadata = zip_file_names
+            .iter()
+            .any(|name| name.contains("metadata.json"));
         let has_dicom_files = zip_file_names.iter().any(|name| name.ends_with(".dcm"));
-        
+
         println!("🔍 Analysis:");
         println!("   - Has manifest.json: {}", has_manifest);
         println!("   - Has metadata.json: {}", has_metadata);
         println!("   - Has DICOM files: {}", has_dicom_files);
-        
+
         // The zip should not be empty - it should have at least manifest and metadata
         assert!(archive.len() > 0, "Zip should contain files");
         assert!(has_manifest, "Zip should contain manifest.json");
