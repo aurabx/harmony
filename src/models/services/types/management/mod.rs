@@ -74,76 +74,17 @@ impl ServiceType for ManagementEndpoint {
     async fn build_protocol_envelope(
         &self,
         ctx: crate::models::protocol::ProtocolCtx,
-        _options: &HashMap<String, Value>,
-    ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-        use crate::models::envelope::envelope::RequestDetails;
-        use std::collections::HashMap;
-
-        // Convert protocol context to request details
-        let mut headers = HashMap::new();
-        let mut cookies = HashMap::new();
-        let mut query_params = HashMap::new();
-        let metadata = ctx.meta;
-
-        // Extract data from attrs if it's an object
-        if let Some(attrs_obj) = ctx.attrs.as_object() {
-            // Extract headers
-            if let Some(headers_val) = attrs_obj.get("headers").and_then(|v| v.as_object()) {
-                for (k, v) in headers_val {
-                    if let Some(v_str) = v.as_str() {
-                        headers.insert(k.clone(), v_str.to_string());
-                    }
-                }
-            }
-
-            // Extract cookies
-            if let Some(cookies_val) = attrs_obj.get("cookies").and_then(|v| v.as_object()) {
-                for (k, v) in cookies_val {
-                    if let Some(v_str) = v.as_str() {
-                        cookies.insert(k.clone(), v_str.to_string());
-                    }
-                }
-            }
-
-            // Extract query params
-            if let Some(query_val) = attrs_obj.get("query_params").and_then(|v| v.as_object()) {
-                for (k, v) in query_val {
-                    if let Some(v_array) = v.as_array() {
-                        let strings: Vec<String> = v_array
-                            .iter()
-                            .filter_map(|item| item.as_str().map(|s| s.to_string()))
-                            .collect();
-                        query_params.insert(k.clone(), strings);
-                    }
-                }
-            }
+        options: &HashMap<String, Value>,
+    ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error>
+    {
+        // For HTTP protocol, delegate to HttpEndpoint for consistent HTTP parsing
+        if ctx.protocol == crate::models::protocol::Protocol::Http {
+            let http = crate::models::services::types::http::HttpEndpoint {};
+            return http.build_protocol_envelope(ctx, options).await;
         }
-
-        let request_details = RequestDetails {
-            method: ctx
-                .attrs
-                .get("method")
-                .and_then(|v| v.as_str())
-                .unwrap_or("GET")
-                .to_string(),
-            uri: ctx
-                .attrs
-                .get("uri")
-                .and_then(|v| v.as_str())
-                .unwrap_or("/")
-                .to_string(),
-            headers,
-            cookies,
-            query_params,
-            cache_status: ctx
-                .attrs
-                .get("cache_status")
-                .and_then(|v| v.as_str())
-                .map(|s| s.to_string()),
-            metadata,
-        };
-
-        Ok(RequestEnvelope::new(request_details, ctx.payload))
+        Err(crate::utils::Error::from(
+            "JmixEndpoint only supports Protocol::Http envelope building",
+        ))
     }
 }
 
