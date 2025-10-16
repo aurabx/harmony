@@ -19,7 +19,7 @@ dicom_json_tool = { path = "crates/dicom_json_tool" }
 harmony_transform = { path = "crates/transform" }
 
 #jmix-rs = { path = "../jmix/jmix-rust" }
-jmix-rs = "0.2.0"
+jmix-rs = "0.3.1"
 
 dicom-object = "0.9"
 dicom-pixeldata = { version = "0.9", features = ["image", "rle", "jpeg"] }
