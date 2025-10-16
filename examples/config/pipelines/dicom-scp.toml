@@ -3,7 +3,7 @@
 #-------------------------
 [pipelines.dicom_scp_demo]
 description = "DICOM endpoint (SCP) that accepts DIMSE connections"
-networks = ["default"]
+networks = ["external"]
 endpoints = ["dicom_scp"]
 middleware = []
 backends = []

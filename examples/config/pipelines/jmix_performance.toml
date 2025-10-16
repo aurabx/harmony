@@ -4,7 +4,7 @@
 #-------------------------
 [pipelines.jmix_performance]
 description = "High-performance JMIX API with default skip flags for large datasets"
-networks = ["default"]
+networks = ["external"]
 endpoints = ["jmix_api_performance"]
 middleware = [
     'middleware.jmix_builder',

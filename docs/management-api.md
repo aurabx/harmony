@@ -41,7 +41,8 @@ Returns basic system information about the Harmony proxy instance.
 
 **Example Request:**
 ```bash
-curl http://localhost:8080/admin/info
+# Management API runs on internal network (localhost:9090)
+curl http://localhost:9090/admin/info
 ```
 
 **Response:**
@@ -66,7 +67,8 @@ Returns a list of all configured pipelines in the system.
 
 **Example Request:**
 ```bash
-curl http://localhost:8080/admin/pipelines
+# Management API runs on internal network (localhost:9090)
+curl http://localhost:9090/admin/pipelines
 ```
 
 **Response:**
@@ -107,11 +109,16 @@ curl http://localhost:8080/admin/pipelines
 ### Default Disabled
 The Management API is disabled by default (`enabled = false`) to prevent accidental exposure of system information. You must explicitly enable it.
 
-### No Authentication (Yet)
-The current implementation does not include authentication. The endpoints are accessible to anyone who can reach the base URL. Consider:
+### Network Security
+The recommended configuration binds the Management API to the management network (`127.0.0.1:9090`), making it accessible only from the local machine. This provides a security boundary between:
 
-- Using network-level restrictions (firewall, VPN)
-- Binding to localhost only for local access
+- **Management network** (`127.0.0.1:9090`): Management API endpoints only
+- **External network** (`0.0.0.0:8080`): Client-facing application endpoints
+
+### No Authentication (Yet)
+The current implementation does not include authentication within the management endpoints themselves. The network-level isolation provides the primary security boundary. Consider additional measures:
+
+- Network-level restrictions (firewall, VPN) for remote management access
 - Planning to add authentication in future versions
 
 ### Information Disclosure
@@ -124,14 +131,14 @@ The API exposes:
 
 ### Check System Health
 ```bash
-# Get basic system info
-curl http://localhost:8080/admin/info | jq
+# Get basic system info (note: management API on port 9090)
+curl http://localhost:9090/admin/info | jq
 
 # Check if specific pipeline exists
-curl http://localhost:8080/admin/pipelines | jq '.pipelines[] | select(.id=="my-pipeline")'
+curl http://localhost:9090/admin/pipelines | jq '.pipelines[] | select(.id=="my-pipeline")'
 
 # Count total pipelines
-curl http://localhost:8080/admin/pipelines | jq '.pipelines | length'
+curl http://localhost:9090/admin/pipelines | jq '.pipelines | length'
 ```
 
 ### Monitoring Integration
@@ -139,24 +146,24 @@ The endpoints return JSON suitable for monitoring tools:
 
 ```bash
 # Prometheus-style check (non-zero exit on error)
-curl -f http://localhost:8080/admin/info > /dev/null
+curl -f http://localhost:9090/admin/info > /dev/null
 
 # Extract version for deployment tracking
-VERSION=$(curl -s http://localhost:8080/admin/info | jq -r '.version')
+VERSION=$(curl -s http://localhost:9090/admin/info | jq -r '.version')
 echo "Running Harmony version: $VERSION"
 ```
 
 ### Pipeline Discovery
 ```bash
 # List all pipeline IDs
-curl -s http://localhost:8080/admin/pipelines | jq -r '.pipelines[].id'
+curl -s http://localhost:9090/admin/pipelines | jq -r '.pipelines[].id'
 
 # Find pipelines using specific middleware
-curl -s http://localhost:8080/admin/pipelines | \
+curl -s http://localhost:9090/admin/pipelines | \
   jq '.pipelines[] | select(.middleware | contains(["jwt_auth"]))'
 
 # Check pipeline network associations
-curl -s http://localhost:8080/admin/pipelines | \
+curl -s http://localhost:9090/admin/pipelines | \
   jq '.pipelines[] | {id, networks}'
 ```
 
@@ -180,20 +187,20 @@ If the system is under heavy load or experiencing issues, endpoints may return 5
 Use the `/info` endpoint for health checks in container orchestration:
 
 ```yaml
-# Docker Compose
+# Docker Compose (note: management API on port 9090)
 healthcheck:
-  test: ["CMD", "curl", "-f", "http://localhost:8080/admin/info"]
+  test: ["CMD", "curl", "-f", "http://localhost:9090/admin/info"]
   interval: 30s
   timeout: 10s
   retries: 3
 ```
 
 ```yaml
-# Kubernetes
+# Kubernetes (note: management API on port 9090)
 livenessProbe:
   httpGet:
     path: /admin/info
-    port: 8080
+    port: 9090
   initialDelaySeconds: 30
   periodSeconds: 10
 ```
@@ -205,7 +212,7 @@ Use the `/pipelines` endpoint to validate configuration after deployment:
 #!/bin/bash
 # Deployment validation script
 EXPECTED_PIPELINES=("pipeline1" "pipeline2" "management")
-ACTUAL_PIPELINES=$(curl -s http://localhost:8080/admin/pipelines | jq -r '.pipelines[].id')
+ACTUAL_PIPELINES=$(curl -s http://localhost:9090/admin/pipelines | jq -r '.pipelines[].id')
 
 for pipeline in "${EXPECTED_PIPELINES[@]}"; do
   if ! echo "$ACTUAL_PIPELINES" | grep -q "^$pipeline$"; then

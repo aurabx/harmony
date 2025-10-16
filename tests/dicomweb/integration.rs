@@ -31,8 +31,7 @@ async fn test_qido_query_all_studies() {
         .await
         .unwrap();
     if !body.is_empty() {
-        let studies: Vec<serde_json::Value> =
-            serde_json::from_slice(&body).expect("parse studies");
+        let studies: Vec<serde_json::Value> = serde_json::from_slice(&body).expect("parse studies");
         assert!(!studies.is_empty(), "Expected at least one study");
     }
 }
@@ -46,7 +45,10 @@ async fn test_qido_query_studies_with_patient_id() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/dicomweb/studies?PatientID={}", ctx.uids.patient_id))
+                .uri(&format!(
+                    "/dicomweb/studies?PatientID={}",
+                    ctx.uids.patient_id
+                ))
                 .method("GET")
                 .header("Accept", "application/dicom+json")
                 .body(Body::empty())
@@ -64,8 +66,7 @@ async fn test_qido_query_studies_with_patient_id() {
         .await
         .unwrap();
     if !body.is_empty() {
-        let studies: Vec<serde_json::Value> =
-            serde_json::from_slice(&body).expect("parse studies");
+        let studies: Vec<serde_json::Value> = serde_json::from_slice(&body).expect("parse studies");
         assert!(
             !studies.is_empty(),
             "Expected at least one study for patient ID: {}",
@@ -123,8 +124,8 @@ async fn test_qido_query_specific_study() {
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    let study_data = serde_json::from_slice::<serde_json::Value>(&body)
-        .expect("parse specific study");
+    let study_data =
+        serde_json::from_slice::<serde_json::Value>(&body).expect("parse specific study");
     // Verify response contains and matches the requested Study Instance UID
     assert_uid_in_response(
         &study_data,
@@ -163,8 +164,7 @@ async fn test_qido_query_all_series_in_study() {
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    let series_list: Vec<serde_json::Value> =
-        serde_json::from_slice(&body).expect("parse series");
+    let series_list: Vec<serde_json::Value> = serde_json::from_slice(&body).expect("parse series");
     assert!(!series_list.is_empty(), "Expected at least one series");
 }
 
@@ -262,8 +262,8 @@ async fn test_qido_query_specific_series() {
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    let series_data = serde_json::from_slice::<serde_json::Value>(&body)
-        .expect("parse specific series");
+    let series_data =
+        serde_json::from_slice::<serde_json::Value>(&body).expect("parse specific series");
     // Verify response contains and matches the requested Series Instance UID
     assert_uid_in_response(
         &series_data,
@@ -305,8 +305,7 @@ async fn test_qido_query_all_instances_in_series() {
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    let instances: Vec<serde_json::Value> =
-        serde_json::from_slice(&body).expect("parse instances");
+    let instances: Vec<serde_json::Value> = serde_json::from_slice(&body).expect("parse instances");
     assert!(!instances.is_empty(), "Expected at least one instance");
 }
 
@@ -404,8 +403,8 @@ async fn test_qido_query_specific_instance() {
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    let instance_data = serde_json::from_slice::<serde_json::Value>(&body)
-        .expect("parse specific instance");
+    let instance_data =
+        serde_json::from_slice::<serde_json::Value>(&body).expect("parse specific instance");
     // Verify response contains and matches the requested SOP Instance UID
     assert_uid_in_response(
         &instance_data,
@@ -428,7 +427,10 @@ async fn test_wado_study_metadata() {
         .clone()
         .oneshot(
             Request::builder()
-                .uri(&format!("/dicomweb/studies/{}/metadata", ctx.uids.study_uid))
+                .uri(&format!(
+                    "/dicomweb/studies/{}/metadata",
+                    ctx.uids.study_uid
+                ))
                 .method("GET")
                 .header("Accept", "application/dicom+json")
                 .body(Body::empty())
@@ -444,8 +446,8 @@ async fn test_wado_study_metadata() {
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    let metadata = serde_json::from_slice::<serde_json::Value>(&body)
-        .expect("parse study metadata");
+    let metadata =
+        serde_json::from_slice::<serde_json::Value>(&body).expect("parse study metadata");
     // Metadata should be either array or object with DICOM tags
     assert!(
         metadata.is_array() || metadata.is_object(),
@@ -481,8 +483,8 @@ async fn test_wado_series_metadata() {
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    let metadata = serde_json::from_slice::<serde_json::Value>(&body)
-        .expect("parse series metadata");
+    let metadata =
+        serde_json::from_slice::<serde_json::Value>(&body).expect("parse series metadata");
     assert!(
         metadata.is_array() || metadata.is_object(),
         "Series metadata should be array or object"
@@ -517,8 +519,8 @@ async fn test_wado_instance_metadata() {
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    let metadata = serde_json::from_slice::<serde_json::Value>(&body)
-        .expect("parse instance metadata");
+    let metadata =
+        serde_json::from_slice::<serde_json::Value>(&body).expect("parse instance metadata");
     assert!(
         metadata.is_array() || metadata.is_object(),
         "Instance metadata should be array or object"
@@ -795,8 +797,8 @@ async fn test_complex_study_search_with_multiple_criteria() {
     let body = axum::body::to_bytes(resp.into_body(), usize::MAX)
         .await
         .unwrap();
-    let results: serde_json::Value = serde_json::from_slice(&body)
-        .expect("parse complex study search");
+    let results: serde_json::Value =
+        serde_json::from_slice(&body).expect("parse complex study search");
     // Should be array of results
     assert!(results.is_array(), "Complex search result should be array");
 }

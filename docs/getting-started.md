@@ -15,11 +15,13 @@ Build
 - Release: cargo build --release
 
 Run
-- Using the default example configuration:
-  - cargo run -- --config examples/default/config.toml
-- The default config references pipeline files under examples/default/pipelines
+- Using the example configuration with dual networks:
+  - cargo run -- --config examples/config/config.toml
+- The config uses two networks: management (127.0.0.1:9090) for management API, external (0.0.0.0:8080) for client traffic
+- Access management endpoints at: http://localhost:9090/admin/info
+- Access client endpoints at: http://localhost:8080/
 
-Minimal pipeline example (HTTP -> Echo)
+Minimal pipeline example (HTTP -> Echo with dual networks)
 ```toml
 [proxy]
 id = "smoke-test"
@@ -29,17 +31,30 @@ log_level = "info"
 backend = "filesystem"
 path = "./tmp"
 
-[network.default]
+# Management network for management API only
+[network.management]
 enable_wireguard = false
 interface = "wg0"
-
-[network.default.http]
+[network.management.http]
 bind_address = "127.0.0.1"
+bind_port = 9090
+
+# External network for client traffic
+[network.external]
+enable_wireguard = false
+interface = "wg0"
+[network.external.http]
+bind_address = "0.0.0.0"
 bind_port = 8080
+
+# Enable management API (automatically uses first network: management)
+[management]
+enabled = true
+base_path = "admin"
 
 [pipelines.core]
 description = "HTTP->Echo smoke pipeline"
-networks = ["default"]
+networks = ["external"]
 endpoints = ["smoke_http"]
 backends = ["echo_backend"]
 middleware = ["middleware.passthru"]

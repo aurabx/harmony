@@ -1,3 +1,6 @@
+pub(crate) use self::config::ManagementConfig;
+use self::info::handle_info;
+use self::pipelines::handle_pipelines;
 use crate::config::config::ConfigError;
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::pipelines::config::Pipeline;
@@ -11,9 +14,6 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
-pub(crate) use self::config::ManagementConfig;
-use self::info::handle_info;
-use self::pipelines::handle_pipelines;
 
 pub mod config;
 pub mod info;
@@ -33,10 +33,12 @@ impl ServiceType for ManagementEndpoint {
                     name: "management".to_string(),
                     reason: "Invalid management configuration".to_string(),
                 })?;
-            config.validate().map_err(|e| ConfigError::InvalidEndpoint {
-                name: "management".to_string(),
-                reason: e,
-            })?;
+            config
+                .validate()
+                .map_err(|e| ConfigError::InvalidEndpoint {
+                    name: "management".to_string(),
+                    reason: e,
+                })?;
         }
         Ok(())
     }
@@ -74,7 +76,7 @@ impl ServiceType for ManagementEndpoint {
         ctx: crate::models::protocol::ProtocolCtx,
         _options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-        use crate::models::envelope::envelope::{RequestDetails};
+        use crate::models::envelope::envelope::RequestDetails;
         use std::collections::HashMap;
 
         // Convert protocol context to request details
@@ -118,18 +120,24 @@ impl ServiceType for ManagementEndpoint {
         }
 
         let request_details = RequestDetails {
-            method: ctx.attrs.get("method")
+            method: ctx
+                .attrs
+                .get("method")
                 .and_then(|v| v.as_str())
                 .unwrap_or("GET")
                 .to_string(),
-            uri: ctx.attrs.get("uri")
+            uri: ctx
+                .attrs
+                .get("uri")
                 .and_then(|v| v.as_str())
                 .unwrap_or("/")
                 .to_string(),
             headers,
             cookies,
             query_params,
-            cache_status: ctx.attrs.get("cache_status")
+            cache_status: ctx
+                .attrs
+                .get("cache_status")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string()),
             metadata,
@@ -175,13 +183,13 @@ impl ServiceHandler<Value> for ManagementEndpoint {
 
         // Remove leading slash and match the specific endpoint
         let clean_path = path.trim_start_matches('/');
-        
+
         let response_value = match clean_path {
             p if p == "info" || p == format!("{}/info", base_path) => {
                 let info = handle_info().await;
                 serde_json::to_value(info.0)
                     .map_err(|_| Error::from("Failed to serialize info response"))?
-            },
+            }
             p if p == "pipelines" || p == format!("{}/pipelines", base_path) => {
                 // Get pipelines from service options if available
                 let pipelines = options
@@ -197,11 +205,11 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                             .collect::<HashMap<String, Pipeline>>()
                     })
                     .unwrap_or_default();
-                
+
                 let pipelines_response = handle_pipelines(State(Arc::new(pipelines))).await;
                 serde_json::to_value(pipelines_response.0)
                     .map_err(|_| Error::from("Failed to serialize pipelines response"))?
-            },
+            }
             p if p == "routes" || p == format!("{}/routes", base_path) => {
                 // Use global config access since we need full config for routes analysis
                 let config = crate::globals::get_config();
@@ -212,8 +220,8 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                 };
                 serde_json::to_value(routes_response)
                     .map_err(|_| Error::from("Failed to serialize routes response"))?
-            },
-            _ => serde_json::json!({"error": "Not found"})
+            }
+            _ => serde_json::json!({"error": "Not found"}),
         };
 
         let body = serde_json::to_string(&response_value)

@@ -3,7 +3,7 @@
 #-------------------------
 [pipelines.dicom_backend_demo]
 description = "HTTP request triggers DIMSE SCU operations via DICOM backend"
-networks = ["default"]
+networks = ["external"]
 endpoints = ["http_to_dicom"]
 middleware = []
 backends = ["dicom_pacs"]

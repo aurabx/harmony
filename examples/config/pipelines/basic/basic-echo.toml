@@ -3,7 +3,7 @@
 #-------------------------
 [pipelines.echo_basic]
 description = "Basic echo endpoint for quick start"
-networks = ["default"]
+networks = ["external"]
 endpoints = ["echo_endpoint"]
 middleware = [
     'middleware.passthru',

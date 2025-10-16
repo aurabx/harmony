@@ -3,12 +3,12 @@ use crate::config::proxy_config::ProxyConfig;
 use crate::config::Cli;
 use crate::models::backends::backends::Backend;
 use crate::models::endpoints::endpoint::Endpoint;
-use crate::models::services::types::management::ManagementConfig;
 use crate::models::middleware::middleware::{initialise_middleware_registry, MiddlewareConfig};
 use crate::models::network::config::NetworkConfig;
 use crate::models::pipelines::config::Pipeline;
 use crate::models::services::services::initialise_service_registry;
 use crate::models::services::services::ServiceConfig;
+use crate::models::services::types::management::ManagementConfig;
 use crate::models::targets::config::TargetConfig;
 use crate::storage::StorageConfig;
 use once_cell::sync::Lazy;
@@ -85,7 +85,10 @@ impl Config {
         // Inject management pipeline if not already present
         if !self.pipelines.contains_key("management") {
             // Find first available network, defaulting to "default"
-            let network = self.network.keys().next()
+            let network = self
+                .network
+                .keys()
+                .next()
                 .cloned()
                 .unwrap_or_else(|| "default".to_string());
 
@@ -405,9 +408,9 @@ impl Config {
     }
 
     fn validate_management(&self) -> Result<(), ConfigError> {
-        self.management.validate().map_err(|err| ConfigError::InvalidManagement {
-            reason: err,
-        })
+        self.management
+            .validate()
+            .map_err(|err| ConfigError::InvalidManagement { reason: err })
     }
 
     fn validate_storage(&self) -> Result<(), ConfigError> {

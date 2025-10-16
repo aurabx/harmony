@@ -3,7 +3,7 @@
 #-------------------------
 [pipelines.fhir]
 description = "FHIR passthru test"
-networks = ["default"]
+networks = ["external"]
 endpoints = ["fhir_test"]
 middleware = [
     'middleware.basic_auth',

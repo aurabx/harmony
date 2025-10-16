@@ -1,8 +1,8 @@
+use crate::models::pipelines::config::Pipeline;
 use axum::{extract::State, response::Json};
 use serde::Serialize;
 use std::collections::HashMap;
 use std::sync::Arc;
-use crate::models::pipelines::config::Pipeline;
 
 #[derive(Serialize)]
 pub struct PipelineInfo {

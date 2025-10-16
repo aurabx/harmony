@@ -102,8 +102,7 @@ pub async fn get_test_context() -> &'static TestContext {
 
 async fn setup_dicomweb_test() -> TestContext {
     // Extract UIDs from samples for validation (even though we use mock data)
-    let uids = extract_uids_from_samples()
-        .expect("Failed to extract UIDs from sample DICOM files");
+    let uids = extract_uids_from_samples().expect("Failed to extract UIDs from sample DICOM files");
 
     // Set up temporary working directory
     let test_base = PathBuf::from("./tmp/dicomweb_integration");

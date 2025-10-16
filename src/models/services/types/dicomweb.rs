@@ -23,13 +23,13 @@ impl DicomwebEndpoint {
     ) -> Result<Response, Error> {
         let data = nd.get("dicomweb_data");
         let metadata = nd.get("dicomweb_metadata").and_then(|v| v.as_object());
-        
+
         match response_type {
             "qido_json" => {
                 // QIDO-RS responses: application/dicom+json
                 // According to DICOMweb spec, return 204 No Content for successful queries with no results
                 let json_data = data.cloned().unwrap_or(Value::Array(vec![]));
-                
+
                 // Check metadata to determine if results were found
                 let has_results = metadata
                     .and_then(|m| m.get("has_results"))
@@ -41,16 +41,16 @@ impl DicomwebEndpoint {
                             _ => true,
                         }
                     });
-                
+
                 let status = if has_results {
                     http::StatusCode::OK
                 } else {
                     http::StatusCode::NO_CONTENT
                 };
-                
+
                 let body_str = serde_json::to_string(&json_data)
                     .map_err(|_| Error::from("Failed to serialize QIDO JSON"))?;
-                
+
                 Response::builder()
                     .status(status)
                     .header("content-type", "application/dicom+json")
@@ -60,23 +60,23 @@ impl DicomwebEndpoint {
             "wado_metadata" => {
                 // WADO-RS metadata responses: application/dicom+json
                 let json_data = data.cloned().unwrap_or(Value::Array(vec![]));
-                
+
                 // Determine status based on whether we have data
                 let has_data = match &json_data {
                     Value::Array(arr) => !arr.is_empty(),
                     Value::Object(_) => true, // Single object is considered data
                     _ => false,
                 };
-                
+
                 let status = if has_data {
                     http::StatusCode::OK
                 } else {
                     http::StatusCode::NO_CONTENT
                 };
-                
+
                 let body_str = serde_json::to_string(&json_data)
                     .map_err(|_| Error::from("Failed to serialize WADO metadata JSON"))?;
-                
+
                 Response::builder()
                     .status(status)
                     .header("content-type", "application/dicom+json")
@@ -88,22 +88,24 @@ impl DicomwebEndpoint {
                 if let Some(meta) = metadata {
                     if let (Some(boundary), Some(body_b64)) = (
                         meta.get("boundary").and_then(|v| v.as_str()),
-                        meta.get("body_b64").and_then(|v| v.as_str())
+                        meta.get("body_b64").and_then(|v| v.as_str()),
                     ) {
                         let bytes = base64::engine::general_purpose::STANDARD
                             .decode(body_b64)
                             .map_err(|_| Error::from("Failed to decode WADO instance body_b64"))?;
-                        
+
                         let content_type = format!(
                             "multipart/related; type=\"application/dicom\"; boundary={}",
                             boundary
                         );
-                        
+
                         return Response::builder()
                             .status(http::StatusCode::OK)
                             .header("content-type", content_type)
                             .body(Body::from(bytes))
-                            .map_err(|_| Error::from("Failed to construct WADO instance response"));
+                            .map_err(|_| {
+                                Error::from("Failed to construct WADO instance response")
+                            });
                     }
                 }
                 // Fallback to error if metadata is missing
@@ -116,26 +118,32 @@ impl DicomwebEndpoint {
             "wado_frames" => {
                 // WADO-RS frame responses: image/jpeg, image/png, or multipart
                 if let Some(meta) = metadata {
-                    let content_type = meta.get("content_type")
+                    let content_type = meta
+                        .get("content_type")
                         .and_then(|v| v.as_str())
                         .unwrap_or("image/jpeg");
-                    let is_single_frame = meta.get("is_single_frame")
+                    let is_single_frame = meta
+                        .get("is_single_frame")
                         .and_then(|v| v.as_bool())
                         .unwrap_or(true);
-                    
+
                     if let Some(body_b64) = meta.get("body_b64").and_then(|v| v.as_str()) {
                         let bytes = base64::engine::general_purpose::STANDARD
                             .decode(body_b64)
                             .map_err(|_| Error::from("Failed to decode frames body_b64"))?;
-                        
+
                         let final_content_type = if is_single_frame {
                             content_type.to_string()
-                        } else if let Some(boundary) = meta.get("boundary").and_then(|v| v.as_str()) {
-                            format!("multipart/related; type=\"{}\"; boundary={}", content_type, boundary)
+                        } else if let Some(boundary) = meta.get("boundary").and_then(|v| v.as_str())
+                        {
+                            format!(
+                                "multipart/related; type=\"{}\"; boundary={}",
+                                content_type, boundary
+                            )
                         } else {
                             content_type.to_string()
                         };
-                        
+
                         return Response::builder()
                             .status(http::StatusCode::OK)
                             .header("content-type", final_content_type)
@@ -156,15 +164,15 @@ impl DicomwebEndpoint {
                     .and_then(|m| m.get("message"))
                     .and_then(|v| v.as_str())
                     .unwrap_or("Unable to decode frames for requested instance");
-                
+
                 let error_response = serde_json::json!({
                     "error": "UnsupportedTransferSyntax",
                     "message": error_msg,
                 });
-                
+
                 let body_str = serde_json::to_string(&error_response)
                     .map_err(|_| Error::from("Failed to serialize error response"))?;
-                
+
                 Response::builder()
                     .status(http::StatusCode::NOT_ACCEPTABLE)
                     .header("content-type", "application/json")
@@ -175,7 +183,7 @@ impl DicomwebEndpoint {
                 // Unknown response type - serialize as JSON
                 let body_str = serde_json::to_string(nd)
                     .map_err(|_| Error::from("Failed to serialize unknown response type"))?;
-                
+
                 Response::builder()
                     .status(http::StatusCode::OK)
                     .header("content-type", "application/json")
@@ -427,12 +435,12 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
         _options: &HashMap<String, Value>,
     ) -> Result<Response, Error> {
         let nd = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
-        
+
         // Check for DICOMweb-specific response types from middleware
         if let Some(response_type) = nd.get("dicomweb_response_type").and_then(|v| v.as_str()) {
             return self.handle_dicomweb_response(response_type, &nd).await;
         }
-        
+
         // Fallback to legacy response handling for backward compatibility
         let response_meta = nd.get("response");
 
@@ -508,14 +516,14 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::envelope::envelope::{RequestEnvelope, RequestDetails};
+    use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
     use axum::body::to_bytes;
     use std::collections::HashMap;
-    
+
     #[tokio::test]
     async fn test_qido_response_with_results() {
         let endpoint = DicomwebEndpoint {};
-        
+
         // Create mock normalized data for QIDO response with results
         let qido_data = serde_json::json!([
             {
@@ -523,16 +531,16 @@ mod tests {
                 "00100010": {"vr": "PN", "Value": ["Doe^John"]}
             }
         ]);
-        
+
         let mut metadata = serde_json::Map::new();
         metadata.insert("has_results".to_string(), Value::Bool(true));
-        
+
         let normalized_data = serde_json::json!({
             "dicomweb_response_type": "qido_json",
             "dicomweb_data": qido_data,
             "dicomweb_metadata": metadata
         });
-        
+
         let envelope = RequestEnvelope {
             request_details: RequestDetails {
                 method: "GET".to_string(),
@@ -547,34 +555,34 @@ mod tests {
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
         };
-        
+
         let response = endpoint.transform_response(envelope, &HashMap::new()).await;
         assert!(response.is_ok());
-        
+
         let resp = response.unwrap();
-        
+
         // Verify status code is 200 OK
         assert_eq!(resp.status(), http::StatusCode::OK);
-        
+
         // Verify content-type header
         let content_type = resp.headers().get("content-type");
         assert!(content_type.is_some());
         assert_eq!(content_type.unwrap(), "application/dicom+json");
     }
-    
+
     #[tokio::test]
     async fn test_qido_response_empty_results() {
         let endpoint = DicomwebEndpoint {};
-        
+
         let mut metadata = serde_json::Map::new();
         metadata.insert("has_results".to_string(), Value::Bool(false));
-        
+
         let normalized_data = serde_json::json!({
             "dicomweb_response_type": "qido_json",
             "dicomweb_data": [],
             "dicomweb_metadata": metadata
         });
-        
+
         let envelope = RequestEnvelope {
             request_details: RequestDetails {
                 method: "GET".to_string(),
@@ -589,36 +597,42 @@ mod tests {
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
         };
-        
+
         let response = endpoint.transform_response(envelope, &HashMap::new()).await;
         assert!(response.is_ok());
-        
+
         let resp = response.unwrap();
-        
+
         // Verify status code is 204 No Content
         assert_eq!(resp.status(), http::StatusCode::NO_CONTENT);
-        
+
         // Verify content-type header
         let content_type = resp.headers().get("content-type");
         assert!(content_type.is_some());
         assert_eq!(content_type.unwrap(), "application/dicom+json");
     }
-    
+
     #[tokio::test]
     async fn test_wado_frames_single_image() {
         let endpoint = DicomwebEndpoint {};
-        
+
         let mut metadata = serde_json::Map::new();
-        metadata.insert("content_type".to_string(), Value::String("image/jpeg".to_string()));
-        metadata.insert("body_b64".to_string(), Value::String("SGVsbG8gV29ybGQ=".to_string())); // "Hello World" in base64
+        metadata.insert(
+            "content_type".to_string(),
+            Value::String("image/jpeg".to_string()),
+        );
+        metadata.insert(
+            "body_b64".to_string(),
+            Value::String("SGVsbG8gV29ybGQ=".to_string()),
+        ); // "Hello World" in base64
         metadata.insert("is_single_frame".to_string(), Value::Bool(true));
-        
+
         let normalized_data = serde_json::json!({
             "dicomweb_response_type": "wado_frames",
             "dicomweb_data": serde_json::Value::Null,
             "dicomweb_metadata": metadata
         });
-        
+
         let envelope = RequestEnvelope {
             request_details: RequestDetails {
                 method: "GET".to_string(),
@@ -633,39 +647,45 @@ mod tests {
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
         };
-        
+
         let response = endpoint.transform_response(envelope, &HashMap::new()).await;
         assert!(response.is_ok());
-        
+
         let resp = response.unwrap();
-        
+
         // Verify status code is 200 OK
         assert_eq!(resp.status(), http::StatusCode::OK);
-        
+
         // Verify content-type header is image/jpeg
         let content_type = resp.headers().get("content-type");
         assert!(content_type.is_some());
         assert_eq!(content_type.unwrap(), "image/jpeg");
-        
+
         // Verify body contains decoded base64 data
         let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         assert_eq!(body_bytes.as_ref(), b"Hello World");
     }
-    
+
     #[tokio::test]
     async fn test_wado_frames_error() {
         let endpoint = DicomwebEndpoint {};
-        
+
         let mut metadata = serde_json::Map::new();
-        metadata.insert("error".to_string(), Value::String("UnsupportedTransferSyntax".to_string()));
-        metadata.insert("message".to_string(), Value::String("Unable to decode frames for requested instance".to_string()));
-        
+        metadata.insert(
+            "error".to_string(),
+            Value::String("UnsupportedTransferSyntax".to_string()),
+        );
+        metadata.insert(
+            "message".to_string(),
+            Value::String("Unable to decode frames for requested instance".to_string()),
+        );
+
         let normalized_data = serde_json::json!({
             "dicomweb_response_type": "wado_frames_error",
             "dicomweb_data": serde_json::Value::Null,
             "dicomweb_metadata": metadata
         });
-        
+
         let envelope = RequestEnvelope {
             request_details: RequestDetails {
                 method: "GET".to_string(),
@@ -680,25 +700,28 @@ mod tests {
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
         };
-        
+
         let response = endpoint.transform_response(envelope, &HashMap::new()).await;
         assert!(response.is_ok());
-        
+
         let resp = response.unwrap();
-        
+
         // Verify status code is 406 Not Acceptable
         assert_eq!(resp.status(), http::StatusCode::NOT_ACCEPTABLE);
-        
+
         // Verify content-type header is application/json
         let content_type = resp.headers().get("content-type");
         assert!(content_type.is_some());
         assert_eq!(content_type.unwrap(), "application/json");
-        
+
         // Verify error response body
         let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
         let body_str = String::from_utf8(body_bytes.to_vec()).unwrap();
         let json: serde_json::Value = serde_json::from_str(&body_str).unwrap();
         assert_eq!(json["error"], "UnsupportedTransferSyntax");
-        assert_eq!(json["message"], "Unable to decode frames for requested instance");
+        assert_eq!(
+            json["message"],
+            "Unable to decode frames for requested instance"
+        );
     }
 }

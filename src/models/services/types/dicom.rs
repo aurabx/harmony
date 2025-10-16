@@ -380,7 +380,6 @@ impl DicomEndpoint {
                     }
                 }
 
-
                 // Determine appropriate query level based on filters and return keys
                 let query_level = if params.get("00080018").is_some_and(|v| !v.is_empty()) {
                     // SOPInstanceUID filter present -> IMAGE level
@@ -410,7 +409,6 @@ impl DicomEndpoint {
                     // Default to PATIENT level
                     QueryLevel::Patient
                 };
-
 
                 let mut query = FindQuery::patient(params.get("00100020").cloned()); // PatientID if present
                 query.query_level = query_level;
@@ -467,7 +465,7 @@ impl DicomEndpoint {
                                 }
                             }
                         }
-                        
+
                         if path.contains("/series") || path.contains("/instances") {
                             eprintln!("[DEBUG] DIMSE Results:");
                             eprintln!("[DEBUG]   Stream items received: {}", item_count);
@@ -476,7 +474,7 @@ impl DicomEndpoint {
                                 eprintln!("[DEBUG]   First match: {:?}", matches[0]);
                             }
                         }
-                        
+
                         serde_json::json!({
                             "operation": "find",
                             "success": true,

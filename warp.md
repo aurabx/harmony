@@ -51,7 +51,7 @@ RUST_LOG=debug cargo test -- --nocapture
 # Format code
 cargo fmt --all
 
-# Lint with clippy
+# Lint with clippy (do not run unless requested - this messes up diffs)
 cargo clippy --all-targets -- -D warnings
 ```
 
@@ -149,7 +149,7 @@ The validator enforces strict requirements:
 - **Output Directory**: Use `./tmp` directory for temporary files (not system `/tmp`)
 - **Dynamic Loading**: libloading supports custom endpoints/middleware (see `examples/custom_endpoint`)
 - Items are only ready for production use if they are fully tested and contain no bugs.
-
+- Clippy is not to be run as part of patches unless specifically requested
 
 ## Change Management and PR Hygiene
 

@@ -3,7 +3,7 @@
 #-------------------------
 [pipelines.fhir]
 description = "FHIR to DICOM example"
-networks = ["default"]
+networks = ["external"]
 endpoints = ["fhir_test"]
 middleware = [
     'middleware.jwt_auth',

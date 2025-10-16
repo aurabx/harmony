@@ -6,7 +6,7 @@
 #-------------------------
 [pipelines.transform_demo]
 description = "Demonstrates JOLT transform middleware"
-networks = ["default"]
+networks = ["external"]
 endpoints = ["http_endpoint"]
 middleware = [
     'middleware.json_extractor',

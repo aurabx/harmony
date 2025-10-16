@@ -160,7 +160,7 @@ impl MockDicomData {
     /// Handle a mock C-FIND request
     pub fn handle_find_query(&self, params: &HashMap<String, String>) -> Vec<serde_json::Value> {
         debug!("[MOCK DICOM] C-FIND query params: {:?}", params);
-        
+
         // Determine query level based on present parameters
         let query_level = if params.get("00080018").is_some_and(|v| !v.is_empty()) {
             // SOPInstanceUID filter present -> IMAGE level
@@ -222,7 +222,7 @@ impl MockDicomData {
                 "Value": [self.study_uid]
             },
             "00100020": {
-                "vr": "LO", 
+                "vr": "LO",
                 "Value": [self.patient_id]
             },
             "00100010": {
@@ -234,7 +234,7 @@ impl MockDicomData {
                 "Value": ["20241015"]
             },
             "00080030": {
-                "vr": "TM", 
+                "vr": "TM",
                 "Value": ["120000"]
             },
             "00081030": {
@@ -251,7 +251,10 @@ impl MockDicomData {
     fn query_series(&self, params: &HashMap<String, String>) -> Vec<serde_json::Value> {
         // Must have study UID constraint for series queries
         let study_uid = params.get("0020000D");
-        if study_uid.is_none() || study_uid.unwrap().is_empty() || study_uid.unwrap() != &self.study_uid {
+        if study_uid.is_none()
+            || study_uid.unwrap().is_empty()
+            || study_uid.unwrap() != &self.study_uid
+        {
             return vec![];
         }
 
@@ -272,7 +275,9 @@ impl MockDicomData {
         if let Some(modality) = params.get("00080060") {
             if !modality.is_empty() {
                 // Filter by modality
-                return self.series.iter()
+                return self
+                    .series
+                    .iter()
                     .filter(|s| s.modality == *modality)
                     .map(|s| self.create_series_response(s))
                     .collect();
@@ -280,7 +285,8 @@ impl MockDicomData {
         }
 
         // Return all series in the study
-        self.series.iter()
+        self.series
+            .iter()
             .map(|s| self.create_series_response(s))
             .collect()
     }
@@ -288,7 +294,10 @@ impl MockDicomData {
     fn query_instances(&self, params: &HashMap<String, String>) -> Vec<serde_json::Value> {
         // Must have study UID constraint for instance queries
         let study_uid = params.get("0020000D");
-        if study_uid.is_none() || study_uid.unwrap().is_empty() || study_uid.unwrap() != &self.study_uid {
+        if study_uid.is_none()
+            || study_uid.unwrap().is_empty()
+            || study_uid.unwrap() != &self.study_uid
+        {
             return vec![];
         }
 
@@ -299,7 +308,10 @@ impl MockDicomData {
         }
 
         // Find the matching series
-        let series = self.series.iter().find(|s| s.series_uid == *series_uid.unwrap());
+        let series = self
+            .series
+            .iter()
+            .find(|s| s.series_uid == *series_uid.unwrap());
         if series.is_none() {
             return vec![];
         }
@@ -324,7 +336,9 @@ impl MockDicomData {
             if !instance_num_str.is_empty() {
                 if let Ok(instance_num) = instance_num_str.parse::<i32>() {
                     // Filter by instance number
-                    return series.instances.iter()
+                    return series
+                        .instances
+                        .iter()
                         .filter(|i| i.instance_number == instance_num)
                         .map(|i| self.create_instance_response(series, i))
                         .collect();
@@ -333,7 +347,9 @@ impl MockDicomData {
         }
 
         // Return all instances in the series
-        series.instances.iter()
+        series
+            .instances
+            .iter()
             .map(|i| self.create_instance_response(series, i))
             .collect()
     }
@@ -345,7 +361,7 @@ impl MockDicomData {
                 "Value": [self.study_uid]
             },
             "0020000E": {
-                "vr": "UI", 
+                "vr": "UI",
                 "Value": [series.series_uid]
             },
             "00200011": {
@@ -367,7 +383,11 @@ impl MockDicomData {
         })
     }
 
-    fn create_instance_response(&self, series: &MockSeries, instance: &MockInstance) -> serde_json::Value {
+    fn create_instance_response(
+        &self,
+        series: &MockSeries,
+        instance: &MockInstance,
+    ) -> serde_json::Value {
         serde_json::json!({
             "0020000D": {
                 "vr": "UI",
@@ -481,7 +501,7 @@ impl ServiceHandler<Value> for MockDicomEndpoint {
 
         let mut builder = Response::builder().status(status);
         let mut has_content_type = false;
-        
+
         if let Some(hdrs) = response_meta
             .and_then(|m| m.get("headers"))
             .and_then(|h| h.as_object())
@@ -505,13 +525,14 @@ impl ServiceHandler<Value> for MockDicomEndpoint {
                 .map_err(|_| Error::from("Failed to construct mock DICOM HTTP response"));
         }
 
-        let body_str = serde_json::to_string(&nd)
-            .map_err(|_| Error::from("Failed to serialize mock DICOM response payload into JSON"))?;
-        
+        let body_str = serde_json::to_string(&nd).map_err(|_| {
+            Error::from("Failed to serialize mock DICOM response payload into JSON")
+        })?;
+
         if !has_content_type {
             builder = builder.header("content-type", "application/json");
         }
-        
+
         builder
             .body(Body::from(body_str))
             .map_err(|_| Error::from("Failed to construct mock DICOM HTTP response"))
@@ -520,10 +541,14 @@ impl ServiceHandler<Value> for MockDicomEndpoint {
 
 impl MockDicomEndpoint {
     /// Handle C-FIND operations
-    async fn handle_c_find(&self, envelope: &RequestEnvelope<Vec<u8>>, path: &str) -> serde_json::Value {
+    async fn handle_c_find(
+        &self,
+        envelope: &RequestEnvelope<Vec<u8>>,
+        path: &str,
+    ) -> serde_json::Value {
         // Parse request body as either wrapper or raw identifier JSON
-        let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
-            .unwrap_or(serde_json::Value::Null);
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null);
 
         // Extract identifier JSON
         let mut identifier_json = match body_json {
@@ -534,7 +559,7 @@ impl MockDicomEndpoint {
             }
             _ => serde_json::json!({}),
         };
-        
+
         if let Some(nd) = envelope.normalized_data.as_ref() {
             if let Some(ident) = nd.get("dimse_identifier") {
                 if ident.is_object() {
@@ -554,9 +579,7 @@ impl MockDicomEndpoint {
                             params.insert(tag.clone(), s.to_string());
                         } else if let Some(obj) = first.as_object() {
                             // PN case: { Alphabetic: "..." }
-                            if let Some(alpha) =
-                                obj.get("Alphabetic").and_then(|v| v.as_str())
-                            {
+                            if let Some(alpha) = obj.get("Alphabetic").and_then(|v| v.as_str()) {
                                 params.insert(tag.clone(), alpha.to_string());
                             }
                         }
@@ -591,9 +614,13 @@ impl MockDicomEndpoint {
     }
 
     /// Handle C-GET operations for WADO-RS instance/frame retrieval
-    async fn handle_c_get(&self, _envelope: &RequestEnvelope<Vec<u8>>, path: &str) -> serde_json::Value {
+    async fn handle_c_get(
+        &self,
+        _envelope: &RequestEnvelope<Vec<u8>>,
+        path: &str,
+    ) -> serde_json::Value {
         debug!("[MOCK DICOM] C-GET Operation - Path: {}", path);
-        
+
         // Create mock DICOM data directory and file
         let mock_dir = std::path::Path::new("/tmp/mock_dicom_data");
         if !mock_dir.exists() {
@@ -607,7 +634,7 @@ impl MockDicomEndpoint {
                 }
             }
         }
-        
+
         // Check if this is a frame request
         if path.contains("/frames/") {
             // Handle frame retrieval - return error for out-of-range frames
@@ -678,12 +705,8 @@ impl MockDicomEndpoint {
                     "port": 11112
                 })
             }
-            "find" | "/find" => {
-                self.handle_c_find(envelope, &path).await
-            }
-            "get" | "/get" => {
-                self.handle_c_get(envelope, &path).await
-            }
+            "find" | "/find" => self.handle_c_find(envelope, &path).await,
+            "get" | "/get" => self.handle_c_get(envelope, &path).await,
             _ => {
                 serde_json::json!({
                     "operation": op,
