@@ -3,6 +3,7 @@ use crate::config::proxy_config::ProxyConfig;
 use crate::config::Cli;
 use crate::models::backends::backends::Backend;
 use crate::models::endpoints::endpoint::Endpoint;
+use crate::models::services::types::management::ManagementConfig;
 use crate::models::middleware::middleware::{initialise_middleware_registry, MiddlewareConfig};
 use crate::models::network::config::NetworkConfig;
 use crate::models::pipelines::config::Pipeline;
@@ -15,6 +16,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+// use serde_json::json;
 
 static DEFAULT_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(HashMap::new);
 
@@ -22,6 +24,8 @@ static DEFAULT_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(Has
 pub struct Config {
     #[serde(default)]
     pub proxy: ProxyConfig,
+    #[serde(default)]
+    pub management: ManagementConfig,
     #[serde(default)]
     pub network: HashMap<String, NetworkConfig>,
     #[serde(default)]
@@ -47,6 +51,67 @@ pub struct Config {
 }
 
 impl Config {
+    pub fn inject_management_service(&mut self) {
+        // Only inject if management is enabled
+        if !self.management.enabled {
+            return;
+        }
+
+        // Inject management endpoint if not already present
+        if !self.endpoints.contains_key("management") {
+            self.endpoints.insert(
+                "management".to_string(),
+                Endpoint {
+                    service: "management".to_string(),
+                    options: Some({
+                        let mut options = HashMap::new();
+                        options.insert(
+                            "config".to_string(),
+                            serde_json::json!({
+                                "enabled": self.management.enabled,
+                                "base_path": self.management.base_path,
+                            }),
+                        );
+                        options.insert(
+                            "pipelines".to_string(),
+                            serde_json::to_value(&self.pipelines).unwrap_or_default(),
+                        );
+                        options
+                    }),
+                },
+            );
+        }
+
+        // Inject management pipeline if not already present
+        if !self.pipelines.contains_key("management") {
+            // Find first available network, defaulting to "default"
+            let network = self.network.keys().next()
+                .cloned()
+                .unwrap_or_else(|| "default".to_string());
+
+            self.pipelines.insert(
+                "management".to_string(),
+                Pipeline {
+                    description: "Management API pipeline".to_string(),
+                    networks: vec![network],
+                    endpoints: vec!["management".to_string()],
+                    backends: Vec::new(),
+                    middleware: Vec::new(),
+                },
+            );
+        }
+
+        // Ensure management service is registered
+        if !self.services.contains_key("management") {
+            self.services.insert(
+                "management".to_string(),
+                ServiceConfig {
+                    module: "".to_string(),
+                },
+            );
+        }
+    }
+
     pub fn from_args(cli: Cli) -> Self {
         // Load the base configuration file
         let contents =
@@ -57,6 +122,9 @@ impl Config {
         if let Ok(additional_configs) = Self::load_additional_configs(&config, &cli.config_path) {
             config = Self::merge_configs(config, additional_configs);
         }
+
+        // Inject management service if enabled
+        config.inject_management_service();
 
         // Initialize both registries
         config.initialize_service_registry();
@@ -137,6 +205,7 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.validate_proxy()?;
         self.validate_networks()?;
+        self.validate_management()?;
         self.validate_services()?;
         self.validate_middleware_types()?;
         self.validate_pipelines()?;
@@ -335,6 +404,12 @@ impl Config {
         Ok(())
     }
 
+    fn validate_management(&self) -> Result<(), ConfigError> {
+        self.management.validate().map_err(|err| ConfigError::InvalidManagement {
+            reason: err,
+        })
+    }
+
     fn validate_storage(&self) -> Result<(), ConfigError> {
         match self.storage.backend.as_str() {
             "filesystem" => {
@@ -369,6 +444,7 @@ impl Config {
 pub enum ConfigError {
     InvalidProxy { name: String, reason: String },
     MissingTargets { name: String, reason: String },
+    InvalidManagement { reason: String },
     InvalidEndpoint { name: String, reason: String },
     InvalidBackend { name: String, reason: String },
     InvalidNetwork { name: String, reason: String },

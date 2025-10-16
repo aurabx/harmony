@@ -5,4 +5,5 @@ pub mod echo;
 pub mod fhir;
 pub mod http;
 pub mod jmix;
+pub mod management;
 pub mod mock_dicom;

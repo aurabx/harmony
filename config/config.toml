@@ -11,6 +11,15 @@ pipelines_path = "pipelines"
 transforms_path = "transforms"
 
 # ------------------------
+# Management API
+#-------------------------
+[management]
+# Whether the management API is enabled. Defaults to false for security.
+enabled = true
+# The base path for management endpoints. Defaults to "admin".
+base_path = "admin"
+
+# ------------------------
 # Network
 #
 # Defines 0 or more network configurations.
@@ -86,13 +95,6 @@ module=""
 
 # DICOMweb <-> DICOM bridge middleware (RECOMMENDED - replaces both middlewares below)
 [middleware_types.dicomweb_bridge]
-module=""
-
-# Legacy DICOMweb middleware (kept for backward compatibility)
-[middleware_types.dicomweb_to_dicom]
-module=""
-
-[middleware_types.dicom_to_dicomweb]
 module=""
 
 # JMIX builder middleware

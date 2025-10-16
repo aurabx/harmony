@@ -122,6 +122,11 @@ path = "tests/jmix/jmix_skip_backends.rs"
 name = "pipeline_jmix_builder"
 path = "tests/jmix/pipeline_jmix_builder.rs"
 
+# Management tests
+[[test]]
+name = "management_service"
+path = "tests/services/management_test.rs"
+
 [profile.profiling]
 inherits = "release"
 debug = true

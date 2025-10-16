@@ -15,6 +15,7 @@ Harmony is a proxy/gateway that handles, transforms and proxies data between sys
 - Request/response transformation pipeline
 - AES-256-GCM encryption with ephemeral keys
 - Envelope-based data exchange format
+- Management API for monitoring and administration
 
 ## Prerequisites
 
@@ -71,6 +72,7 @@ cargo clippy --all-targets -- -D warnings
 - [docs/envelope.md](docs/envelope.md) - Core Envelope struct for data exchange
 - [docs/endpoints.md](docs/endpoints.md) - Endpoint types (HTTP, FHIR, JMIX, DICOMweb)
 - [docs/backends.md](docs/backends.md) - Backend types and target communication
+- [docs/management-api.md](docs/management-api.md) - Management API for monitoring and administration
 
 ### Other
 - [readme.md](readme.md) - Project overview and links
