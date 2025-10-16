@@ -15,7 +15,7 @@ fn find_samples_root() -> Option<PathBuf> {
     let candidates = [
         PathBuf::from("./samples/study_1"),
         PathBuf::from("./samples/dicom/study_1"),
-        PathBuf::from("./dev/samples/study_1"),
+        PathBuf::from("../../dev/samples/study_1"),
     ];
     candidates.into_iter().find(|p| p.exists())
 }
@@ -71,7 +71,7 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
     drop(listener);
 
     // Prepare QR SCP DB config
-    let base = PathBuf::from("./tmp/qrscp_jmix");
+    let base = PathBuf::from("../../tmp/qrscp_jmix");
     let dbdir = base.join("qrdb");
     std::fs::create_dir_all(&dbdir).expect("create qr db dir");
     let cfg_path = base.join("dcmqrscp.cfg");

@@ -60,6 +60,68 @@ dicom-core = "0.9"
 tempfile = "3.10"
 serial_test = "3.0"
 
+# Test organization
+
+# DICOM tests
+[[test]]
+name = "dicom_backend_bridge"
+path = "tests/dicom/dicom_backend_bridge.rs"
+
+[[test]]
+name = "dicom_find_qrscp"
+path = "tests/dicom/dicom_find_qrscp.rs"
+
+[[test]]
+name = "dicom_get_qrscp"
+path = "tests/dicom/dicom_get_qrscp.rs"
+
+[[test]]
+name = "dicom_get_samples"
+path = "tests/dicom/dicom_get_samples.rs"
+
+[[test]]
+name = "dicom_move_persistent_relocate"
+path = "tests/dicom/dicom_move_persistent_relocate.rs"
+
+[[test]]
+name = "dicom_move_qrscp"
+path = "tests/dicom/dicom_move_qrscp.rs"
+
+[[test]]
+name = "dimse_scp_starts"
+path = "tests/dicom/dimse_scp_starts.rs"
+
+# DICOMweb tests
+[[test]]
+name = "dicomweb_frames_qrscp"
+path = "tests/dicomweb/dicomweb_frames_qrscp.rs"
+
+[[test]]
+name = "dicomweb_service"
+path = "tests/dicomweb/dicomweb_service.rs"
+
+[[test]]
+name = "dicomweb_to_dicom_middleware"
+path = "tests/dicomweb/dicomweb_to_dicom_middleware.rs"
+
+[[test]]
+name = "dicomweb_integration"
+path = "tests/dicomweb/integration.rs"
+
+# FHIR tests
+[[test]]
+name = "fhir_service"
+path = "tests/fhir/fhir_service.rs"
+
+# JMIX tests
+[[test]]
+name = "jmix_skip_backends"
+path = "tests/jmix/jmix_skip_backends.rs"
+
+[[test]]
+name = "pipeline_jmix_builder"
+path = "tests/jmix/pipeline_jmix_builder.rs"
+
 [profile.profiling]
 inherits = "release"
 debug = true

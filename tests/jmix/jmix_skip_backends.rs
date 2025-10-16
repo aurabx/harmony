@@ -126,6 +126,9 @@ async fn jmix_manifest_and_archive_skip_backends() {
         host = "127.0.0.1"
         port = 104
 
+        [middleware.jmix_builder]
+        type = "jmix_builder"
+        
         [services.http]
         module = ""
         [services.dicom]

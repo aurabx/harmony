@@ -16,7 +16,7 @@ fn load_config_from_str(toml_str: &str) -> Config {
 #[tokio::test]
 async fn fhir_endpoint_handles_get_request() {
     // Ensure ./tmp exists per project preference
-    let _ = std::fs::create_dir_all("./tmp");
+    let _ = std::fs::create_dir_all("../../tmp");
 
     let toml = r#"
         [proxy]
@@ -73,7 +73,7 @@ async fn fhir_endpoint_handles_get_request() {
 #[tokio::test]
 async fn fhir_put_is_supported() {
     // Ensure ./tmp exists per project preference
-    let _ = std::fs::create_dir_all("./tmp");
+    let _ = std::fs::create_dir_all("../../tmp");
 
     let toml = r#"
         [proxy]
@@ -130,7 +130,7 @@ async fn fhir_put_is_supported() {
 #[tokio::test]
 async fn fhir_delete_is_supported() {
     // Ensure ./tmp exists per project preference
-    let _ = std::fs::create_dir_all("./tmp");
+    let _ = std::fs::create_dir_all("../../tmp");
 
     let toml = r#"
         [proxy]
@@ -187,7 +187,7 @@ async fn fhir_delete_is_supported() {
 #[tokio::test]
 async fn fhir_backend_is_invoked_in_pipeline() {
     // Ensure ./tmp exists per project preference
-    let _ = std::fs::create_dir_all("./tmp");
+    let _ = std::fs::create_dir_all("../../tmp");
 
     let toml = r#"
         [proxy]

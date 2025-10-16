@@ -31,7 +31,7 @@ async fn dicomweb_frames_with_dcmqrscp() {
     drop(listener);
 
     // Prepare dcmqrscp config
-    let base = PathBuf::from("./tmp/qrscp_frames");
+    let base = PathBuf::from("../../tmp/qrscp_frames");
     let dbdir = base.join("qrdb");
     std::fs::create_dir_all(&dbdir).expect("mkdir qr db");
     let cfg_path = base.join("dcmqrscp.cfg");
@@ -314,7 +314,7 @@ async fn dicomweb_multiframes_with_dcmqrscp() {
     drop(listener);
 
     // Prepare dcmqrscp config
-    let base = PathBuf::from("./tmp/qrscp_multiframes");
+    let base = PathBuf::from("../../tmp/qrscp_multiframes");
     let dbdir = base.join("qrdb");
     std::fs::create_dir_all(&dbdir).expect("mkdir qr db");
     let cfg_path = base.join("dcmqrscp.cfg");

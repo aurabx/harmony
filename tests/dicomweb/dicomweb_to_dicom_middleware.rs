@@ -56,7 +56,7 @@ fn cfg() -> &'static str {
 }
 
 async fn build_router() -> axum::Router<()> {
-    let _ = std::fs::create_dir_all("./tmp");
+    let _ = std::fs::create_dir_all("../../tmp");
     let c = load_config_from_str(cfg()).expect("valid config");
     harmony::router::build_network_router(Arc::new(c), "default").await
 }

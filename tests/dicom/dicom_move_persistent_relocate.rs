@@ -35,7 +35,7 @@ async fn dicom_move_persistent_relocates_into_per_move_dir() {
     drop(listener2);
 
     // Prepare QR storage directory and config
-    let base = PathBuf::from("./tmp/qrscp_persist");
+    let base = PathBuf::from("../../tmp/qrscp_persist");
     let dbdir = base.join("qrdb");
     std::fs::create_dir_all(&dbdir).expect("create qr db dir");
     let cfg_path = base.join("dcmqrscp.cfg");

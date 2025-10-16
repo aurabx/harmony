@@ -31,7 +31,7 @@ async fn dicom_get_with_dcmqrscp() {
     drop(listener);
 
     // Prepare QR storage directory and config
-    let base = PathBuf::from("./tmp/qrscp_get");
+    let base = PathBuf::from("../../tmp/qrscp_get");
     let dbdir = base.join("qrdb");
     std::fs::create_dir_all(&dbdir).expect("create qr db dir");
     let cfg_path = base.join("dcmqrscp.cfg");

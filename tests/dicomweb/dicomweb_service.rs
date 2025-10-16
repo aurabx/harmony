@@ -44,7 +44,7 @@ fn get_dicomweb_test_config() -> &'static str {
 
 async fn build_test_router() -> axum::Router<()> {
     // Ensure ./tmp directory exists for store_dir
-    let _ = std::fs::create_dir_all("./tmp");
+    let _ = std::fs::create_dir_all("../../tmp");
 
     let cfg = load_config_from_str(get_dicomweb_test_config()).expect("valid config");
     harmony::router::build_network_router(Arc::new(cfg), "default").await

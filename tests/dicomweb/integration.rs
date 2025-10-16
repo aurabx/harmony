@@ -2,7 +2,8 @@ use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use tower::ServiceExt;
 
-use super::common::{assert_uid_in_response, get_test_context};
+mod common;
+use common::{assert_uid_in_response, get_test_context};
 
 // =============================================================================
 // QIDO-RS Tests: Query Studies
