@@ -4,6 +4,7 @@ use std::sync::Arc;
 use tokio::sync::OnceCell;
 
 // Shared test state to avoid spinning up backend/app multiple times
+#[allow(dead_code)]
 static TEST_STATE: OnceCell<TestContext> = OnceCell::const_new();
 
 pub struct TestContext {
@@ -25,6 +26,7 @@ pub struct TestUids {
 }
 
 /// Extract UIDs and identifiers from sample DICOM files using the dicom-object crate
+#[allow(dead_code)]
 fn extract_uids_from_samples() -> Option<TestUids> {
     let candidates = [
         PathBuf::from("./samples/study_1"),
@@ -80,12 +82,14 @@ fn extract_uids_from_samples() -> Option<TestUids> {
     })
 }
 
+#[allow(dead_code)]
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(toml).expect("TOML parse error");
     config.validate()?;
     Ok(config)
 }
 
+#[allow(dead_code)]
 async fn build_router_with_config(toml: &str) -> Result<axum::Router<()>, ConfigError> {
     let _ = std::fs::create_dir_all("./tmp");
     let c = load_config_from_str(toml)?;
@@ -94,12 +98,14 @@ async fn build_router_with_config(toml: &str) -> Result<axum::Router<()>, Config
 }
 
 /// Initialize shared test context (backend and app) once for all tests
+#[allow(dead_code)]
 pub async fn get_test_context() -> &'static TestContext {
     TEST_STATE
         .get_or_init(|| async { setup_dicomweb_test().await })
         .await
 }
 
+#[allow(dead_code)]
 async fn setup_dicomweb_test() -> TestContext {
     // Extract UIDs from samples for validation (even though we use mock data)
     let uids = extract_uids_from_samples().expect("Failed to extract UIDs from sample DICOM files");
@@ -144,6 +150,9 @@ async fn setup_dicomweb_test() -> TestContext {
         [services.mock_dicom]
         module = ""
 
+        [middleware.dicomweb_bridge]
+        type = "dicomweb_bridge"
+
         [middleware_types.dicomweb_bridge]
         module = ""
     "#;
@@ -157,6 +166,7 @@ async fn setup_dicomweb_test() -> TestContext {
 
 /// Helper to extract UID value from DICOM JSON response
 /// Handles both single object (with nested Value array) and array responses
+#[allow(dead_code)]
 pub fn extract_uid_from_response(data: &serde_json::Value, tag: &str) -> Option<String> {
     data.get(tag)
         .and_then(|v| v.get("Value"))
@@ -167,6 +177,7 @@ pub fn extract_uid_from_response(data: &serde_json::Value, tag: &str) -> Option<
 }
 
 /// Helper to verify requested UID is in response (handles both array and object responses)
+#[allow(dead_code)]
 pub fn assert_uid_in_response(
     response: &serde_json::Value,
     tag: &str,

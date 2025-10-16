@@ -42,7 +42,7 @@ async fn test_transform_middleware_integration() {
         [middleware.transform_test]
         type = "transform"
         [middleware.transform_test.options]
-        spec_path = "examples/default/transforms/simple_rename.json"
+        spec_path = "examples/config/transforms/simple_rename.json"
         apply = "left"
         fail_on_error = true
 

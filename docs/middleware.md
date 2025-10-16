@@ -17,7 +17,8 @@ Config keys:
 
 Example:
 ```toml
-[middleware.basic_auth]
+[middleware.basic_auth_example]
+type="basic_auth"
 username = "test_user"
 password = "test_password"
 # token_path = "/tmp/test_token" # optional
@@ -49,7 +50,8 @@ Config keys:
 Examples
 - RS256 (recommended):
 ```toml
-[middleware.jwt_auth]
+[middleware.jwt_auth_example]
+type = "jwt_auth"
 public_key_path = "/etc/harmony/jwt_public.pem"
 issuer = "https://auth.example.com/"
 audience = "harmony"
@@ -58,7 +60,8 @@ leeway_secs = 60
 
 - HS256 (development/test only):
 ```toml
-[middleware.jwt_auth]
+[middleware.jwt_auth_example]
+type = "jwt_auth"
 use_hs256 = true
 hs256_secret = "replace-with-strong-secret"
 issuer = "https://auth.example.com/"
@@ -72,19 +75,6 @@ Notes:
 
 ## Transformation
 
-### DICOM to JSON
-Converts DICOM into JSON.
-
-### DICOMweb to JSON
-Converts DICOMweb into JSON.
-
-### FHIR to DICOM
-Converts FHIR to DICOM.
-
-### JMIX to DICOM
-Converts JMIX to DICOM.
-
 ### Transform (JOLT)
 Applies JSON-to-JSON transformations using JOLT specifications. Supports configurable application on request/response sides with error handling options.
 
-See `warp.md` for detailed configuration and examples.

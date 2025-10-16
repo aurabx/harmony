@@ -6,8 +6,8 @@ description = "FHIR to DICOM example"
 networks = ["external"]
 endpoints = ["fhir_test"]
 middleware = [
-    'middleware.jwt_auth',
-    'middleware.json_extractor',
+    "basic_auth",
+    "json_extractor",
 ]
 backends = ["dicom_backend"]
 
@@ -16,9 +16,14 @@ backends = ["dicom_backend"]
 #-------------------------
 
 [middleware.basic_auth]
+type = "basic_auth"
+[middleware.basic_auth.options]
 token_path = "./tmp/test_token"
 username = "test_user"
 password = "test_password"
+
+[middleware.json_extractor]
+type = "json_extractor"
 
 # ------------------------
 # Endpoints

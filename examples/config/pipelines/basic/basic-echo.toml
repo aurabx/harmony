@@ -6,7 +6,7 @@ description = "Basic echo endpoint for quick start"
 networks = ["external"]
 endpoints = ["echo_endpoint"]
 middleware = [
-    'middleware.passthru',
+    "passthru",
 ]
 backends = ["echo_backend"]
 
@@ -14,7 +14,7 @@ backends = ["echo_backend"]
 # Middleware
 #-------------------------
 [middleware.passthru]
-# This middleware has no configurable properties
+type = "passthru"
 
 # ------------------------
 # Public endpoints

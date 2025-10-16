@@ -34,7 +34,7 @@
 
 ## Pipelines and middleware
 - Pipelines bind networks to endpoints and an ordered set of middleware/services.
-- Built-in middleware types include: jwtauth, auth, connect, passthru, json_extractor, jmix_builder, dicomweb_to_dicom, dicom_to_dicomweb, dicomweb, transform.
+- Built-in middleware types include: jwtauth, auth, connect, passthru, json_extractor, jmix_builder, dicomweb_to_dicom, dicomweb, transform.
 - JWT guidance: prefer RS256 in production, enforce algorithm, validate exp/nbf/iat, iss/aud as applicable. HS256 is for development/tests only.
 
 ## JMIX and schema path

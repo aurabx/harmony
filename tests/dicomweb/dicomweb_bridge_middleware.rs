@@ -50,6 +50,9 @@ fn cfg() -> &'static str {
         [services.dicom]
         module = ""
 
+        [middleware.dicomweb_bridge]
+        type = "dicomweb_bridge"
+
         [middleware_types.dicomweb_bridge]
         module = ""
     "#

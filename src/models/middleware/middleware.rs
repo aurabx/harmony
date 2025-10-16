@@ -2,29 +2,10 @@ use crate::config::config::{Config, ConfigError};
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::utils::Error;
 use async_trait::async_trait;
-use once_cell::sync::Lazy;
 use once_cell::sync::OnceCell;
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Debug, Deserialize)]
-pub struct MiddlewareInstance {
-    pub middleware_type: String, // The middleware type, e.g., "jwtauth", "auth", etc.
-    #[serde(default)]
-    pub options: Option<HashMap<String, serde_json::Value>>, // Middleware-specific options
-}
-
-// Create a static empty HashMap to avoid the temporary value issue
-static EMPTY_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(HashMap::new);
-
-impl MiddlewareInstance {
-    /// Resolves the middleware type using the centralized middleware resolver
-    pub fn resolve_middleware(&self) -> Result<Box<dyn Middleware>, String> {
-        let options = self.options.as_ref().unwrap_or(&EMPTY_OPTIONS);
-        resolve_middleware(&self.middleware_type, options)
-    }
-}
 
 // Middleware registry similar to services
 pub static MIDDLEWARE_REGISTRY: OnceCell<HashMap<String, String>> = OnceCell::new();
@@ -50,7 +31,7 @@ pub fn initialise_middleware_registry(config: &Config) {
 }
 
 /// Resolves a middleware type from the registry and returns a boxed Middleware
-pub fn resolve_middleware(
+pub fn resolve_middleware_type(
     middleware_type: &str,
     options: &HashMap<String, Value>,
 ) -> Result<Box<dyn Middleware>, String> {
@@ -60,7 +41,7 @@ pub fn resolve_middleware(
             match module.as_str() {
                 "" => {
                     // Default built-in modules
-                    create_builtin_middleware(middleware_type, options)
+                    create_builtin_middleware_type(middleware_type, options)
                 }
                 module_path => {
                     // Custom module loading would go here
@@ -72,19 +53,19 @@ pub fn resolve_middleware(
             }
         } else {
             // Registry is present but does not include this middleware. Attempt built-in fallback.
-            match create_builtin_middleware(middleware_type, options) {
+            match create_builtin_middleware_type(middleware_type, options) {
                 Ok(mw) => Ok(mw),
                 Err(_) => Err(format!("Unknown middleware type: {}", middleware_type)),
             }
         }
     } else {
         // Fallback to hardcoded types if registry isn't initialized
-        create_builtin_middleware(middleware_type, options)
+        create_builtin_middleware_type(middleware_type, options)
     }
 }
 
 /// Creates built-in middleware instances
-fn create_builtin_middleware(
+fn create_builtin_middleware_type(
     middleware_type: &str,
     options: &HashMap<String, Value>,
 ) -> Result<Box<dyn Middleware>, String> {
@@ -94,11 +75,11 @@ fn create_builtin_middleware(
     use crate::models::middleware::types::transform::JoltTransformMiddleware;
 
     match middleware_type.to_lowercase().as_str() {
-        "jwtauth" => {
+        "jwtauth" | "jwt_auth" => {
             let config = crate::models::middleware::types::jwtauth::parse_config(options)?;
             Ok(Box::new(JwtAuthMiddleware::new(config)))
         }
-        "auth" => {
+        "basic_auth" => {
             let config = crate::models::middleware::types::auth::parse_config(options)?;
             Ok(Box::new(AuthSidecarMiddleware::new(config)))
         }
@@ -127,6 +108,30 @@ fn create_builtin_middleware(
             middleware_type
         )),
     }
+}
+
+/// Build middleware instances for a pipeline from configuration
+/// Returns a vector of constructed middleware objects in the order of pipeline names
+pub fn build_middleware_instances_for_pipeline(
+    names: &[String],
+    config: &Config,
+) -> Result<Vec<Box<dyn Middleware>>, String> {
+    let mut instances = Vec::new();
+    
+    for name in names {
+        let middleware_instance = config
+            .middleware
+            .get(name)
+            .ok_or_else(|| format!("Unknown middleware instance '{}'", name))?;
+        
+        let middleware = middleware_instance
+            .resolve_middleware()
+            .map_err(|err| format!("Failed to resolve middleware instance '{}': {}", name, err))?;
+        
+        instances.push(middleware);
+    }
+    
+    Ok(instances)
 }
 
 #[async_trait]

@@ -30,7 +30,10 @@ fn get_test_config() -> &'static str {
         networks = ["default"]
         endpoints = ["smoke_http"]
         backends = ["echo_backend"]
-        middleware = ["middleware.passthru"]
+        middleware = ["passthru"]
+
+        [middleware.passthru]
+        type = "passthru"
 
         [endpoints.smoke_http]
         service = "http"

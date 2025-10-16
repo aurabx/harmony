@@ -248,6 +248,9 @@ async fn dicomweb_frames_with_dcmqrscp() {
         [services.dicom]
         module = ""
 
+        [middleware.dicomweb_bridge]
+        type = "dicomweb_bridge"
+
         [middleware_types.dicomweb_bridge]
         module = ""
     "#,
@@ -533,6 +536,9 @@ async fn dicomweb_multiframes_with_dcmqrscp() {
         module = ""
         [services.dicom]
         module = ""
+
+        [middleware.dicomweb_bridge]
+        type = "dicomweb_bridge"
 
         [middleware_types.dicomweb_bridge]
         module = ""

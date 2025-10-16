@@ -1,8 +1,6 @@
 use crate::models::envelope::envelope::RequestEnvelope;
-use crate::models::middleware::middleware::{resolve_middleware, Middleware};
+use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
-use serde_json::Value;
-use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Struct representing a chain of middleware
@@ -12,38 +10,11 @@ pub struct MiddlewareChain {
 }
 
 impl MiddlewareChain {
-    /// Create a new `MiddlewareChain` from middleware instances with their configurations
-    pub fn new(middleware_instances: &[(String, HashMap<String, Value>)]) -> Self {
-        let middlewares = middleware_instances
-            .iter()
-            .filter_map(|(middleware_type, options)| {
-                match resolve_middleware(middleware_type, options) {
-                    Ok(middleware) => Some(middleware),
-                    Err(err) => {
-                        tracing::error!(
-                            "Failed to resolve middleware '{}': {}",
-                            middleware_type,
-                            err
-                        );
-                        None
-                    }
-                }
-            })
-            .collect();
-
+    /// Create a new `MiddlewareChain` from pre-built middleware instances
+    pub fn new(middlewares: impl IntoIterator<Item = Box<dyn Middleware>>) -> Self {
         Self {
-            middlewares: Arc::new(middlewares),
+            middlewares: Arc::new(middlewares.into_iter().collect()),
         }
-    }
-
-    /// Create middleware chain from a simplified list (for backward compatibility)
-    pub fn from_simple_list(middleware_list: &[String]) -> Self {
-        let middleware_instances: Vec<(String, HashMap<String, Value>)> = middleware_list
-            .iter()
-            .map(|name| (name.clone(), HashMap::new()))
-            .collect();
-
-        Self::new(&middleware_instances)
     }
 
     /// Processes the incoming envelope through the "left" middleware chain.

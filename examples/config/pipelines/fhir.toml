@@ -6,8 +6,8 @@ description = "FHIR passthru test"
 networks = ["external"]
 endpoints = ["fhir_test"]
 middleware = [
-    'middleware.basic_auth',
-    'middleware.json_extractor',
+    "basic_auth",
+    "json_extractor",
 ]
 backends = ["fhir_backend"]
 
@@ -16,12 +16,17 @@ backends = ["fhir_backend"]
 #-------------------------
 
 [middleware.passthru]
-# This middleware has no configurable properties
+type = "passthru"
 
 [middleware.basic_auth]
+type = "basic_auth"
+[middleware.basic_auth.options]
 token_path = "./tmp/test_token"
 username = "test_user"
 password = "test_password"
+
+[middleware.json_extractor]
+type = "json_extractor"
 
 # ------------------------
 # Endpoints

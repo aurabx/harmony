@@ -40,7 +40,7 @@ async fn basic_auth_allows_valid_credentials() {
         networks = ["default"]
         endpoints = ["http_in"]
         backends = ["echo_backend"]
-        middleware = ["middleware.auth_sidecar"]
+        middleware = ["basic_auth_test"]
 
         [endpoints.http_in]
         service = "http"
@@ -58,8 +58,9 @@ async fn basic_auth_allows_valid_credentials() {
         [services.echo]
         module = ""
 
-        [middleware.auth_sidecar]
-        token_path = ""
+        [middleware.basic_auth_test]
+        type="basic_auth"
+        [middleware.basic_auth_test.options]
         username = "u1"
         password = "p1"
     "#;
@@ -103,7 +104,7 @@ async fn basic_auth_rejects_invalid_credentials() {
         networks = ["default"]
         endpoints = ["http_in"]
         backends = ["echo_backend"]
-        middleware = ["middleware.auth_sidecar"]
+        middleware = ["basic_auth_test"]
 
         [endpoints.http_in]
         service = "http"
@@ -121,8 +122,9 @@ async fn basic_auth_rejects_invalid_credentials() {
         [services.echo]
         module = ""
 
-        [middleware.auth_sidecar]
-        token_path = ""
+        [middleware.basic_auth_test]
+        type = "basic_auth"
+        [middleware.basic_auth_test.options]
         username = "u1"
         password = "p1"
     "#;

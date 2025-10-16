@@ -42,6 +42,8 @@ JMIX endpoint registers a strict, fixed set of routes. Only the following are ha
  options = { path_prefix = "/<some-path>" }
 ```
 
+See [jmix-dev-testing.md](../dev/jmix-dev-testing.md) for development testing.
+
 ### DICOMweb
 
 Provides DICOMweb QIDO-RS and WADO-RS endpoints

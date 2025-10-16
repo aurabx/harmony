@@ -6,7 +6,7 @@ description = "JMIX API backed by DIMSE SCU -> packages results into JMIX"
 networks = ["default"]
 endpoints = ["jmix_api"]
 middleware = [
-    'middleware.jmix_builder',
+    "jmix_builder",
 ]
 backends = ["dicom_pacs"]
 
@@ -30,6 +30,9 @@ skip_listing = true   # Skip DICOM files from files.json manifest
 # Required: aet, host, port
 # Optional: local_aet (default: HARMONY_SCU), use_tls, incoming_store_port (for C-MOVE)
 #-------------------------
+[middleware.jmix_builder]
+type = "jmix_builder"
+
 [backends.dicom_pacs]
 service = "dicom"
 [backends.dicom_pacs.options]

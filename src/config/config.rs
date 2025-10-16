@@ -16,6 +16,7 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
+use crate::models::middleware::instance::{MiddlewareInstance, MiddlewareInstanceConfig};
 // use serde_json::json;
 
 static DEFAULT_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(HashMap::new);
@@ -35,7 +36,9 @@ pub struct Config {
     #[serde(default)]
     pub backends: HashMap<String, Backend>,
     #[serde(default)]
-    pub middleware: MiddlewareInstanceConfig, // Keep the old middleware config for compatibility
+    pub middleware: HashMap<String, MiddlewareInstance>, // Middleware instances
+    #[serde(default)]
+    pub middleware_legacy: MiddlewareInstanceConfig, // Keep the old middleware config for compatibility
     #[serde(default)]
     pub middleware_types: HashMap<String, MiddlewareConfig>, // New middleware registry config
     #[serde(default)]
@@ -202,6 +205,8 @@ impl Config {
             base.pipelines.extend(config.pipelines);
             // base.transforms.extend(config.transforms);
             base.targets.extend(config.targets);
+            // Merge middleware instances
+            base.middleware.extend(config.middleware);
             // Merge middleware registries if provided
             base.middleware_types.extend(config.middleware_types);
             // Merge services if provided
@@ -398,7 +403,7 @@ impl Config {
             if middleware_config.module.is_empty() {
                 // Built-in middleware, validate that it exists
                 match name.as_str() {
-                    "jwtauth" | "auth" | "connect" | "passthru" | "json_extractor" | "json"
+                    "jwtauth" | "basic_auth" | "connect" | "passthru" | "json_extractor" | "json"
                     | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "transform" => {}
                     _ => {
                         return Err(ConfigError::InvalidMiddleware {
@@ -461,13 +466,3 @@ pub enum ConfigError {
     InvalidStorage { backend: String, reason: String }, // Added for storage validation
 }
 
-// Rename the existing MiddlewareConfig to avoid confusion
-#[derive(Debug, Deserialize, Default, Clone)]
-pub struct MiddlewareInstanceConfig {
-    #[serde(default)]
-    pub jwt_auth: Option<crate::models::middleware::types::jwtauth::JwtAuthConfig>,
-    #[serde(default)]
-    pub auth_sidecar: Option<crate::models::middleware::types::auth::AuthSidecarConfig>,
-    #[serde(default)]
-    pub aurabox_connect: Option<crate::models::middleware::types::connect::AuraboxConnectConfig>,
-}

@@ -3,6 +3,7 @@ pub mod config;
 #[allow(clippy::module_inception)]
 pub mod middleware;
 pub mod types;
+pub(crate) mod instance;
 
 use crate::models::middleware::config::*;
 use axum::response::Response;

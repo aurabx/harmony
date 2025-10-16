@@ -30,3 +30,4 @@ Notes
 - Prefer fixture configs under examples/default/pipelines or tests/data
 - For JWT tests, explicitly choose RS256 or HS256 mode and sign tokens accordingly
 - Consider adding end-to-end tests against a full server only in separate, slower suites
+- JMIX (dev): See [jmix-dev-testing.md](../dev/jmix-dev-testing.md) for JMIX API development testing

@@ -102,7 +102,7 @@ path = "tests/dicomweb/dicomweb_service.rs"
 
 [[test]]
 name = "dicomweb_to_dicom_middleware"
-path = "tests/dicomweb/dicomweb_to_dicom_middleware.rs"
+path = "tests/dicomweb/dicomweb_bridge_middleware.rs"
 
 [[test]]
 name = "dicomweb_integration"

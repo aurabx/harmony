@@ -7,9 +7,15 @@ description = "High-performance JMIX API with default skip flags for large datas
 networks = ["external"]
 endpoints = ["jmix_api_performance"]
 middleware = [
-    'middleware.jmix_builder',
+    "jmix_builder",
 ]
 backends = ["dicom_pacs"]
+
+# ------------------------
+# Middleware
+#-------------------------
+[middleware.jmix_builder]
+type = "jmix_builder"
 
 # ------------------------
 # High-Performance JMIX HTTP endpoint with default skip flags

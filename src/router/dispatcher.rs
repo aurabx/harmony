@@ -2,6 +2,7 @@ use crate::config::config::Config;
 use crate::models::backends::backends::Backend;
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::chain::MiddlewareChain;
+use crate::models::middleware::middleware::build_middleware_instances_for_pipeline;
 use crate::models::pipelines::config::Pipeline;
 use axum::body::Body;
 use axum::extract::Request;
@@ -518,14 +519,11 @@ impl Dispatcher {
             normalized_snapshot: envelope.normalized_snapshot.clone(),
         };
 
-        // Build middleware instances from pipeline names + config options
-        let middleware_instances: Vec<(String, HashMap<String, serde_json::Value>)> = group
-            .middleware
-            .iter()
-            .map(|raw| Self::resolve_middleware_instance(raw, config))
-            .collect();
+        // Build middleware instances from pipeline names
+        let middleware_instances = build_middleware_instances_for_pipeline(&group.middleware, config)
+            .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> { Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, err)) })?;
 
-        let middleware_chain = MiddlewareChain::new(&middleware_instances);
+        let middleware_chain = MiddlewareChain::new(middleware_instances);
 
         // Process through middleware chain
         let processed_json_envelope = middleware_chain.left(json_envelope).await?;
@@ -565,14 +563,11 @@ impl Dispatcher {
             normalized_snapshot: envelope.normalized_snapshot.clone(),
         };
 
-        // Build middleware instances from pipeline names + config options
-        let middleware_instances: Vec<(String, HashMap<String, serde_json::Value>)> = group
-            .middleware
-            .iter()
-            .map(|raw| Self::resolve_middleware_instance(raw, config))
-            .collect();
+        // Build middleware instances from pipeline names
+        let middleware_instances = build_middleware_instances_for_pipeline(&group.middleware, config)
+            .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> { Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, err)) })?;
 
-        let middleware_chain = MiddlewareChain::new(&middleware_instances);
+        let middleware_chain = MiddlewareChain::new(middleware_instances);
 
         // Process through middleware chain (right side)
         let processed_json_envelope = middleware_chain.right(json_envelope).await?;
@@ -593,61 +588,4 @@ impl Dispatcher {
         Ok(processed_envelope)
     }
 
-    fn resolve_middleware_instance(
-        raw_name: &str,
-        config: &Config,
-    ) -> (String, HashMap<String, serde_json::Value>) {
-        // Normalize name: accept forms like "middleware.jwt_auth" or "jwt_auth"
-        let base = raw_name
-            .split('.')
-            .next_back()
-            .unwrap_or(raw_name)
-            .to_lowercase();
-
-        // Helper to turn a config struct into a map
-        let to_map = |val: serde_json::Value| -> HashMap<String, serde_json::Value> {
-            match val {
-                serde_json::Value::Object(map) => map.into_iter().collect(),
-                _ => HashMap::new(),
-            }
-        };
-
-        match base.as_str() {
-            // JWT auth
-            "jwt_auth" | "jwtauth" => {
-                let opts = config
-                    .middleware
-                    .jwt_auth
-                    .as_ref()
-                    .map(|c| serde_json::to_value(c).unwrap_or(serde_json::Value::Null))
-                    .map(to_map)
-                    .unwrap_or_default();
-                ("jwtauth".to_string(), opts)
-            }
-            // Basic/Auth sidecar
-            "basic_auth" | "auth_sidecar" | "auth" => {
-                let opts = config
-                    .middleware
-                    .auth_sidecar
-                    .as_ref()
-                    .map(|c| serde_json::to_value(c).unwrap_or(serde_json::Value::Null))
-                    .map(to_map)
-                    .unwrap_or_default();
-                ("auth".to_string(), opts)
-            }
-            // Aurabox connect
-            "aurabox_connect" | "connect" => {
-                let opts = config
-                    .middleware
-                    .aurabox_connect
-                    .as_ref()
-                    .map(|c| serde_json::to_value(c).unwrap_or(serde_json::Value::Null))
-                    .map(to_map)
-                    .unwrap_or_default();
-                ("connect".to_string(), opts)
-            }
-            // Fallback: pass the normalized name with no options
-            other => (other.to_string(), HashMap::new()),
-        }
-    }
 }

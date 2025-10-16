@@ -9,8 +9,8 @@ description = "Demonstrates JOLT transform middleware"
 networks = ["external"]
 endpoints = ["http_endpoint"]
 middleware = [
-    'middleware.json_extractor',
-    'middleware.patient_transform',
+    "json_extractor",
+    "patient_transform",
 ]
 backends = []
 
@@ -18,7 +18,7 @@ backends = []
 # Middleware
 #-------------------------
 [middleware.json_extractor]
-# Extracts JSON from request body
+type = "json_extractor"
 
 [middleware.patient_transform]
 type = "transform"

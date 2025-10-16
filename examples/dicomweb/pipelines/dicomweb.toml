@@ -6,7 +6,7 @@ description = "DICOMweb QIDO-RS and WADO-RS endpoint bridging to DIMSE via middl
 networks = ["default"]
 endpoints = ["dicomweb_endpoint"]
 middleware = [
-    'dicomweb_bridge',
+    "dicomweb_bridge",
 ]
 backends = ["dicom_pacs"]
 
@@ -32,6 +32,9 @@ local_aet = "HARMONY_SCU"
 # ------------------------
 # Middleware Types
 #-------------------------
+[middleware.dicomweb_bridge]
+type = "dicomweb_bridge"
+
 [middleware_types.dicomweb_bridge]
 module = ""
 

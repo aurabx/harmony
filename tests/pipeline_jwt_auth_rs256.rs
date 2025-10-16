@@ -65,7 +65,7 @@ async fn jwt_rs256_allows_valid_signature() {
         networks = ["default"]
         endpoints = ["http_in"]
         backends = ["echo_backend"]
-        middleware = ["middleware.jwt_auth"]
+        middleware = ["jwt_auth_example"]
 
         [endpoints.http_in]
         service = "http"
@@ -86,7 +86,9 @@ async fn jwt_rs256_allows_valid_signature() {
         [middleware_types.jwtauth]
         module = ""
 
-        [middleware.jwt_auth]
+        [middleware.jwt_auth_example]
+        type = "jwt_auth"
+        [middleware.jwt_auth_example.options]
         public_key_path = "tmp/rs256_pub.pem"
         issuer = "https://test-issuer/"
         audience = "harmony"
@@ -161,7 +163,7 @@ async fn jwt_rs256_rejects_wrong_alg() {
         networks = ["default"]
         endpoints = ["http_in"]
         backends = ["echo_backend"]
-        middleware = ["middleware.jwt_auth"]
+        middleware = ["jwt_auth_example"]
 
         [endpoints.http_in]
         service = "http"
@@ -182,7 +184,9 @@ async fn jwt_rs256_rejects_wrong_alg() {
         [middleware_types.jwtauth]
         module = ""
 
-        [middleware.jwt_auth]
+        [middleware.jwt_auth_example]
+        type = "jwt_auth"
+        [middleware.jwt_auth_example.options]
         public_key_path = "tmp/rs256_pub.pem"
         issuer = "https://test-issuer/"
         audience = "harmony"

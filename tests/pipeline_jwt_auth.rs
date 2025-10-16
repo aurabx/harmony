@@ -33,7 +33,7 @@ async fn jwt_auth_allows_valid_bearer() {
         networks = ["default"]
         endpoints = ["http_in"]
         backends = ["echo_backend"]
-        middleware = ["middleware.jwt_auth"]
+        middleware = ["jwt_auth_test"]
 
         [endpoints.http_in]
         service = "http"
@@ -56,7 +56,9 @@ async fn jwt_auth_allows_valid_bearer() {
         module = ""
 
         # Middleware options
-        [middleware.jwt_auth]
+        [middleware.jwt_auth_test]
+        type = "jwt_auth"
+        [middleware.jwt_auth_test.options]
         use_hs256 = true
         hs256_secret = "test-fallback-secret"
         issuer = "https://test-issuer/"
@@ -129,7 +131,7 @@ async fn jwt_auth_rejects_invalid_bearer() {
         networks = ["default"]
         endpoints = ["http_in"]
         backends = ["echo_backend"]
-        middleware = ["middleware.jwt_auth"]
+        middleware = ["jwt_auth_test"]
 
         [endpoints.http_in]
         service = "http"
@@ -150,7 +152,9 @@ async fn jwt_auth_rejects_invalid_bearer() {
         [middleware_types.jwtauth]
         module = ""
 
-        [middleware.jwt_auth]
+        [middleware.jwt_auth_test]
+        type = "jwt_auth"
+        [middleware.jwt_auth_test.options]
         use_hs256 = true
         hs256_secret = "test-fallback-secret"
         issuer = "https://test-issuer/"
