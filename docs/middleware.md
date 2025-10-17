@@ -78,3 +78,24 @@ Notes:
 ### Transform (JOLT)
 Applies JSON-to-JSON transformations using JOLT specifications. Supports configurable application on request/response sides with error handling options.
 
+## Path Filter
+
+Filters incoming requests based on URL path patterns using matchit syntax. Requests that don't match any configured rule are rejected with HTTP 404 and backend processing is skipped.
+
+Config keys:
+- `rules` (array of strings, required): List of path patterns to allow using matchit syntax (e.g., "/ImagingStudy", "/Patient/{id}")
+
+Example:
+```toml
+[middleware.imagingstudy_filter]
+type = "path_filter"
+[middleware.imagingstudy_filter.options]
+rules = ["/ImagingStudy", "/Patient"]
+```
+
+Behavior:
+- Only applies to incoming requests (left side of middleware chain)
+- Path matching uses the subpath after the endpoint's path_prefix
+- Trailing slashes are normalized (e.g., "/ImagingStudy/" matches "/ImagingStudy")
+- On rejection: returns 404 status with empty body and sets skip_backends=true to avoid backend calls
+- Supports matchit patterns for dynamic routing (wildcards, parameters)

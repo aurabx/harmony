@@ -6,4 +6,5 @@ pub mod jmix_index;
 pub mod json_extractor;
 pub mod jwtauth;
 pub mod passthru;
+pub mod path_filter;
 pub mod transform;

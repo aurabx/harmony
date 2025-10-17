@@ -72,6 +72,7 @@ fn create_builtin_middleware_type(
     use crate::models::middleware::types::auth::AuthSidecarMiddleware;
     use crate::models::middleware::types::connect::AuraboxConnectMiddleware;
     use crate::models::middleware::types::jwtauth::JwtAuthMiddleware;
+    use crate::models::middleware::types::path_filter::PathFilterMiddleware;
     use crate::models::middleware::types::transform::JoltTransformMiddleware;
 
     match middleware_type.to_lowercase().as_str() {
@@ -102,6 +103,10 @@ fn create_builtin_middleware_type(
         "transform" => {
             let config = crate::models::middleware::types::transform::parse_config(options)?;
             Ok(Box::new(JoltTransformMiddleware::new(config)?))
+        }
+        "path_filter" => {
+            let config = crate::models::middleware::types::path_filter::parse_config(options)?;
+            Ok(Box::new(PathFilterMiddleware::new(config)?))
         }
         _ => Err(format!(
             "Unsupported built-in middleware type: {}",

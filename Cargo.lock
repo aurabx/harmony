@@ -1548,6 +1548,7 @@ dependencies = [
  "image 0.24.9",
  "jmix-rs",
  "jsonwebtoken",
+ "matchit",
  "once_cell",
  "rand",
  "redb",
