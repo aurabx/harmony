@@ -680,18 +680,21 @@ impl MockDicomEndpoint {
         envelope: &mut RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-        // Extract path for context and resolve operation
+        // Extract path for context and resolve operation (check normalized_data first)
         let path = envelope
-            .request_details
-            .metadata
-            .get("path")
-            .cloned()
+            .normalized_data
+            .as_ref()
+            .and_then(|nd| nd.get("path").and_then(|p| p.as_str()))
+            .map(|s| s.to_string())
+            .or_else(|| envelope.request_details.metadata.get("path").cloned())
             .unwrap_or_default();
+            
         let op = envelope
-            .request_details
-            .metadata
-            .get("dimse_op")
-            .cloned()
+            .normalized_data
+            .as_ref()
+            .and_then(|nd| nd.get("dimse_op").and_then(|op| op.as_str()))
+            .map(|s| s.to_string())
+            .or_else(|| envelope.request_details.metadata.get("dimse_op").cloned())
             .unwrap_or_else(|| path.clone());
 
         let result = match op.as_str() {
