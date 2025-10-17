@@ -55,7 +55,8 @@ async fn http_to_dicom_backend_echo_succeeds() {
 
     // Start a DCMTK storescp to respond to C-ECHO on 4242
     // If dcmtk is not installed, this test will fail. Ensure `brew install dcmtk`.
-    std::fs::create_dir_all("../../tmp/dcmtk_in").expect("create dcmtk output dir");
+    // Ensure the output directory exists where storescp will write
+    std::fs::create_dir_all("./tmp/dcmtk_in").expect("create dcmtk output dir");
     let mut child = tokio::process::Command::new("storescp")
         .arg("--fork")
         .arg("--aetitle")

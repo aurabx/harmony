@@ -8,7 +8,9 @@ use tokio::sync::OnceCell;
 static TEST_STATE: OnceCell<TestContext> = OnceCell::const_new();
 
 pub struct TestContext {
+    #[allow(dead_code)]
     pub app: axum::Router<()>,
+    #[allow(dead_code)]
     pub uids: TestUids,
 }
 
