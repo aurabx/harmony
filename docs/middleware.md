@@ -99,3 +99,29 @@ Behavior:
 - Trailing slashes are normalized (e.g., "/ImagingStudy/" matches "/ImagingStudy")
 - On rejection: returns 404 status with empty body and sets skip_backends=true to avoid backend calls
 - Supports matchit patterns for dynamic routing (wildcards, parameters)
+
+## Metadata Transform
+
+Applies JOLT transformations to request metadata (the HashMap&lt;String, String&gt; in RequestDetails). This allows dynamic modification of metadata fields that control backend behavior.
+
+Config keys:
+- `spec_path` (string, required): Path to JOLT specification file
+- `apply` (string, optional): When to apply - "left", "right", or "both" (default: "left")
+- `fail_on_error` (bool, optional): Whether to fail request on transform errors (default: true)
+
+Example:
+```toml
+[middleware.fhir_dimse_meta]
+type = "metadata_transform"
+[middleware.fhir_dimse_meta.options]
+spec_path = "transforms/metadata_set_dimse_op.json"
+apply = "left"
+fail_on_error = true
+```
+
+Behavior:
+- Converts metadata to JSON object for JOLT processing
+- Only string-valued outputs from JOLT are written back to metadata
+- Preserves existing metadata fields not modified by transform
+- Common use case: setting dimse_op field to control DICOM backend operations
+
