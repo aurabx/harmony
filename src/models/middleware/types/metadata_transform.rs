@@ -291,6 +291,28 @@ mod tests {
         assert_eq!(result.request_details.metadata.get("dimse_op"), Some(&"find".to_string()));
     }
 
+    #[tokio::test]
+    async fn test_non_string_outputs_are_ignored() {
+        // Set a string and a numeric value; only string should be written back
+        let spec = json!([{
+            "operation": "default",
+            "spec": {
+                "dimse_op": "get",
+                "num": 123
+            }
+        }]);
+        let temp = NamedTempFile::new().unwrap();
+        fs::write(&temp, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+        let cfg = MetadataTransformConfig { spec_path: temp.path().to_string_lossy().to_string(), apply: "left".to_string(), fail_on_error: true };
+        let mw = MetadataTransformMiddleware::new(cfg).unwrap();
+
+        let env = create_test_envelope(HashMap::new());
+        let out = mw.left(env).await.unwrap();
+        assert_eq!(out.request_details.metadata.get("dimse_op"), Some(&"get".to_string()));
+        assert!(out.request_details.metadata.get("num").is_none());
+    }
+
+
     #[test]
     fn test_parse_config() {
         let mut options = HashMap::new();
@@ -321,5 +343,30 @@ mod tests {
         let result = parse_config(&options);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing required 'spec_path'"));
+    }
+
+    #[tokio::test]
+    async fn test_metadata_middleware_with_real_spec_left_sets_dimse() {
+        use crate::models::envelope::envelope::RequestDetails;
+        let request_details = RequestDetails {
+            method: "GET".into(),
+            uri: "/fhir/ImagingStudy".into(),
+            headers: Default::default(),
+            cookies: Default::default(),
+            query_params: Default::default(),
+            cache_status: None,
+            metadata: Default::default(),
+        };
+        let env = RequestEnvelope {
+            request_details,
+            original_data: serde_json::Value::Null,
+            normalized_data: Some(serde_json::Value::Null),
+            normalized_snapshot: None,
+        };
+        let spec_path = format!("{}/examples/config/transforms/metadata_set_dimse_op.json", env!("CARGO_MANIFEST_DIR"));
+        let cfg = MetadataTransformConfig { spec_path, apply: "left".into(), fail_on_error: true };
+        let mw = MetadataTransformMiddleware::new(cfg).unwrap();
+        let out = mw.left(env).await.unwrap();
+        assert_eq!(out.request_details.metadata.get("dimse_op"), Some(&"find".to_string()));
     }
 }

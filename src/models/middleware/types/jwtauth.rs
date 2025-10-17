@@ -1,5 +1,6 @@
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::middleware::Middleware;
+use crate::models::middleware::AuthFailure;
 use crate::utils::Error;
 use jsonwebtoken::{decode, decode_header, Algorithm, DecodingKey, Validation};
 use serde::{Deserialize, Serialize};
@@ -125,9 +126,9 @@ impl JwtAuthMiddleware {
     /// Real token validation: verify signature and claims
     async fn validate_token(&self, token: &str) -> Result<bool, Error> {
         // Enforce expected algorithm from header
-        let header = decode_header(token).map_err(|_| Error::from("invalid JWT header"))?;
+        let header = decode_header(token).map_err(|_| AuthFailure("invalid JWT header"))?;
         if header.alg != self.algorithm {
-            return Err("unexpected JWT alg".into());
+            return Err(AuthFailure("unexpected JWT alg").into());
         }
 
         let mut validation = Validation::new(self.algorithm);
@@ -143,14 +144,14 @@ impl JwtAuthMiddleware {
         }
 
         let token_data = decode::<Claims>(token, &self.decoding_key, &validation)
-            .map_err(|_| Error::from("jwt verify failed"))?;
+            .map_err(|_| AuthFailure("jwt verify failed"))?;
 
         // Additional audience check if aud is array or string
         if let (Some(expected), Some(aud_val)) = (&self.config.audience, &token_data.claims.aud) {
             match aud_val {
                 JsonValue::String(s) if s == expected => {}
                 JsonValue::Array(arr) if arr.iter().any(|v| v == expected) => {}
-                _ => return Err("aud mismatch".into()),
+                _ => return Err(AuthFailure("jwt verify failed").into()),
             }
         }
 
@@ -166,10 +167,10 @@ impl JwtAuthMiddleware {
             if auth_header.starts_with("Bearer ") {
                 Ok(auth_header.trim_start_matches("Bearer ").to_string())
             } else {
-                Err("Authorization header must start with 'Bearer '".into())
+                Err(AuthFailure("Authorization header must start with 'Bearer '").into())
             }
         } else {
-            Err("Missing Authorization header".into())
+            Err(AuthFailure("Missing Authorization header").into())
         }
     }
 }
@@ -193,7 +194,7 @@ impl Middleware for JwtAuthMiddleware {
         if !self.validate_token(&token).await? {
             let error_message = "Invalid or expired JWT token";
             tracing::error!("{}", error_message);
-            return Err(error_message.into());
+            return Err(AuthFailure("jwt verify failed").into());
         }
 
         tracing::info!("JWT token validated successfully");

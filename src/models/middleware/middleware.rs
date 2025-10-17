@@ -129,16 +129,23 @@ pub fn build_middleware_instances_for_pipeline(
     let mut instances = Vec::new();
     
     for name in names {
-        let middleware_instance = config
-            .middleware
-            .get(name)
-            .ok_or_else(|| format!("Unknown middleware instance '{}'", name))?;
-        
-        let middleware = middleware_instance
-            .resolve_middleware()
-            .map_err(|err| format!("Failed to resolve middleware instance '{}': {}", name, err))?;
-        
-        instances.push(middleware);
+        if let Some(middleware_instance) = config.middleware.get(name) {
+            let middleware = middleware_instance
+                .resolve_middleware()
+                .map_err(|err| format!("Failed to resolve middleware instance '{}': {}", name, err))?;
+            instances.push(middleware);
+        } else {
+            // Fallback: if the name itself corresponds to a built-in middleware type,
+            // allow referencing it directly without an instance block.
+            // This supports conveniences like using "json_extractor" without an options table.
+            let empty_opts: HashMap<String, Value> = HashMap::new();
+            match resolve_middleware_type(name, &empty_opts) {
+                Ok(mw) => instances.push(mw),
+                Err(_) => {
+                    return Err(format!("Unknown middleware instance '{}'", name));
+                }
+            }
+        }
     }
     
     Ok(instances)

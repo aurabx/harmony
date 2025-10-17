@@ -9,7 +9,8 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn test_transform_middleware_integration() {
     // Create a config that uses the transform middleware
-    let config_toml = r#"
+    let spec_path = format!("{}/examples/config/transforms/simple_rename.json", env!("CARGO_MANIFEST_DIR"));
+    let config_toml = format!(r#"
         [proxy]
         id = "transform-test"
         log_level = "debug"
@@ -31,7 +32,7 @@ async fn test_transform_middleware_integration() {
         description = "Test transform middleware"
         networks = ["default"]
         endpoints = ["http_test"]
-        middleware = ["transform_test"]
+        middleware = ["json_extractor", "transform_test"]
         backends = []
 
         [endpoints.http_test]
@@ -42,7 +43,7 @@ async fn test_transform_middleware_integration() {
         [middleware.transform_test]
         type = "transform"
         [middleware.transform_test.options]
-        spec_path = "examples/config/transforms/simple_rename.json"
+        spec_path = "{spec_path}"
         apply = "left"
         fail_on_error = true
 
@@ -51,9 +52,9 @@ async fn test_transform_middleware_integration() {
 
         [services.http]
         module = ""
-    "#;
+    "#, spec_path = spec_path);
 
-    let config: Config = toml::from_str(config_toml).unwrap();
+    let config: Config = toml::from_str(&config_toml).unwrap();
     config.validate().unwrap();
 
     let app = build_network_router(Arc::new(config), "default").await;
@@ -103,17 +104,11 @@ async fn test_transform_middleware_integration() {
     //     }
     // });
 
-    // Check that the response contains the transformed structure
-    // Note: In a real scenario, the exact response format would depend on
-    // how the HTTP service handles the transformed data
-    println!(
-        "Response: {}",
-        serde_json::to_string_pretty(&response_json).unwrap()
-    );
-
-    // At minimum, verify we got a successful response
-    // The exact assertion would depend on the specific service implementation
-    assert!(response_json.is_object());
+    // Validate the transformed structure according to simple_rename.json
+    assert_eq!(response_json.get("full_name").and_then(|v| v.as_str()), Some("John Doe"));
+    assert_eq!(response_json.get("patient_id").and_then(|v| v.as_i64()), Some(12345));
+    assert!(response_json.get("financial_info").and_then(|v| v.as_object()).is_some());
+    assert_eq!(response_json.get("other").and_then(|v| v.get("extra_field")).and_then(|v| v.as_str()), Some("should be moved to other"));
 }
 
 #[tokio::test]

@@ -1558,6 +1558,7 @@ dependencies = [
  "serial_test",
  "tar",
  "tempfile",
+ "thiserror 1.0.69",
  "tokio",
  "tokio-test",
  "toml",

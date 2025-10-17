@@ -73,6 +73,9 @@ module=""
 [services.dicom]
 module=""
 
+[services.mock_dicom]
+module=""
+
 [services.echo]
 module=""
 
@@ -101,6 +104,12 @@ module=""
 module=""
 
 [middleware_types.transform]
+module=""
+
+[middleware_types.path_filter]
+module=""
+
+[middleware_types.metadata_transform]
 module=""
 
 # DICOMweb <-> DICOM bridge

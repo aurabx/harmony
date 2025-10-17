@@ -176,4 +176,71 @@ mod tests {
 
         assert!(config_both.apply == "both");
     }
+
+    #[test]
+    fn test_parse_real_metadata_set_dimse_op_spec() {
+        // Resolve path relative to this crate directory
+        let spec_path = format!(
+            "{}/../../examples/config/transforms/metadata_set_dimse_op.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let engine = JoltTransformEngine::from_spec_path(&spec_path)
+            .expect("should parse real metadata_set_dimse_op.json");
+
+        let input = json!({});
+        let out = engine.transform(input).expect("transform ok");
+        assert_eq!(out.get("dimse_op").and_then(|v| v.as_str()), Some("find"));
+    }
+
+    #[test]
+    fn test_parse_real_fhir_to_dicom_params_spec() {
+        let spec_path = format!(
+            "{}/../../examples/config/transforms/fhir_to_dicom_params.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let engine = JoltTransformEngine::from_spec_path(&spec_path)
+            .expect("should parse real fhir_to_dicom_params.json");
+
+        let input = json!({
+            "full_path": "/fhir/ImagingStudy?patient=PID156695",
+            "path": "ImagingStudy",
+            "headers": {},
+            "original_data": {}
+        });
+        let out = engine.transform(input).expect("transform ok");
+        // Should produce an object
+        assert!(out.is_object());
+    }
+
+    #[test]
+    fn test_parse_real_dicom_to_imagingstudy_spec() {
+        let spec_path = format!(
+            "{}/../../examples/config/transforms/dicom_to_imagingstudy_simple.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let engine = JoltTransformEngine::from_spec_path(&spec_path)
+            .expect("should parse real dicom_to_imagingstudy_simple.json");
+
+        // Build a minimal mock DICOM find response compatible with the spec
+        let input = json!({
+            "operation": "find",
+            "success": true,
+            "matches": [
+                {
+                    "0020000D": {"vr": "UI", "Value": ["1.2.3"]},
+                    "00100020": {"vr": "LO", "Value": ["PID156695"]},
+                    "00100010": {"vr": "PN", "Value": [{"Alphabetic": "Doe^John"}]},
+                    "00080020": {"vr": "DA", "Value": ["20241015"]},
+                    "00080030": {"vr": "TM", "Value": ["120000"]},
+                    "00081030": {"vr": "LO", "Value": ["Mock CT Study"]},
+                    "00200010": {"vr": "SH", "Value": ["1"]}
+                }
+            ]
+        });
+
+        let out = engine.transform(input).expect("transform ok");
+        // Should produce a Bundle with an ImagingStudy entry
+        assert_eq!(out.get("resourceType").and_then(|v| v.as_str()), Some("Bundle"));
+        assert!(out.get("entry").and_then(|v| v.as_array()).is_some());
+    }
 }

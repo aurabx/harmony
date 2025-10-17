@@ -1,0 +1,15 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "*": "&",
+      "matches": "entry"
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "resourceType": "Bundle"
+    }
+  }
+]

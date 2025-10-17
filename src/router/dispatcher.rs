@@ -3,6 +3,7 @@ use crate::models::backends::backends::Backend;
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::chain::MiddlewareChain;
 use crate::models::middleware::middleware::build_middleware_instances_for_pipeline;
+use crate::models::middleware::AuthFailure;
 use crate::models::pipelines::config::Pipeline;
 use axum::body::Body;
 use axum::extract::Request;
@@ -18,6 +19,20 @@ pub struct Dispatcher {
 impl Dispatcher {
     pub fn new(config: Arc<Config>) -> Self {
         Self { config }
+    }
+
+    /// Maps incoming middleware errors to appropriate HTTP status codes
+    /// Only authentication failures (AuthFailure) should result in 401,
+    /// all other errors should be 500 Internal Server Error
+    fn map_incoming_middleware_error_to_status(
+        err: &(dyn std::error::Error + Send + Sync + 'static),
+    ) -> StatusCode {
+        // Check if the error is specifically an AuthFailure
+        if err.downcast_ref::<AuthFailure>().is_some() {
+            StatusCode::UNAUTHORIZED
+        } else {
+            StatusCode::INTERNAL_SERVER_ERROR
+        }
     }
 
     /// Builds incoming routes for a specific group within the given app router.
@@ -274,8 +289,9 @@ impl Dispatcher {
             Self::process_incoming_middleware(processed_envelope, pipeline, &config)
                 .await
                 .map_err(|err| {
+                    let status = Self::map_incoming_middleware_error_to_status(err.as_ref());
                     tracing::warn!("Incoming middleware failed: {:?}", err);
-                    StatusCode::UNAUTHORIZED
+                    status
                 })?;
 
         // 3. Process through configured backends
@@ -588,4 +604,54 @@ impl Dispatcher {
         Ok(processed_envelope)
     }
 
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::middleware::AuthFailure;
+
+    #[test]
+    fn test_map_incoming_middleware_error_to_status_authfailure() {
+        let auth_err = AuthFailure("test");
+        let status = Dispatcher::map_incoming_middleware_error_to_status(&auth_err);
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_map_incoming_middleware_error_to_status_authfailure_missing_creds() {
+        let auth_err = AuthFailure("Missing Authorization header");
+        let status = Dispatcher::map_incoming_middleware_error_to_status(&auth_err);
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_map_incoming_middleware_error_to_status_authfailure_expired() {
+        let auth_err = AuthFailure("jwt verify failed");
+        let status = Dispatcher::map_incoming_middleware_error_to_status(&auth_err);
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_map_incoming_middleware_error_to_status_non_auth_error() {
+        let generic_err = std::io::Error::new(std::io::ErrorKind::Other, "boom");
+        let status = Dispatcher::map_incoming_middleware_error_to_status(&generic_err);
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_map_incoming_middleware_error_to_status_string_error() {
+        #[derive(Debug)]
+        struct StringError(String);
+        impl std::fmt::Display for StringError {
+            fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                write!(f, "{}", self.0)
+            }
+        }
+        impl std::error::Error for StringError {}
+
+        let string_err = StringError("generic error".to_string());
+        let status = Dispatcher::map_incoming_middleware_error_to_status(&string_err);
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
 }

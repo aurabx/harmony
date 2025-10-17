@@ -5,6 +5,14 @@ Middleware extends the request/response pipeline to authenticate, enrich, or tra
 - Authentication middleware runs at the start of the pipeline (endpoint side)
 - Transformation middleware can run before requests are sent to backends and/or on responses
 
+## Error Handling
+
+Incoming middleware errors are mapped to HTTP status codes as follows:
+- **Authentication failures** (JWT/Basic auth credential problems): HTTP 401 Unauthorized
+- **All other middleware failures** (transform errors, internal failures): HTTP 500 Internal Server Error
+
+This ensures that only actual authentication problems result in 401 responses, while configuration errors, transform failures, and other internal issues correctly return 500.
+
 ## Authentication
 
 ### Basic Auth
@@ -14,6 +22,8 @@ Config keys:
 - `username` (string)
 - `password` (string)
 - `token_path` (optional, string): file path for a pre-shared token, if used by your environment
+
+Error handling: Authentication failures (missing/invalid credentials) return HTTP 401 Unauthorized.
 
 Example:
 ```toml
@@ -72,6 +82,8 @@ leeway_secs = 60
 Notes:
 - Place JWT auth middleware early in your pipeline to reject unauthenticated requests before expensive work.
 - Configuration parsing for this middleware lives within the middleware module itself.
+
+Error handling: Authentication failures (missing/invalid/expired tokens) return HTTP 401 Unauthorized. Internal server errors (key parsing, configuration issues) return HTTP 500 Internal Server Error.
 
 ## Transformation
 

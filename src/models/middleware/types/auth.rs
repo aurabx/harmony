@@ -1,5 +1,6 @@
 use crate::models::envelope::envelope::RequestEnvelope;
 use crate::models::middleware::middleware::Middleware;
+use crate::models::middleware::AuthFailure;
 use crate::utils::Error;
 use axum::http::HeaderValue;
 use base64::{engine::general_purpose, Engine as _};
@@ -69,32 +70,32 @@ impl Middleware for AuthSidecarMiddleware {
 
         let header_val = match auth_header_opt {
             Some(h) => h,
-            None => return Err("Missing Authorization header".into()),
+            None => return Err(AuthFailure("Missing Authorization header").into()),
         };
 
         // Validate Basic auth against configured username/password
         if !header_val.starts_with("Basic ") {
-            return Err("Authorization header must start with 'Basic '".into());
+            return Err(AuthFailure("Authorization header must start with 'Basic '").into());
         }
         let encoded = &header_val[6..];
         let decoded_bytes = general_purpose::STANDARD
             .decode(encoded)
-            .map_err(|_| Error::from("Failed to decode Basic Auth credentials"))?;
+            .map_err(|_| AuthFailure("Failed to decode Basic Auth credentials"))?;
         let decoded = String::from_utf8(decoded_bytes)
-            .map_err(|_| Error::from("Failed to parse Basic Auth credentials as UTF-8"))?;
+            .map_err(|_| AuthFailure("Failed to parse Basic Auth credentials as UTF-8"))?;
 
         let mut parts = decoded.splitn(2, ':');
         let user = parts
             .next()
-            .ok_or_else(|| Error::from("Missing username in Basic Auth credentials"))?;
+            .ok_or_else(|| AuthFailure("Missing username in Basic Auth credentials"))?;
         let pass = parts
             .next()
-            .ok_or_else(|| Error::from("Missing password in Basic Auth credentials"))?;
+            .ok_or_else(|| AuthFailure("Missing password in Basic Auth credentials"))?;
 
         if user == self._config.username && pass == self._config.password {
             Ok(envelope)
         } else {
-            Err("Invalid username or password".into())
+            Err(AuthFailure("Invalid username or password").into())
         }
     }
 

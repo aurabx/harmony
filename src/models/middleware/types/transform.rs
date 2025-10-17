@@ -271,6 +271,39 @@ mod tests {
         assert_eq!(right_result.normalized_snapshot, Some(input)); // Snapshot created on right
     }
 
+    #[tokio::test]
+    async fn test_jolt_transform_middleware_apply_both() {
+        // Identity transform applied on both sides
+        let spec = json!([{
+            "operation": "shift",
+            "spec": {
+                "*": "&"
+            }
+        }]);
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+
+        let config = JoltTransformMiddlewareConfig {
+            spec_path: temp_file.path().to_string_lossy().to_string(),
+            apply: "both".to_string(),
+            fail_on_error: true,
+        };
+        let middleware = JoltTransformMiddleware::new(config).unwrap();
+
+        let input = json!({"k": "v"});
+        let env = create_test_envelope(input.clone());
+
+        let left_res = middleware.left(env).await.unwrap();
+        assert_eq!(left_res.normalized_data, Some(input.clone()));
+        assert_eq!(left_res.normalized_snapshot, Some(input.clone()));
+
+        let right_res = middleware.right(left_res).await.unwrap();
+        assert_eq!(right_res.normalized_data, Some(input.clone()));
+        // snapshot should remain as first snapshot
+        assert_eq!(right_res.normalized_snapshot, Some(input));
+    }
+
+
     #[test]
     fn test_parse_config() {
         let mut options = HashMap::new();
@@ -290,5 +323,86 @@ mod tests {
         let result = parse_config(&options);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing required 'spec_path'"));
+    }
+
+    #[tokio::test]
+    async fn test_middleware_with_real_fhir_to_dicom_params_left() {
+        // Build envelope resembling FHIR endpoint normalized_data
+        let request_details = RequestDetails {
+            method: "GET".into(),
+            uri: "/fhir/ImagingStudy?patient=PID156695".into(),
+            headers: Default::default(),
+            cookies: Default::default(),
+            query_params: Default::default(),
+            cache_status: None,
+            metadata: Default::default(),
+        };
+        let mut env = RequestEnvelope {
+            request_details,
+            original_data: serde_json::json!({}),
+            normalized_data: Some(serde_json::json!({
+                "full_path": "/fhir/ImagingStudy?patient=PID156695",
+                "path": "ImagingStudy",
+                "headers": {},
+                "original_data": {}
+            })),
+            normalized_snapshot: None,
+        };
+
+        // Use real spec file
+        let spec_path = format!("{}/examples/config/transforms/fhir_to_dicom_params.json", env!("CARGO_MANIFEST_DIR"));
+        let cfg = JoltTransformMiddlewareConfig { spec_path, apply: "left".into(), fail_on_error: true };
+        let mw = JoltTransformMiddleware::new(cfg).unwrap();
+
+        env = mw.left(env).await.unwrap();
+        // Should have an object; presence of dimse_identifier is expected by current spec
+        let out = env.normalized_data.unwrap();
+        assert!(out.is_object());
+        assert!(out.get("dimse_identifier").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_middleware_with_real_dicom_to_imagingstudy_right() {
+        use serde_json::json;
+        // Start with a DICOM find-style payload (as produced by mock_dicom)
+        let request_details = RequestDetails {
+            method: "GET".into(),
+            uri: "/fhir/ImagingStudy?patient=PID156695".into(),
+            headers: Default::default(),
+            cookies: Default::default(),
+            query_params: Default::default(),
+            cache_status: None,
+            metadata: Default::default(),
+        };
+        let input = json!({
+            "operation": "find",
+            "success": true,
+            "matches": [
+                {
+                    "0020000D": {"vr": "UI", "Value": ["1.2.3"]},
+                    "00100020": {"vr": "LO", "Value": ["PID156695"]},
+                    "00100010": {"vr": "PN", "Value": [{"Alphabetic": "Doe^John"}]},
+                    "00080020": {"vr": "DA", "Value": ["20241015"]},
+                    "00080030": {"vr": "TM", "Value": ["120000"]},
+                    "00081030": {"vr": "LO", "Value": ["Mock CT Study"]},
+                    "00200010": {"vr": "SH", "Value": ["1"]}
+                }
+            ]
+        });
+        let mut env = RequestEnvelope {
+            request_details,
+            original_data: input.clone(),
+            normalized_data: Some(input),
+            normalized_snapshot: None,
+        };
+
+        let spec_path = format!("{}/examples/config/transforms/dicom_to_imagingstudy_simple.json", env!("CARGO_MANIFEST_DIR"));
+        let cfg = JoltTransformMiddlewareConfig { spec_path, apply: "right".into(), fail_on_error: true };
+        let mw = JoltTransformMiddleware::new(cfg).unwrap();
+
+        env = mw.right(env).await.unwrap();
+        let out = env.normalized_data.unwrap();
+        assert_eq!(out.get("resourceType").and_then(|v| v.as_str()), Some("Bundle"));
+        assert!(out.get("entry").and_then(|v| v.as_array()).is_some());
     }
 }
