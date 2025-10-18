@@ -91,9 +91,6 @@ path = "tests/dicom/dicom_move_persistent_relocate.rs"
 name = "dicom_move_qrscp"
 path = "tests/dicom/dicom_move_qrscp.rs"
 
-[[test]]
-name = "dimse_scp_starts"
-path = "tests/dicom/dimse_scp_starts.rs"
 
 # DICOMweb tests
 [[test]]

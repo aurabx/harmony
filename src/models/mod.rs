@@ -1,4 +1,4 @@
-pub(crate) mod backends;
+pub mod backends;
 pub mod endpoints;
 pub(crate) mod envelope;
 pub mod middleware;

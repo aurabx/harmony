@@ -1,2 +1,2 @@
 #[allow(clippy::module_inception)]
-pub(crate) mod backends;
+pub mod backends;

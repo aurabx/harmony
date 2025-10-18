@@ -14,10 +14,128 @@ use crate::adapters::http::HttpAdapter;
 use crate::adapters::ProtocolAdapter;
 use crate::config::config::Config;
 use crate::storage::create_storage_backend;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
+use std::path::PathBuf;
 use std::sync::Arc;
 use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{self, prelude::*};
+
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct PersistentScpSpec {
+    pub backend_name: String,
+    pub bind_addr: IpAddr,
+    pub port: u16,
+    pub local_aet: String,
+    pub storage_dir: PathBuf,
+    pub enable_echo: bool,
+    pub enable_find: bool,
+    pub enable_move: bool,
+}
+
+pub fn collect_required_dimse_scps(config: &Config) -> Vec<PersistentScpSpec> {
+    let mut specs = Vec::new();
+    
+    for (backend_name, backend) in &config.backends {
+        // Only check DICOM backends
+        if backend.service != "dicom" {
+            continue;
+        }
+        
+        let options = match &backend.options {
+            Some(opts) => opts,
+            None => continue,
+        };
+        
+        // Check if persistent Store SCP is required
+        let persistent_scp = options
+            .get("persistent_store_scp")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+            
+        if !persistent_scp {
+            continue;
+        }
+        
+        // Validate that incoming_store_port is present
+        let port = match options.get("incoming_store_port").and_then(|v| v.as_u64()) {
+            Some(p) if (1..=65535).contains(&p) => p as u16,
+            Some(p) => {
+                tracing::warn!(
+                    "Backend '{}' has persistent_store_scp=true but invalid incoming_store_port={}, skipping SCP",
+                    backend_name, p
+                );
+                continue;
+            }
+            None => {
+                tracing::warn!(
+                    "Backend '{}' has persistent_store_scp=true but missing incoming_store_port, skipping SCP",
+                    backend_name
+                );
+                continue;
+            }
+        };
+        
+        // Parse bind_addr (default "0.0.0.0")
+        let bind_addr = options
+            .get("bind_addr")
+            .and_then(|v| v.as_str())
+            .unwrap_or("0.0.0.0")
+            .parse::<IpAddr>()
+            .unwrap_or_else(|_| {
+                tracing::warn!(
+                    "Backend '{}' has invalid bind_addr, using default 0.0.0.0",
+                    backend_name
+                );
+                "0.0.0.0".parse().unwrap()
+            });
+            
+        // Parse local_aet (default "HARMONY_SCU")
+        let local_aet = options
+            .get("local_aet")
+            .and_then(|v| v.as_str())
+            .unwrap_or("HARMONY_SCU")
+            .to_string();
+            
+        // Parse storage_dir (default "./tmp/dimse")
+        let storage_dir = options
+            .get("storage_dir")
+            .and_then(|v| v.as_str())
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from("./tmp/dimse"));
+            
+        // Parse optional feature flags
+        let enable_echo = options
+            .get("enable_echo")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let enable_find = options
+            .get("enable_find")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+        let enable_move = options
+            .get("enable_move")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(true);
+            
+        specs.push(PersistentScpSpec {
+            backend_name: backend_name.clone(),
+            bind_addr,
+            port,
+            local_aet,
+            storage_dir,
+            enable_echo,
+            enable_find,
+            enable_move,
+        });
+        
+        tracing::debug!(
+            "Found DICOM backend '{}' requiring persistent SCP on {}:{}",
+            backend_name, bind_addr, port
+        );
+    }
+    
+    specs
+}
 
 pub async fn run(config: Config) {
     let config = Arc::new(config);
@@ -90,8 +208,8 @@ pub async fn run(config: Config) {
             }
         }
 
-        // Start DIMSE adapter if network has DIMSE endpoints
-        let has_dimse = config.pipelines.values().any(|pipeline| {
+        // Check if network needs DIMSE services
+        let has_dimse_endpoint = config.pipelines.values().any(|pipeline| {
             pipeline.networks.contains(&network_name)
                 && pipeline.endpoints.iter().any(|endpoint_name| {
                     config
@@ -101,24 +219,120 @@ pub async fn run(config: Config) {
                         .unwrap_or(false)
                 })
         });
+        
+        // Collect required persistent DICOM SCPs for this network
+        let scp_specs: Vec<_> = collect_required_dimse_scps(&config)
+            .into_iter()
+            .filter(|spec| {
+                // Filter SCPs for pipelines using this network
+                config.pipelines.values().any(|pipeline| {
+                    pipeline.networks.contains(&network_name)
+                        && pipeline.backends.iter().any(|backend_name| {
+                            backend_name == &spec.backend_name
+                        })
+                })
+            })
+            .collect();
+            
+        let needs_any_dimse = has_dimse_endpoint || !scp_specs.is_empty();
 
-        if has_dimse {
-            let dimse_adapter = DimseAdapter::new(network_name_clone.clone());
-            match dimse_adapter.start(config_clone, shutdown_clone).await {
-                Ok(handle) => {
-                    tracing::info!(
-                        "🚀 Started DIMSE adapter for network '{}'",
-                        network_name
-                    );
-                    adapter_handles.push(handle);
+        if needs_any_dimse {
+            // Start existing DIMSE adapter for endpoints
+            if has_dimse_endpoint {
+                let dimse_adapter = DimseAdapter::new(network_name_clone.clone());
+                match dimse_adapter.start(config_clone.clone(), shutdown_clone.clone()).await {
+                    Ok(handle) => {
+                        tracing::info!(
+                            "🚀 Started DIMSE adapter for network '{}'",
+                            network_name
+                        );
+                        adapter_handles.push(handle);
+                    }
+                    Err(e) => {
+                        tracing::error!(
+                            "Failed to start DIMSE adapter for network '{}': {}",
+                            network_name,
+                            e
+                        );
+                    }
                 }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to start DIMSE adapter for network '{}': {}",
-                        network_name,
-                        e
+            }
+            
+            // Start persistent DICOM SCPs
+            // Deduplicate by (bind_addr, port) to avoid conflicts
+            let mut unique_listeners: std::collections::HashSet<(IpAddr, u16)> = std::collections::HashSet::new();
+            for spec in scp_specs {
+                let listener_key = (spec.bind_addr, spec.port);
+                if !unique_listeners.insert(listener_key) {
+                    tracing::debug!(
+                        "Skipping duplicate SCP listener on {}:{} (backend '{}')",
+                        spec.bind_addr, spec.port, spec.backend_name
                     );
+                    continue;
                 }
+                
+                let storage_dir = spec.storage_dir.clone();
+                let backend_name = spec.backend_name.clone();
+                let bind_addr = spec.bind_addr;
+                let port = spec.port;
+                let local_aet = spec.local_aet.clone();
+                let enable_echo = spec.enable_echo;
+                let enable_find = spec.enable_find;
+                let enable_move = spec.enable_move;
+                let shutdown_clone = shutdown_clone.clone();
+                
+                tracing::info!(
+                    "🩺 Starting persistent DICOM SCP for backend '{}' on {}:{}, AE='{}', storage='{:?}'",
+                    backend_name, bind_addr, port, local_aet, storage_dir
+                );
+                
+                // Spawn persistent SCP task
+                let scp_handle = tokio::spawn(async move {
+                    // Ensure storage directory exists
+                    if let Err(e) = tokio::fs::create_dir_all(&storage_dir).await {
+                        tracing::error!(
+                            "Failed to create storage directory {:?} for backend '{}': {}",
+                            storage_dir, backend_name, e
+                        );
+                        return;
+                    }
+                    
+                    let dimse_config = dimse::DimseConfig {
+                        local_aet,
+                        bind_addr,
+                        port,
+                        storage_dir,
+                        enable_echo,
+                        enable_find,
+                        enable_move,
+                        ..Default::default()
+                    };
+                    
+                    // Use internal SCP for persistent listeners
+                    let provider: Arc<dyn dimse::scp::QueryProvider> = Arc::new(
+                        crate::adapters::dimse::query_provider::PipelineQueryProvider::new(
+                            "persistent_scp".to_string(),
+                            backend_name.clone()
+                        )
+                    );
+                    let scp = dimse::DimseScp::new(dimse_config, provider);
+                    
+                    // Run SCP until shutdown signal
+                    tokio::select! {
+                        result = scp.run() => {
+                            if let Err(e) = result {
+                                tracing::error!("Persistent DICOM SCP '{}' failed: {}", backend_name, e);
+                            } else {
+                                tracing::info!("Persistent DICOM SCP '{}' stopped gracefully", backend_name);
+                            }
+                        }
+                        _ = shutdown_clone.cancelled() => {
+                            tracing::info!("Persistent DICOM SCP '{}' shutting down", backend_name);
+                        }
+                    }
+                });
+                
+                adapter_handles.push(scp_handle);
             }
         }
     }
