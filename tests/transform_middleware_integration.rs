@@ -37,12 +37,15 @@ async fn test_transform_middleware_integration() {
         networks = ["default"]
         endpoints = ["http_test"]
         middleware = ["json_extractor", "transform_test"]
-        backends = []
+        backends = ["echo_backend"]
 
         [endpoints.http_test]
         service = "http"
         [endpoints.http_test.options]
         path_prefix = "/transform"
+        
+        [backends.echo_backend]
+        service = "echo"
 
         [middleware.transform_test]
         type = "transform"
@@ -56,14 +59,26 @@ async fn test_transform_middleware_integration() {
 
         [services.http]
         module = ""
+        
+        [services.echo]
+        module = ""
     "#,
         spec_path = spec_path
     );
 
     let config: Config = toml::from_str(&config_toml).unwrap();
     config.validate().unwrap();
+    
+    let config_arc = Arc::new(config);
+    
+    // Initialize globals (required for pipeline execution)
+    use harmony::storage::create_storage_backend;
+    harmony::globals::set_config(config_arc.clone());
+    let storage = create_storage_backend(&config_arc.storage)
+        .expect("Failed to create storage backend");
+    harmony::globals::set_storage(storage);
 
-    let app = build_network_router(Arc::new(config), "default").await;
+    let app = build_network_router(config_arc, "default").await;
 
     // Test data that should be transformed by the JOLT spec
     let input_data = json!({

@@ -11,6 +11,19 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
+// Helper: initialize global config and storage for tests
+fn init_test_globals(config: Arc<Config>) {
+    use harmony::storage::create_storage_backend;
+    
+    // Set global config
+    harmony::globals::set_config(config.clone());
+    
+    // Initialize storage
+    let storage = create_storage_backend(&config.storage)
+        .expect("Failed to create storage backend");
+    harmony::globals::set_storage(storage);
+}
+
 #[tokio::test]
 async fn router_builds_and_handles_404() {
     // Minimal config with one network and one empty pipeline bound to that network.
@@ -211,6 +224,11 @@ async fn router_handles_path_based_routing() {
         id = "router-test"
         log_level = "info"
         store_dir = "/tmp"
+        
+        [storage]
+        backend = "filesystem"
+        [storage.options]
+        path = "./tmp"
 
         [network.default]
         enable_wireguard = false
@@ -224,7 +242,7 @@ async fn router_handles_path_based_routing() {
         description = "Core pipeline"
         networks = ["default"]
         endpoints = ["echo_one", "echo_two"]
-        backends = []
+        backends = ["echo_backend"]
         middleware = []
 
         [endpoints.echo_one]
@@ -236,15 +254,22 @@ async fn router_handles_path_based_routing() {
         service = "echo"
         [endpoints.echo_two.options]
         path_prefix = "/echo2"
+        
+        [backends.echo_backend]
+        service = "echo"
 
         [services.echo]
         module = ""
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
+    let cfg_arc = Arc::new(cfg);
+    
+    // Initialize globals (required for pipeline execution)
+    init_test_globals(cfg_arc.clone());
 
     // Build the router
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let app = harmony::router::build_network_router(cfg_arc, "default").await;
 
     // Test first endpoint `/echo1/:path`
     let response = app

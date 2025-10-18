@@ -80,6 +80,7 @@ pub fn http_status_to_dimse(http_status: u16) -> DimseStatus {
 }
 
 /// Maps PipelineError to DIMSE status codes
+#[allow(dead_code)]
 pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
     match error {
         PipelineError::ServiceError(msg) => {
@@ -120,6 +121,7 @@ pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
 }
 
 /// Maps common error scenarios to DIMSE status with context
+#[allow(dead_code)]
 pub fn error_context_to_dimse(http_status: Option<u16>, error: Option<&PipelineError>) -> DimseStatus {
     // Prefer pipeline error mapping if available (more specific)
     if let Some(err) = error {
@@ -136,11 +138,13 @@ pub fn error_context_to_dimse(http_status: Option<u16>, error: Option<&PipelineE
 }
 
 /// Check if a status indicates success (including warnings)
+#[allow(dead_code)]
 pub fn is_successful_status(status: &DimseStatus) -> bool {
     matches!(status, DimseStatus::Success | DimseStatus::Warning(_))
 }
 
 /// Check if a status indicates a retriable error
+#[allow(dead_code)]
 pub fn is_retriable_status(status: &DimseStatus) -> bool {
     match status {
         DimseStatus::Failure(code) => {

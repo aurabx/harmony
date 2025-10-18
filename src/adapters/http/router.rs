@@ -79,7 +79,7 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
 
         // Register routes
         for (endpoint_name, route_config) in planned {
-            if let Some(endpoint) = config.endpoints.get(&endpoint_name) {
+            if let Some(_endpoint) = config.endpoints.get(&endpoint_name) {
                 let path = route_config.path.clone();
                 let methods = route_config.methods.clone();
 
