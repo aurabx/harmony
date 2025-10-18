@@ -1,3 +1,5 @@
+pub mod http;
+
 use crate::config::config::Config;
 use crate::models::protocol::Protocol;
 use async_trait::async_trait;

@@ -1,0 +1,286 @@
+use super::HttpAdapter;
+use crate::config::config::Config;
+use crate::models::middleware::AuthFailure;
+use crate::pipeline::{PipelineError, PipelineExecutor};
+use axum::body::Body;
+use axum::extract::Request;
+use axum::response::Response;
+use axum::Router;
+use http::{Method, StatusCode};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
+
+/// Build network router for HTTP adapter
+///
+/// This replaces the old router/dispatcher logic but uses PipelineExecutor
+pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Router {
+    let mut app = Router::new();
+    let mut route_registry: HashSet<(Method, String)> = HashSet::new();
+
+    for (pipeline_name, pipeline) in &config.pipelines {
+        if !pipeline.networks.contains(&network_name.to_string()) {
+            continue;
+        }
+
+        // Track DICOM SCP endpoints (which have no HTTP routes) so we can start listeners
+        let mut scp_endpoints: Vec<(String, HashMap<String, serde_json::Value>)> = Vec::new();
+
+        // Collect routes for this pipeline
+        let mut planned: Vec<(String, crate::router::route_config::RouteConfig)> = Vec::new();
+        let mut has_conflict = false;
+
+        for endpoint_name in &pipeline.endpoints {
+            if let Some(endpoint) = config.endpoints.get(endpoint_name) {
+                let service = match endpoint.resolve_service() {
+                    Ok(service) => service,
+                    Err(err) => {
+                        tracing::error!(
+                            "Failed to resolve service for endpoint '{}': {}",
+                            endpoint_name,
+                            err
+                        );
+                        continue;
+                    }
+                };
+
+                let opts_map: HashMap<String, serde_json::Value> =
+                    endpoint.options.clone().unwrap_or_default();
+
+                // Detect DICOM SCP endpoints (not backends)
+                if endpoint.service.eq_ignore_ascii_case("dicom") {
+                    let is_backend = opts_map.contains_key("host") || opts_map.contains_key("aet");
+                    if !is_backend {
+                        scp_endpoints.push((endpoint_name.clone(), opts_map.clone()));
+                    }
+                }
+
+                let route_configs = service.build_router(&opts_map);
+
+                for route_config in route_configs.clone() {
+                    for m in &route_config.methods {
+                        let key = (m.clone(), route_config.path.clone());
+                        if route_registry.contains(&key) {
+                            tracing::warn!(
+                                "Dropping pipeline '{}' due to route conflict: {} {}",
+                                pipeline_name,
+                                m,
+                                route_config.path
+                            );
+                            has_conflict = true;
+                            break;
+                        }
+                    }
+                    if has_conflict {
+                        break;
+                    }
+                    planned.push((endpoint_name.clone(), route_config));
+                }
+                if has_conflict {
+                    break;
+                }
+            }
+        }
+
+        if has_conflict {
+            continue;
+        }
+
+        // Ensure any DICOM SCP listeners are started
+        for (ep_name, opts) in scp_endpoints.iter() {
+            let mut opts_with_storage = opts.clone();
+            if !opts_with_storage.contains_key("storage_dir") {
+                let storage_root = config
+                    .storage
+                    .options
+                    .get("path")
+                    .and_then(|v| v.as_str())
+                    .unwrap_or("./tmp");
+                let dimse_root = std::path::Path::new(storage_root).join("dimse");
+                opts_with_storage.insert(
+                    "storage_dir".to_string(),
+                    serde_json::json!(dimse_root.to_string_lossy().to_string()),
+                );
+            }
+            crate::router::scp_launcher::ensure_dimse_scp_started(
+                ep_name,
+                pipeline_name,
+                &opts_with_storage,
+            );
+        }
+
+        // Register routes
+        for (endpoint_name, route_config) in planned {
+            if let Some(endpoint) = config.endpoints.get(&endpoint_name) {
+                // Start DICOM SCP for endpoint (SCP mode)
+                if endpoint.service.eq_ignore_ascii_case("dicom") {
+                    let opts_map: HashMap<String, serde_json::Value> =
+                        endpoint.options.clone().unwrap_or_default();
+                    let is_backend = opts_map.contains_key("host") || opts_map.contains_key("aet");
+                    if !is_backend {
+                        crate::router::scp_launcher::ensure_dimse_scp_started(
+                            &endpoint_name,
+                            pipeline_name,
+                            &opts_map,
+                        );
+                    }
+                }
+
+                let path = route_config.path.clone();
+                let methods = route_config.methods.clone();
+
+                let mut method_router = axum::routing::MethodRouter::new();
+                let mut added_any = false;
+
+                for method in methods.clone() {
+                    let key = (method.clone(), path.clone());
+                    if route_registry.contains(&key) {
+                        tracing::warn!("Skipping duplicate route: {} {}", method, path);
+                        continue;
+                    }
+
+                    let endpoint_name2 = endpoint_name.clone();
+                    let pipeline_name2 = pipeline_name.clone();
+                    let config_ref = config.clone();
+
+                    let handler = move |mut req: Request| {
+                        let endpoint_name = endpoint_name2.clone();
+                        let pipeline_name = pipeline_name2.clone();
+                        let config_ref = config_ref.clone();
+                        async move {
+                            handle_request(&mut req, config_ref, endpoint_name, pipeline_name).await
+                        }
+                    };
+
+                    method_router = match method {
+                        http::Method::GET => method_router.get(handler),
+                        http::Method::POST => method_router.post(handler),
+                        http::Method::PUT => method_router.put(handler),
+                        http::Method::DELETE => method_router.delete(handler),
+                        http::Method::PATCH => method_router.patch(handler),
+                        http::Method::HEAD => method_router.head(handler),
+                        http::Method::OPTIONS => method_router.options(handler),
+                        _ => method_router,
+                    };
+
+                    route_registry.insert(key);
+                    added_any = true;
+                }
+
+                if added_any {
+                    app = app.route(&path, method_router);
+                }
+            }
+        }
+
+        // If requested, start a persistent Store SCP for any DICOM backends in this pipeline
+        for backend_name in &pipeline.backends {
+            if let Some(backend) = config.backends.get(backend_name) {
+                if backend.service.eq_ignore_ascii_case("dicom") {
+                    let mut opts = backend.options.clone().unwrap_or_default();
+                    let persistent = opts
+                        .get("persistent_store_scp")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    if persistent {
+                        if let Some(p) = opts.get("incoming_store_port").and_then(|v| v.as_u64()) {
+                            opts.insert("port".to_string(), serde_json::json!(p as u16));
+                        }
+                        if !opts.contains_key("local_aet") {
+                            opts.insert("local_aet".to_string(), serde_json::json!("HARMONY_SCU"));
+                        }
+                        if !opts.contains_key("storage_dir") {
+                            let storage_root = config
+                                .storage
+                                .options
+                                .get("path")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("./tmp");
+                            let dimse_root = std::path::Path::new(storage_root).join("dimse");
+                            opts.insert(
+                                "storage_dir".to_string(),
+                                serde_json::json!(dimse_root.to_string_lossy().to_string()),
+                            );
+                        }
+                        crate::router::scp_launcher::ensure_dimse_scp_started(
+                            backend_name,
+                            pipeline_name,
+                            &opts,
+                        );
+                    }
+                }
+            }
+        }
+    }
+
+    app
+}
+
+/// Handle HTTP request using PipelineExecutor
+async fn handle_request(
+    req: &mut Request,
+    config: Arc<Config>,
+    endpoint_name: String,
+    pipeline_name: String,
+) -> Result<Response<Body>, StatusCode> {
+    // Look up the endpoint and pipeline from config
+    let endpoint = config
+        .endpoints
+        .get(&endpoint_name)
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let service = endpoint
+        .resolve_service()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let pipeline = config
+        .pipelines
+        .get(&pipeline_name)
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // 1. Convert HTTP Request → ProtocolCtx
+    let ctx = HttpAdapter::http_request_to_protocol_ctx(
+        req,
+        endpoint.options.as_ref().unwrap_or(&HashMap::new()),
+    )
+    .await
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // 2. Build envelope via service
+    let envelope = service
+        .build_protocol_envelope(ctx.clone(), endpoint.options.as_ref().unwrap_or(&HashMap::new()))
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // 3. Execute pipeline (NEW: using PipelineExecutor!)
+    let response_envelope = PipelineExecutor::execute(envelope, pipeline, &config, &ctx)
+        .await
+        .map_err(|err| map_pipeline_error_to_status(&err))?;
+
+    // 4. Convert ResponseEnvelope → HTTP Response
+    let response = service
+        .endpoint_outgoing_response(
+            response_envelope.clone(),
+            endpoint.options.as_ref().unwrap_or(&HashMap::new()),
+        )
+        .await
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    Ok(response)
+}
+
+/// Map pipeline errors to HTTP status codes
+fn map_pipeline_error_to_status(err: &PipelineError) -> StatusCode {
+    match err {
+        PipelineError::MiddlewareError(middleware_err) => {
+            // Check if it's an AuthFailure
+            if let Some(_auth_failure) = middleware_err.downcast_ref::<AuthFailure>() {
+                StatusCode::UNAUTHORIZED
+            } else {
+                StatusCode::INTERNAL_SERVER_ERROR
+            }
+        }
+        PipelineError::BackendError(_) => StatusCode::BAD_GATEWAY,
+        PipelineError::ConfigError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+        PipelineError::ServiceError(_) => StatusCode::INTERNAL_SERVER_ERROR,
+    }
+}

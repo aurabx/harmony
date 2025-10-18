@@ -4,4 +4,4 @@ pub mod executor;
 mod tests;
 
 // Re-exports for convenience
-pub use executor::PipelineExecutor;
+pub use executor::{PipelineError, PipelineExecutor};
