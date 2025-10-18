@@ -177,14 +177,21 @@ impl Middleware for JmixBuilderMiddleware {
                 return Ok(envelope);
             }
 
-            // Just verify the zip exists and set metadata - jmix service will handle serving
+            // Verify the zip exists before serving from cache
             let zip_file = package_dir.join(format!("{}.zip", id));
 
             if !zip_file.exists() {
+                // Zip file is missing - package directory may have been deleted
+                tracing::warn!(
+                    "📦 JMIX package {} not found at {}, returning 404",
+                    id,
+                    zip_file.display()
+                );
+                // For direct ID requests, return 404 since we can't rebuild without study UID
                 set_response_and_skip(
-                    500,
+                    404,
                     HashMap::new(),
-                    Some("zip file not found".to_string()),
+                    Some("JMIX package not found".to_string()),
                     None,
                     None,
                     None,
@@ -201,6 +208,16 @@ impl Middleware for JmixBuilderMiddleware {
                 Some(id.to_string()),
                 Some(true),
             );
+            
+            // Also store metadata in request_details for immediate response processing
+            envelope
+                .request_details
+                .metadata
+                .insert("jmix_id".to_string(), id.to_string());
+            envelope
+                .request_details
+                .metadata
+                .insert("jmix_zip_ready".to_string(), "true".to_string());
             return Ok(envelope);
         }
 
@@ -220,19 +237,19 @@ impl Middleware for JmixBuilderMiddleware {
             let path = m.get("path").and_then(|v| v.as_str()).unwrap_or("");
             let _package_dir = Path::new(path);
 
-            // Just verify the zip exists and set metadata - jmix service will handle serving
+            // Verify the zip exists before serving from cache
             let package_dir = store_root.join(id);
             let zip_file = package_dir.join(format!("{}.zip", id));
 
             if !zip_file.exists() {
-                set_response_and_skip(
-                    500,
-                    HashMap::new(),
-                    Some("zip file not found".to_string()),
-                    None,
-                    None,
-                    None,
+                // Zip file is missing (e.g., tmp directory was deleted)
+                // Don't skip backends - let them fetch and rebuild the package
+                tracing::warn!(
+                    "📦 JMIX package {} found in index but zip file missing at {}, allowing backend to refetch",
+                    id,
+                    zip_file.display()
                 );
+                // Pass through to backends without setting skip_backends
                 return Ok(envelope);
             }
 
@@ -245,6 +262,16 @@ impl Middleware for JmixBuilderMiddleware {
                 Some(id.to_string()),
                 Some(true),
             );
+            
+            // Also store metadata in request_details for immediate response processing
+            envelope
+                .request_details
+                .metadata
+                .insert("jmix_id".to_string(), id.to_string());
+            envelope
+                .request_details
+                .metadata
+                .insert("jmix_zip_ready".to_string(), "true".to_string());
             return Ok(envelope);
         }
 

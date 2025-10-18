@@ -616,15 +616,22 @@ impl ServiceHandler<Value> for JmixEndpoint {
     ) -> Result<Response, Error> {
         // Check if response has jmix metadata for special zip file handling
         // Only serve zip if BOTH jmix_id and jmix_zip_ready are set
+        // Check both response and request metadata (fallback for when backends are skipped)
         let zip_ready = envelope
             .response_details
             .metadata
             .get("jmix_zip_ready")
+            .or_else(|| envelope.request_details.metadata.get("jmix_zip_ready"))
             .map(|s| s == "true")
             .unwrap_or(false);
 
         if zip_ready {
-            if let Some(jmix_id) = envelope.response_details.metadata.get("jmix_id") {
+            let jmix_id = envelope
+                .response_details
+                .metadata
+                .get("jmix_id")
+                .or_else(|| envelope.request_details.metadata.get("jmix_id"));
+            if let Some(jmix_id) = jmix_id {
                 // Load the zip file and return it (special case for JMIX)
                 tracing::info!("📦 Serving zip file for JMIX package: {}", jmix_id);
 

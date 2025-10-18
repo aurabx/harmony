@@ -40,7 +40,7 @@ All routes assume `127.0.0.1:8080/jmix`:
 ### Build JMIX from StudyInstanceUID (triggers DICOM retrieval)
 ```zsh
 curl -fsSLOJ -H "Accept: application/zip" \
-  "http://127.0.0.1:8080/jmix/api/jmix?studyInstanceUid=<UID>&skip_hashing=true&skip_listing=true"
+  "http://127.0.0.1:8080/jmix/api/jmix?studyInstanceUid=1.3.6.1.4.1.5962.99.1.939772310.1977867020.1426868947350.4.0"
 ```
 
 ### Get manifest by ID
