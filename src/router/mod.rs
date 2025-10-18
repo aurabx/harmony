@@ -1,12 +1,9 @@
-#[deprecated(
-    since = "0.2.0",
-    note = "Dispatcher is deprecated. Use adapters::http::router::build_network_router instead. Will be removed after Phase 6."
-)]
-mod dispatcher;
-
-pub mod pipeline_runner;
 pub mod route_config;
-pub mod scp_launcher;
+
+// Phase 6 cleanup complete (2025-10-18):
+// - dispatcher.rs: Deleted (use HttpAdapter instead)
+// - pipeline_runner.rs: Deleted (DIMSE now uses PipelineExecutor)
+// - scp_launcher.rs: Deleted (DimseAdapter started by orchestrator in src/lib.rs)
 
 use crate::config::config::Config;
 use axum::Router;

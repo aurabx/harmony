@@ -22,9 +22,6 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
             continue;
         }
 
-        // Track DICOM SCP endpoints (which have no HTTP routes) so we can start listeners
-        let mut scp_endpoints: Vec<(String, HashMap<String, serde_json::Value>)> = Vec::new();
-
         // Collect routes for this pipeline
         let mut planned: Vec<(String, crate::router::route_config::RouteConfig)> = Vec::new();
         let mut has_conflict = false;
@@ -46,13 +43,8 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
                 let opts_map: HashMap<String, serde_json::Value> =
                     endpoint.options.clone().unwrap_or_default();
 
-                // Detect DICOM SCP endpoints (not backends)
-                if endpoint.service.eq_ignore_ascii_case("dicom") {
-                    let is_backend = opts_map.contains_key("host") || opts_map.contains_key("aet");
-                    if !is_backend {
-                        scp_endpoints.push((endpoint_name.clone(), opts_map.clone()));
-                    }
-                }
+                // Note: DIMSE SCPs are now started by DimseAdapter in the orchestrator (src/lib.rs)
+                // HTTP router no longer launches DIMSE listeners
 
                 let route_configs = service.build_router(&opts_map);
 
@@ -85,46 +77,9 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
             continue;
         }
 
-        // Ensure any DICOM SCP listeners are started
-        for (ep_name, opts) in scp_endpoints.iter() {
-            let mut opts_with_storage = opts.clone();
-            if !opts_with_storage.contains_key("storage_dir") {
-                let storage_root = config
-                    .storage
-                    .options
-                    .get("path")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("./tmp");
-                let dimse_root = std::path::Path::new(storage_root).join("dimse");
-                opts_with_storage.insert(
-                    "storage_dir".to_string(),
-                    serde_json::json!(dimse_root.to_string_lossy().to_string()),
-                );
-            }
-            crate::router::scp_launcher::ensure_dimse_scp_started(
-                ep_name,
-                pipeline_name,
-                &opts_with_storage,
-            );
-        }
-
         // Register routes
         for (endpoint_name, route_config) in planned {
             if let Some(endpoint) = config.endpoints.get(&endpoint_name) {
-                // Start DICOM SCP for endpoint (SCP mode)
-                if endpoint.service.eq_ignore_ascii_case("dicom") {
-                    let opts_map: HashMap<String, serde_json::Value> =
-                        endpoint.options.clone().unwrap_or_default();
-                    let is_backend = opts_map.contains_key("host") || opts_map.contains_key("aet");
-                    if !is_backend {
-                        crate::router::scp_launcher::ensure_dimse_scp_started(
-                            &endpoint_name,
-                            pipeline_name,
-                            &opts_map,
-                        );
-                    }
-                }
-
                 let path = route_config.path.clone();
                 let methods = route_config.methods.clone();
 
@@ -172,44 +127,9 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
             }
         }
 
-        // If requested, start a persistent Store SCP for any DICOM backends in this pipeline
-        for backend_name in &pipeline.backends {
-            if let Some(backend) = config.backends.get(backend_name) {
-                if backend.service.eq_ignore_ascii_case("dicom") {
-                    let mut opts = backend.options.clone().unwrap_or_default();
-                    let persistent = opts
-                        .get("persistent_store_scp")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    if persistent {
-                        if let Some(p) = opts.get("incoming_store_port").and_then(|v| v.as_u64()) {
-                            opts.insert("port".to_string(), serde_json::json!(p as u16));
-                        }
-                        if !opts.contains_key("local_aet") {
-                            opts.insert("local_aet".to_string(), serde_json::json!("HARMONY_SCU"));
-                        }
-                        if !opts.contains_key("storage_dir") {
-                            let storage_root = config
-                                .storage
-                                .options
-                                .get("path")
-                                .and_then(|v| v.as_str())
-                                .unwrap_or("./tmp");
-                            let dimse_root = std::path::Path::new(storage_root).join("dimse");
-                            opts.insert(
-                                "storage_dir".to_string(),
-                                serde_json::json!(dimse_root.to_string_lossy().to_string()),
-                            );
-                        }
-                        crate::router::scp_launcher::ensure_dimse_scp_started(
-                            backend_name,
-                            pipeline_name,
-                            &opts,
-                        );
-                    }
-                }
-            }
-        }
+        // Note: DIMSE SCPs (including persistent Store SCPs for backends) are now
+        // started by DimseAdapter in the orchestrator (src/lib.rs)
+        // HTTP router no longer launches DIMSE listeners
     }
 
     app

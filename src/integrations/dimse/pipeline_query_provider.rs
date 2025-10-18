@@ -1,13 +1,12 @@
 use crate::globals::get_config;
-use crate::models::envelope::envelope::RequestEnvelope;
-use crate::router::pipeline_runner::run_pipeline;
+use crate::models::envelope::envelope::ResponseEnvelope;
+use crate::pipeline::executor::PipelineExecutor;
 use async_trait::async_trait;
 use dicom_json_tool as tool;
 use dimse::error::DimseError;
 use dimse::types::{DatasetStream, QueryLevel};
 use dimse::Result as DimseResult;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 use once_cell::sync::Lazy;
 use std::path::PathBuf;
@@ -88,7 +87,7 @@ impl PipelineQueryProvider {
         op: &str,
         body: serde_json::Value,
         mut meta: HashMap<String, String>,
-    ) -> DimseResult<RequestEnvelope<Vec<u8>>> {
+    ) -> DimseResult<ResponseEnvelope<Vec<u8>>> {
         use crate::models::protocol::{Protocol, ProtocolCtx};
         let config =
             get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
@@ -116,15 +115,21 @@ impl PipelineQueryProvider {
 
         // Let the service build the envelope
         let envelope = service
-            .build_protocol_envelope(ctx, options)
+            .build_protocol_envelope(ctx.clone(), options)
             .await
             .map_err(|e| DimseError::operation_failed(format!("Envelope build failed: {}", e)))?;
 
-        // Run common pipeline
-        let processed = run_pipeline(envelope, &self.pipeline, Arc::clone(&config))
+        // Get pipeline reference
+        let pipeline = config.pipelines.get(&self.pipeline).ok_or_else(|| {
+            DimseError::operation_failed(format!("Unknown pipeline '{}'", self.pipeline))
+        })?;
+
+        // Execute through PipelineExecutor (single source of truth)
+        let response = PipelineExecutor::execute(envelope, pipeline, &config, &ctx)
             .await
             .map_err(|e| DimseError::operation_failed(format!("Pipeline failed: {}", e)))?;
-        Ok(processed)
+        
+        Ok(response)
     }
 }
 
@@ -158,8 +163,20 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let _envelope = self.run("C-FIND", body, meta).await?;
-        // For now, we return empty datasets (stub) and rely on envelope side effects/logging
+        let response_envelope = self.run("C-FIND", body, meta).await?;
+        
+        // TODO(Phase 3C): Map ResponseEnvelope to C-FIND datasets
+        // - Extract normalized_data from response
+        // - Convert JSON results to DICOM datasets
+        // - Stream multiple Pending responses for multi-match
+        // - Send final Success status
+        // For now, log the response and return empty (stub)
+        tracing::debug!(
+            "C-FIND response status: {}, payload size: {} bytes",
+            response_envelope.response_details.status,
+            response_envelope.original_data.len()
+        );
+        
         Ok(vec![])
     }
 
@@ -188,7 +205,20 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let _envelope = self.run("C-MOVE", body, meta).await?;
+        let response_envelope = self.run("C-MOVE", body, meta).await?;
+        
+        // TODO(Phase 3C): Map ResponseEnvelope to C-MOVE progress
+        // - Parse response for move progress (remaining/completed sub-ops)
+        // - Stream Pending responses with counters
+        // - Map pipeline errors to DIMSE failure statuses
+        // - Send final Success/Failure status
+        // For now, log the response and return empty (stub)
+        tracing::debug!(
+            "C-MOVE response status: {}, payload size: {} bytes",
+            response_envelope.response_details.status,
+            response_envelope.original_data.len()
+        );
+        
         Ok(vec![])
     }
 
@@ -206,14 +236,32 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             .await
             .map_err(|e| DimseError::operation_failed(format!("store dataset: {}", e)))?;
 
-        // Also emit a pipeline event for observability (optional)
+        // Emit pipeline event for observability and processing
         let mut meta = HashMap::new();
         meta.insert("dicom.operation".into(), "C-STORE".into());
         let body = serde_json::json!({
             "operation": "store",
             "dir": target_dir.to_string_lossy(),
         });
-        let _ = self.run("C-STORE", body, meta).await;
-        Ok(())
+        
+        // TODO(Phase 3C): Use ResponseEnvelope to determine C-STORE status
+        // - Check response_envelope.response_details.status
+        // - Map 2xx → DIMSE Success (0x0000)
+        // - Map 4xx/5xx → appropriate DIMSE failure statuses
+        // - Return status via DimseResult
+        match self.run("C-STORE", body, meta).await {
+            Ok(response) => {
+                tracing::debug!(
+                    "C-STORE pipeline response: status={}",
+                    response.response_details.status
+                );
+                // For now, accept all pipeline responses as success
+                Ok(())
+            }
+            Err(e) => {
+                tracing::error!("C-STORE pipeline failed: {}", e);
+                Err(e)
+            }
+        }
     }
 }
