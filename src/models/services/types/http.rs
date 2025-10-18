@@ -200,6 +200,34 @@ impl ServiceHandler<Value> for HttpEndpoint {
         Ok(response_envelope)
     }
 
+    /// Protocol-aware response post-processing
+    /// 
+    /// For HTTP service, this adds protocol metadata to response headers
+    /// to help with debugging and observability.
+    async fn endpoint_outgoing_protocol(
+        &self,
+        envelope: &mut ResponseEnvelope<Vec<u8>>,
+        ctx: &crate::models::protocol::ProtocolCtx,
+        _options: &HashMap<String, Value>,
+    ) -> Result<(), Error> {
+        // Add protocol information to response metadata for observability
+        envelope
+            .response_details
+            .metadata
+            .insert("protocol".to_string(), format!("{:?}", ctx.protocol));
+        
+        // For HTTP protocol, optionally add X-Protocol header for debugging
+        if ctx.protocol == crate::models::protocol::Protocol::Http {
+            envelope
+                .response_details
+                .headers
+                .entry("x-harmony-protocol".to_string())
+                .or_insert_with(|| "http".to_string());
+        }
+        
+        Ok(())
+    }
+
     async fn endpoint_outgoing_response(
         &self,
         envelope: ResponseEnvelope<Vec<u8>>,
