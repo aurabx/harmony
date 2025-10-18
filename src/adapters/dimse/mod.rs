@@ -1,4 +1,5 @@
 mod query_provider;
+mod status_mapper;
 
 use crate::adapters::ProtocolAdapter;
 use crate::config::config::Config;

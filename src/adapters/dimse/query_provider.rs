@@ -1,3 +1,4 @@
+use crate::adapters::dimse::status_mapper;
 use crate::globals::get_config;
 use crate::models::envelope::envelope::ResponseEnvelope;
 use crate::models::protocol::{Protocol, ProtocolCtx};
@@ -146,6 +147,93 @@ impl PipelineQueryProvider {
 
         Ok(response_envelope)
     }
+
+    /// Convert ResponseEnvelope to Vec<DatasetStream>
+    ///
+    /// Parses the response data and converts it to DICOM datasets.
+    /// Supports both single results and arrays of results.
+    async fn response_to_datasets(
+        &self,
+        response: ResponseEnvelope<Vec<u8>>,
+    ) -> DimseResult<Vec<DatasetStream>> {
+        // Check HTTP status and map errors
+        let http_status = response.response_details.status;
+        if http_status < 200 || http_status >= 300 {
+            let status = status_mapper::http_status_to_dimse(http_status);
+            return Err(DimseError::operation_failed(format!(
+                "Pipeline returned non-success status {}: {:?}",
+                http_status, status
+            )));
+        }
+
+        // Try to parse response body as JSON
+        let json_data = if let Some(normalized) = response.normalized_data {
+            // Use normalized_data if available
+            normalized
+        } else if !response.original_data.is_empty() {
+            // Try to parse original_data as JSON
+            serde_json::from_slice(&response.original_data)
+                .map_err(|e| DimseError::operation_failed(format!("Failed to parse response as JSON: {}", e)))?
+        } else {
+            // Empty response
+            return Ok(vec![]);
+        };
+
+        // Convert JSON to datasets
+        let datasets = match &json_data {
+            serde_json::Value::Array(items) => {
+                // Multiple results
+                let mut datasets = Vec::new();
+                for item in items {
+                    if let Some(dataset) = self.json_to_dataset(item).await? {
+                        datasets.push(dataset);
+                    }
+                }
+                datasets
+            }
+            serde_json::Value::Object(_) => {
+                // Single result
+                if let Some(dataset) = self.json_to_dataset(&json_data).await? {
+                    vec![dataset]
+                } else {
+                    vec![]
+                }
+            }
+            _ => {
+                // Unexpected format
+                return Err(DimseError::operation_failed(format!(
+                    "Unexpected response format: expected object or array, got {:?}",
+                    json_data
+                )));
+            }
+        };
+
+        Ok(datasets)
+    }
+
+    /// Convert a single JSON object to a DatasetStream
+    ///
+    /// Currently creates in-memory datasets from JSON.
+    /// Future: could support file-based datasets for large results.
+    async fn json_to_dataset(
+        &self,
+        json: &serde_json::Value,
+    ) -> DimseResult<Option<DatasetStream>> {
+        // Skip null or empty objects
+        if json.is_null() || (json.is_object() && json.as_object().unwrap().is_empty()) {
+            return Ok(None);
+        }
+
+        // Convert JSON back to bytes for DatasetStream
+        // In the future, we could parse DICOM JSON and build proper DICOM objects
+        let json_bytes = serde_json::to_vec(json)
+            .map_err(|e| DimseError::operation_failed(format!("Failed to serialize JSON: {}", e)))?;
+
+        // DatasetStream::from_bytes expects bytes::Bytes, but it's just a wrapper around Vec<u8>
+        // We convert via into() which should work since Bytes implements From<Vec<u8>>
+        let dataset = DatasetStream::from_bytes(json_bytes.into());
+        Ok(Some(dataset))
+    }
 }
 
 #[async_trait]
@@ -178,11 +266,10 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let _response_envelope = self.run("C-FIND", body, meta).await?;
+        let response_envelope = self.run("C-FIND", body, meta).await?;
         
-        // TODO: Convert response_envelope back to Vec<DatasetStream>
-        // For now, return empty datasets (stub)
-        Ok(vec![])
+        // Convert response envelope to datasets
+        self.response_to_datasets(response_envelope).await
     }
 
     async fn locate(
@@ -210,10 +297,10 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let _response_envelope = self.run("C-MOVE", body, meta).await?;
+        let response_envelope = self.run("C-MOVE", body, meta).await?;
         
-        // TODO: Convert response_envelope back to Vec<DatasetStream>
-        Ok(vec![])
+        // Convert response envelope to datasets
+        self.response_to_datasets(response_envelope).await
     }
 
     async fn store(&self, dataset: DatasetStream) -> DimseResult<()> {
