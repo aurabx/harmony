@@ -73,7 +73,7 @@ impl Middleware for PathFilterMiddleware {
         tracing::debug!("PathFilter evaluating path: {}", path_to_match);
 
         // Try to match the path
-        if let Ok(_) = self.router.at(&path_to_match) {
+        if self.router.at(&path_to_match).is_ok() {
             tracing::debug!(
                 "PathFilter: path '{}' matched, allowing request",
                 path_to_match

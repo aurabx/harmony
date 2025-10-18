@@ -34,7 +34,7 @@ impl DicomwebEndpoint {
                 let has_results = metadata
                     .and_then(|m| m.get("has_results"))
                     .and_then(|v| v.as_bool())
-                    .unwrap_or_else(|| {
+                    .unwrap_or({
                         // Fallback: check data content if metadata is missing
                         match &json_data {
                             Value::Array(arr) => !arr.is_empty(),

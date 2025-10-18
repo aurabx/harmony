@@ -70,11 +70,11 @@ pub fn http_status_to_dimse(http_status: u16) -> DimseStatus {
         // 5xx Server Errors
         500 => DimseStatus::Failure(0x0110), // Processing failure
         501 => DimseStatus::Failure(0x0112), // Unrecognized operation
-        502 | 503 | 504 => DimseStatus::Failure(0xA701), // Out of resources/unable to process
+        502..=504 => DimseStatus::Failure(0xA701), // Out of resources/unable to process
         507 => DimseStatus::Failure(0xA700), // Out of resources
         
         // Default for unknown status codes
-        _ if http_status >= 400 && http_status < 500 => DimseStatus::Failure(0xC000),
+        _ if (400..500).contains(&http_status) => DimseStatus::Failure(0xC000),
         _ => DimseStatus::Failure(0x0110), // Processing failure
     }
 }

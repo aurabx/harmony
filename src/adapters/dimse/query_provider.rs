@@ -158,7 +158,7 @@ impl PipelineQueryProvider {
     ) -> DimseResult<Vec<DatasetStream>> {
         // Check HTTP status and map errors
         let http_status = response.response_details.status;
-        if http_status < 200 || http_status >= 300 {
+        if !(200..300).contains(&http_status) {
             let status = status_mapper::http_status_to_dimse(http_status);
             return Err(DimseError::operation_failed(format!(
                 "Pipeline returned non-success status {}: {:?}",

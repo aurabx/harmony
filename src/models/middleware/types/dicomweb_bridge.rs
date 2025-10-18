@@ -114,7 +114,8 @@ impl DicomwebBridgeMiddleware {
     }
 
     fn process_item(includefield: Option<&Vec<String>>, item: &Value) -> Value {
-        let processed_item = match includefield {
+        
+        match includefield {
             Some(_fields) => {
                 // If filtering is requested, work with the identifier as-is instead of
                 // converting to full JSON first, to avoid including unwanted attributes
@@ -132,8 +133,7 @@ impl DicomwebBridgeMiddleware {
                     item.clone()
                 }
             }
-        };
-        processed_item
+        }
     }
 
     /// Filter DICOM JSON attributes based on includefield parameter
@@ -354,7 +354,7 @@ impl Middleware for DicomwebBridgeMiddleware {
             let vr = Self::infer_vr_for_tag(&tag_hex);
 
             // Use all values for this parameter (DICOMweb allows multiple values)
-            let values: Vec<String> = param_values.iter().cloned().collect();
+            let values: Vec<String> = param_values.to_vec();
             if !values.is_empty() {
                 Self::add_tag(&mut ident, &tag_hex, &vr, values);
             }

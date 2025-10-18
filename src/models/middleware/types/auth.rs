@@ -87,10 +87,10 @@ impl Middleware for AuthSidecarMiddleware {
         let mut parts = decoded.splitn(2, ':');
         let user = parts
             .next()
-            .ok_or_else(|| AuthFailure("Missing username in Basic Auth credentials"))?;
+            .ok_or(AuthFailure("Missing username in Basic Auth credentials"))?;
         let pass = parts
             .next()
-            .ok_or_else(|| AuthFailure("Missing password in Basic Auth credentials"))?;
+            .ok_or(AuthFailure("Missing password in Basic Auth credentials"))?;
 
         if user == self._config.username && pass == self._config.password {
             Ok(envelope)
