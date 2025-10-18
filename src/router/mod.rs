@@ -1,13 +1,15 @@
+#[deprecated(
+    since = "0.2.0",
+    note = "Dispatcher is deprecated. Use adapters::http::router::build_network_router instead. Will be removed after Phase 6."
+)]
 mod dispatcher;
+
 pub mod pipeline_runner;
 pub mod route_config;
 pub mod scp_launcher;
 
 use crate::config::config::Config;
-use crate::router::dispatcher::Dispatcher;
 use axum::Router;
-use http::Method;
-use std::collections::HashSet;
 use std::sync::Arc;
 
 #[derive(Clone)]
@@ -15,19 +17,11 @@ pub struct AppState {
     pub config: Arc<Config>,
 }
 
+/// Build network router for HTTP endpoints
+///
+/// This function now delegates to the HttpAdapter for actual routing.
+/// The old dispatcher-based approach is deprecated.
 pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Router<()> {
-    let dispatcher = Dispatcher::new(config.clone());
-
-    let mut app = Router::new();
-    // Track globally-registered (method, path) to avoid axum panics on duplicates
-    let mut route_registry: HashSet<(Method, String)> = HashSet::new();
-
-    for (group_name, group) in &config.pipelines {
-        if !group.networks.contains(&network_name.to_string()) {
-            continue;
-        }
-        app = dispatcher.build_router(app, group_name, group, &mut route_registry);
-    }
-
-    app
+    // Delegate to HttpAdapter's router builder
+    crate::adapters::http::router::build_network_router(config, network_name).await
 }

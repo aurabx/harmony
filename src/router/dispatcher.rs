@@ -1,3 +1,17 @@
+//! # DEPRECATED: Dispatcher Module
+//!
+//! This module is deprecated and will be removed in Phase 6 of the protocol adapter refactoring.
+//!
+//! All HTTP-specific routing and request handling has been moved to:
+//! - `crate::adapters::http::HttpAdapter` - HTTP protocol adapter
+//! - `crate::adapters::http::router` - HTTP route building and request handling
+//!
+//! Pipeline execution is now handled by:
+//! - `crate::pipeline::PipelineExecutor` - Protocol-agnostic pipeline processing
+//!
+//! This file is kept temporarily for backward compatibility during the migration.
+//! Do not add new functionality here.
+
 use crate::config::config::Config;
 use crate::models::backends::backends::Backend;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
@@ -12,6 +26,10 @@ use http::{Method, StatusCode};
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 
+#[deprecated(
+    since = "0.2.0",
+    note = "Dispatcher is deprecated. Use HttpAdapter instead. Will be removed after Phase 6."
+)]
 pub struct Dispatcher {
     config: Arc<Config>,
 }
