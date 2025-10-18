@@ -553,6 +553,35 @@ impl ServiceHandler<Value> for JmixEndpoint {
         Ok(response_envelope)
     }
 
+    async fn endpoint_outgoing_protocol(
+        &self,
+        envelope: &mut ResponseEnvelope<Vec<u8>>,
+        ctx: &crate::models::protocol::ProtocolCtx,
+        _options: &HashMap<String, Value>,
+    ) -> Result<(), Error> {
+        // Add protocol metadata for JMIX service
+        envelope
+            .response_details
+            .metadata
+            .insert("protocol".to_string(), format!("{:?}", ctx.protocol));
+        envelope
+            .response_details
+            .metadata
+            .insert("service".to_string(), "jmix".to_string());
+        
+        // For HTTP protocol, ensure JMIX content-type if applicable
+        if ctx.protocol == crate::models::protocol::Protocol::Http {
+            // Only set if not already a zip file
+            if !envelope.response_details.headers.contains_key("content-type") {
+                envelope
+                    .response_details
+                    .headers
+                    .insert("content-type".to_string(), "application/json".to_string());
+            }
+        }
+        Ok(())
+    }
+
     async fn endpoint_outgoing_response(
         &self,
         envelope: ResponseEnvelope<Vec<u8>>,

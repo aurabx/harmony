@@ -159,6 +159,24 @@ impl ServiceHandler<Value> for EchoEndpoint {
         Ok(response_envelope)
     }
 
+    async fn endpoint_outgoing_protocol(
+        &self,
+        envelope: &mut ResponseEnvelope<Vec<u8>>,
+        ctx: &crate::models::protocol::ProtocolCtx,
+        _options: &HashMap<String, Value>,
+    ) -> Result<(), Error> {
+        // Add protocol metadata for echo service
+        envelope
+            .response_details
+            .metadata
+            .insert("protocol".to_string(), format!("{:?}", ctx.protocol));
+        envelope
+            .response_details
+            .metadata
+            .insert("service".to_string(), "echo".to_string());
+        Ok(())
+    }
+
     async fn endpoint_outgoing_response(
         &self,
         envelope: ResponseEnvelope<Vec<u8>>,

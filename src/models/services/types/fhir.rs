@@ -106,6 +106,33 @@ impl ServiceHandler<Value> for FhirEndpoint {
         Ok(response_envelope)
     }
 
+    async fn endpoint_outgoing_protocol(
+        &self,
+        envelope: &mut ResponseEnvelope<Vec<u8>>,
+        ctx: &crate::models::protocol::ProtocolCtx,
+        _options: &HashMap<String, Value>,
+    ) -> Result<(), Error> {
+        // Add protocol metadata and ensure FHIR content-type is set
+        envelope
+            .response_details
+            .metadata
+            .insert("protocol".to_string(), format!("{:?}", ctx.protocol));
+        envelope
+            .response_details
+            .metadata
+            .insert("service".to_string(), "fhir".to_string());
+        
+        // Ensure FHIR content-type is present for HTTP
+        if ctx.protocol == crate::models::protocol::Protocol::Http {
+            envelope
+                .response_details
+                .headers
+                .entry("content-type".to_string())
+                .or_insert_with(|| "application/fhir+json".to_string());
+        }
+        Ok(())
+    }
+
     // Convert the processed ResponseEnvelope into an HTTP Response
     async fn endpoint_outgoing_response(
         &self,

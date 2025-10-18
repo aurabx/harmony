@@ -503,6 +503,32 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
         Ok(response_envelope)
     }
 
+    async fn endpoint_outgoing_protocol(
+        &self,
+        envelope: &mut ResponseEnvelope<Vec<u8>>,
+        ctx: &crate::models::protocol::ProtocolCtx,
+        _options: &HashMap<String, Value>,
+    ) -> Result<(), Error> {
+        envelope
+            .response_details
+            .metadata
+            .insert("protocol".to_string(), format!("{:?}", ctx.protocol));
+        envelope
+            .response_details
+            .metadata
+            .insert("service".to_string(), "dicomweb".to_string());
+        
+        // Ensure DICOMweb content-type for HTTP
+        if ctx.protocol == crate::models::protocol::Protocol::Http {
+            envelope
+                .response_details
+                .headers
+                .entry("content-type".to_string())
+                .or_insert_with(|| "application/dicom+json".to_string());
+        }
+        Ok(())
+    }
+
     async fn endpoint_outgoing_response(
         &self,
         envelope: ResponseEnvelope<Vec<u8>>,
