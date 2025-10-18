@@ -9,13 +9,14 @@ pub mod router;
 pub mod storage;
 mod utils;
 
+use crate::adapters::dimse::DimseAdapter;
+use crate::adapters::http::HttpAdapter;
+use crate::adapters::ProtocolAdapter;
 use crate::config::config::Config;
-use crate::router::build_network_router;
 use crate::storage::create_storage_backend;
-use axum::serve;
 use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio::net::TcpListener;
+use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{self, prelude::*};
 
 pub async fn run(config: Config) {
@@ -52,44 +53,90 @@ pub async fn run(config: Config) {
 
     tracing::info!("🔧 Starting Harmony '{}'", config.proxy.id);
 
-    // Start servers for each network
+    // Create shared shutdown token
+    let shutdown = CancellationToken::new();
+    let mut adapter_handles = Vec::new();
+
+    // Start protocol adapters for each network
     for (network_name, network) in config.network.clone() {
-        // Clone `config.network` for proper ownership
-        let config_clone = Arc::clone(&config); // Clone the Arc<Config> to ensure shared ownership
-        let network_name = network_name.clone();
-        let network = network.clone();
+        let config_clone = Arc::clone(&config);
+        let network_name_clone = network_name.clone();
+        let shutdown_clone = shutdown.clone();
 
-        tokio::spawn(async move {
-            let base_app = build_network_router(config_clone.clone(), &network_name).await;
-
-            let addr = format!("{}:{}", network.http.bind_address, network.http.bind_port)
-                .parse::<SocketAddr>()
-                .unwrap_or_else(|_| {
-                    panic!("Invalid bind address or port for network {}", network_name)
-                });
-
-            tracing::info!(
-                "🚀 Starting HTTP server for network '{}' on '{}'",
-                network_name,
-                addr
-            );
-
-            let listener = TcpListener::bind(addr)
-                .await
-                .unwrap_or_else(|err| panic!("Failed to bind to address {addr}: {err}"));
-
-            if let Err(err) = serve(listener, base_app).await {
+        // Parse bind address for HTTP
+        let bind_addr = format!("{}:{}", network.http.bind_address, network.http.bind_port)
+            .parse::<SocketAddr>()
+            .unwrap_or_else(|_| {
+                panic!("Invalid bind address or port for network {}", network_name)
+            });
+        
+        // Start HTTP adapter
+        let http_adapter = HttpAdapter::new(network_name_clone.clone(), bind_addr);
+        
+        match http_adapter.start(config_clone.clone(), shutdown_clone.clone()).await {
+            Ok(handle) => {
+                tracing::info!(
+                    "🚀 Started HTTP adapter for network '{}'",
+                    network_name
+                );
+                adapter_handles.push(handle);
+            }
+            Err(e) => {
                 tracing::error!(
-                    "Server for network '{}' encountered an error: {}",
+                    "Failed to start HTTP adapter for network '{}': {}",
                     network_name,
-                    err
+                    e
                 );
             }
+        }
+
+        // Start DIMSE adapter if network has DIMSE endpoints
+        let has_dimse = config.pipelines.values().any(|pipeline| {
+            pipeline.networks.contains(&network_name)
+                && pipeline.endpoints.iter().any(|endpoint_name| {
+                    config
+                        .endpoints
+                        .get(endpoint_name)
+                        .map(|e| e.service == "dimse")
+                        .unwrap_or(false)
+                })
         });
+
+        if has_dimse {
+            let dimse_adapter = DimseAdapter::new(network_name_clone.clone());
+            match dimse_adapter.start(config_clone, shutdown_clone).await {
+                Ok(handle) => {
+                    tracing::info!(
+                        "🚀 Started DIMSE adapter for network '{}'",
+                        network_name
+                    );
+                    adapter_handles.push(handle);
+                }
+                Err(e) => {
+                    tracing::error!(
+                        "Failed to start DIMSE adapter for network '{}': {}",
+                        network_name,
+                        e
+                    );
+                }
+            }
+        }
     }
 
-    // Block on ctrl-c
+    // Wait for ctrl-c signal
+    tracing::info!("✓ All adapters started. Press Ctrl+C to shutdown.");
     tokio::signal::ctrl_c()
         .await
         .expect("Failed to listen for ctrl-c signal");
+
+    // Trigger shutdown
+    tracing::info!("⏳ Shutting down...");
+    shutdown.cancel();
+
+    // Wait for all adapters to complete
+    for handle in adapter_handles {
+        let _ = handle.await;
+    }
+
+    tracing::info!("✓ Harmony shut down gracefully.");
 }

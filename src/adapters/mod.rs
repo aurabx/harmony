@@ -1,3 +1,4 @@
+pub mod dimse;
 pub mod http;
 
 use crate::config::config::Config;

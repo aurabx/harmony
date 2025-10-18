@@ -1,3 +1,7 @@
+// TODO: DEPRECATED - This module is deprecated and will be removed in Phase 4+
+// Use adapters::dimse::DimseAdapter instead
+// Migration path: DimseAdapter should be instantiated and started via the adapter framework
+
 use crate::integrations::dimse::pipeline_query_provider::PipelineQueryProvider;
 use dimse::{DimseConfig, DEFAULT_DIMSE_PORT};
 use once_cell::sync::Lazy;
