@@ -1,19 +1,16 @@
 pub(crate) use self::config::ManagementConfig;
 use self::info::handle_info;
-use self::pipelines::handle_pipelines;
 use crate::config::config::ConfigError;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
-use crate::models::pipelines::config::Pipeline;
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use async_trait::async_trait;
-use axum::{body::Body, extract::State, response::Response};
+use axum::{body::Body, response::Response};
 use http::Method;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
-use std::sync::Arc;
 
 pub mod config;
 pub mod info;
@@ -133,23 +130,14 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                     .map_err(|_| Error::from("Failed to serialize info response"))?
             }
             p if p == "pipelines" || p == format!("{}/pipelines", base_path) => {
-                // Get pipelines from service options if available
-                let pipelines = options
-                    .get("pipelines")
-                    .and_then(|v| v.as_object())
-                    .map(|obj| {
-                        obj.iter()
-                            .filter_map(|(k, v)| {
-                                serde_json::from_value::<Pipeline>(v.clone())
-                                    .ok()
-                                    .map(|p| (k.clone(), p))
-                            })
-                            .collect::<HashMap<String, Pipeline>>()
-                    })
-                    .unwrap_or_default();
-
-                let pipelines_response = handle_pipelines(State(Arc::new(pipelines))).await;
-                serde_json::to_value(pipelines_response.0)
+                // Use global config access to get pipelines
+                let config = crate::globals::get_config();
+                let pipelines_response = if let Some(config_arc) = config {
+                    self::pipelines::get_pipelines_info(&config_arc.pipelines)
+                } else {
+                    self::pipelines::PipelinesResponse { pipelines: vec![] }
+                };
+                serde_json::to_value(pipelines_response)
                     .map_err(|_| Error::from("Failed to serialize pipelines response"))?
             }
             p if p == "routes" || p == format!("{}/routes", base_path) => {

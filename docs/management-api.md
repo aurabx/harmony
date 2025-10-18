@@ -111,6 +111,49 @@ curl http://localhost:9090/admin/pipelines
   - `backends`: List of backend names used by this pipeline
   - `middleware`: Ordered list of middleware applied to requests
 
+### GET /{base_path}/routes
+
+Returns a list of all configured routes in the system, showing which endpoints and pipelines handle each route.
+
+**Example Request:**
+```bash
+# Management API runs on internal network (localhost:9090)
+curl http://localhost:9090/admin/routes
+```
+
+**Response:**
+```json
+{
+  "routes": [
+    {
+      "path": "/admin/info",
+      "methods": ["GET"],
+      "description": "Get system information",
+      "endpoint_name": "management",
+      "service_type": "management",
+      "pipeline": "management"
+    },
+    {
+      "path": "/fhir/*",
+      "methods": ["GET", "POST", "PUT", "DELETE"],
+      "description": "FHIR endpoint for resource operations",
+      "endpoint_name": "fhir-endpoint",
+      "service_type": "fhir",
+      "pipeline": "fhir-pipeline"
+    }
+  ]
+}
+```
+
+**Response Fields:**
+- `routes`: Array of route objects
+  - `path`: The route path pattern
+  - `methods`: HTTP methods supported by this route
+  - `description`: Human-readable description of the route
+  - `endpoint_name`: Name of the endpoint handling this route
+  - `service_type`: Type of service (e.g., "fhir", "management")
+  - `pipeline`: Name of the pipeline containing this route
+
 ## Security Considerations
 
 ### Default Disabled

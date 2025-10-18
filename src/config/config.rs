@@ -85,6 +85,31 @@ impl Config {
             );
         }
 
+        // Inject management backend if not already present
+        if !self.backends.contains_key("management") {
+            self.backends.insert(
+                "management".to_string(),
+                Backend {
+                    service: "management".to_string(),
+                    options: Some({
+                        let mut options = HashMap::new();
+                        options.insert(
+                            "config".to_string(),
+                            serde_json::json!({
+                                "enabled": self.management.enabled,
+                                "base_path": self.management.base_path,
+                            }),
+                        );
+                        options.insert(
+                            "pipelines".to_string(),
+                            serde_json::to_value(&self.pipelines).unwrap_or_default(),
+                        );
+                        options
+                    }),
+                },
+            );
+        }
+
         // Inject management pipeline if not already present
         if !self.pipelines.contains_key("management") {
             // Use specified network or fail if not provided
@@ -109,7 +134,7 @@ impl Config {
                     description: "Management API pipeline".to_string(),
                     networks: vec![network],
                     endpoints: vec!["management".to_string()],
-                    backends: Vec::new(),
+                    backends: vec!["management".to_string()],
                     middleware: Vec::new(),
                 },
             );
