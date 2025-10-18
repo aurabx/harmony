@@ -1,6 +1,12 @@
 # Getting Started
 
-Status: alpha-quality software under active development. Some features are placeholders.
+**Last Updated**: 2025-01-18 (Phase 6)
+
+**Status**: Alpha-quality software under active development. Some features are placeholders.
+
+## Architecture Overview
+
+Harmony uses a **protocol adapter architecture** where each protocol (HTTP, DIMSE, HL7, etc.) has a dedicated adapter that feeds into a unified pipeline. See [adapters.md](adapters.md) for details.
 
 Prerequisites
 - Rust (stable; repository currently targets recent stable toolchains)
@@ -87,6 +93,8 @@ Conventions
 - Logging: use RUST_LOG=harmony=debug,info for local debugging
 
 Next steps
-- Read Configuration for how the top-level config and pipeline files fit together
-- See Middleware for auth and transforms (including real JWT verification)
-- See Testing for how to run fast, deterministic tests
+- Read [adapters.md](adapters.md) to understand protocol adapters (HTTP, DIMSE, and how to add new protocols)
+- Read [configuration.md](configuration.md) for config structure and pipeline files
+- See [middleware.md](middleware.md) for auth and transforms (including real JWT verification)
+- See [router.md](router.md) for pipeline execution flow
+- See [testing.md](testing.md) for running tests

@@ -1,8 +1,14 @@
 # Configuration
 
+**Last Updated**: 2025-01-18 (Phase 6)
+
+## Overview
+
 Harmony uses a two-layer configuration model:
-- A top-level config file (e.g., examples/default/config.toml)
-- One or more pipeline files (e.g., examples/default/pipelines/*.toml)
+- **Top-level config**: Networks, storage, logging, service registrations
+- **Pipeline files**: Endpoints, middleware, backends, and routing rules
+
+**Protocol adapters** (HTTP, DIMSE, etc.) are automatically spawned based on pipeline configurations. See [adapters.md](adapters.md) for details.
 
 Top-level config (examples/default/config.toml)
 - [proxy]: service identity, logging level, and store_dir
@@ -15,16 +21,21 @@ Top-level config (examples/default/config.toml)
 - [middleware_types.*]: built-in or custom middleware types
 
 Pipeline files (examples/default/pipelines/*.toml)
-- [pipelines.<name>]: binds a set of endpoints, middleware, and backends to one or more networks
-  - networks: list of network names from the top-level config
-  - endpoints: list of endpoint names defined in this file
-  - middleware: list of middleware names defined in this file
-  - backends: list of backend names defined in this file
-- [middleware.<name>]: middleware instances and their config
-- [endpoints.<name>]: endpoint instances and their config
-- [backends.<name>]: backend instances and their config
-- [targets.<name>]: concrete destinations that a backend selects from
-- [endpoint_types.*], [service_types.*]: register built-in or custom types
+- `[pipelines.<name>]`: binds a set of endpoints, middleware, and backends to one or more networks
+  - `networks`: list of network names from the top-level config
+  - `endpoints`: list of endpoint names defined in this file
+  - `middleware`: ordered list of middleware names (applied in sequence)
+  - `backends`: list of backend names defined in this file
+- `[middleware.<name>]`: middleware instances and their config
+- `[endpoints.<name>]`: endpoint instances with service type and options
+- `[backends.<name>]`: backend instances with service type and target configuration
+- `[targets.<name>]`: concrete destinations that a backend selects from
+- `[endpoint_types.*]`, `[service_types.*]`: register built-in or custom types
+
+**Protocol adapters** are spawned automatically:
+- **HttpAdapter**: Started for pipelines with HTTP/FHIR/JMIX/DICOMweb endpoints
+- **DimseAdapter**: Started for pipelines with DICOM DIMSE endpoints
+- See `src/lib.rs::run()` for orchestration logic
 
 Validation expectations
 - Networks must define valid HTTP bind_address and non-zero bind_port

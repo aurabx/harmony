@@ -1,6 +1,13 @@
 # DIMSE Integration
 
-Harmony integrates DIMSE via a dedicated `dimse` crate that orchestrates DCMTK CLI tools for networking today (SCU/SCP). Native DIMSE networking is planned. This enables both DICOM endpoint operations (SCP - Service Class Provider) and backend operations (SCU - Service Class User).
+**Last Updated**: 2025-01-18 (Phase 6)
+
+Harmony integrates DIMSE via:
+- **DimseAdapter**: Protocol adapter for DICOM DIMSE network operations (SCP)
+- **DICOM Backend**: Service Class User (SCU) for outbound DIMSE operations
+- **DCMTK CLI orchestration**: Current implementation uses DCMTK tools; native DIMSE networking is planned
+
+This enables both DICOM endpoint operations (SCP - Service Class Provider) and backend operations (SCU - Service Class User).
 
 ## Prerequisites
 
@@ -9,15 +16,44 @@ Harmony integrates DIMSE via a dedicated `dimse` crate that orchestrates DCMTK C
   - macOS (Homebrew): `brew install dcmtk`
   - Debian/Ubuntu: `sudo apt-get install dcmtk`
 
-## Architecture
+## Architecture (Phase 6)
 
 ```
-HTTP Request → Harmony Proxy → DIMSE Crate → DICOM Network
-                    ↓
-              Service Types:
-              - Endpoint (SCP): HTTP→DIMSE bridge  
-              - Backend (SCU): Outbound DICOM operations
+DIMSE Network Request
+  ↓
+DimseAdapter (SCP listener)
+  ↓ Converts to
+RequestEnvelope
+  ↓
+PipelineExecutor
+  ├─ Incoming Middleware
+  ├─ Backend (SCU or HTTP)
+  └─ Outgoing Middleware
+  ↓
+ResponseEnvelope
+  ↓ Converts back
+DimseAdapter
+  ↓
+DIMSE Network Response
 ```
+
+**OR** HTTP → DICOM Backend:
+
+```
+HTTP Request
+  ↓
+HttpAdapter
+  ↓ Converts to
+RequestEnvelope
+  ↓
+PipelineExecutor
+  ├─ Incoming Middleware (sets dimse_op metadata)
+  └─ DICOM Backend (SCU)
+  ↓
+C-ECHO/C-FIND/C-MOVE/C-GET to PACS
+```
+
+See [adapters.md](adapters.md) for protocol adapter details.
 
 ## Service Configuration
 
@@ -46,7 +82,7 @@ use_tls = false
 
 ### Endpoint Usage (SCP - Service Class Provider)
 
-When configured as an endpoint, the DICOM service accepts DICOM network connections (SCP). Inbound DIMSE is converted to Harmony Request Envelopes and processed by the pipeline that references this endpoint.
+When configured as an endpoint, the DICOM service accepts DICOM network connections via **DimseAdapter**. Inbound DIMSE is converted to `RequestEnvelope` and processed by the unified `PipelineExecutor`.
 
 ```toml
 [endpoints.dicom_scp]
@@ -58,9 +94,13 @@ local_aet = "HARMONY_SCP"
 # port = 11112
 ```
 
-Important:
-- The pipeline determines how inbound DICOM is processed. The pipeline references the DICOM endpoint in its endpoints list, and the SCP is started automatically for that pipeline.
-- To build an HTTP→DICOM bridge, use an HTTP endpoint together with a DICOM backend (SCU) in the same pipeline (see below).
+**How it works (Phase 6)**:
+1. **DimseAdapter** is automatically spawned by the orchestrator (`src/lib.rs::run()`) when a pipeline references a DICOM endpoint
+2. Inbound DIMSE requests (C-FIND, C-STORE, etc.) are converted to `RequestEnvelope`
+3. **PipelineExecutor** processes the envelope through middleware and backends
+4. Response is converted back to DIMSE and sent to the calling AET
+
+**HTTP→DICOM bridge**: Use an HTTP endpoint with a DICOM backend (SCU) in the same pipeline (see below).
 
 ## Usage Examples
 

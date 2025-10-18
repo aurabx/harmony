@@ -1,6 +1,10 @@
 # Management API
 
+**Last Updated**: 2025-01-18 (Phase 6)
+
 The Management API provides administrative endpoints for monitoring and inspecting the Harmony proxy at runtime. It is disabled by default for security and must be explicitly enabled in the configuration.
+
+**Note**: The Management API continues to work unchanged in Phase 6. It runs through the same `HttpAdapter` and `PipelineExecutor` as other HTTP endpoints, but is isolated on a dedicated management network.
 
 ## Configuration
 

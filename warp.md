@@ -68,7 +68,8 @@ cargo clippy --all-targets -- -D warnings
 - [docs/testing.md](docs/testing.md) - Testing strategy and commands
 - [docs/security.md](docs/security.md) - Security guidance and best practices
 - [docs/system-description.md](docs/system-description.md) - High-level system overview and Runbeam architecture
-- [docs/router.md](docs/router.md) - Router behavior and request flow (Endpoint → Middleware → Service → Backend)
+- [docs/router.md](docs/router.md) - Pipeline architecture and request flow (Protocol Adapter → PipelineExecutor → Protocol Adapter)
+- [docs/adapters.md](docs/adapters.md) - Protocol adapter guide (HTTP, DIMSE, future protocols)
 - [docs/envelope.md](docs/envelope.md) - Core Envelope struct for data exchange
 - [docs/endpoints.md](docs/endpoints.md) - Endpoint types (HTTP, FHIR, JMIX, DICOMweb)
 - [docs/backends.md](docs/backends.md) - Backend types and target communication

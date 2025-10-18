@@ -1,11 +1,39 @@
-# About
+# System Description
 
-Harmony is a proxy/gateway that is designed to handle, transform and proxy data between different systems.
+**Last Updated**: 2025-01-18 (Phase 6)
 
-See also:
-- [Backends](backends.md)
-- [Endpoints](endpoints.md)
-- [Middleware](middleware.md)
+Harmony is a proxy/gateway designed to handle, transform, and route data between different systems using a **protocol-agnostic architecture**.
+
+## Key Components
+
+- **[Protocol Adapters](adapters.md)**: Handle protocol-specific I/O (HTTP, DIMSE, HL7, etc.)
+- **[Pipeline](router.md)**: Unified execution engine for all protocols
+- **[Endpoints](endpoints.md)**: Protocol entry points (HTTP paths, DICOM AE titles, etc.)
+- **[Middleware](middleware.md)**: Authentication, transformation, and enrichment
+- **[Backends](backends.md)**: Communication with external systems
+- **[Envelopes](envelope.md)**: Protocol-agnostic data exchange format
+
+## Architecture
+
+```
+Protocol Request (HTTP/DIMSE/HL7/...)
+  ↓
+Protocol Adapter (HttpAdapter/DimseAdapter/...)
+  ↓ Converts to
+RequestEnvelope (protocol-agnostic)
+  ↓
+PipelineExecutor (unified business logic)
+  ├─ Endpoint Service
+  ├─ Incoming Middleware
+  ├─ Backend
+  └─ Outgoing Middleware
+  ↓
+ResponseEnvelope
+  ↓ Converts back
+Protocol Adapter
+  ↓
+Protocol Response
+```
 
 
 ### Runbeam Architecture

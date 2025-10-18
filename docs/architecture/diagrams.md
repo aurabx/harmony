@@ -1,94 +1,4 @@
 # Architecture Diagrams
-
-## Current Architecture (Before Refactoring)
-
-### HTTP Request Flow
-```
-┌─────────────────────────────────────────────────────────────┐
-│                       HTTP Request                          │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                     Axum Router                             │
-│                   (HTTP-specific)                           │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    Dispatcher.rs                            │
-│              (Tightly coupled to HTTP)                      │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ 1. Convert HTTP Request → RequestEnvelope            │  │
-│  │ 2. Process incoming middleware (left)                │  │
-│  │ 3. Process backends                                  │  │
-│  │ 4. Process outgoing middleware (right)               │  │
-│  │ 5. Convert ResponseEnvelope → HTTP Response          │  │
-│  └──────────────────────────────────────────────────────┘  │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    HTTP Response                            │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### DIMSE Request Flow (Current - BROKEN)
-```
-┌─────────────────────────────────────────────────────────────┐
-│                   DIMSE Request                             │
-│              (C-FIND / C-MOVE / C-STORE)                    │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                    DIMSE SCP                                │
-│         (Launched as side effect of                         │
-│          HTTP router building)                              │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│              pipeline_query_provider.rs                     │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│               pipeline_runner.rs                            │
-│            (DUPLICATE & BROKEN LOGIC)                       │
-│  ┌──────────────────────────────────────────────────────┐  │
-│  │ ❌ Returns RequestEnvelope (WRONG!)                  │  │
-│  │ ❌ Cannot convert back to DIMSE properly             │  │
-│  │ ❌ Duplicates dispatcher middleware logic            │  │
-│  │ ❌ Backend processing broken                         │  │
-│  └──────────────────────────────────────────────────────┘  │
-└────────────────────────┬────────────────────────────────────┘
-                         │
-                         ▼
-┌─────────────────────────────────────────────────────────────┐
-│                 ??? BROKEN ???                              │
-│    (Cannot properly convert RequestEnvelope                 │
-│          back to DIMSE response)                            │
-└─────────────────────────────────────────────────────────────┘
-```
-
-### Problems with Current Architecture
-```
-╔═══════════════════════════════════════════════════════════╗
-║                    ISSUES                                 ║
-╠═══════════════════════════════════════════════════════════╣
-║ 1. HTTP and DIMSE use DIFFERENT pipeline execution paths ║
-║ 2. pipeline_runner.rs DUPLICATES dispatcher logic         ║
-║ 3. DIMSE returns RequestEnvelope (should be Response!)    ║
-║ 4. No way to add HL7, SFTP, etc. without more hacks      ║
-║ 5. Protocol I/O mixed with business logic                 ║
-╚═══════════════════════════════════════════════════════════╝
-```
-
----
-
-## Target Architecture (After Refactoring)
-
 ### Unified Request Flow (All Protocols)
 ```
 ┌──────────────────┐  ┌──────────────────┐  ┌──────────────────┐
@@ -222,73 +132,7 @@
 ```
 
 ---
-
-## Module Structure
-
-### Before
-```
-src/
-├── router/
-│   ├── mod.rs
-│   ├── dispatcher.rs          ← HTTP-specific, inline pipeline exec
-│   ├── pipeline_runner.rs     ← DUPLICATE & BROKEN 🗑️
-│   ├── scp_launcher.rs        ← Side effect launcher 🗑️
-│   └── route_config.rs
-├── integrations/
-│   └── dimse/
-│       ├── mod.rs
-│       └── pipeline_query_provider.rs  ← Uses broken pipeline_runner
-└── models/
-    └── services/
-        └── services.rs        ← HTTP-specific response handling
-```
-
-### After
-```
-src/
-├── pipeline/                  ← NEW: Protocol-agnostic core
-│   ├── mod.rs
-│   ├── executor.rs           ← SINGLE SOURCE OF TRUTH ⭐
-│   └── tests.rs
-│
-├── adapters/                  ← NEW: Protocol-specific I/O
-│   ├── mod.rs                ← ProtocolAdapter trait
-│   ├── http/
-│   │   ├── mod.rs           ← HttpAdapter
-│   │   └── router.rs
-│   ├── dimse/
-│   │   ├── mod.rs           ← DimseAdapter
-│   │   └── query_provider.rs
-│   └── hl7_mllp/            ← Future: Easy to add
-│       └── mod.rs
-│
-├── router/
-│   ├── mod.rs               ← Thinned, delegates to adapters
-│   ├── dispatcher.rs        ← Thinned, no pipeline exec
-│   └── route_config.rs
-│
-├── integrations/            ← May be deprecated/moved
-│   └── dimse/
-│       └── ...              ← Moved to adapters/dimse
-│
-└── models/
-    └── services/
-        └── services.rs      ← Add endpoint_outgoing_protocol()
-```
-
----
-
-## Data Flow Comparison
-
-### Current (Broken)
-```
-HTTP:  Request → Dispatcher → Middleware → Backend → Response ✅
-DIMSE: Request → SCP → pipeline_runner → ❌ Wrong type → ??? ❌
-
-Different paths, duplicate logic, broken DIMSE
-```
-
-### Target (Fixed)
+## Data Flow
 ```
 HTTP:  Request → HttpAdapter → PipelineExecutor → HttpAdapter → Response ✅
 DIMSE: Request → DimseAdapter → PipelineExecutor → DimseAdapter → Response ✅
@@ -297,47 +141,8 @@ HL7:   Request → Hl7Adapter → PipelineExecutor → Hl7Adapter → Response �
 Same path, single logic, all protocols work correctly
 ```
 
----
-
-## Adding New Protocols
-
-### Current Architecture (Hard)
-```
-❌ To add HL7 MLLP:
-1. Hack around HTTP router
-2. Duplicate pipeline_runner logic (broken)
-3. Try to work around Axum types
-4. Fight with type mismatches
-5. Give up or create more hacks
-```
-
-### Target Architecture (Easy)
-```
-✅ To add HL7 MLLP:
-1. Create Hl7MllpAdapter
-2. Implement protocol I/O (listen, parse, format)
-3. Convert HL7 ↔ ProtocolCtx ↔ Envelope
-4. Call PipelineExecutor (already works!)
-5. Done! ✨
-```
-
----
 
 ## Orchestration Flow
-
-### Current (HTTP-only spawning)
-```rust
-// src/lib.rs
-pub async fn run(config: Config) {
-    for (network_name, network) in &config.network {
-        tokio::spawn(async move {
-            // Only HTTP server spawned
-            let router = build_network_router(config, network_name).await;
-            serve(listener, router).await
-        });
-    }
-}
-```
 
 ### Target (Protocol-aware spawning)
 ```rust
@@ -375,9 +180,3 @@ pub async fn run(config: Config) {
     }
 }
 ```
-
----
-
-## Summary
-
-The target architecture treats all protocols as first-class citizens through a unified adapter pattern, with a single protocol-agnostic pipeline executor that handles all middleware and backend processing. This eliminates duplicate logic, fixes the DIMSE return type bug, and makes it trivial to add new protocols.

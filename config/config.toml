@@ -103,7 +103,7 @@ module=""
 [middleware_types.transform]
 module=""
 
-# DICOMweb <-> DICOM bridge middleware (RECOMMENDED - replaces both middlewares below)
+# DICOMweb <-> DICOM bridge middleware
 [middleware_types.dicomweb_bridge]
 module=""
 

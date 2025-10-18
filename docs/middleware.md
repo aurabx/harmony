@@ -1,9 +1,24 @@
 # Middleware
 
-Middleware extends the request/response pipeline to authenticate, enrich, or transform the Envelope as it flows between endpoints and backends.
+**Last Updated**: 2025-01-18 (Phase 6)
 
-- Authentication middleware runs at the start of the pipeline (endpoint side)
-- Transformation middleware can run before requests are sent to backends and/or on responses
+Middleware extends the request/response pipeline to authenticate, enrich, or transform the `RequestEnvelope` and `ResponseEnvelope` as they flow through the `PipelineExecutor`.
+
+## Architecture
+
+Middleware operates within the unified `PipelineExecutor` (see [router.md](router.md)) and processes envelopes for all protocols (HTTP, DIMSE, HL7, etc.).
+
+```
+RequestEnvelope → Incoming Middleware<RequestEnvelope> → Backend<ResponseEnvelope> → Outgoing Middleware<ResponseEnvelope>
+```
+
+**Middleware types**:
+- **Authentication**: Should be run early in the pipeline (incoming side)
+- **Transformation**: Can run on incoming requests ("left"), outgoing responses ("right"), or both
+- **Path filtering**: Rejects requests based on URL patterns
+- **Metadata transformation**: Modifies request metadata for routing decisions
+
+**Key principle**: Middleware is protocol-agnostic. It works with envelopes, not raw protocol data.
 
 ## Error Handling
 
