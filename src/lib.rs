@@ -47,31 +47,56 @@ pub fn collect_required_dimse_scps(config: &Config) -> Vec<PersistentScpSpec> {
         };
         
         // Check if persistent Store SCP is required
-        let persistent_scp = options
+        // Either explicitly requested OR auto-detected for DICOM backends that could use C-MOVE
+        let explicit_persistent_scp = options
             .get("persistent_store_scp")
             .and_then(|v| v.as_bool())
             .unwrap_or(false);
             
-        if !persistent_scp {
+        // Auto-detect: if this is a DICOM backend with remote host/port, it likely needs SCP for C-MOVE
+        let has_remote_connection = options.contains_key("host") && options.contains_key("port");
+        let needs_persistent_scp = explicit_persistent_scp || has_remote_connection;
+            
+        if !needs_persistent_scp {
             continue;
         }
         
-        // Validate that incoming_store_port is present
+        // Get or assign incoming_store_port
         let port = match options.get("incoming_store_port").and_then(|v| v.as_u64()) {
             Some(p) if (1..=65535).contains(&p) => p as u16,
             Some(p) => {
                 tracing::warn!(
-                    "Backend '{}' has persistent_store_scp=true but invalid incoming_store_port={}, skipping SCP",
+                    "Backend '{}' has invalid incoming_store_port={}, skipping SCP",
                     backend_name, p
                 );
                 continue;
             }
             None => {
-                tracing::warn!(
-                    "Backend '{}' has persistent_store_scp=true but missing incoming_store_port, skipping SCP",
-                    backend_name
-                );
-                continue;
+                // Auto-assign a port if not explicitly set
+                if explicit_persistent_scp {
+                    tracing::warn!(
+                        "Backend '{}' has persistent_store_scp=true but missing incoming_store_port, skipping SCP",
+                        backend_name
+                    );
+                    continue;
+                } else {
+                    // For auto-detected backends, use a reasonable default port
+                    // Use the remote port + 10000 to avoid conflicts, or 11112 as fallback
+                    if let Some(remote_port) = options.get("port").and_then(|v| v.as_u64()) {
+                        let suggested_port = (remote_port + 10000).min(65535) as u16;
+                        if suggested_port > 1024 { // Avoid privileged ports
+                            tracing::debug!(
+                                "Auto-assigning incoming_store_port={} for backend '{}' (remote_port + 10000)",
+                                suggested_port, backend_name
+                            );
+                            suggested_port
+                        } else {
+                            11112 // Safe default
+                        }
+                    } else {
+                        11112 // Safe default
+                    }
+                }
             }
         };
         
