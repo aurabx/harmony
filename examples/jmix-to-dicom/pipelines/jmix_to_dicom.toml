@@ -21,6 +21,10 @@ backends = ["dicom_pacs"]
 service = "jmix"
 [endpoints.jmix_api.options]
 path_prefix = "/jmix"
+# DICOM retrieval operation: "get" (default) or "move"
+# - "get" (C-GET): Works without PACS-side AE configuration, images received directly
+# - "move" (C-MOVE): Requires PACS to know SCU's AE title and network address
+dimse_operation = "get"
 # Performance optimization flags
 skip_hashing = true   # Skip SHA256 hashing for faster processing
 skip_listing = true   # Skip DICOM files from files.json manifest
