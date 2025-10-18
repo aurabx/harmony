@@ -54,7 +54,8 @@ impl PipelineExecutor {
     /// 2. Incoming middleware chain (left)
     /// 3. Backend invocation
     /// 4. Outgoing middleware chain (right)
-    /// 5. Return ResponseEnvelope
+    /// 5. Endpoint service post-processing (protocol-aware)
+    /// 6. Return ResponseEnvelope
     /// 
     /// # Arguments
     /// * `envelope` - The request envelope to process
@@ -86,7 +87,10 @@ impl PipelineExecutor {
         let response = Self::process_backends(envelope, pipeline, config).await?;
 
         // 4. Outgoing middleware chain (right)
-        let response = Self::process_outgoing_middleware(response, pipeline, config).await?;
+        let mut response = Self::process_outgoing_middleware(response, pipeline, config).await?;
+
+        // 5. Endpoint service post-processing (protocol-aware)
+        Self::process_endpoint_outgoing(&mut response, pipeline, config, ctx).await?;
 
         tracing::info!("Pipeline execution completed successfully");
         Ok(response)
@@ -294,6 +298,44 @@ impl PipelineExecutor {
         })?;
 
         Ok(processed_envelope)
+    }
+
+    /// Process endpoint outgoing response (protocol-aware)
+    async fn process_endpoint_outgoing(
+        envelope: &mut ResponseEnvelope<Vec<u8>>,
+        pipeline: &Pipeline,
+        config: &Config,
+        ctx: &ProtocolCtx,
+    ) -> Result<(), PipelineError> {
+        tracing::debug!("Processing endpoint outgoing response");
+
+        // Get first endpoint from pipeline
+        let endpoint_name = pipeline
+            .endpoints
+            .first()
+            .ok_or_else(|| PipelineError::ConfigError("No endpoints in pipeline".to_string()))?;
+
+        let endpoint = config
+            .endpoints
+            .get(endpoint_name)
+            .ok_or_else(|| {
+                PipelineError::ConfigError(format!("Endpoint '{}' not found", endpoint_name))
+            })?;
+
+        let service = endpoint
+            .resolve_service()
+            .map_err(|e| PipelineError::ServiceError(format!("Failed to resolve service: {}", e)))?;
+
+        let empty_options = HashMap::new();
+        let options = endpoint.options.as_ref().unwrap_or(&empty_options);
+
+        // Call protocol-aware endpoint outgoing hook
+        service
+            .endpoint_outgoing_protocol(envelope, ctx, options)
+            .await
+            .map_err(|e| PipelineError::ServiceError(format!("Endpoint outgoing failed: {}", e)))?;
+
+        Ok(())
     }
 }
 

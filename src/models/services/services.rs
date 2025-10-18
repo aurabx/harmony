@@ -140,7 +140,28 @@ where
         options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error>;
 
+    /// Protocol-aware response processing hook
+    /// 
+    /// This method is called during pipeline execution to allow services to
+    /// modify the ResponseEnvelope based on the protocol context (HTTP, DIMSE, etc.).
+    /// Services can use this to add protocol-specific headers, metadata, or transformations.
+    /// 
+    /// Default implementation does nothing (no-op).
+    async fn endpoint_outgoing_protocol(
+        &self,
+        _envelope: &mut ResponseEnvelope<Vec<u8>>,
+        _ctx: &crate::models::protocol::ProtocolCtx,
+        _options: &HashMap<String, Value>,
+    ) -> Result<(), Error> {
+        // Default: no-op, services can override for protocol-specific behavior
+        Ok(())
+    }
+
     /// Handles the response stage, converting ResponseEnvelope back into an HTTP response
+    /// 
+    /// NOTE: This is HTTP-specific and will be deprecated in favor of protocol-specific
+    /// adapters handling the final conversion. Use endpoint_outgoing_protocol() for
+    /// protocol-agnostic response processing.
     async fn endpoint_outgoing_response(
         &self,
         envelope: ResponseEnvelope<Vec<u8>>,
