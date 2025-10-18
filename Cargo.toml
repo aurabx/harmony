@@ -52,6 +52,8 @@ tempfile = "3.10"
 uuid = { version = "1", features = ["v4"] }
 redb = "2.1"
 matchit = "0.8"
+anyhow = "1.0.100"
+tokio-util = "0.7.16"
 
 [dev-dependencies]
 tokio-test = "0.4"
