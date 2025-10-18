@@ -1,5 +1,5 @@
 use crate::config::config::ConfigError;
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use async_trait::async_trait;
 use axum::{body::Body, response::Response};
@@ -451,7 +451,7 @@ impl ServiceType for MockDicomEndpoint {
             .cloned()
             .unwrap_or_else(|| "DIMSE".into());
         let uri = format!("mock-dicom://scp/{}", op.to_lowercase());
-        let details = RequestDetails {
+        let backend_request_details = RequestDetails {
             method: op,
             uri,
             headers: Map::new(),
@@ -463,9 +463,12 @@ impl ServiceType for MockDicomEndpoint {
 
         // Prefer normalized_data as the JSON body if payload is JSON
         let normalized: Option<serde_json::Value> = serde_json::from_slice(&ctx.payload).ok();
+        // @todo We shouldnt really need this but currently it's required
+        let request_details = backend_request_details.clone();
 
         Ok(RequestEnvelope {
-            request_details: details,
+            request_details,
+            backend_request_details,
             original_data: ctx.payload,
             normalized_data: normalized,
             normalized_snapshot: None,
@@ -477,64 +480,86 @@ impl ServiceType for MockDicomEndpoint {
 impl ServiceHandler<Value> for MockDicomEndpoint {
     type ReqBody = Value;
 
-    async fn transform_request(
-        &self,
-        mut envelope: RequestEnvelope<Vec<u8>>,
-        options: &HashMap<String, Value>,
-    ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-        self.handle_backend_request(&mut envelope, options).await
-    }
-
-    async fn transform_response(
+    async fn endpoint_incoming_request(
         &self,
         envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
-    ) -> Result<Response, Error> {
-        let nd = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
-        let response_meta = nd.get("response");
+    ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
+        // Mock backend: Pass through without processing
+        //
+        // Important: The mock backend intentionally does NOT generate its response here.
+        // If we did, the incoming middleware (which runs AFTER this method) would overwrite
+        // our response data with request metadata (e.g., dimse_identifier).
+        //
+        // Instead, we wait for backend_outgoing_request (which runs AFTER middleware) to
+        // generate the mock response based on the middleware-processed request.
+        Ok(envelope)
+    }
 
-        let status = response_meta
-            .and_then(|m| m.get("status"))
-            .and_then(|s| s.as_u64())
-            .and_then(|code| http::StatusCode::from_u16(code as u16).ok())
+    async fn backend_outgoing_request(
+        &self,
+        mut envelope: RequestEnvelope<Vec<u8>>,
+        options: &HashMap<String, Value>,
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
+        // Handle the backend request (after incoming middleware has run)
+        // This is where the mock backend generates its response based on the processed request
+        let processed_envelope = self.handle_backend_request(&mut envelope, options).await?;
+
+        // Convert to ResponseEnvelope
+        let status = 200;
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+
+        // Use the result from handle_backend_request as the response normalized_data
+        let body = if let Some(ref normalized) = processed_envelope.normalized_data {
+            serde_json::to_vec(normalized).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let mut response_envelope = ResponseEnvelope::from_backend(
+            processed_envelope.request_details.clone(),
+            status,
+            headers,
+            body,
+            None,
+        );
+
+        // Set the response normalized_data from the backend result
+        response_envelope.normalized_data = processed_envelope.normalized_data.clone();
+
+        Ok(response_envelope)
+    }
+
+    async fn endpoint_outgoing_response(
+        &self,
+        envelope: ResponseEnvelope<Vec<u8>>,
+        _options: &HashMap<String, Value>,
+    ) -> Result<Response, Error> {
+        // Build response from ResponseEnvelope
+        let status = http::StatusCode::from_u16(envelope.response_details.status)
             .unwrap_or(http::StatusCode::OK);
 
         let mut builder = Response::builder().status(status);
-        let mut has_content_type = false;
 
-        if let Some(hdrs) = response_meta
-            .and_then(|m| m.get("headers"))
-            .and_then(|h| h.as_object())
-        {
-            for (k, v) in hdrs.iter() {
-                if let Some(val_str) = v.as_str() {
-                    if k.eq_ignore_ascii_case("content-type") {
-                        has_content_type = true;
-                    }
-                    builder = builder.header(k.as_str(), val_str);
-                }
-            }
+        // Add headers from response_details
+        for (k, v) in &envelope.response_details.headers {
+            builder = builder.header(k.as_str(), v.as_str());
         }
 
-        if let Some(body_str) = response_meta
-            .and_then(|m| m.get("body"))
-            .and_then(|b| b.as_str())
-        {
-            return builder
-                .body(Body::from(body_str.to_string()))
-                .map_err(|_| Error::from("Failed to construct mock DICOM HTTP response"));
-        }
-
-        let body_str = serde_json::to_string(&nd).map_err(|_| {
-            Error::from("Failed to serialize mock DICOM response payload into JSON")
-        })?;
-
-        if !has_content_type {
-            builder = builder.header("content-type", "application/json");
-        }
+        // Use original_data if available, otherwise serialize normalized_data
+        let body = if !envelope.original_data.is_empty() {
+            Body::from(envelope.original_data)
+        } else if let Some(normalized) = envelope.normalized_data {
+            let body_bytes = serde_json::to_vec(&normalized)
+                .map_err(|_| Error::from("Failed to serialize mock DICOM response JSON"))?;
+            Body::from(body_bytes)
+        } else {
+            Body::empty()
+        };
 
         builder
-            .body(Body::from(body_str))
+            .body(body)
             .map_err(|_| Error::from("Failed to construct mock DICOM HTTP response"))
     }
 }
@@ -688,7 +713,7 @@ impl MockDicomEndpoint {
             .map(|s| s.to_string())
             .or_else(|| envelope.request_details.metadata.get("path").cloned())
             .unwrap_or_default();
-            
+
         let op = envelope
             .normalized_data
             .as_ref()

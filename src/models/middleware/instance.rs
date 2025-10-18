@@ -1,5 +1,5 @@
-use std::collections::HashMap;
 use serde::Deserialize;
+use std::collections::HashMap;
 
 #[derive(Debug, Deserialize, Clone)]
 pub struct MiddlewareInstance {
@@ -11,8 +11,13 @@ pub struct MiddlewareInstance {
 
 impl MiddlewareInstance {
     /// Resolves the middleware type using the centralized middleware resolver
-    pub fn resolve_middleware(&self) -> Result<Box<dyn crate::models::middleware::middleware::Middleware>, String> {
-        crate::models::middleware::middleware::resolve_middleware_type(&self.middleware_type, &self.options)
+    pub fn resolve_middleware(
+        &self,
+    ) -> Result<Box<dyn crate::models::middleware::middleware::Middleware>, String> {
+        crate::models::middleware::middleware::resolve_middleware_type(
+            &self.middleware_type,
+            &self.options,
+        )
     }
 }
 

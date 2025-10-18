@@ -1,9 +1,9 @@
 pub mod chain;
 pub mod config;
+pub(crate) mod instance;
 #[allow(clippy::module_inception)]
 pub mod middleware;
 pub mod types;
-pub(crate) mod instance;
 
 // Re-export AuthFailure for easier access
 pub use types::auth_error::AuthFailure;

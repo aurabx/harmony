@@ -2,7 +2,7 @@ pub(crate) use self::config::ManagementConfig;
 use self::info::handle_info;
 use self::pipelines::handle_pipelines;
 use crate::config::config::ConfigError;
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::pipelines::config::Pipeline;
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
@@ -92,7 +92,7 @@ impl ServiceType for ManagementEndpoint {
 impl ServiceHandler<Value> for ManagementEndpoint {
     type ReqBody = Value;
 
-    async fn transform_request(
+    async fn endpoint_incoming_request(
         &self,
         envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
@@ -101,11 +101,12 @@ impl ServiceHandler<Value> for ManagementEndpoint {
         Ok(envelope)
     }
 
-    async fn transform_response(
+    async fn backend_outgoing_request(
         &self,
         envelope: RequestEnvelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Response, Error> {
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
+        // Management endpoints generate responses directly (no backend call)
         // Extract the path from metadata to determine the handler
         let path = envelope
             .request_details
@@ -165,13 +166,54 @@ impl ServiceHandler<Value> for ManagementEndpoint {
             _ => serde_json::json!({"error": "Not found"}),
         };
 
-        let body = serde_json::to_string(&response_value)
+        let body = serde_json::to_vec(&response_value)
             .map_err(|_| Error::from("Failed to serialize management response"))?;
 
-        Response::builder()
-            .status(200)
-            .header("content-type", "application/json")
-            .body(Body::from(body))
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+
+        let mut response_envelope = ResponseEnvelope::from_backend(
+            envelope.request_details.clone(),
+            200,
+            headers,
+            body,
+            None,
+        );
+
+        response_envelope.normalized_data = Some(response_value);
+
+        Ok(response_envelope)
+    }
+
+    async fn endpoint_outgoing_response(
+        &self,
+        envelope: ResponseEnvelope<Vec<u8>>,
+        _options: &HashMap<String, Value>,
+    ) -> Result<Response, Error> {
+        // Build response from ResponseEnvelope
+        let status = http::StatusCode::from_u16(envelope.response_details.status)
+            .unwrap_or(http::StatusCode::OK);
+
+        let mut builder = Response::builder().status(status);
+
+        // Add headers from response_details
+        for (k, v) in &envelope.response_details.headers {
+            builder = builder.header(k.as_str(), v.as_str());
+        }
+
+        // Use original_data if available, otherwise serialize normalized_data
+        let body = if !envelope.original_data.is_empty() {
+            Body::from(envelope.original_data)
+        } else if let Some(normalized) = envelope.normalized_data {
+            let body_bytes = serde_json::to_vec(&normalized)
+                .map_err(|_| Error::from("Failed to serialize management response JSON"))?;
+            Body::from(body_bytes)
+        } else {
+            Body::empty()
+        };
+
+        builder
+            .body(body)
             .map_err(|_| Error::from("Failed to construct management response"))
     }
 }

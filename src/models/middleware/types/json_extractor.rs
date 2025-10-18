@@ -1,4 +1,4 @@
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 
@@ -37,8 +37,9 @@ impl Middleware for JsonExtractorMiddleware {
 
     async fn right(
         &self,
-        envelope: RequestEnvelope<serde_json::Value>,
-    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
+        envelope: ResponseEnvelope<serde_json::Value>,
+    ) -> Result<ResponseEnvelope<serde_json::Value>, Error> {
+        // JSON extraction not needed on response side (dispatcher handles it)
         Ok(envelope)
     }
 }

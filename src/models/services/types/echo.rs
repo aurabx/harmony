@@ -1,5 +1,5 @@
 use crate::config::config::ConfigError;
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
@@ -65,7 +65,7 @@ impl ServiceType for EchoEndpoint {
 impl ServiceHandler<Value> for EchoEndpoint {
     type ReqBody = Value;
 
-    async fn transform_request(
+    async fn endpoint_incoming_request(
         &self,
         mut envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
@@ -96,58 +96,98 @@ impl ServiceHandler<Value> for EchoEndpoint {
         Ok(envelope)
     }
 
-    async fn transform_response(
+    async fn backend_outgoing_request(
         &self,
-        envelope: RequestEnvelope<Vec<u8>>,
+        mut envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
-    ) -> Result<Response, Error> {
-        // Convention: response metadata may be present at normalized_data.response
-        let nd = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
-        let response_meta = nd.get("response");
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
+        // Echo service generates response directly from request (no backend call)
+        // Build echo data structure with path, headers, etc.
+        let subpath = envelope
+            .request_details
+            .metadata
+            .get("path")
+            .cloned()
+            .unwrap_or_default();
+        let full_path = envelope
+            .request_details
+            .metadata
+            .get("full_path")
+            .cloned()
+            .unwrap_or_default();
 
-        // Determine status
-        let status = response_meta
-            .and_then(|m| m.get("status"))
-            .and_then(|s| s.as_u64())
-            .and_then(|code| http::StatusCode::from_u16(code as u16).ok())
-            .unwrap_or(http::StatusCode::OK);
+        // Merge with existing normalized_data if present (to preserve middleware annotations)
+        let mut echo_data = serde_json::json!({
+            "path": subpath,
+            "full_path": full_path,
+            "headers": envelope.request_details.headers,
+            "original_data": envelope.original_data,
+        });
 
-        // Build headers
-        let mut builder = Response::builder().status(status);
-        let mut has_content_type = false;
-        if let Some(hdrs) = response_meta
-            .and_then(|m| m.get("headers"))
-            .and_then(|h| h.as_object())
-        {
-            for (k, v) in hdrs.iter() {
-                if let Some(val_str) = v.as_str() {
-                    if k.eq_ignore_ascii_case("content-type") {
-                        has_content_type = true;
-                    }
-                    builder = builder.header(k.as_str(), val_str);
+        if let Some(existing) = envelope.normalized_data {
+            // Merge existing data into echo_data
+            if let (Some(echo_map), Some(existing_map)) =
+                (echo_data.as_object_mut(), existing.as_object())
+            {
+                for (k, v) in existing_map {
+                    echo_map.insert(k.clone(), v.clone());
                 }
             }
         }
 
-        // Determine body
-        if let Some(body_val) = response_meta
-            .and_then(|m| m.get("body"))
-            .and_then(|b| b.as_str())
-        {
-            // Raw body provided by middleware
-            return builder
-                .body(Body::from(body_val.to_string()))
-                .map_err(|_| Error::from("Failed to construct Echo HTTP response"));
+        envelope.normalized_data = Some(echo_data);
+
+        // Build ResponseEnvelope with normalized_data from the request
+        let status = 200;
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+
+        let body_json =
+            serde_json::to_vec(&envelope.normalized_data).unwrap_or_else(|_| Vec::new());
+
+        let mut response_envelope = ResponseEnvelope::from_backend(
+            envelope.request_details.clone(),
+            status,
+            headers,
+            body_json,
+            None,
+        );
+
+        // Set normalized_data to the echoed content
+        response_envelope.normalized_data = envelope.normalized_data;
+
+        Ok(response_envelope)
+    }
+
+    async fn endpoint_outgoing_response(
+        &self,
+        envelope: ResponseEnvelope<Vec<u8>>,
+        _options: &HashMap<String, Value>,
+    ) -> Result<Response, Error> {
+        // Build response from ResponseEnvelope
+        let status = http::StatusCode::from_u16(envelope.response_details.status)
+            .unwrap_or(http::StatusCode::OK);
+
+        let mut builder = Response::builder().status(status);
+
+        // Add headers from response_details
+        for (k, v) in &envelope.response_details.headers {
+            builder = builder.header(k.as_str(), v.as_str());
         }
 
-        // Fallback to JSON serialization of normalized_data
-        let body_str = serde_json::to_string(&nd)
-            .map_err(|_| Error::from("Failed to serialize Echo response JSON"))?;
-        if !has_content_type {
-            builder = builder.header("content-type", "application/json");
-        }
+        // Use original_data if available, otherwise serialize normalized_data
+        let body = if !envelope.original_data.is_empty() {
+            Body::from(envelope.original_data)
+        } else if let Some(normalized) = envelope.normalized_data {
+            let body_str = serde_json::to_string(&normalized)
+                .map_err(|_| Error::from("Failed to serialize Echo response JSON"))?;
+            Body::from(body_str)
+        } else {
+            Body::empty()
+        };
+
         builder
-            .body(Body::from(body_str))
+            .body(body)
             .map_err(|_| Error::from("Failed to construct Echo HTTP response"))
     }
 }

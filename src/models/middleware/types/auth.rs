@@ -1,4 +1,4 @@
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
 use crate::models::middleware::AuthFailure;
 use crate::utils::Error;
@@ -101,9 +101,9 @@ impl Middleware for AuthSidecarMiddleware {
 
     async fn right(
         &self,
-        envelope: RequestEnvelope<serde_json::Value>,
-    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
-        tracing::info!("Processing auth middleware (right)");
+        envelope: ResponseEnvelope<serde_json::Value>,
+    ) -> Result<ResponseEnvelope<serde_json::Value>, Error> {
+        tracing::debug!("Processing auth middleware (right) - passthrough");
         Ok(envelope)
     }
 }

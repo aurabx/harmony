@@ -1,11 +1,10 @@
 use crate::config::config::{Config, ConfigError};
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::utils::Error;
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
 use serde_json::Value;
 use std::collections::HashMap;
-
 
 // Middleware registry similar to services
 pub static MIDDLEWARE_REGISTRY: OnceCell<HashMap<String, String>> = OnceCell::new();
@@ -110,7 +109,8 @@ fn create_builtin_middleware_type(
             Ok(Box::new(PathFilterMiddleware::new(config)?))
         }
         "metadata_transform" => {
-            let config = crate::models::middleware::types::metadata_transform::parse_config(options)?;
+            let config =
+                crate::models::middleware::types::metadata_transform::parse_config(options)?;
             Ok(Box::new(MetadataTransformMiddleware::new(config)?))
         }
         _ => Err(format!(
@@ -127,12 +127,12 @@ pub fn build_middleware_instances_for_pipeline(
     config: &Config,
 ) -> Result<Vec<Box<dyn Middleware>>, String> {
     let mut instances = Vec::new();
-    
+
     for name in names {
         if let Some(middleware_instance) = config.middleware.get(name) {
-            let middleware = middleware_instance
-                .resolve_middleware()
-                .map_err(|err| format!("Failed to resolve middleware instance '{}': {}", name, err))?;
+            let middleware = middleware_instance.resolve_middleware().map_err(|err| {
+                format!("Failed to resolve middleware instance '{}': {}", name, err)
+            })?;
             instances.push(middleware);
         } else {
             // Fallback: if the name itself corresponds to a built-in middleware type,
@@ -147,7 +147,7 @@ pub fn build_middleware_instances_for_pipeline(
             }
         }
     }
-    
+
     Ok(instances)
 }
 
@@ -165,9 +165,9 @@ pub trait Middleware: Send + Sync {
         envelope: RequestEnvelope<serde_json::Value>,
     ) -> Result<RequestEnvelope<serde_json::Value>, Error>;
 
-    /// Modify the incoming envelope on its way from the backend.
+    /// Modify the response envelope coming from the backend.
     async fn right(
         &self,
-        envelope: RequestEnvelope<serde_json::Value>,
-    ) -> Result<RequestEnvelope<serde_json::Value>, Error>;
+        envelope: ResponseEnvelope<serde_json::Value>,
+    ) -> Result<ResponseEnvelope<serde_json::Value>, Error>;
 }

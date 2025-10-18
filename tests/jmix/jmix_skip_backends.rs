@@ -83,6 +83,11 @@ fn ensure_jmix_envelope(id: &str) -> PathBuf {
 
 #[tokio::test]
 async fn jmix_manifest_and_archive_skip_backends() {
+    // Initialize storage backend before creating test data
+    use harmony::storage::filesystem::FilesystemStorage;
+    let storage = Arc::new(FilesystemStorage::new("./tmp").expect("Failed to create test storage"));
+    harmony::globals::set_storage(storage);
+
     // Prepare a valid JMIX package on disk
     let id = Uuid::new_v4().to_string();
     let pkg_dir = ensure_jmix_envelope(&id);

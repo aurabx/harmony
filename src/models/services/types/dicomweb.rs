@@ -1,5 +1,5 @@
 use crate::config::config::ConfigError;
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
@@ -321,7 +321,7 @@ impl ServiceType for DicomwebEndpoint {
 impl ServiceHandler<Value> for DicomwebEndpoint {
     type ReqBody = Value;
 
-    async fn transform_request(
+    async fn endpoint_incoming_request(
         &self,
         mut envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
@@ -429,86 +429,127 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
         Ok(envelope)
     }
 
-    async fn transform_response(
+    async fn backend_outgoing_request(
         &self,
         envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
-    ) -> Result<Response, Error> {
-        let nd = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
-
-        // Check for DICOMweb-specific response types from middleware
-        if let Some(response_type) = nd.get("dicomweb_response_type").and_then(|v| v.as_str()) {
-            return self.handle_dicomweb_response(response_type, &nd).await;
-        }
-
-        // Fallback to legacy response handling for backward compatibility
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
+        // DICOMweb prepares response in endpoint_incoming_request or middleware
+        // Extract response metadata from normalized_data
+        let nd = envelope
+            .normalized_data
+            .clone()
+            .unwrap_or(serde_json::Value::Null);
         let response_meta = nd.get("response");
 
+        // Extract status code
         let status = response_meta
             .and_then(|m| m.get("status"))
             .and_then(|s| s.as_u64())
-            .and_then(|code| http::StatusCode::from_u16(code as u16).ok())
-            .unwrap_or(http::StatusCode::OK);
+            .unwrap_or(200) as u16;
 
-        let mut builder = Response::builder().status(status);
-        let mut has_content_type = false;
+        // Extract headers
+        let mut headers = HashMap::new();
         if let Some(hdrs) = response_meta
             .and_then(|m| m.get("headers"))
             .and_then(|h| h.as_object())
         {
             for (k, v) in hdrs.iter() {
                 if let Some(val_str) = v.as_str() {
-                    if k.eq_ignore_ascii_case("content-type") {
-                        has_content_type = true;
-                    }
-                    builder = builder.header(k.as_str(), val_str);
+                    headers.insert(k.clone(), val_str.to_string());
                 }
             }
         }
 
-        // body as explicit string
-        if let Some(body_str) = response_meta
-            .and_then(|m| m.get("body"))
-            .and_then(|b| b.as_str())
-        {
-            return builder
-                .body(Body::from(body_str.to_string()))
-                .map_err(|_| Error::from("Failed to construct DICOMweb HTTP response"));
-        }
-
-        // body as base64 (binary)
-        if let Some(body_b64) = response_meta
+        // Build body from various sources
+        let body = if let Some(body_b64) = response_meta
             .and_then(|m| m.get("body_b64"))
             .and_then(|b| b.as_str())
         {
-            let bytes = base64::engine::general_purpose::STANDARD
+            // Binary body (base64-encoded)
+            base64::engine::general_purpose::STANDARD
                 .decode(body_b64)
-                .map_err(|_| Error::from("Failed to decode body_b64"))?;
-            return builder
-                .body(Body::from(bytes))
-                .map_err(|_| Error::from("Failed to construct DICOMweb HTTP response"));
+                .unwrap_or_default()
+        } else if let Some(body_str) = response_meta
+            .and_then(|m| m.get("body"))
+            .and_then(|b| b.as_str())
+        {
+            // String body
+            body_str.as_bytes().to_vec()
+        } else if let Some(json_val) = response_meta.and_then(|m| m.get("json")) {
+            // JSON body
+            serde_json::to_vec(json_val).unwrap_or_default()
+        } else {
+            // Empty body
+            Vec::new()
+        };
+
+        // Ensure content-type is set if not present
+        if !headers.contains_key("content-type") && !headers.contains_key("Content-Type") {
+            headers.insert("content-type".to_string(), "application/json".to_string());
         }
 
-        // body as JSON object under response.json
-        if let Some(json_val) = response_meta.and_then(|m| m.get("json")) {
-            let body_str = serde_json::to_string(json_val)
+        let mut response_envelope = ResponseEnvelope::from_backend(
+            envelope.request_details.clone(),
+            status,
+            headers,
+            body,
+            None,
+        );
+
+        // Preserve normalized_data for special handling in endpoint_outgoing_response
+        response_envelope.normalized_data = envelope.normalized_data;
+
+        Ok(response_envelope)
+    }
+
+    async fn endpoint_outgoing_response(
+        &self,
+        envelope: ResponseEnvelope<Vec<u8>>,
+        _options: &HashMap<String, Value>,
+    ) -> Result<Response, Error> {
+        // Always check normalized_data first for DICOMweb-specific response types from middleware
+        let nd = envelope
+            .normalized_data
+            .clone()
+            .unwrap_or(serde_json::Value::Null);
+
+        tracing::debug!(
+            "DICOMweb endpoint_outgoing_response - normalized_data keys: {:?}",
+            nd.as_object().map(|o| o.keys().collect::<Vec<_>>())
+        );
+
+        if let Some(response_type) = nd.get("dicomweb_response_type").and_then(|v| v.as_str()) {
+            tracing::debug!("Found dicomweb_response_type: {}", response_type);
+            return self.handle_dicomweb_response(response_type, &nd).await;
+        }
+
+        tracing::debug!("No dicomweb_response_type found, using standard handling");
+
+        // Standard ResponseEnvelope handling
+        let status = http::StatusCode::from_u16(envelope.response_details.status)
+            .unwrap_or(http::StatusCode::OK);
+
+        let mut builder = Response::builder().status(status);
+
+        // Add headers from response_details
+        for (k, v) in &envelope.response_details.headers {
+            builder = builder.header(k.as_str(), v.as_str());
+        }
+
+        // Use original_data if available, otherwise serialize normalized_data
+        let body = if !envelope.original_data.is_empty() {
+            Body::from(envelope.original_data)
+        } else if let Some(normalized) = envelope.normalized_data {
+            let body_bytes = serde_json::to_vec(&normalized)
                 .map_err(|_| Error::from("Failed to serialize DICOMweb response JSON"))?;
-            if !has_content_type {
-                builder = builder.header("content-type", "application/json");
-            }
-            return builder
-                .body(Body::from(body_str))
-                .map_err(|_| Error::from("Failed to construct DICOMweb HTTP response"));
-        }
+            Body::from(body_bytes)
+        } else {
+            Body::empty()
+        };
 
-        // default: serialize entire normalized_data
-        let body_str = serde_json::to_string(&nd)
-            .map_err(|_| Error::from("Failed to serialize DICOMweb response payload into JSON"))?;
-        if !has_content_type {
-            builder = builder.header("content-type", "application/json");
-        }
         builder
-            .body(Body::from(body_str))
+            .body(body)
             .map_err(|_| Error::from("Failed to construct DICOMweb HTTP response"))
     }
 }
@@ -516,7 +557,7 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
+    use crate::models::envelope::envelope::{RequestDetails, ResponseDetails, ResponseEnvelope};
     use axum::body::to_bytes;
     use std::collections::HashMap;
 
@@ -540,15 +581,21 @@ mod tests {
             "dicomweb_data": qido_data,
             "dicomweb_metadata": metadata
         });
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata: HashMap::new(),
+        };
 
-        let envelope = RequestEnvelope {
-            request_details: RequestDetails {
-                method: "GET".to_string(),
-                uri: "/dicomweb/studies".to_string(),
+        let envelope = ResponseEnvelope {
+            request_details,
+            response_details: ResponseDetails {
+                status: 200,
                 headers: HashMap::new(),
-                cookies: HashMap::new(),
-                query_params: HashMap::new(),
-                cache_status: None,
                 metadata: HashMap::new(),
             },
             original_data: vec![],
@@ -556,7 +603,9 @@ mod tests {
             normalized_snapshot: None,
         };
 
-        let response = endpoint.transform_response(envelope, &HashMap::new()).await;
+        let response = endpoint
+            .endpoint_outgoing_response(envelope, &HashMap::new())
+            .await;
         assert!(response.is_ok());
 
         let resp = response.unwrap();
@@ -582,15 +631,21 @@ mod tests {
             "dicomweb_data": [],
             "dicomweb_metadata": metadata
         });
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata: HashMap::new(),
+        };
 
-        let envelope = RequestEnvelope {
-            request_details: RequestDetails {
-                method: "GET".to_string(),
-                uri: "/dicomweb/studies".to_string(),
+        let envelope = ResponseEnvelope {
+            request_details,
+            response_details: ResponseDetails {
+                status: 200,
                 headers: HashMap::new(),
-                cookies: HashMap::new(),
-                query_params: HashMap::new(),
-                cache_status: None,
                 metadata: HashMap::new(),
             },
             original_data: vec![],
@@ -598,7 +653,9 @@ mod tests {
             normalized_snapshot: None,
         };
 
-        let response = endpoint.transform_response(envelope, &HashMap::new()).await;
+        let response = endpoint
+            .endpoint_outgoing_response(envelope, &HashMap::new())
+            .await;
         assert!(response.is_ok());
 
         let resp = response.unwrap();
@@ -633,14 +690,21 @@ mod tests {
             "dicomweb_metadata": metadata
         });
 
-        let envelope = RequestEnvelope {
-            request_details: RequestDetails {
-                method: "GET".to_string(),
-                uri: "/dicomweb/studies/1.2.3/series/4.5.6/instances/7.8.9/frames/1".to_string(),
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies/1.2.3/series/4.5.6/instances/7.8.9/frames/1".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata: HashMap::new(),
+        };
+
+        let envelope = ResponseEnvelope {
+            request_details,
+            response_details: ResponseDetails {
+                status: 200,
                 headers: HashMap::new(),
-                cookies: HashMap::new(),
-                query_params: HashMap::new(),
-                cache_status: None,
                 metadata: HashMap::new(),
             },
             original_data: vec![],
@@ -648,7 +712,9 @@ mod tests {
             normalized_snapshot: None,
         };
 
-        let response = endpoint.transform_response(envelope, &HashMap::new()).await;
+        let response = endpoint
+            .endpoint_outgoing_response(envelope, &HashMap::new())
+            .await;
         assert!(response.is_ok());
 
         let resp = response.unwrap();
@@ -686,14 +752,21 @@ mod tests {
             "dicomweb_metadata": metadata
         });
 
-        let envelope = RequestEnvelope {
-            request_details: RequestDetails {
-                method: "GET".to_string(),
-                uri: "/dicomweb/studies/1.2.3/series/4.5.6/instances/7.8.9/frames/1".to_string(),
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies/1.2.3/series/4.5.6/instances/7.8.9/frames/1".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata: HashMap::new(),
+        };
+
+        let envelope = ResponseEnvelope {
+            request_details,
+            response_details: ResponseDetails {
+                status: 200,
                 headers: HashMap::new(),
-                cookies: HashMap::new(),
-                query_params: HashMap::new(),
-                cache_status: None,
                 metadata: HashMap::new(),
             },
             original_data: vec![],
@@ -701,7 +774,9 @@ mod tests {
             normalized_snapshot: None,
         };
 
-        let response = endpoint.transform_response(envelope, &HashMap::new()).await;
+        let response = endpoint
+            .endpoint_outgoing_response(envelope, &HashMap::new())
+            .await;
         assert!(response.is_ok());
 
         let resp = response.unwrap();

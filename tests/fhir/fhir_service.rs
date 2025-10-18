@@ -36,7 +36,7 @@ async fn fhir_endpoint_handles_get_request() {
         description = "Core pipeline"
         networks = ["default"]
         endpoints = ["fhir"]
-        backends = []
+        backends = ["echo"]
         middleware = []
 
         [endpoints.fhir]
@@ -44,7 +44,15 @@ async fn fhir_endpoint_handles_get_request() {
         [endpoints.fhir.options]
         path_prefix = "/fhir"
 
+        [backends.echo]
+        service = "echo"
+        [backends.echo.options]
+        path_prefix = "/fhir"
+
         [services.fhir]
+        module = ""
+
+        [services.echo]
         module = ""
     "#;
 
@@ -93,7 +101,7 @@ async fn fhir_put_is_supported() {
         description = "Core pipeline"
         networks = ["default"]
         endpoints = ["fhir"]
-        backends = []
+        backends = ["echo"]
         middleware = []
 
         [endpoints.fhir]
@@ -101,7 +109,15 @@ async fn fhir_put_is_supported() {
         [endpoints.fhir.options]
         path_prefix = "/fhir"
 
+        [backends.echo]
+        service = "echo"
+        [backends.echo.options]
+        path_prefix = "/fhir"
+
         [services.fhir]
+        module = ""
+
+        [services.echo]
         module = ""
     "#;
 
@@ -150,7 +166,7 @@ async fn fhir_delete_is_supported() {
         description = "Core pipeline"
         networks = ["default"]
         endpoints = ["fhir"]
-        backends = []
+        backends = ["echo"]
         middleware = []
 
         [endpoints.fhir]
@@ -158,7 +174,15 @@ async fn fhir_delete_is_supported() {
         [endpoints.fhir.options]
         path_prefix = "/fhir"
 
+        [backends.echo]
+        service = "echo"
+        [backends.echo.options]
+        path_prefix = "/fhir"
+
         [services.fhir]
+        module = ""
+
+        [services.echo]
         module = ""
     "#;
 
@@ -207,7 +231,7 @@ async fn fhir_backend_is_invoked_in_pipeline() {
         description = "FHIR passthrough"
         networks = ["default"]
         endpoints = ["fhir_endpoint"]
-        backends = ["fhir_backend"]
+        backends = ["echo_backend"]
         middleware = []
 
         [endpoints.fhir_endpoint]
@@ -215,12 +239,15 @@ async fn fhir_backend_is_invoked_in_pipeline() {
         [endpoints.fhir_endpoint.options]
         path_prefix = "/fhir"
 
-        [backends.fhir_backend]
-        service = "fhir"
-        [backends.fhir_backend.options]
+        [backends.echo_backend]
+        service = "echo"
+        [backends.echo_backend.options]
         path_prefix = "/fhir"
 
         [services.fhir]
+        module = ""
+
+        [services.echo]
         module = ""
     "#;
 

@@ -1,4 +1,4 @@
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use async_trait::async_trait;
@@ -95,8 +95,8 @@ impl Middleware for JoltTransformMiddleware {
 
     async fn right(
         &self,
-        mut envelope: RequestEnvelope<serde_json::Value>,
-    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
+        mut envelope: ResponseEnvelope<serde_json::Value>,
+    ) -> Result<ResponseEnvelope<serde_json::Value>, Error> {
         if !self.engine.should_apply_right() {
             return Ok(envelope);
         }
@@ -106,7 +106,7 @@ impl Middleware for JoltTransformMiddleware {
             envelope.normalized_snapshot = envelope.normalized_data.clone();
         }
 
-        // Apply transform to normalized_data
+        // Apply transform to normalized_data (response data)
         if let Some(ref normalized_data) = envelope.normalized_data.clone() {
             match self.engine.transform(normalized_data.clone()) {
                 Ok(transformed) => {
@@ -115,10 +115,10 @@ impl Middleware for JoltTransformMiddleware {
                         .normalized_data
                         .clone()
                         .unwrap_or(serde_json::Value::Null);
-                    tracing::debug!("Applied JOLT transform on right side");
+                    tracing::debug!("Applied JOLT transform on response (right side)");
                 }
                 Err(e) => {
-                    let error_msg = format!("JOLT transform failed on right side: {}", e);
+                    let error_msg = format!("JOLT transform failed on response: {}", e);
                     if self.engine.should_fail_on_error() {
                         tracing::error!("{}", error_msg);
                         return Err(Error::from(error_msg));
@@ -164,7 +164,7 @@ pub fn parse_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::envelope::envelope::RequestDetails;
+    use crate::models::envelope::envelope::{RequestDetails, ResponseDetails, ResponseEnvelope};
     use serde_json::json;
     use std::fs;
     use tempfile::NamedTempFile;
@@ -179,12 +179,28 @@ mod tests {
             cache_status: None,
             metadata: Default::default(),
         };
+        let backend_request_details = request_details.clone();
 
         RequestEnvelope {
             request_details,
+            backend_request_details,
             original_data: data.clone(),
             normalized_data: Some(data),
             normalized_snapshot: None,
+        }
+    }
+
+    fn request_to_response(req: RequestEnvelope<Value>) -> ResponseEnvelope<Value> {
+        ResponseEnvelope {
+            request_details: req.request_details,
+            response_details: ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
+            original_data: req.original_data,
+            normalized_data: req.normalized_data,
+            normalized_snapshot: req.normalized_snapshot,
         }
     }
 
@@ -265,8 +281,11 @@ mod tests {
         assert_eq!(left_result.normalized_data, Some(input.clone()));
         assert_eq!(left_result.normalized_snapshot, None); // No snapshot created on left when apply=right
 
+        // Convert to ResponseEnvelope for right side
+        let response_envelope = request_to_response(left_result);
+
         // Should apply transform on right
-        let right_result = middleware.right(left_result).await.unwrap();
+        let right_result = middleware.right(response_envelope).await.unwrap();
         assert_eq!(right_result.normalized_data, Some(input.clone())); // Identity transform
         assert_eq!(right_result.normalized_snapshot, Some(input)); // Snapshot created on right
     }
@@ -297,12 +316,14 @@ mod tests {
         assert_eq!(left_res.normalized_data, Some(input.clone()));
         assert_eq!(left_res.normalized_snapshot, Some(input.clone()));
 
-        let right_res = middleware.right(left_res).await.unwrap();
+        // Convert to ResponseEnvelope for right side
+        let response_envelope = request_to_response(left_res);
+
+        let right_res = middleware.right(response_envelope).await.unwrap();
         assert_eq!(right_res.normalized_data, Some(input.clone()));
         // snapshot should remain as first snapshot
         assert_eq!(right_res.normalized_snapshot, Some(input));
     }
-
 
     #[test]
     fn test_parse_config() {
@@ -337,8 +358,10 @@ mod tests {
             cache_status: None,
             metadata: Default::default(),
         };
+        let backend_request_details = request_details.clone();
         let mut env = RequestEnvelope {
             request_details,
+            backend_request_details,
             original_data: serde_json::json!({}),
             normalized_data: Some(serde_json::json!({
                 "full_path": "/fhir/ImagingStudy?patient=PID156695",
@@ -350,8 +373,15 @@ mod tests {
         };
 
         // Use real spec file
-        let spec_path = format!("{}/examples/config/transforms/fhir_to_dicom_params.json", env!("CARGO_MANIFEST_DIR"));
-        let cfg = JoltTransformMiddlewareConfig { spec_path, apply: "left".into(), fail_on_error: true };
+        let spec_path = format!(
+            "{}/examples/config/transforms/fhir_to_dicom_params.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let cfg = JoltTransformMiddlewareConfig {
+            spec_path,
+            apply: "left".into(),
+            fail_on_error: true,
+        };
         let mw = JoltTransformMiddleware::new(cfg).unwrap();
 
         env = mw.left(env).await.unwrap();
@@ -363,7 +393,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_middleware_with_real_dicom_to_imagingstudy_right() {
+        use crate::models::envelope::envelope::ResponseDetails;
         use serde_json::json;
+
         // Start with a DICOM find-style payload (as produced by mock_dicom)
         let request_details = RequestDetails {
             method: "GET".into(),
@@ -389,20 +421,35 @@ mod tests {
                 }
             ]
         });
-        let mut env = RequestEnvelope {
+        let mut env = ResponseEnvelope {
             request_details,
+            response_details: ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
             original_data: input.clone(),
             normalized_data: Some(input),
             normalized_snapshot: None,
         };
 
-        let spec_path = format!("{}/examples/config/transforms/dicom_to_imagingstudy_simple.json", env!("CARGO_MANIFEST_DIR"));
-        let cfg = JoltTransformMiddlewareConfig { spec_path, apply: "right".into(), fail_on_error: true };
+        let spec_path = format!(
+            "{}/examples/config/transforms/dicom_to_imagingstudy_simple.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let cfg = JoltTransformMiddlewareConfig {
+            spec_path,
+            apply: "right".into(),
+            fail_on_error: true,
+        };
         let mw = JoltTransformMiddleware::new(cfg).unwrap();
 
         env = mw.right(env).await.unwrap();
         let out = env.normalized_data.unwrap();
-        assert_eq!(out.get("resourceType").and_then(|v| v.as_str()), Some("Bundle"));
+        assert_eq!(
+            out.get("resourceType").and_then(|v| v.as_str()),
+            Some("Bundle")
+        );
         assert!(out.get("entry").and_then(|v| v.as_array()).is_some());
     }
 }

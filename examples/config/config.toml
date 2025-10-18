@@ -94,9 +94,6 @@ module=""
 [middleware_types.basic_auth]
 module=""
 
-[middleware_types.connect]
-module=""
-
 [middleware_types.json_extractor]
 module=""
 
@@ -115,7 +112,6 @@ module=""
 # DICOMweb <-> DICOM bridge
 [middleware_types.dicomweb_bridge]
 module=""
-
 
 # JMIX builder middleware
 [middleware_types.jmix_builder]

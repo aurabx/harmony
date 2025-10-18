@@ -88,7 +88,7 @@ module=""
 [middleware_types.jwtauth]
 module=""
 
-[middleware_types.auth]
+[middleware_types.basic_auth]
 module=""
 
 [middleware_types.connect]

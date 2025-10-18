@@ -240,7 +240,10 @@ mod tests {
 
         let out = engine.transform(input).expect("transform ok");
         // Should produce a Bundle with an ImagingStudy entry
-        assert_eq!(out.get("resourceType").and_then(|v| v.as_str()), Some("Bundle"));
+        assert_eq!(
+            out.get("resourceType").and_then(|v| v.as_str()),
+            Some("Bundle")
+        );
         assert!(out.get("entry").and_then(|v| v.as_array()).is_some());
     }
 }

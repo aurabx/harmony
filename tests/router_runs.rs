@@ -171,7 +171,7 @@ async fn router_selects_correct_endpoint_based_on_path() {
 
     // Verify the `/basic` route returns 200 OK
     assert_eq!(response.status(), StatusCode::OK);
-    
+
     // Test `/fhir/:path` endpoint
     let response = app
         .clone()

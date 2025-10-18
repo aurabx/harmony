@@ -1,13 +1,12 @@
 use crate::config::config::ConfigError;
 use crate::file;
 use crate::globals::get_storage;
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use async_trait::async_trait;
 use axum::{body::Body, response::Response};
-use base64::Engine;
 use http::Method;
 use serde::Deserialize;
 use serde_json::Value;
@@ -155,7 +154,7 @@ fn find_package_root_and_manifest(
 impl ServiceHandler<Value> for JmixEndpoint {
     type ReqBody = Value;
 
-    async fn transform_request(
+    async fn endpoint_incoming_request(
         &self,
         mut envelope: RequestEnvelope<Vec<u8>>,
         options: &HashMap<String, Value>,
@@ -492,26 +491,85 @@ impl ServiceHandler<Value> for JmixEndpoint {
         Ok(envelope)
     }
 
-    async fn transform_response(
+    /// @todo This could be incorrect. Check.
+    async fn backend_outgoing_request(
         &self,
         envelope: RequestEnvelope<Vec<u8>>,
+        _options: &HashMap<String, Value>,
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
+        // JMIX service prepares response in endpoint_incoming_request
+        // Extract response metadata from request_details.metadata (set by middleware)
+        let status = envelope
+            .request_details
+            .metadata
+            .get("jmix_response_status")
+            .and_then(|s| s.parse::<u16>().ok())
+            .unwrap_or(200);
+
+        // Extract headers from metadata
+        let mut headers = HashMap::new();
+        if let Some(headers_json) = envelope
+            .request_details
+            .metadata
+            .get("jmix_response_headers")
+        {
+            if let Ok(hdrs) = serde_json::from_str::<HashMap<String, String>>(headers_json) {
+                headers = hdrs;
+            }
+        }
+
+        // Build body from normalized_data (set by middleware)
+        let body = if let Some(ref normalized) = envelope.normalized_data {
+            serde_json::to_vec(normalized).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        // Ensure content-type is set if not present
+        if !headers.contains_key("content-type") && !headers.contains_key("Content-Type") {
+            headers.insert("content-type".to_string(), "application/json".to_string());
+        }
+
+        // Copy JMIX metadata from request to response
+        let mut response_metadata = HashMap::new();
+        if let Some(jmix_id) = envelope.request_details.metadata.get("jmix_id") {
+            response_metadata.insert("jmix_id".to_string(), jmix_id.clone());
+        }
+        if let Some(zip_ready) = envelope.request_details.metadata.get("jmix_zip_ready") {
+            response_metadata.insert("jmix_zip_ready".to_string(), zip_ready.clone());
+        }
+
+        let mut response_envelope = ResponseEnvelope::from_backend(
+            envelope.request_details.clone(),
+            status,
+            headers,
+            body,
+            Some(response_metadata),
+        );
+
+        // Preserve normalized_data
+        response_envelope.normalized_data = envelope.normalized_data;
+
+        Ok(response_envelope)
+    }
+
+    async fn endpoint_outgoing_response(
+        &self,
+        envelope: ResponseEnvelope<Vec<u8>>,
         options: &HashMap<String, Value>,
     ) -> Result<Response, Error> {
-        let nd = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
-        let response_meta = nd.get("response");
+        // Check if response has jmix metadata for special zip file handling
+        // Only serve zip if BOTH jmix_id and jmix_zip_ready are set
+        let zip_ready = envelope
+            .response_details
+            .metadata
+            .get("jmix_zip_ready")
+            .map(|s| s == "true")
+            .unwrap_or(false);
 
-        // Check if response has jmix metadata - if so, return the zip instead
-        if let Some(jmix_id) = response_meta
-            .and_then(|m| m.get("jmix_id"))
-            .and_then(|id| id.as_str())
-        {
-            let zip_ready = response_meta
-                .and_then(|m| m.get("zip_ready"))
-                .and_then(|ready| ready.as_bool())
-                .unwrap_or(false);
-
-            if zip_ready {
-                // Load the zip file and return it
+        if zip_ready {
+            if let Some(jmix_id) = envelope.response_details.metadata.get("jmix_id") {
+                // Load the zip file and return it (special case for JMIX)
                 tracing::info!("📦 Serving zip file for JMIX package: {}", jmix_id);
 
                 let store_root = if let Some(p) = options.get("store_dir").and_then(|v| v.as_str())
@@ -523,7 +581,6 @@ impl ServiceHandler<Value> for JmixEndpoint {
                     PathBuf::from("./tmp/jmix-store")
                 };
 
-                // Look for zip file in the package directory (where jmix-rs creates it)
                 let package_dir = store_root.join(jmix_id);
                 let zip_file = package_dir.join(format!("{}.zip", jmix_id));
 
@@ -560,84 +617,33 @@ impl ServiceHandler<Value> for JmixEndpoint {
                         .body(Body::from("JMIX zip file not found"))
                         .map_err(|_| Error::from("Failed to construct error response"));
                 }
-            } else {
-                // zip_ready is false - return error
-                tracing::error!(
-                    "❌ JMIX package {} is not ready (zip build failed)",
-                    jmix_id
-                );
-                return Response::builder()
-                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
-                    .body(Body::from("JMIX package build failed"))
-                    .map_err(|_| Error::from("Failed to construct error response"));
             }
         }
 
-        let status = response_meta
-            .and_then(|m| m.get("status"))
-            .and_then(|s| s.as_u64())
-            .and_then(|code| http::StatusCode::from_u16(code as u16).ok())
+        // Standard ResponseEnvelope handling
+        let status = http::StatusCode::from_u16(envelope.response_details.status)
             .unwrap_or(http::StatusCode::OK);
 
         let mut builder = Response::builder().status(status);
-        let mut has_content_type = false;
-        if let Some(hdrs) = response_meta
-            .and_then(|m| m.get("headers"))
-            .and_then(|h| h.as_object())
-        {
-            for (k, v) in hdrs.iter() {
-                if let Some(val_str) = v.as_str() {
-                    if k.eq_ignore_ascii_case("content-type") {
-                        has_content_type = true;
-                    }
-                    builder = builder.header(k.as_str(), val_str);
-                }
-            }
+
+        // Add headers from response_details
+        for (k, v) in &envelope.response_details.headers {
+            builder = builder.header(k.as_str(), v.as_str());
         }
 
-        // body as base64 (binary) - only if we didn't already handle jmixEnvelopes above
-        if let Some(body_b64) = response_meta
-            .and_then(|m| m.get("body_b64"))
-            .and_then(|b| b.as_str())
-        {
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(body_b64)
-                .map_err(|_| Error::from("Failed to decode body_b64"))?;
-            return builder
-                .body(Body::from(bytes))
-                .map_err(|_| Error::from("Failed to construct JMIX HTTP response"));
-        }
-
-        // body as explicit string
-        if let Some(body_str) = response_meta
-            .and_then(|m| m.get("body"))
-            .and_then(|b| b.as_str())
-        {
-            return builder
-                .body(Body::from(body_str.to_string()))
-                .map_err(|_| Error::from("Failed to construct JMIX HTTP response"));
-        }
-
-        // body as JSON object under response.json
-        if let Some(json_val) = response_meta.and_then(|m| m.get("json")) {
-            let body_str = serde_json::to_string(json_val)
+        // Use original_data if available, otherwise serialize normalized_data
+        let body = if !envelope.original_data.is_empty() {
+            Body::from(envelope.original_data)
+        } else if let Some(normalized) = envelope.normalized_data {
+            let body_bytes = serde_json::to_vec(&normalized)
                 .map_err(|_| Error::from("Failed to serialize JMIX response JSON"))?;
-            if !has_content_type {
-                builder = builder.header("content-type", "application/json");
-            }
-            return builder
-                .body(Body::from(body_str))
-                .map_err(|_| Error::from("Failed to construct JMIX HTTP response"));
-        }
+            Body::from(body_bytes)
+        } else {
+            Body::empty()
+        };
 
-        // default: serialize entire normalized_data for debug
-        let body_str = serde_json::to_string(&nd)
-            .map_err(|_| Error::from("Failed to serialize Jmix response payload into JSON"))?;
-        if !has_content_type {
-            builder = builder.header("content-type", "application/json");
-        }
         builder
-            .body(Body::from(body_str))
+            .body(body)
             .map_err(|_| Error::from("Failed to construct JMIX HTTP response"))
     }
 }

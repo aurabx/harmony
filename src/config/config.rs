@@ -3,6 +3,7 @@ use crate::config::proxy_config::ProxyConfig;
 use crate::config::Cli;
 use crate::models::backends::backends::Backend;
 use crate::models::endpoints::endpoint::Endpoint;
+use crate::models::middleware::instance::{MiddlewareInstance, MiddlewareInstanceConfig};
 use crate::models::middleware::middleware::{initialise_middleware_registry, MiddlewareConfig};
 use crate::models::network::config::NetworkConfig;
 use crate::models::pipelines::config::Pipeline;
@@ -16,7 +17,6 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::Path;
-use crate::models::middleware::instance::{MiddlewareInstance, MiddlewareInstanceConfig};
 // use serde_json::json;
 
 static DEFAULT_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(HashMap::new);
@@ -91,7 +91,10 @@ impl Config {
             let network = match &self.management.network {
                 Some(network_name) => {
                     if !self.network.contains_key(network_name) {
-                        panic!("Management network '{}' not found in configuration", network_name);
+                        panic!(
+                            "Management network '{}' not found in configuration",
+                            network_name
+                        );
                     }
                     network_name.clone()
                 }
@@ -403,8 +406,8 @@ impl Config {
             if middleware_config.module.is_empty() {
                 // Built-in middleware, validate that it exists
                 match name.as_str() {
-                    "jwtauth" | "basic_auth" | "connect" | "passthru" | "json_extractor" | "json"
-                    | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "transform" => {}
+                    "jwtauth" | "basic_auth" | "connect" | "passthru" | "json_extractor"
+                    | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "transform" => {}
                     _ => {
                         return Err(ConfigError::InvalidMiddleware {
                             name: name.clone(),
@@ -465,4 +468,3 @@ pub enum ConfigError {
     InvalidMiddleware { name: String, reason: String }, // Added for middleware validation
     InvalidStorage { backend: String, reason: String }, // Added for storage validation
 }
-

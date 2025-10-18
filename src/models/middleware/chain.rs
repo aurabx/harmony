@@ -1,4 +1,4 @@
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use std::sync::Arc;
@@ -29,11 +29,11 @@ impl MiddlewareChain {
         Ok(envelope)
     }
 
-    /// Processes the outgoing envelope through the "right" middleware chain.
+    /// Processes the response envelope through the "right" middleware chain.
     pub async fn right(
         &self,
-        mut envelope: RequestEnvelope<serde_json::Value>,
-    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
+        mut envelope: ResponseEnvelope<serde_json::Value>,
+    ) -> Result<ResponseEnvelope<serde_json::Value>, Error> {
         // Process middleware in reverse order for right-side processing
         for middleware in self.middlewares.iter().rev() {
             // Pass the envelope through the middleware

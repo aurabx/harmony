@@ -1,5 +1,5 @@
 use crate::config::config::Config;
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseDetails, ResponseEnvelope};
 use crate::models::middleware::chain::MiddlewareChain;
 use crate::models::pipelines::config::Pipeline;
 use std::collections::HashMap;
@@ -39,7 +39,7 @@ async fn process_backends(
                 .map_err(|err| format!("Failed to resolve backend service: {}", err))?;
 
             envelope = service
-                .transform_request(
+                .endpoint_incoming_request(
                     envelope,
                     backend.options.as_ref().unwrap_or(&HashMap::new()),
                 )
@@ -63,6 +63,7 @@ async fn process_incoming_middleware(
     // Convert envelope to use serde_json::Value for middleware processing
     let json_envelope = RequestEnvelope {
         request_details: envelope.request_details.clone(),
+        backend_request_details: envelope.backend_request_details.clone(),
         original_data: normalized_data.unwrap_or_else(|| {
             serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
         }),
@@ -71,8 +72,14 @@ async fn process_incoming_middleware(
     };
 
     // Build middleware instances from pipeline names
-    let middleware_instances = crate::models::middleware::middleware::build_middleware_instances_for_pipeline(&group.middleware, config)
-        .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> { Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, err)) })?;
+    let middleware_instances =
+        crate::models::middleware::middleware::build_middleware_instances_for_pipeline(
+            &group.middleware,
+            config,
+        )
+        .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, err))
+        })?;
 
     let middleware_chain = MiddlewareChain::new(middleware_instances);
 
@@ -82,6 +89,7 @@ async fn process_incoming_middleware(
     // Convert back to Vec<u8> envelope
     let processed_envelope = RequestEnvelope {
         request_details: processed_json_envelope.request_details,
+        backend_request_details: processed_json_envelope.backend_request_details,
         original_data: envelope.original_data, // Keep original bytes
         normalized_data: processed_json_envelope.normalized_data,
         normalized_snapshot: processed_json_envelope.normalized_snapshot,
@@ -95,36 +103,49 @@ async fn process_outgoing_middleware(
     group: &Pipeline,
     config: &Config,
 ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-    // Clone normalized_data before using it to avoid ownership issues
+    // Convert RequestEnvelope to ResponseEnvelope for outgoing middleware processing
+    // Since right() middleware now operates on responses
     let normalized_data = envelope.normalized_data.clone();
+    let original_json = normalized_data.unwrap_or_else(|| {
+        serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
+    });
 
-    // Convert envelope to use serde_json::Value for middleware processing
-    let json_envelope = RequestEnvelope {
+    // Create ResponseEnvelope for right-side middleware
+    let response_envelope = ResponseEnvelope {
         request_details: envelope.request_details.clone(),
-        original_data: normalized_data.unwrap_or_else(|| {
-            serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
-        }),
+        response_details: ResponseDetails {
+            status: 200,
+            headers: HashMap::new(),
+            metadata: HashMap::new(),
+        },
+        original_data: original_json.clone(),
         normalized_data: envelope.normalized_data.clone(),
         normalized_snapshot: envelope.normalized_snapshot.clone(),
     };
 
     // Build middleware instances from pipeline names
-    let middleware_instances = crate::models::middleware::middleware::build_middleware_instances_for_pipeline(&group.middleware, config)
-        .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> { Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, err)) })?;
+    let middleware_instances =
+        crate::models::middleware::middleware::build_middleware_instances_for_pipeline(
+            &group.middleware,
+            config,
+        )
+        .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> {
+            Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, err))
+        })?;
 
     let middleware_chain = MiddlewareChain::new(middleware_instances);
 
-    // Process through middleware chain (right side)
-    let processed_json_envelope = middleware_chain.right(json_envelope).await?;
+    // Process through middleware chain (right side) - now uses ResponseEnvelope
+    let processed_response_envelope = middleware_chain.right(response_envelope).await?;
 
-    // Convert back to Vec<u8> envelope
+    // Convert back to RequestEnvelope for compatibility with existing code
     let processed_envelope = RequestEnvelope {
-        request_details: processed_json_envelope.request_details,
-        original_data: envelope.original_data, // Keep original bytes
-        normalized_data: Some(processed_json_envelope.original_data),
-        normalized_snapshot: processed_json_envelope.normalized_snapshot,
+        request_details: processed_response_envelope.request_details,
+        backend_request_details: envelope.backend_request_details,
+        original_data: envelope.original_data,
+        normalized_data: processed_response_envelope.normalized_data,
+        normalized_snapshot: processed_response_envelope.normalized_snapshot,
     };
 
     Ok(processed_envelope)
 }
-

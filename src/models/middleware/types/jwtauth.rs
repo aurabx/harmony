@@ -1,4 +1,4 @@
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
 use crate::models::middleware::AuthFailure;
 use crate::utils::Error;
@@ -205,11 +205,11 @@ impl Middleware for JwtAuthMiddleware {
 
     async fn right(
         &self,
-        envelope: RequestEnvelope<serde_json::Value>,
-    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
+        envelope: ResponseEnvelope<serde_json::Value>,
+    ) -> Result<ResponseEnvelope<serde_json::Value>, Error> {
         // For JWT auth, typically no processing is needed on the right side
-        // Just pass through the envelope
-        tracing::info!("JWT Auth middleware processing response (right)");
+        // Just pass through the response envelope
+        tracing::debug!("JWT Auth middleware processing response (right) - passthrough");
         Ok(envelope)
     }
 }
@@ -243,16 +243,20 @@ mod tests {
             headers.insert("authorization".to_string(), auth.to_string());
         }
 
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/test".to_string(),
+            headers,
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata: HashMap::new(),
+        };
+        let backend_request_details = request_details.clone();
+
         RequestEnvelope {
-            request_details: RequestDetails {
-                method: "GET".to_string(),
-                uri: "/test".to_string(),
-                headers,
-                cookies: HashMap::new(),
-                query_params: HashMap::new(),
-                cache_status: None,
-                metadata: HashMap::new(),
-            },
+            request_details,
+            backend_request_details,
             original_data: serde_json::json!({}),
             normalized_data: Some(serde_json::json!({"test": "data"})),
             normalized_snapshot: None,
@@ -722,9 +726,22 @@ mod tests {
         };
         let middleware = JwtAuthMiddleware::new(config);
 
-        let envelope = create_test_envelope_with_auth(None);
-        let original_method = envelope.request_details.method.clone();
-        let original_uri = envelope.request_details.uri.clone();
+        let request_env = create_test_envelope_with_auth(None);
+        let original_method = request_env.request_details.method.clone();
+        let original_uri = request_env.request_details.uri.clone();
+
+        // Convert to ResponseEnvelope for right() method
+        let envelope = crate::models::envelope::envelope::ResponseEnvelope {
+            request_details: request_env.request_details,
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
+            original_data: request_env.original_data,
+            normalized_data: request_env.normalized_data,
+            normalized_snapshot: request_env.normalized_snapshot,
+        };
 
         let result = middleware.right(envelope).await;
 

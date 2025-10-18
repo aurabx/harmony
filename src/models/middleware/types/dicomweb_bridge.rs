@@ -1,4 +1,4 @@
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use base64::Engine;
@@ -52,7 +52,7 @@ impl DicomwebBridgeMiddleware {
     // --- RIGHT SIDE HELPERS (DICOM → DICOMweb) ---
 
     fn set_dicomweb_data(
-        envelope: &mut RequestEnvelope<Value>,
+        envelope: &mut ResponseEnvelope<Value>,
         response_type: &str,
         data: Value,
         metadata: Option<serde_json::Map<String, Value>>,
@@ -81,6 +81,18 @@ impl DicomwebBridgeMiddleware {
         envelope.original_data = new_nd;
     }
 
+    /// Build QIDO-RS JSON response from backend matches
+    ///
+    /// This method ensures QIDO responses are ALWAYS arrays, as required by the DICOMweb spec.
+    /// Even single results are wrapped in a one-element array. This method does NOT inject
+    /// missing UIDs or synthesize data - it passes through exactly what the backend provides.
+    ///
+    /// # Arguments
+    /// * `matches` - The backend response data (array or single object)
+    /// * `includefield` - Optional list of fields to include (for filtering)
+    ///
+    /// # Returns
+    /// A JSON array containing the QIDO results
     fn build_qido_json_from_matches(matches: &Value, includefield: Option<&Vec<String>>) -> Value {
         // Convert identifier JSON objects to full DICOMweb JSON objects
         // Filter attributes based on includefield parameter if provided
@@ -94,7 +106,7 @@ impl DicomwebBridgeMiddleware {
                 Value::Array(dicomweb_objects)
             }
             other => {
-                // Single object case
+                // Single object case - wrap in array per DICOMweb spec
                 let processed_item = Self::process_item(includefield, other);
                 Value::Array(vec![processed_item])
             }
@@ -598,8 +610,8 @@ impl Middleware for DicomwebBridgeMiddleware {
 
     async fn right(
         &self,
-        mut envelope: RequestEnvelope<serde_json::Value>,
-    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
+        mut envelope: ResponseEnvelope<serde_json::Value>,
+    ) -> Result<ResponseEnvelope<serde_json::Value>, Error> {
         // Detect DICOMweb routes from metadata.path
         // Prefer the full HTTP path (with optional query) because another middleware may override
         // metadata.path with an operation name (e.g., "get"/"find").
@@ -616,6 +628,14 @@ impl Middleware for DicomwebBridgeMiddleware {
                     .cloned()
                     .unwrap_or_default()
             });
+
+        tracing::debug!(
+            full_path = ?envelope.request_details.metadata.get("full_path"),
+            path_meta = ?envelope.request_details.metadata.get("path"),
+            raw_path = %raw_path,
+            "dicomweb_bridge.right: incoming path analysis"
+        );
+
         // Strip query string if present
         if let Some((p, _)) = raw_path.split_once('?') {
             raw_path = p.to_string();
@@ -636,6 +656,15 @@ impl Middleware for DicomwebBridgeMiddleware {
         let operation = nd.get("operation").and_then(|v| v.as_str()).unwrap_or("");
         let success = nd.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
 
+        tracing::debug!(
+            dicomweb_subpath = %path,
+            operation = %operation,
+            success = %success,
+            has_matches = nd.get("matches").is_some(),
+            has_instances = nd.get("instances").is_some(),
+            "dicomweb_bridge.right: backend response analysis"
+        );
+
         // Parse includefield from request metadata (set by left-side middleware)
         let includefield: Option<Vec<String>> = envelope
             .request_details
@@ -653,6 +682,13 @@ impl Middleware for DicomwebBridgeMiddleware {
                 Value::Array(arr) => !arr.is_empty(),
                 _ => true, // Non-array responses are considered to have results
             };
+
+            tracing::debug!(
+                response_is_array = json.is_array(),
+                result_count = json.as_array().map(|a| a.len()).unwrap_or(0),
+                has_results = %has_results,
+                "dicomweb_bridge.right: QIDO response shaped"
+            );
 
             let mut metadata = serde_json::Map::new();
             metadata.insert("has_results".to_string(), Value::Bool(has_results));
@@ -957,9 +993,11 @@ mod tests {
             cache_status: None,
             metadata,
         };
+        let backend_request_details = request_details.clone();
 
         let envelope = RequestEnvelope {
             request_details,
+            backend_request_details,
             original_data: serde_json::json!({}),
             normalized_data: None,
             normalized_snapshot: None,
@@ -1030,9 +1068,11 @@ mod tests {
             cache_status: None,
             metadata,
         };
+        let backend_request_details = request_details.clone();
 
         let envelope = RequestEnvelope {
             request_details,
+            backend_request_details,
             original_data: serde_json::json!({}),
             normalized_data: None,
             normalized_snapshot: None,
@@ -1101,9 +1141,11 @@ mod tests {
             cache_status: None,
             metadata,
         };
+        let backend_request_details = request_details.clone();
 
         let envelope = RequestEnvelope {
             request_details,
+            backend_request_details,
             original_data: serde_json::json!({}),
             normalized_data: None,
             normalized_snapshot: None,
@@ -1166,8 +1208,13 @@ mod tests {
             "matches": matches
         });
 
-        let envelope = RequestEnvelope {
+        let envelope = ResponseEnvelope {
             request_details,
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
             original_data: serde_json::json!({}),
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
@@ -1233,9 +1280,11 @@ mod tests {
             cache_status: None,
             metadata,
         };
+        let backend_request_details = request_details.clone();
 
         let envelope = RequestEnvelope {
             request_details,
+            backend_request_details,
             original_data: serde_json::json!({}),
             normalized_data: None,
             normalized_snapshot: None,

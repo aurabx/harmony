@@ -21,11 +21,12 @@ async fn incoming_non_auth_middleware_failure_returns_500() {
             }
         }
     ]"#;
-    
+
     let temp_file = tempfile::NamedTempFile::new().expect("create temp file");
     std::fs::write(temp_file.path(), spec_content).expect("write spec file");
-    
-    let toml = format!(r#"
+
+    let toml = format!(
+        r#"
         [proxy]
         id = "middleware-status-test"
         log_level = "info"
@@ -72,7 +73,9 @@ async fn incoming_non_auth_middleware_failure_returns_500() {
         spec_path = "{spec_path}"
         apply = "left"
         fail_on_error = true
-    "#, spec_path = temp_file.path().to_string_lossy());
+    "#,
+        spec_path = temp_file.path().to_string_lossy()
+    );
 
     let cfg = load_config_from_str(&toml).expect("valid config");
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
@@ -96,7 +99,7 @@ async fn incoming_non_auth_middleware_failure_returns_500() {
     assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
 }
 
-#[tokio::test] 
+#[tokio::test]
 async fn jwt_auth_failure_still_returns_401() {
     let toml = r#"
         [proxy]

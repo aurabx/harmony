@@ -1,5 +1,5 @@
 use crate::config::config::ConfigError;
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
@@ -65,84 +65,77 @@ impl ServiceHandler<Value> for FhirEndpoint {
     type ReqBody = Value;
 
     // Process the incoming request and transform it into an Envelope
-    async fn transform_request(
-        &self,
-        mut envelope: RequestEnvelope<Vec<u8>>,
-        _options: &HashMap<String, Value>,
-    ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-        // Capture subpath from request metadata inserted by dispatcher
-        let subpath = envelope
-            .request_details
-            .metadata
-            .get("path")
-            .cloned()
-            .unwrap_or_default();
-
-        // Add or modify the envelope's normalized data
-        let full_path = envelope
-            .request_details
-            .metadata
-            .get("full_path")
-            .cloned()
-            .unwrap_or_default();
-
-        envelope.normalized_data = Some(serde_json::json!({
-            "path": subpath,
-            "full_path": full_path,
-            "headers": envelope.request_details.headers,
-            "original_data": envelope.original_data,
-        }));
-
-        Ok(envelope)
-    }
-
-    // Convert the processed Envelope into an HTTP Response
-    async fn transform_response(
+    async fn endpoint_incoming_request(
         &self,
         envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
-    ) -> Result<Response, Error> {
-        let nd = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
-        let response_meta = nd.get("response");
+    ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
+        Ok(envelope)
+    }
 
-        let status = response_meta
-            .and_then(|m| m.get("status"))
-            .and_then(|s| s.as_u64())
-            .and_then(|code| http::StatusCode::from_u16(code as u16).ok())
+    async fn backend_outgoing_request(
+        &self,
+        envelope: RequestEnvelope<Vec<u8>>,
+        _options: &HashMap<String, Value>,
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
+        // FHIR passthrough - convert request to response with 200 OK
+        // @todo In a real implementation, this would make a FHIR API call to a backend
+        let status = 200;
+        let mut headers = HashMap::new();
+        headers.insert(
+            "content-type".to_string(),
+            "application/fhir+json".to_string(),
+        );
+
+        let body = if let Some(ref normalized) = envelope.normalized_data {
+            serde_json::to_vec(normalized).unwrap_or_default()
+        } else {
+            envelope.original_data.clone()
+        };
+
+        let mut response_envelope = ResponseEnvelope::from_backend(
+            envelope.request_details.clone(),
+            status,
+            headers,
+            body,
+            None,
+        );
+
+        response_envelope.normalized_data = envelope.normalized_data;
+
+        Ok(response_envelope)
+    }
+
+    // Convert the processed ResponseEnvelope into an HTTP Response
+    async fn endpoint_outgoing_response(
+        &self,
+        envelope: ResponseEnvelope<Vec<u8>>,
+        _options: &HashMap<String, Value>,
+    ) -> Result<Response, Error> {
+        // Build response from ResponseEnvelope
+        let status = http::StatusCode::from_u16(envelope.response_details.status)
             .unwrap_or(http::StatusCode::OK);
 
         let mut builder = Response::builder().status(status);
-        let mut has_content_type = false;
-        if let Some(hdrs) = response_meta
-            .and_then(|m| m.get("headers"))
-            .and_then(|h| h.as_object())
-        {
-            for (k, v) in hdrs.iter() {
-                if let Some(val_str) = v.as_str() {
-                    if k.eq_ignore_ascii_case("content-type") {
-                        has_content_type = true;
-                    }
-                    builder = builder.header(k.as_str(), val_str);
-                }
-            }
+
+        // Add headers from response_details
+        for (k, v) in &envelope.response_details.headers {
+            builder = builder.header(k.as_str(), v.as_str());
         }
 
-        if let Some(body_str) = response_meta
-            .and_then(|m| m.get("body"))
-            .and_then(|b| b.as_str())
-        {
-            return builder
-                .body(Body::from(body_str.to_string()))
-                .map_err(|_| Error::from("Failed to construct FHIR HTTP response"));
-        }
+        // Use original_data if available, otherwise serialize normalized_data
+        let body = if !envelope.original_data.is_empty() {
+            Body::from(envelope.original_data)
+        } else if let Some(normalized) = envelope.normalized_data {
+            let body_bytes = serde_json::to_vec(&normalized)
+                .map_err(|_| Error::from("Failed to serialize FHIR response JSON"))?;
+            Body::from(body_bytes)
+        } else {
+            Body::empty()
+        };
 
-        let body_str = serde_json::to_string(&nd)
-            .map_err(|_| Error::from("Failed to serialize FHIR response JSON"))?;
-        if !has_content_type {
-            builder = builder.header("content-type", "application/json");
-        }
         builder
-            .body(Body::from(body_str))
+            .body(body)
             .map_err(|_| Error::from("Failed to construct FHIR HTTP response"))
     }
 }

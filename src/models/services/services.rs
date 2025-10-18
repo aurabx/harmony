@@ -1,6 +1,6 @@
 use crate::config::config::Config;
 use crate::config::config::ConfigError;
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use async_trait::async_trait;
@@ -134,16 +134,23 @@ where
     // Response body is determined by the Service; use axum Body
 
     /// Handles incoming requests, producing an Envelope
-    async fn transform_request(
+    async fn endpoint_incoming_request(
         &self,
         envelope: RequestEnvelope<Vec<u8>>,
         options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error>;
 
-    /// Handles the response stage, converting Envelope back into an HTTP response
-    async fn transform_response(
+    /// Handles the response stage, converting ResponseEnvelope back into an HTTP response
+    async fn endpoint_outgoing_response(
+        &self,
+        envelope: ResponseEnvelope<Vec<u8>>,
+        options: &HashMap<String, Value>,
+    ) -> Result<Response, Error>;
+
+    /// Handles sending a request to a backend and returning the response
+    async fn backend_outgoing_request(
         &self,
         envelope: RequestEnvelope<Vec<u8>>,
         options: &HashMap<String, Value>,
-    ) -> Result<Response, Error>;
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Error>;
 }

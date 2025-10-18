@@ -1,6 +1,6 @@
 use crate::config::config::Config;
 use crate::models::backends::backends::Backend;
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::chain::MiddlewareChain;
 use crate::models::middleware::middleware::build_middleware_instances_for_pipeline;
 use crate::models::middleware::AuthFailure;
@@ -36,6 +36,7 @@ impl Dispatcher {
     }
 
     /// Builds incoming routes for a specific group within the given app router.
+    /// @todo Abstract the HTTP and DICOM parts into separate handlers
     pub fn build_router(
         &self,
         mut app: Router<()>,
@@ -277,7 +278,7 @@ impl Dispatcher {
 
         // 1. Process through endpoint service
         let processed_envelope = service
-            .transform_request(
+            .endpoint_incoming_request(
                 envelope,
                 endpoint.options.as_ref().unwrap_or(&HashMap::new()),
             )
@@ -294,27 +295,28 @@ impl Dispatcher {
                     status
                 })?;
 
-        // 3. Process through configured backends
-        let after_backends = Self::process_backends(after_incoming_mw, pipeline, &config)
-            .await
-            .map_err(|err| {
-                tracing::error!("Backend processing failed: {:?}", err);
-                StatusCode::BAD_GATEWAY
-            })?;
+        // 3. Process through backend(s) - returns ResponseEnvelope
+        let response_envelope =
+            Self::process_backends(after_incoming_mw, pipeline, &config, &service)
+                .await
+                .map_err(|err| {
+                    tracing::error!("Backend processing failed: {:?}", err);
+                    StatusCode::BAD_GATEWAY
+                })?;
 
-        // 4. Outgoing (right) middleware chain
+        // 4. Outgoing (right) middleware chain - operates on ResponseEnvelope
         let after_outgoing_mw =
-            Self::process_outgoing_middleware(after_backends, pipeline, &config)
+            Self::process_outgoing_middleware(response_envelope, pipeline, &config)
                 .await
                 .map_err(|err| {
                     tracing::error!("Outgoing middleware failed: {:?}", err);
                     StatusCode::INTERNAL_SERVER_ERROR
                 })?;
 
-        // 5. Final endpoint response processing
+        // 5. Final endpoint response processing - converts ResponseEnvelope to axum Response
         let response = service
-            .transform_response(
-                after_outgoing_mw.clone(),
+            .endpoint_outgoing_response(
+                after_outgoing_mw,
                 endpoint.options.as_ref().unwrap_or(&HashMap::new()),
             )
             .await
@@ -457,55 +459,92 @@ impl Dispatcher {
         })
     }
 
-    // Process through backend(s)
+    // Process through backend(s) - returns ResponseEnvelope
     async fn process_backends(
-        mut envelope: RequestEnvelope<Vec<u8>>,
+        envelope: RequestEnvelope<Vec<u8>>,
         group: &Pipeline,
         config: &Config,
-    ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-        // Allow endpoints to short-circuit backend processing by setting a metadata flag
-        if envelope
+        service: &Box<
+            dyn crate::models::services::services::ServiceType<ReqBody = serde_json::Value>,
+        >,
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+        // Check if endpoint requested to skip backends
+        let skip_backends = envelope
             .request_details
             .metadata
             .get("skip_backends")
             .map(|v| v == "true")
-            .unwrap_or(false)
-        {
+            .unwrap_or(false);
+
+        if skip_backends {
             tracing::info!("Skipping backends due to endpoint 'skip_backends' flag");
-            return Ok(envelope);
+            // Service must still generate a ResponseEnvelope (e.g., from endpoint's prepared response data)
+            let response_envelope = service
+                .backend_outgoing_request(envelope, &HashMap::new())
+                .await
+                .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> {
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Backend skip failed: {:?}", err),
+                    ))
+                })?;
+            return Ok(response_envelope);
+        }
+
+        // If no backends configured, service should generate response directly
+        if group.backends.is_empty() {
+            tracing::info!("No backends configured - service will generate response directly");
+            let response_envelope = service
+                .backend_outgoing_request(envelope, &HashMap::new())
+                .await
+                .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> {
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::Other,
+                        format!("Service backend_outgoing_request failed: {:?}", err),
+                    ))
+                })?;
+            return Ok(response_envelope);
         }
 
         tracing::info!("Processing through {} backends", group.backends.len());
 
-        // Process each backend in the group
-        for backend_name in &group.backends {
+        // For simplicity, process first backend (most configs have one backend per pipeline)
+        // Multi-backend chaining would require more complex envelope state management
+        if let Some(backend_name) = group.backends.first() {
             if let Some(backend) = config.backends.get(backend_name) {
-                envelope = Self::process_single_backend(envelope, backend).await?;
+                return Self::process_single_backend(envelope, backend).await;
             } else {
                 tracing::warn!("Backend '{}' not found in config", backend_name);
             }
         }
 
-        Ok(envelope)
+        // Backend referenced but not found - return a 502 response
+        Ok(ResponseEnvelope::from_backend(
+            envelope.request_details.clone(),
+            502,
+            HashMap::from([("content-type".to_string(), "text/plain".to_string())]),
+            b"Backend not found in configuration".to_vec(),
+            None,
+        ))
     }
 
-    // Process through a single backend
+    // Process through a single backend - returns ResponseEnvelope
     async fn process_single_backend(
-        mut envelope: RequestEnvelope<Vec<u8>>,
+        envelope: RequestEnvelope<Vec<u8>>,
         backend: &Backend,
-    ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         let service = backend
             .resolve_service()
             .map_err(|err| format!("Failed to resolve backend service: {}", err))?;
 
-        // Transform the request using the backend service
-        envelope = service
-            .transform_request(
+        // Call backend service - now returns ResponseEnvelope
+        let response = service
+            .backend_outgoing_request(
                 envelope,
                 backend.options.as_ref().unwrap_or(&HashMap::new()),
             )
             .await
-            .map_err(|err| format!("Backend request transformation failed: {:?}", err))?;
+            .map_err(|err| format!("Backend request failed: {:?}", err))?;
 
         tracing::info!(
             "Processed backend '{}' using service type '{}'",
@@ -513,7 +552,7 @@ impl Dispatcher {
             backend.service
         );
 
-        Ok(envelope)
+        Ok(response)
     }
 
     // Process through incoming middleware chain
@@ -528,6 +567,7 @@ impl Dispatcher {
         // Convert envelope to use serde_json::Value for middleware processing
         let json_envelope = RequestEnvelope {
             request_details: envelope.request_details.clone(),
+            backend_request_details: envelope.backend_request_details.clone(),
             original_data: normalized_data.unwrap_or_else(|| {
                 serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
             }),
@@ -536,8 +576,12 @@ impl Dispatcher {
         };
 
         // Build middleware instances from pipeline names
-        let middleware_instances = build_middleware_instances_for_pipeline(&group.middleware, config)
-            .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> { Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, err)) })?;
+        let middleware_instances =
+            build_middleware_instances_for_pipeline(&group.middleware, config).map_err(
+                |err| -> Box<dyn std::error::Error + Send + Sync> {
+                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, err))
+                },
+            )?;
 
         let middleware_chain = MiddlewareChain::new(middleware_instances);
 
@@ -550,8 +594,10 @@ impl Dispatcher {
         );
 
         // Convert back to Vec<u8> envelope
+        // @todo No idea why we are converting everything to json then back to Vec<u8>
         let processed_envelope = RequestEnvelope {
             request_details: processed_json_envelope.request_details,
+            backend_request_details: processed_json_envelope.backend_request_details,
             original_data: envelope.original_data, // Keep original bytes
             normalized_data: processed_json_envelope.normalized_data,
             normalized_snapshot: processed_json_envelope.normalized_snapshot,
@@ -560,50 +606,53 @@ impl Dispatcher {
         Ok(processed_envelope)
     }
 
-    // Process through outgoing middleware chain
+    // Process through outgoing middleware chain - operates on ResponseEnvelope
     async fn process_outgoing_middleware(
-        envelope: RequestEnvelope<Vec<u8>>,
+        envelope: ResponseEnvelope<Vec<u8>>,
         group: &Pipeline,
         config: &Config,
-    ) -> Result<RequestEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
-        // Clone normalized_data before using it to avoid ownership issues
-        let normalized_data = envelope.normalized_data.clone();
-
-        // Convert envelope to use serde_json::Value for middleware processing
-        let json_envelope = RequestEnvelope {
-            request_details: envelope.request_details.clone(),
-            original_data: normalized_data.unwrap_or_else(|| {
-                serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
-            }),
-            normalized_data: envelope.normalized_data.clone(),
-            normalized_snapshot: envelope.normalized_snapshot.clone(),
-        };
-
-        // Build middleware instances from pipeline names
-        let middleware_instances = build_middleware_instances_for_pipeline(&group.middleware, config)
-            .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> { Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, err)) })?;
-
-        let middleware_chain = MiddlewareChain::new(middleware_instances);
-
-        // Process through middleware chain (right side)
-        let processed_json_envelope = middleware_chain.right(json_envelope).await?;
-
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Box<dyn std::error::Error + Send + Sync>> {
         tracing::info!(
             "Processing outgoing middleware for {} middlewares",
             group.middleware.len()
         );
 
-        // Convert back to Vec<u8> envelope
-        let processed_envelope = RequestEnvelope {
-            request_details: processed_json_envelope.request_details,
-            original_data: envelope.original_data, // Keep original bytes
-            normalized_data: Some(processed_json_envelope.original_data),
-            normalized_snapshot: processed_json_envelope.normalized_snapshot,
-        };
+        // Convert ResponseEnvelope<Vec<u8>> to ResponseEnvelope<serde_json::Value> for middleware
+        let json_envelope =
+            envelope
+                .to_json()
+                .map_err(|err| -> Box<dyn std::error::Error + Send + Sync> {
+                    Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        format!("Failed to convert response to JSON: {}", err),
+                    ))
+                })?;
+
+        // Build middleware instances from pipeline names
+        let middleware_instances =
+            build_middleware_instances_for_pipeline(&group.middleware, config).map_err(
+                |err| -> Box<dyn std::error::Error + Send + Sync> {
+                    Box::new(std::io::Error::new(std::io::ErrorKind::InvalidInput, err))
+                },
+            )?;
+
+        let middleware_chain = MiddlewareChain::new(middleware_instances);
+
+        // Process through middleware chain (right side) - now works with ResponseEnvelope
+        let processed_json_envelope = middleware_chain.right(json_envelope).await?;
+
+        // Convert back to ResponseEnvelope<Vec<u8>>
+        let processed_envelope = processed_json_envelope.to_bytes().map_err(
+            |err| -> Box<dyn std::error::Error + Send + Sync> {
+                Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    format!("Failed to convert response to bytes: {}", err),
+                ))
+            },
+        )?;
 
         Ok(processed_envelope)
     }
-
 }
 
 #[cfg(test)]

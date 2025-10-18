@@ -1,5 +1,5 @@
 use crate::globals::get_storage;
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
 use crate::models::middleware::types::jmix_index::{
     current_timestamp, get_jmix_index, JmixPackageInfo,
@@ -65,7 +65,7 @@ impl Middleware for JmixBuilderMiddleware {
 
         let store_root = resolve_store_root(&options);
 
-        // Helper to set response and skip backends
+        // Helper to set response metadata and skip backends
         let mut set_response_and_skip =
             |status: u16,
              hdrs: HashMap<String, String>,
@@ -73,26 +73,43 @@ impl Middleware for JmixBuilderMiddleware {
              json_obj: Option<serde_json::Value>,
              jmix_id: Option<String>,
              zip_ready: Option<bool>| {
-                let mut resp = serde_json::Map::new();
-                resp.insert("status".to_string(), serde_json::json!(status));
+                // Store response metadata in request_details.metadata
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("jmix_response_status".to_string(), status.to_string());
+
+                // Store headers as JSON string
                 if !hdrs.is_empty() {
-                    resp.insert("headers".to_string(), serde_json::json!(hdrs));
+                    if let Ok(headers_json) = serde_json::to_string(&hdrs) {
+                        envelope
+                            .request_details
+                            .metadata
+                            .insert("jmix_response_headers".to_string(), headers_json);
+                    }
                 }
-                if let Some(s) = body_str {
-                    resp.insert("body".to_string(), serde_json::json!(s));
-                }
+
+                // Store body or JSON in normalized_data for the response
                 if let Some(j) = json_obj {
-                    resp.insert("json".to_string(), j);
+                    envelope.normalized_data = Some(j);
+                } else if let Some(s) = body_str {
+                    envelope.normalized_data = Some(serde_json::json!(s));
                 }
+
+                // Store JMIX-specific metadata
                 if let Some(id) = jmix_id {
-                    resp.insert("jmix_id".to_string(), serde_json::json!(id));
+                    envelope
+                        .request_details
+                        .metadata
+                        .insert("jmix_id".to_string(), id);
                 }
                 if let Some(ready) = zip_ready {
-                    resp.insert("zip_ready".to_string(), serde_json::json!(ready));
+                    envelope
+                        .request_details
+                        .metadata
+                        .insert("jmix_zip_ready".to_string(), ready.to_string());
                 }
-                envelope.normalized_data = Some(serde_json::json!({
-                    "response": serde_json::Value::Object(resp)
-                }));
+
                 envelope
                     .request_details
                     .metadata
@@ -237,23 +254,21 @@ impl Middleware for JmixBuilderMiddleware {
 
     async fn right(
         &self,
-        mut envelope: RequestEnvelope<serde_json::Value>,
-    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
+        mut envelope: ResponseEnvelope<serde_json::Value>,
+    ) -> Result<ResponseEnvelope<serde_json::Value>, Error> {
+        // Check if zip is already ready from previous processing (e.g. from left() method via metadata)
+        if let Some(zip_ready_str) = envelope.request_details.metadata.get("jmix_zip_ready") {
+            if zip_ready_str == "true" {
+                tracing::debug!("📦 Zip already ready, skipping build process");
+                return Ok(envelope);
+            }
+        }
+
         // Read normalized_data; expect a DICOM operation result from a backend
         let nd = envelope
             .normalized_data
             .clone()
             .unwrap_or_else(|| serde_json::json!({}));
-
-        // Check if zip is already ready from previous processing (e.g. from left() method)
-        if let Some(response) = nd.get("response") {
-            if let Some(zip_ready) = response.get("zip_ready").and_then(|r| r.as_bool()) {
-                if zip_ready {
-                    tracing::debug!("📦 Zip already ready, skipping build process");
-                    return Ok(envelope);
-                }
-            }
-        }
 
         // Handle two shapes from DICOM service: move and get
         // Example fields: { operation: "move"|"get", success: true, folder_id, folder_path, file_count, instances: [...] }
@@ -421,23 +436,20 @@ impl Middleware for JmixBuilderMiddleware {
             );
         }
 
-        // Set metadata for jmix service to use - endpoint will handle HTTP headers
-        let mut new_nd = nd;
+        // Set metadata in response_details for jmix service to use
+        envelope
+            .response_details
+            .metadata
+            .insert("jmix_id".to_string(), jmix_id.clone());
+        envelope
+            .response_details
+            .metadata
+            .insert("jmix_zip_ready".to_string(), "true".to_string());
+        envelope
+            .response_details
+            .metadata
+            .insert("jmix_study_uid".to_string(), study_uid);
 
-        let response_obj = serde_json::json!({
-            "status": 200u16,
-            "jmix_id": jmix_id,
-            "zip_ready": true,
-            "study_uid": study_uid
-        });
-        if let Some(map) = new_nd.as_object_mut() {
-            map.insert("response".to_string(), response_obj);
-        }
-        // Mirror response into both normalized_data and original_data so it is preserved
-        // by the pipeline and directly accessible in unit tests.
-        let out_nd = new_nd;
-        envelope.normalized_data = Some(out_nd.clone());
-        envelope.original_data = out_nd;
         Ok(envelope)
     }
 }
@@ -534,7 +546,7 @@ fn extract_study_uid(instances: &Value) -> String {
 mod tests {
     use super::*;
     use crate::globals::set_storage;
-    use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
+    use crate::models::envelope::envelope::{RequestDetails, ResponseDetails, ResponseEnvelope};
     use crate::storage::{filesystem::FilesystemStorage, StorageBackend};
     use serial_test::serial;
     use std::fs;
@@ -566,16 +578,22 @@ mod tests {
             "file_count": 2,
             "instances": [{"StudyInstanceUID": "1.2.3"}]
         });
+        let request_details = RequestDetails {
+            method: "GET".into(),
+            uri: "".into(),
+            headers: Default::default(),
+            cookies: Default::default(),
+            query_params: Default::default(),
+            cache_status: None,
+            metadata: Default::default(),
+        };
 
-        let env = RequestEnvelope {
-            request_details: RequestDetails {
-                method: "GET".into(),
-                uri: "".into(),
-                headers: Default::default(),
-                cookies: Default::default(),
-                query_params: Default::default(),
-                cache_status: None,
-                metadata: Default::default(),
+        let env = ResponseEnvelope {
+            request_details,
+            response_details: ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
             },
             original_data: serde_json::json!({}),
             normalized_data: Some(nd),
@@ -586,19 +604,18 @@ mod tests {
         let rt = tokio::runtime::Runtime::new().unwrap();
         let out = rt.block_on(async move { mw.right(env).await.expect("mw") });
 
-        // Validate response contains jmix metadata
-        let nd2 = out.normalized_data.expect("nd");
-        let response = nd2.get("response").expect("response");
-
-        // Check for jmix_id and zip_ready metadata
-        let jmix_id = response
+        // Validate response contains jmix metadata in response_details.metadata
+        let jmix_id = out
+            .response_details
+            .metadata
             .get("jmix_id")
-            .and_then(|id| id.as_str())
-            .expect("jmix_id");
-        let zip_ready = response
-            .get("zip_ready")
-            .and_then(|r| r.as_bool())
-            .expect("zip_ready");
+            .expect("jmix_id should be in metadata");
+        let zip_ready = out
+            .response_details
+            .metadata
+            .get("jmix_zip_ready")
+            .map(|s| s == "true")
+            .expect("jmix_zip_ready should be in metadata");
 
         assert!(!jmix_id.is_empty(), "jmix_id should not be empty");
         assert!(zip_ready, "zip_ready should be true");
@@ -613,6 +630,9 @@ mod tests {
         // Create unique storage for this test
         let storage = create_test_storage();
         set_storage(storage.clone());
+
+        // Capture the expected store_root path before async execution
+        let expected_store_root = storage.subpath_str("jmix-store");
 
         // Prepare a temp source folder with DICOM files
         let src_dir = storage
@@ -632,16 +652,22 @@ mod tests {
             "file_count": 2,
             "instances": [{"StudyInstanceUID": "1.2.3.test.zip"}]
         });
+        let request_details = RequestDetails {
+            method: "GET".into(),
+            uri: "".into(),
+            headers: Default::default(),
+            cookies: Default::default(),
+            query_params: Default::default(),
+            cache_status: None,
+            metadata: Default::default(),
+        };
 
-        let env = RequestEnvelope {
-            request_details: RequestDetails {
-                method: "GET".into(),
-                uri: "".into(),
-                headers: Default::default(),
-                cookies: Default::default(),
-                query_params: Default::default(),
-                cache_status: None,
-                metadata: Default::default(),
+        let env = ResponseEnvelope {
+            request_details,
+            response_details: ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
             },
             original_data: serde_json::json!({}),
             normalized_data: Some(nd),
@@ -650,7 +676,12 @@ mod tests {
 
         let mw = JmixBuilderMiddleware::new();
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(async move { mw.right(env).await });
+        // Re-set storage just before async execution to ensure consistency
+        let storage_clone = storage.clone();
+        let result = rt.block_on(async move {
+            set_storage(storage_clone);
+            mw.right(env).await
+        });
 
         // Check if the middleware ran successfully
         match &result {
@@ -663,16 +694,15 @@ mod tests {
 
         let out = result.expect("middleware should succeed");
 
-        // Get the jmix_id from the response
-        let nd2 = out.normalized_data.expect("nd");
-        let response = nd2.get("response").expect("response");
-        let jmix_id = response
+        // Get the jmix_id from the response metadata
+        let jmix_id = out
+            .response_details
+            .metadata
             .get("jmix_id")
-            .and_then(|id| id.as_str())
-            .expect("jmix_id");
+            .expect("jmix_id should be in metadata");
 
-        // Find the created zip file using the local storage instance
-        let store_root = storage.subpath_str("jmix-store");
+        // Use the pre-captured store_root path
+        let store_root = expected_store_root;
 
         // Look for zip file in the package directory (where jmix-rs creates it)
         let package_dir = store_root.join(jmix_id);

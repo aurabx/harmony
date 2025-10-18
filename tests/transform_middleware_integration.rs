@@ -9,8 +9,12 @@ use tower::ServiceExt;
 #[tokio::test]
 async fn test_transform_middleware_integration() {
     // Create a config that uses the transform middleware
-    let spec_path = format!("{}/examples/config/transforms/simple_rename.json", env!("CARGO_MANIFEST_DIR"));
-    let config_toml = format!(r#"
+    let spec_path = format!(
+        "{}/examples/config/transforms/simple_rename.json",
+        env!("CARGO_MANIFEST_DIR")
+    );
+    let config_toml = format!(
+        r#"
         [proxy]
         id = "transform-test"
         log_level = "debug"
@@ -52,7 +56,9 @@ async fn test_transform_middleware_integration() {
 
         [services.http]
         module = ""
-    "#, spec_path = spec_path);
+    "#,
+        spec_path = spec_path
+    );
 
     let config: Config = toml::from_str(&config_toml).unwrap();
     config.validate().unwrap();
@@ -105,10 +111,25 @@ async fn test_transform_middleware_integration() {
     // });
 
     // Validate the transformed structure according to simple_rename.json
-    assert_eq!(response_json.get("full_name").and_then(|v| v.as_str()), Some("John Doe"));
-    assert_eq!(response_json.get("patient_id").and_then(|v| v.as_i64()), Some(12345));
-    assert!(response_json.get("financial_info").and_then(|v| v.as_object()).is_some());
-    assert_eq!(response_json.get("other").and_then(|v| v.get("extra_field")).and_then(|v| v.as_str()), Some("should be moved to other"));
+    assert_eq!(
+        response_json.get("full_name").and_then(|v| v.as_str()),
+        Some("John Doe")
+    );
+    assert_eq!(
+        response_json.get("patient_id").and_then(|v| v.as_i64()),
+        Some(12345)
+    );
+    assert!(response_json
+        .get("financial_info")
+        .and_then(|v| v.as_object())
+        .is_some());
+    assert_eq!(
+        response_json
+            .get("other")
+            .and_then(|v| v.get("extra_field"))
+            .and_then(|v| v.as_str()),
+        Some("should be moved to other")
+    );
 }
 
 #[tokio::test]

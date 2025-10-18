@@ -150,6 +150,9 @@ The validator enforces strict requirements:
 - **Dynamic Loading**: libloading supports custom endpoints/middleware (see `examples/custom_endpoint`)
 - Items are only ready for production use if they are fully tested and contain no bugs.
 - Clippy is not to be run as part of patches unless specifically requested
+- Try not to mix concerns. 
+- Don't write tests to accept failure to make a failing implementation pass. Keep the test failing till the implementation is fixed. Alternatively, mark the test as skipped.
+- If a piece of code seems poorly architected or doesn't do what you might expect it to, prompt the user.
 
 ## Change Management and PR Hygiene
 

@@ -1,5 +1,5 @@
 use crate::config::config::ConfigError;
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use async_trait::async_trait;
 use axum::{body::Body, response::Response};
@@ -170,8 +170,8 @@ impl ServiceType for DicomEndpoint {
             .get("operation")
             .cloned()
             .unwrap_or_else(|| "DIMSE".into());
-        let uri = format!("dicom://scp/{}", op.to_lowercase());
-        let details = RequestDetails {
+        let uri = format!("mock-dicom://scp/{}", op.to_lowercase());
+        let backend_request_details = RequestDetails {
             method: op,
             uri,
             headers: Map::new(),
@@ -183,9 +183,12 @@ impl ServiceType for DicomEndpoint {
 
         // Prefer normalized_data as the JSON body if payload is JSON
         let normalized: Option<serde_json::Value> = serde_json::from_slice(&ctx.payload).ok();
+        // @todo We shouldnt really need this but currently it's required
+        let request_details = backend_request_details.clone();
 
         Ok(RequestEnvelope {
-            request_details: details,
+            request_details,
+            backend_request_details,
             original_data: ctx.payload,
             normalized_data: normalized,
             normalized_snapshot: None,
@@ -197,66 +200,98 @@ impl ServiceType for DicomEndpoint {
 impl ServiceHandler<Value> for DicomEndpoint {
     type ReqBody = Value;
 
-    async fn transform_request(
-        &self,
-        mut envelope: RequestEnvelope<Vec<u8>>,
-        options: &HashMap<String, Value>,
-    ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-        if self.is_backend_usage(options) {
-            // Backend usage - prepare for DIMSE SCU operations
-            self.handle_backend_request(&mut envelope, options).await
-        } else {
-            // Misconfiguration: DICOM cannot act as HTTP endpoint
-            Err(Error::from("DICOM service cannot be used as an endpoint; configure an HTTP endpoint and a DICOM backend instead"))
-        }
-    }
-
-    async fn transform_response(
+    async fn endpoint_incoming_request(
         &self,
         envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
-    ) -> Result<Response, Error> {
-        let nd = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
-        let response_meta = nd.get("response");
+    ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
+        // Doesn't run as an endpoint yet
+        Ok(envelope)
+    }
 
-        let status = response_meta
-            .and_then(|m| m.get("status"))
-            .and_then(|s| s.as_u64())
-            .and_then(|code| http::StatusCode::from_u16(code as u16).ok())
+    async fn backend_outgoing_request(
+        &self,
+        mut envelope: RequestEnvelope<Vec<u8>>,
+        options: &HashMap<String, Value>,
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
+        // Backend usage - perform DIMSE SCU operations
+        envelope = self
+            .handle_backend_request(&mut envelope, options)
+            .await
+            .expect("DICOM response failed");
+
+        // Detect error conditions and set appropriate HTTP status
+        let status = if let Some(ref normalized) = envelope.normalized_data {
+            if let Some(error) = normalized.get("error") {
+                if error.as_str() == Some("Study not found") {
+                    404
+                } else {
+                    500
+                }
+            } else if let Some(success) = normalized.get("success") {
+                if success.as_bool() == Some(false) {
+                    500 // DICOM operation failed
+                } else {
+                    200
+                }
+            } else {
+                200
+            }
+        } else {
+            200
+        };
+
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "application/json".to_string());
+
+        let body = if let Some(ref normalized) = envelope.normalized_data {
+            serde_json::to_vec(normalized).unwrap_or_default()
+        } else {
+            Vec::new()
+        };
+
+        let mut response_envelope = ResponseEnvelope::from_backend(
+            envelope.request_details.clone(),
+            status,
+            headers,
+            body,
+            None,
+        );
+
+        response_envelope.normalized_data = envelope.normalized_data;
+
+        Ok(response_envelope)
+    }
+
+    async fn endpoint_outgoing_response(
+        &self,
+        envelope: ResponseEnvelope<Vec<u8>>,
+        _options: &HashMap<String, Value>,
+    ) -> Result<Response, Error> {
+        // Build response from ResponseEnvelope
+        let status = http::StatusCode::from_u16(envelope.response_details.status)
             .unwrap_or(http::StatusCode::OK);
 
         let mut builder = Response::builder().status(status);
-        let mut has_content_type = false;
-        if let Some(hdrs) = response_meta
-            .and_then(|m| m.get("headers"))
-            .and_then(|h| h.as_object())
-        {
-            for (k, v) in hdrs.iter() {
-                if let Some(val_str) = v.as_str() {
-                    if k.eq_ignore_ascii_case("content-type") {
-                        has_content_type = true;
-                    }
-                    builder = builder.header(k.as_str(), val_str);
-                }
-            }
+
+        // Add headers from response_details
+        for (k, v) in &envelope.response_details.headers {
+            builder = builder.header(k.as_str(), v.as_str());
         }
 
-        if let Some(body_str) = response_meta
-            .and_then(|m| m.get("body"))
-            .and_then(|b| b.as_str())
-        {
-            return builder
-                .body(Body::from(body_str.to_string()))
-                .map_err(|_| Error::from("Failed to construct DICOM HTTP response"));
-        }
+        // Use original_data if available, otherwise serialize normalized_data
+        let body = if !envelope.original_data.is_empty() {
+            Body::from(envelope.original_data)
+        } else if let Some(normalized) = envelope.normalized_data {
+            let body_bytes = serde_json::to_vec(&normalized)
+                .map_err(|_| Error::from("Failed to serialize DICOM response JSON"))?;
+            Body::from(body_bytes)
+        } else {
+            Body::empty()
+        };
 
-        let body_str = serde_json::to_string(&nd)
-            .map_err(|_| Error::from("Failed to serialize DICOM response payload into JSON"))?;
-        if !has_content_type {
-            builder = builder.header("content-type", "application/json");
-        }
         builder
-            .body(Body::from(body_str))
+            .body(body)
             .map_err(|_| Error::from("Failed to construct DICOM HTTP response"))
     }
 }
@@ -554,21 +589,10 @@ impl DicomEndpoint {
                                 any = true;
                             }
                             if !any {
-                                // Return 404 early
-                                let mut hdrs = HashMap::new();
-                                hdrs.insert(
-                                    "content-type".to_string(),
-                                    "application/json".to_string(),
-                                );
-                                let body =
-                                    serde_json::json!({"error":"Study not found"}).to_string();
-                                let mut resp = serde_json::Map::new();
-                                resp.insert("status".into(), serde_json::json!(404u16));
-                                resp.insert("headers".into(), serde_json::json!(hdrs));
-                                resp.insert("body".into(), serde_json::json!(body));
-                                envelope.normalized_data = Some(
-                                    serde_json::json!({"response": serde_json::Value::Object(resp)}),
-                                );
+                                // Study not found - set error in normalized_data
+                                envelope.normalized_data =
+                                    Some(serde_json::json!({"error": "Study not found"}));
+                                // Mark to skip further backend processing
                                 envelope
                                     .request_details
                                     .metadata

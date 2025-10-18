@@ -1,4 +1,4 @@
-use crate::models::envelope::envelope::RequestEnvelope;
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use async_trait::async_trait;
@@ -78,7 +78,10 @@ impl Middleware for MetadataTransformMiddleware {
                 if let Some(obj) = transformed.as_object() {
                     for (key, value) in obj.iter() {
                         if let Some(string_value) = value.as_str() {
-                            envelope.request_details.metadata.insert(key.clone(), string_value.to_string());
+                            envelope
+                                .request_details
+                                .metadata
+                                .insert(key.clone(), string_value.to_string());
                         }
                         // Ignore non-string values
                     }
@@ -101,8 +104,8 @@ impl Middleware for MetadataTransformMiddleware {
 
     async fn right(
         &self,
-        mut envelope: RequestEnvelope<serde_json::Value>,
-    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
+        mut envelope: ResponseEnvelope<serde_json::Value>,
+    ) -> Result<ResponseEnvelope<serde_json::Value>, Error> {
         if !self.engine.should_apply_right() {
             return Ok(envelope);
         }
@@ -110,7 +113,7 @@ impl Middleware for MetadataTransformMiddleware {
         // Convert metadata HashMap<String, String> to serde_json::Value
         let metadata_json: serde_json::Value = {
             let mut map = serde_json::Map::new();
-            for (key, value) in envelope.request_details.metadata.iter() {
+            for (key, value) in envelope.response_details.metadata.iter() {
                 map.insert(key.clone(), serde_json::Value::String(value.clone()));
             }
             serde_json::Value::Object(map)
@@ -123,7 +126,10 @@ impl Middleware for MetadataTransformMiddleware {
                 if let Some(obj) = transformed.as_object() {
                     for (key, value) in obj.iter() {
                         if let Some(string_value) = value.as_str() {
-                            envelope.request_details.metadata.insert(key.clone(), string_value.to_string());
+                            envelope
+                                .response_details
+                                .metadata
+                                .insert(key.clone(), string_value.to_string());
                         }
                         // Ignore non-string values
                     }
@@ -146,9 +152,7 @@ impl Middleware for MetadataTransformMiddleware {
 }
 
 /// Parse configuration from HashMap for middleware registry
-pub fn parse_config(
-    options: &HashMap<String, Value>,
-) -> Result<MetadataTransformConfig, String> {
+pub fn parse_config(options: &HashMap<String, Value>) -> Result<MetadataTransformConfig, String> {
     let spec_path = options
         .get("spec_path")
         .and_then(|v| v.as_str())
@@ -191,9 +195,11 @@ mod tests {
             cache_status: None,
             metadata,
         };
+        let backend_request_details = request_details.clone();
 
         RequestEnvelope {
             request_details,
+            backend_request_details,
             original_data: serde_json::Value::Null,
             normalized_data: Some(serde_json::Value::Null),
             normalized_snapshot: None,
@@ -224,7 +230,10 @@ mod tests {
         let envelope = create_test_envelope(HashMap::new());
         let result = middleware.left(envelope).await.unwrap();
 
-        assert_eq!(result.request_details.metadata.get("dimse_op"), Some(&"find".to_string()));
+        assert_eq!(
+            result.request_details.metadata.get("dimse_op"),
+            Some(&"find".to_string())
+        );
     }
 
     #[tokio::test]
@@ -249,14 +258,34 @@ mod tests {
         let middleware = MetadataTransformMiddleware::new(config).unwrap();
 
         let envelope = create_test_envelope(HashMap::new());
-        
+
         // Left should do nothing
         let left_result = middleware.left(envelope).await.unwrap();
-        assert!(!left_result.request_details.metadata.contains_key("dimse_op"));
+        assert!(!left_result
+            .request_details
+            .metadata
+            .contains_key("dimse_op"));
+
+        // Convert to ResponseEnvelope for right() method
+        let response_envelope = crate::models::envelope::envelope::ResponseEnvelope {
+            request_details: left_result.request_details,
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
+            original_data: left_result.original_data,
+            normalized_data: left_result.normalized_data,
+            normalized_snapshot: left_result.normalized_snapshot,
+        };
 
         // Right should apply transform
-        let right_result = middleware.right(left_result).await.unwrap();
-        assert_eq!(right_result.request_details.metadata.get("dimse_op"), Some(&"find".to_string()));
+        let right_result = middleware.right(response_envelope).await.unwrap();
+        // After refactor, right() transforms response_details.metadata, not request_details.metadata
+        assert_eq!(
+            right_result.response_details.metadata.get("dimse_op"),
+            Some(&"find".to_string())
+        );
     }
 
     #[tokio::test]
@@ -282,13 +311,19 @@ mod tests {
 
         let mut metadata = HashMap::new();
         metadata.insert("existing_key".to_string(), "existing_value".to_string());
-        
+
         let envelope = create_test_envelope(metadata);
         let result = middleware.left(envelope).await.unwrap();
 
         // Should preserve existing metadata and add new
-        assert_eq!(result.request_details.metadata.get("existing_key"), Some(&"existing_value".to_string()));
-        assert_eq!(result.request_details.metadata.get("dimse_op"), Some(&"find".to_string()));
+        assert_eq!(
+            result.request_details.metadata.get("existing_key"),
+            Some(&"existing_value".to_string())
+        );
+        assert_eq!(
+            result.request_details.metadata.get("dimse_op"),
+            Some(&"find".to_string())
+        );
     }
 
     #[tokio::test]
@@ -303,15 +338,21 @@ mod tests {
         }]);
         let temp = NamedTempFile::new().unwrap();
         fs::write(&temp, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
-        let cfg = MetadataTransformConfig { spec_path: temp.path().to_string_lossy().to_string(), apply: "left".to_string(), fail_on_error: true };
+        let cfg = MetadataTransformConfig {
+            spec_path: temp.path().to_string_lossy().to_string(),
+            apply: "left".to_string(),
+            fail_on_error: true,
+        };
         let mw = MetadataTransformMiddleware::new(cfg).unwrap();
 
         let env = create_test_envelope(HashMap::new());
         let out = mw.left(env).await.unwrap();
-        assert_eq!(out.request_details.metadata.get("dimse_op"), Some(&"get".to_string()));
+        assert_eq!(
+            out.request_details.metadata.get("dimse_op"),
+            Some(&"get".to_string())
+        );
         assert!(out.request_details.metadata.get("num").is_none());
     }
-
 
     #[test]
     fn test_parse_config() {
@@ -357,16 +398,28 @@ mod tests {
             cache_status: None,
             metadata: Default::default(),
         };
+        let backend_request_details = request_details.clone();
         let env = RequestEnvelope {
             request_details,
+            backend_request_details,
             original_data: serde_json::Value::Null,
             normalized_data: Some(serde_json::Value::Null),
             normalized_snapshot: None,
         };
-        let spec_path = format!("{}/examples/config/transforms/metadata_set_dimse_op.json", env!("CARGO_MANIFEST_DIR"));
-        let cfg = MetadataTransformConfig { spec_path, apply: "left".into(), fail_on_error: true };
+        let spec_path = format!(
+            "{}/examples/config/transforms/metadata_set_dimse_op.json",
+            env!("CARGO_MANIFEST_DIR")
+        );
+        let cfg = MetadataTransformConfig {
+            spec_path,
+            apply: "left".into(),
+            fail_on_error: true,
+        };
         let mw = MetadataTransformMiddleware::new(cfg).unwrap();
         let out = mw.left(env).await.unwrap();
-        assert_eq!(out.request_details.metadata.get("dimse_op"), Some(&"find".to_string()));
+        assert_eq!(
+            out.request_details.metadata.get("dimse_op"),
+            Some(&"find".to_string())
+        );
     }
 }
