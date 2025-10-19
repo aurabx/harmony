@@ -44,8 +44,9 @@ Thank you for your interest in contributing! This document explains how to propo
 - Use the samples/ directory for test inputs where relevant; keep tests hermetic.
 
 ## Documentation
-- Update docs/ and examples/config when behavior or configuration changes.
-- Include usage notes and security implications where applicable.
+- Update docs/ and example directories (examples/*/) when behavior or configuration changes.
+- Each example should have its own README with usage notes and prerequisites.
+- Include security implications where applicable.
 
 ## Security guidance
 - Do not commit secrets. Use environment variables or secret managers; restrict permissions to least privilege.

@@ -34,6 +34,7 @@
 /tmp/
 .tmp/
 ./tmp/
+examples/*/tmp/
 
 # Database files
 *.db

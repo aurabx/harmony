@@ -12,7 +12,7 @@
 ## Repository layout
 - Root crate: harmony (src/lib.rs, src/main.rs)
 - Workspace crates: crates/dimse, crates/dicom_json_tool, crates/transform
-- Examples: examples/config (config.toml, pipelines/, transforms/), examples/custom_endpoint (example crate)
+- Examples: Self-contained example directories under examples/ (basic-echo, fhir, transform, fhir-to-dicom, jmix, dicom-backend, dicom-scp, dicomweb, jmix-to-dicom, custom_endpoint)
 - Docs: docs/* (getting-started, configuration, endpoints, middleware, backends, router, envelope, dimse-integration, testing, security, system-description)
 - Samples: samples/jolt/*; additional DICOM samples in dev/samples
 - Temporary outputs: prefer ./tmp (gitignored) over /tmp
@@ -20,7 +20,7 @@
 ## Build, run, test
 - Build (debug): `cargo build`
 - Build (release): `cargo build --release`
-- Run with example config: `cargo run -- --config examples/config/config.toml`
+- Run with example config: `cargo run -- --config examples/basic-echo/config.toml` (or any other example)
 - Run tests: `cargo test`
 - With logs: `RUST_LOG=harmony=debug cargo test -- --nocapture`
 - Format: `cargo fmt --all`

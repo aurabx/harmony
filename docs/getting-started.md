@@ -21,11 +21,11 @@ Build
 - Release: cargo build --release
 
 Run
-- Using the example configuration with dual networks:
-  - cargo run -- --config examples/config/config.toml
-- The config uses two networks: management (127.0.0.1:9090) for management API, external (0.0.0.0:8080) for client traffic
-- Access management endpoints at: http://localhost:9090/admin/info
-- Access client endpoints at: http://localhost:8080/
+- Using the basic echo example:
+  - cargo run -- --config examples/basic-echo/config.toml
+- Each example under `examples/` has its own README with specific instructions
+- The basic-echo example binds to 127.0.0.1:8080
+- Access the echo endpoint at: http://localhost:8080/echo
 
 Minimal pipeline example (HTTP -> Echo with dual networks)
 ```toml

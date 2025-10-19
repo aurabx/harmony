@@ -40,24 +40,32 @@ Build and run with the example configuration:
 # Build
 cargo build
 
-# Run
-cargo run -- --config examples/config/config.toml
+# Run the basic echo example
+cargo run -- --config examples/basic-echo/config.toml
 ```
 
-Try the basic echo pipeline (loaded from examples/config/pipelines/basic/basic-echo.toml):
+Try the basic echo endpoint:
 
 ```bash
 # In another shell
-curl -i http://127.0.0.1:8080/echo/hello
+curl -i http://127.0.0.1:8080/echo
 ```
 
-If configured, you should receive an echoed response from the sample backend. Explore more pipelines under examples/config/pipelines/.
+If configured, you should receive an echoed response from the sample backend. Explore more examples under the `examples/` directory (each has its own README).
 
 ## Configuration
-Harmony’s configuration is file-based (TOML) and can include additional pipeline/transform files from a directory.
-- Example config: examples/config/config.toml
-- Pipelines: examples/config/pipelines/*
-- Transforms: examples/config/transforms/*
+Harmony's configuration is file-based (TOML) and can include additional pipeline/transform files from a directory.
+
+Examples (each with README, config, and pipelines):
+- `examples/basic-echo/` - Simple HTTP passthrough
+- `examples/fhir/` - FHIR with authentication
+- `examples/transform/` - JOLT transformations
+- `examples/fhir-to-dicom/` - Protocol translation
+- `examples/jmix/` - JMIX packaging
+- `examples/dicom-backend/` - DICOM SCU operations
+- `examples/dicom-scp/` - DICOM SCP endpoint
+- `examples/dicomweb/` - DICOMweb support
+- `examples/jmix-to-dicom/` - JMIX to DICOM workflow
 
 Core building blocks:
 - Networks: bind addresses/ports and optional WireGuard
