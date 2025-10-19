@@ -1,0 +1,33 @@
+# ------------------------
+# Basic echo-only pipeline (conflict-free)
+#-------------------------
+[pipelines.echo_basic]
+description = "Basic echo endpoint for quick start"
+networks = ["http_net"]
+endpoints = ["echo_endpoint"]
+middleware = [
+    "passthru",
+]
+backends = ["echo_backend"]
+
+# ------------------------
+# Middleware
+#-------------------------
+[middleware.passthru]
+type = "passthru"
+
+# ------------------------
+# Public endpoints
+#-------------------------
+[endpoints.echo_endpoint]
+service = "http"
+[endpoints.echo_endpoint.options]
+path_prefix = "/echo"
+
+# ------------------------
+# Backends
+#-------------------------
+[backends.echo_backend]
+service = "echo"
+[backends.echo_backend.options]
+path_prefix = "/echo-back"

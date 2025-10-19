@@ -1,0 +1,38 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "PatientID": "resource.identifier[0].value",
+      "PatientName": "resource.name[0].family",
+      "StudyInstanceUID": "resource.extension[0].valueString",
+      "StudyDate": "resource.extension[1].valueDate",
+      "*": "resource.&"
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "resourceType": "Patient",
+      "resource": {
+        "identifier": [
+          {
+            "system": "http://example.com/patient-id"
+          }
+        ],
+        "name": [
+          {
+            "use": "usual"
+          }
+        ],
+        "extension": [
+          {
+            "url": "http://example.com/study-uid"
+          },
+          {
+            "url": "http://example.com/study-date"
+          }
+        ]
+      }
+    }
+  }
+]

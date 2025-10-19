@@ -1,0 +1,45 @@
+# FHIR Passthrough Example Configuration
+# Demonstrates FHIR endpoint with basic authentication and JSON extraction
+
+[proxy]
+id = "harmony-fhir"
+log_level = "debug"
+pipelines_path = "pipelines"
+
+# Network configuration
+[network.http_net]
+enable_wireguard = false
+interface = "wg0"
+
+[network.http_net.http]
+bind_address = "127.0.0.1"
+bind_port = 8081
+
+# Logging
+[logging]
+log_to_file = true
+log_file_path = "./tmp/harmony_fhir.log"
+
+# Storage
+[storage]
+backend = "filesystem"
+
+[storage.options]
+path = "./tmp"
+
+# Service types
+[services.http]
+module = ""
+
+[services.echo]
+module = ""
+
+# Middleware types
+[middleware_types.basic_auth]
+module = ""
+
+[middleware_types.json_extractor]
+module = ""
+
+[middleware_types.passthru]
+module = ""

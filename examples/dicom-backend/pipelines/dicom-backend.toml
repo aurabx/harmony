@@ -1,0 +1,28 @@
+# ------------------------
+# DICOM Backend (SCU) Example
+#-------------------------
+[pipelines.dicom_backend_demo]
+description = "HTTP request triggers DIMSE SCU operations via DICOM backend"
+networks = ["http_net"]
+endpoints = ["http_to_dicom"]
+middleware = []
+backends = ["dicom_pacs"]
+
+# ------------------------
+# Endpoint
+#-------------------------
+[endpoints.http_to_dicom]
+service = "http"
+[endpoints.http_to_dicom.options]
+path_prefix = "/trigger-dicom"
+
+# ------------------------
+# DICOM Backend
+#-------------------------
+[backends.dicom_pacs]
+service = "dicom"
+[backends.dicom_pacs.options]
+aet = "ORTHANC"
+host = "localhost"
+port = 4242
+local_aet = "HARMONY_SCU"

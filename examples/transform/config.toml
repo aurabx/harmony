@@ -1,0 +1,40 @@
+# Transform Middleware Example Configuration
+# Demonstrates JOLT transformation middleware for data transformation
+
+[proxy]
+id = "harmony-transform"
+log_level = "debug"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+
+# Network configuration
+[network.http_net]
+enable_wireguard = false
+interface = "wg0"
+
+[network.http_net.http]
+bind_address = "127.0.0.1"
+bind_port = 8083
+
+# Logging
+[logging]
+log_to_file = true
+log_file_path = "./tmp/harmony_transform.log"
+
+# Storage
+[storage]
+backend = "filesystem"
+
+[storage.options]
+path = "./tmp"
+
+# Service types
+[services.http]
+module = ""
+
+# Middleware types
+[middleware_types.json_extractor]
+module = ""
+
+[middleware_types.transform]
+module = ""

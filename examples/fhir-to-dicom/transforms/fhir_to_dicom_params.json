@@ -1,0 +1,9 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "*": "&",
+      "path": "dimse_identifier.dummy"
+    }
+  }
+]

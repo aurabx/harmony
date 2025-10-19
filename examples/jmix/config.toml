@@ -1,0 +1,39 @@
+# JMIX High-Performance Example Configuration
+# Demonstrates JMIX endpoint with performance optimization flags
+
+[proxy]
+id = "harmony-jmix"
+log_level = "debug"
+pipelines_path = "pipelines"
+
+# Network configuration
+[network.http_net]
+enable_wireguard = false
+interface = "wg0"
+
+[network.http_net.http]
+bind_address = "127.0.0.1"
+bind_port = 8084
+
+# Logging
+[logging]
+log_to_file = true
+log_file_path = "./tmp/harmony_jmix.log"
+
+# Storage
+[storage]
+backend = "filesystem"
+
+[storage.options]
+path = "./tmp"
+
+# Service types
+[services.jmix]
+module = ""
+
+[services.dicom]
+module = ""
+
+# Middleware types
+[middleware_types.jmix_builder]
+module = ""

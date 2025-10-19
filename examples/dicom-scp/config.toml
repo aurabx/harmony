@@ -1,0 +1,33 @@
+# DICOM SCP Example Configuration
+# Demonstrates DICOM SCP endpoint accepting DIMSE connections
+
+[proxy]
+id = "harmony-dicom-scp"
+log_level = "debug"
+pipelines_path = "pipelines"
+
+# Network configuration - DICOM SCP listener
+[network.dicom_net]
+enable_wireguard = false
+interface = "wg0"
+
+[network.dicom_net.dicom]
+bind_address = "0.0.0.0"
+bind_port = 11112
+aet = "HARMONY_SCP"
+
+# Logging
+[logging]
+log_to_file = true
+log_file_path = "./tmp/harmony_dicom_scp.log"
+
+# Storage
+[storage]
+backend = "filesystem"
+
+[storage.options]
+path = "./tmp"
+
+# Service types
+[services.dicom]
+module = ""
