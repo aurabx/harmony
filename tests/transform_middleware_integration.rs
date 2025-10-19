@@ -10,7 +10,7 @@ use tower::ServiceExt;
 async fn test_transform_middleware_integration() {
     // Create a config that uses the transform middleware
     let spec_path = format!(
-        "{}/examples/config/transforms/simple_rename.json",
+        "{}/examples/transform/transforms/simple_rename.json",
         env!("CARGO_MANIFEST_DIR")
     );
     let config_toml = format!(

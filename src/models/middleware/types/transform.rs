@@ -374,7 +374,7 @@ mod tests {
 
         // Use real spec file
         let spec_path = format!(
-            "{}/examples/config/transforms/fhir_to_dicom_params.json",
+            "{}/examples/fhir-to-dicom/transforms/fhir_to_dicom_params.json",
             env!("CARGO_MANIFEST_DIR")
         );
         let cfg = JoltTransformMiddlewareConfig {
@@ -434,7 +434,7 @@ mod tests {
         };
 
         let spec_path = format!(
-            "{}/examples/config/transforms/dicom_to_imagingstudy_simple.json",
+            "{}/examples/fhir-to-dicom/transforms/dicom_to_imagingstudy_simple.json",
             env!("CARGO_MANIFEST_DIR")
         );
         let cfg = JoltTransformMiddlewareConfig {

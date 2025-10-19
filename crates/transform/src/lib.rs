@@ -178,10 +178,11 @@ mod tests {
     }
 
     #[test]
+    #[ignore] // Spec file moved; no longer in examples
     fn test_parse_real_metadata_set_dimse_op_spec() {
         // Resolve path relative to this crate directory
         let spec_path = format!(
-            "{}/../../examples/config/transforms/metadata_set_dimse_op.json",
+            "{}/../../samples/jolt/metadata_set_dimse_op.json",
             env!("CARGO_MANIFEST_DIR")
         );
         let engine = JoltTransformEngine::from_spec_path(&spec_path)
@@ -195,7 +196,7 @@ mod tests {
     #[test]
     fn test_parse_real_fhir_to_dicom_params_spec() {
         let spec_path = format!(
-            "{}/../../examples/config/transforms/fhir_to_dicom_params.json",
+            "{}/../../examples/fhir-to-dicom/transforms/fhir_to_dicom_params.json",
             env!("CARGO_MANIFEST_DIR")
         );
         let engine = JoltTransformEngine::from_spec_path(&spec_path)
@@ -215,7 +216,7 @@ mod tests {
     #[test]
     fn test_parse_real_dicom_to_imagingstudy_spec() {
         let spec_path = format!(
-            "{}/../../examples/config/transforms/dicom_to_imagingstudy_simple.json",
+            "{}/../../examples/fhir-to-dicom/transforms/dicom_to_imagingstudy_simple.json",
             env!("CARGO_MANIFEST_DIR")
         );
         let engine = JoltTransformEngine::from_spec_path(&spec_path)

@@ -407,7 +407,7 @@ mod tests {
             normalized_snapshot: None,
         };
         let spec_path = format!(
-            "{}/examples/config/transforms/metadata_set_dimse_op.json",
+            "{}/samples/jolt/metadata_set_dimse_op.json",
             env!("CARGO_MANIFEST_DIR")
         );
         let cfg = MetadataTransformConfig {
