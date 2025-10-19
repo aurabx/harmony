@@ -1,5 +1,45 @@
 # Changelog
 
+## [0.3.0] - 2025-10-19
+
+### Highlights
+- Complete protocol adapter redesign built around the Router/Pipeline architecture for clearer request flow and easier extensibility. See docs/router.md and docs/adapters.md.
+- Enhanced DIMSE support with more robust association handling and improved behavior for common operations.
+- Configurable DICOM backends via a new backend abstraction, allowing you to select and configure different DICOM providers.
+- Examples reorganized to match the new adapter/backends layout and to simplify getting started.
+- Automatic persistent SCP orchestration for DICOM backend operations.
+- Numerous bug fixes and dependency updates.
+
+### Breaking Changes
+- Protocol adapter interfaces were redesigned.
+- Configuration format related to protocol adapters/backends has changed.
+
+### Added
+- Protocol-agnostic core module layout with HTTP and DIMSE adapters
+- Backend abstraction for DICOM enabling configurable providers
+- Automatic persistent DICOM SCP spawning for backend operations
+- Configurable GET/MOVE operations for DICOM backends
+- ServiceType protocol-agnostic response hooks
+- Comprehensive tests for Phase 1 components
+
+### Changed
+- Router and pipeline integration updated to align with the new adapter design
+- Examples directory layout updated with focused example directories
+- DIMSE response conversion and status mapping improvements
+- Deprecated dispatcher in favor of HttpAdapter delegation
+- Management API fixes and improvements
+
+### Fixed
+- Backend skipping logic and associated tests
+- State issues with JMIX package construction
+- Management API functionality
+- Transform test references updated to new example paths
+- Multiple stability and correctness fixes across adapters, routing, and configuration validation
+
+### Dependencies
+- Updated jmix-rs to 0.3.2
+- Upgraded core web stack and ecosystem crates
+
 ## [0.2.0] - 2025-10-17
 
 ### Added
@@ -30,3 +70,6 @@
 
 ### Notes
 - No breaking changes since 0.1.1.
+
+[0.3.0]: https://github.com/aurabx/harmony/compare/0.2.0...0.3.0
+[0.2.0]: https://github.com/aurabx/harmony/compare/0.1.1...0.2.0
