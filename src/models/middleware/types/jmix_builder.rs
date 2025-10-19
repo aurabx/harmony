@@ -583,6 +583,9 @@ mod tests {
     #[test]
     #[serial]
     fn test_builds_jmix_envelope_from_dicom_result() {
+        // Reset global storage to ensure clean state
+        crate::globals::reset_storage();
+        
         // Create unique storage for this test
         let storage = create_test_storage();
         set_storage(storage.clone());
@@ -654,6 +657,9 @@ mod tests {
         use std::io::Cursor;
         use zip::ZipArchive;
 
+        // Reset global storage to ensure clean state
+        crate::globals::reset_storage();
+
         // Create unique storage for this test
         let storage = create_test_storage();
         set_storage(storage.clone());
@@ -703,10 +709,7 @@ mod tests {
 
         let mw = JmixBuilderMiddleware::new();
         let rt = tokio::runtime::Runtime::new().unwrap();
-        // Re-set storage just before async execution to ensure consistency
-        let storage_clone = storage.clone();
         let result = rt.block_on(async move {
-            set_storage(storage_clone);
             mw.right(env).await
         });
 
@@ -797,6 +800,9 @@ mod tests {
         assert!(archive.len() > 0, "Zip should contain files");
         assert!(has_manifest, "Zip should contain manifest.json");
         // Note: metadata.json and DICOM files might be optional depending on jmix-rs behavior
+        
+        // Clean up: Remove the test-specific storage to avoid interference
+        drop(storage);
     }
 
     fn create_test_storage() -> Arc<FilesystemStorage> {

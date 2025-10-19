@@ -1,6 +1,7 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use harmony::config::config::{Config, ConfigError};
+use harmony::storage::StorageBackend;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -44,9 +45,8 @@ fn create_test_zip(
     Ok(())
 }
 
-fn ensure_jmix_envelope(id: &str) -> PathBuf {
-    let root = PathBuf::from("./tmp/jmix-store");
-    let pkg = root.join(id); // No .jmix extension - just the UUID
+fn ensure_jmix_envelope(id: &str, store_root: &std::path::Path) -> PathBuf {
+    let pkg = store_root.join(id); // No .jmix extension - just the UUID
     let payload = pkg.join("payload");
     fs::create_dir_all(&payload).expect("mkdir jmix payload");
     let manifest = serde_json::json!({
@@ -83,20 +83,27 @@ fn ensure_jmix_envelope(id: &str) -> PathBuf {
 
 #[tokio::test]
 async fn jmix_manifest_and_archive_skip_backends() {
+    // Reset global storage to ensure clean state
+    harmony::globals::reset_storage();
+    
     // Initialize storage backend before creating test data
     use harmony::storage::filesystem::FilesystemStorage;
     let storage = Arc::new(FilesystemStorage::new("./tmp").expect("Failed to create test storage"));
-    harmony::globals::set_storage(storage);
+    
+    harmony::globals::set_storage(storage.clone());
 
+    // Get the store root from storage backend
+    let store_root = storage.subpath_str("jmix-store");
+    fs::create_dir_all(&store_root).expect("create jmix-store dir");
+    
     // Prepare a valid JMIX package on disk
     let id = Uuid::new_v4().to_string();
-    let pkg_dir = ensure_jmix_envelope(&id);
+    let pkg_dir = ensure_jmix_envelope(&id, &store_root);
     assert!(pkg_dir.exists());
 
     // Build config with an intentionally invalid DICOM backend (missing AET)
     // If backends are not skipped for JMIX-served routes, requests would fail with 502.
-    let toml = format!(
-        r#"
+    let toml = r#"
         [proxy]
         id = "jmix-skip-backends-test"
         log_level = "info"
@@ -133,15 +140,14 @@ async fn jmix_manifest_and_archive_skip_backends() {
 
         [middleware.jmix_builder]
         type = "jmix_builder"
-        
+
         [services.http]
         module = ""
         [services.dicom]
         module = ""
         [services.jmix]
         module = ""
-    "#
-    );
+    "#.to_string();
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;

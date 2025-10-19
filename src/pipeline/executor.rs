@@ -197,15 +197,28 @@ impl PipelineExecutor {
             .unwrap_or(false);
 
         if skip_backends {
-            tracing::info!("Skipping backends due to endpoint 'skip_backends' flag");
-            // Return empty response
-            return Ok(ResponseEnvelope::from_backend(
+            tracing::info!("Skipping backends - building response from request envelope");
+            // When backends are skipped, build response directly from the request envelope
+            // Middleware/endpoint should have prepared normalized_data with the response
+            
+            let body = if let Some(ref normalized) = envelope.normalized_data {
+                serde_json::to_vec(normalized).unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            
+            let mut response = ResponseEnvelope::from_backend(
                 envelope.request_details.clone(),
                 200,
                 HashMap::new(),
-                Vec::new(),
+                body,
                 None,
-            ));
+            );
+            
+            // Preserve normalized_data for outgoing middleware
+            response.normalized_data = envelope.normalized_data;
+            
+            return Ok(response);
         }
 
         // If no backends configured, return empty response
