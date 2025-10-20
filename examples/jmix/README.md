@@ -29,7 +29,7 @@ docker run -p 4242:4242 -p 8042:8042 --name orthanc \
 - **HTTP Listener**: `127.0.0.1:8084`
 - **Endpoint Path**: `/jmix`
 - **DICOM Backend**: `127.0.0.1:4242` (AE: `ORTHANC`, Local AE: `HARMONY_SCU`)
-- **Performance Options**:
+- **Performance Options** (configured on jmix_builder middleware):
   - `skip_hashing`: `true` (skips SHA256 hash computation for speed)
   - `skip_listing`: `false` (includes DICOM files in manifest)
 - **Log File**: `./tmp/harmony_jmix.log`
@@ -57,8 +57,8 @@ curl "http://127.0.0.1:8084/jmix/api/jmix?studyInstanceUid=1.2.3.4.5.6"
 
 **Query Parameters:**
 - `studyInstanceUid`: DICOM Study Instance UID (required)
-- `skip_hashing`: Override config default (optional, true/false)
-- `skip_listing`: Override config default (optional, true/false)
+
+**Note**: Performance options (`skip_hashing`, `skip_listing`) are now configured on the jmix_builder middleware in the configuration file, not as query parameters.
 
 ### 2. Download Stored Envelope
 

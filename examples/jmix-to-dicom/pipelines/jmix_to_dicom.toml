@@ -25,9 +25,6 @@ path_prefix = "/jmix"
 # - "get" (C-GET): Works without PACS-side AE configuration, images received directly
 # - "move" (C-MOVE): Requires PACS to know SCU's AE title and network address
 dimse_operation = "get"
-# Performance optimization flags
-skip_hashing = true   # Skip SHA256 hashing for faster processing
-skip_listing = true   # Skip DICOM files from files.json manifest
 
 # ------------------------
 # DICOM backend (remote PACS)
@@ -36,6 +33,10 @@ skip_listing = true   # Skip DICOM files from files.json manifest
 #-------------------------
 [middleware.jmix_builder]
 type = "jmix_builder"
+[middleware.jmix_builder.options]
+# Performance optimization flags
+skip_hashing = true   # Skip SHA256 hashing for faster processing
+skip_listing = true   # Skip DICOM files from files.json manifest
 
 [backends.dicom_pacs]
 service = "dicom"

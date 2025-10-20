@@ -152,3 +152,81 @@ Behavior:
 - Preserves existing metadata fields not modified by transform
 - Common use case: setting dimse_op field to control DICOM backend operations
 
+## JMIX Builder
+
+Builds JMIX envelopes from DICOM operation responses. Handles caching, indexing, and ZIP file creation for JMIX packages.
+
+Config:
+```toml
+[middleware.jmix_builder]
+type = "jmix_builder"
+[middleware.jmix_builder.options]
+# Performance optimization flags
+skip_hashing = true   # Skip SHA256 hashing for faster processing
+skip_listing = true   # Skip DICOM files from files.json manifest
+```
+
+**Configuration options:**
+- `skip_hashing` (bool, optional, default: false): Skip SHA256 file hashing for faster processing
+- `skip_listing` (bool, optional, default: false): Skip DICOM files from files.json manifest
+
+**Left side behavior (request processing):**
+- Processes GET/HEAD requests for JMIX endpoints (`/api/jmix/{id}`, `/api/jmix?studyInstanceUid=...`)
+- Serves cached JMIX packages if they exist locally
+- Returns manifest.json for manifest requests (`/api/jmix/{id}/manifest`)
+- Sets `skip_backends=true` and response metadata when serving from cache
+- Passes through to backends when no local package exists
+
+**Right side behavior (response processing):**
+- Detects DICOM "move"/"get" responses containing `folder_path` and `instances`
+- Creates JMIX packages under storage using jmix-rs builder
+- Copies DICOM files from the backend folder into the package payload
+- Writes manifest.json and metadata.json files
+- Creates ZIP files for distribution
+- Indexes packages by StudyInstanceUID for query lookup
+- Cleans up temporary DICOM files after successful ZIP creation
+
+This middleware is typically used with JMIX endpoints that bridge to DICOM backends, automatically converting DICOM responses into distributable JMIX packages.
+
+## DICOMweb Bridge
+
+Bridges DICOMweb HTTP requests (QIDO-RS/WADO-RS) to DICOM operations and converts responses back to DICOMweb format.
+
+Config:
+```toml
+[middleware.dicomweb_bridge]
+type = "dicomweb_bridge"
+```
+
+**Left side behavior (DICOMweb → DICOM):**
+- Maps DICOMweb URLs to DICOM operations:
+  - `/studies` → C-FIND at study level
+  - `/studies/{study}/series` → C-FIND at series level  
+  - `/studies/{study}/series/{series}/instances` → C-FIND at instance level
+  - `/studies/{study}/series/{series}/instances/{instance}` → C-GET (WADO) or C-FIND (QIDO)
+  - `/studies/.../metadata` → C-FIND with full metadata
+  - `/studies/.../frames/{frames}` → C-GET for frame extraction
+- Converts query parameters to DICOM identifiers with hex tags
+- Processes `includefield` parameter for attribute filtering
+- Sets appropriate return keys based on query level and includefield
+- Distinguishes between QIDO (JSON) and WADO (binary) based on Accept headers
+
+**Right side behavior (DICOM → DICOMweb):**
+- **QIDO responses**: Converts DICOM find results to DICOMweb JSON arrays
+- **WADO metadata**: Returns filtered JSON metadata based on includefield
+- **WADO instances**: Creates multipart/related responses with DICOM files
+- **WADO frames**: Decodes DICOM pixel data to JPEG/PNG images
+- Handles both single-frame and multi-frame responses
+- Supports content negotiation (Accept: image/jpeg, image/png)
+- Provides proper error responses for unsupported transfer syntaxes
+
+**Features:**
+- Full DICOMweb QIDO-RS and WADO-RS compliance
+- Automatic DICOM tag name to hex conversion using dicom-rs StandardDataDictionary
+- Support for multiple query parameter values
+- Includefield filtering for bandwidth optimization
+- Multipart response handling for bulk data
+- Frame-level image extraction with format conversion
+
+This middleware enables DICOMweb endpoints to communicate with traditional DICOM PACS systems via DIMSE protocols.
+

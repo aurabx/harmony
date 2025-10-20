@@ -16,26 +16,25 @@ backends = ["dicom_pacs"]
 #-------------------------
 [middleware.jmix_builder]
 type = "jmix_builder"
+[middleware.jmix_builder.options]
+# Performance optimization flags configured on the middleware
+skip_hashing = true   # Skip SHA256 hashing by default for faster processing
+skip_listing = false  # Still include file listings by default for inventory
 
 # ------------------------
-# High-Performance JMIX HTTP endpoint with default skip flags
+# JMIX HTTP endpoint
 # Routes:
-#   GET  /jmix/api/jmix?studyInstanceUid=...     -> uses config defaults, can be overridden by query params
+#   GET  /jmix/api/jmix?studyInstanceUid=...     -> triggers DICOM backend if not cached
 #   GET  /jmix/api/jmix/{id}                     -> download stored envelope (zip/gzip via Accept)
 #   GET  /jmix/api/jmix/{id}/manifest            -> fetch stored manifest.json
 #
-# Configuration options:
-#   skip_hashing: true/false (default: false) - Skip SHA256 hash computation for performance
-#   skip_listing: true/false (default: false) - Skip DICOM files from files.json manifest
-#   store_dir: path (optional) - Custom storage directory for JMIX envelopes
+# Note: Performance options (skip_hashing, skip_listing) are configured on the
+# jmix_builder middleware above, not on the endpoint.
 #-------------------------
 [endpoints.jmix_api_performance]
 service = "jmix"
 [endpoints.jmix_api_performance.options]
 path_prefix = "/jmix"
-# Default performance optimizations - can be overridden by query parameters
-skip_hashing = true   # Skip SHA256 hashing by default for faster processing
-skip_listing = false  # Still include file listings by default for inventory
 
 # Optional: custom storage directory
 # store_dir = "./tmp/jmix-store-performance"
