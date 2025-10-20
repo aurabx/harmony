@@ -13,7 +13,7 @@ backends = ["dicom_pacs"]
 # ------------------------
 # JMIX HTTP endpoint
 # Routes:
-#   GET  /jmix/api/jmix?studyInstanceUid=...     -> if not locally stored, triggers DIMSE C-GET
+#   GET  /jmix/api/jmix?studyInstanceUid=...     -> if not locally stored, triggers DIMSE operation
 #   GET  /jmix/api/jmix/{id}                     -> download stored envelope (zip/gzip via Accept)
 #   GET  /jmix/api/jmix/{id}/manifest            -> fetch stored manifest.json
 #-------------------------
@@ -21,10 +21,6 @@ backends = ["dicom_pacs"]
 service = "jmix"
 [endpoints.jmix_api.options]
 path_prefix = "/jmix"
-# DICOM retrieval operation: "get" (default) or "move"
-# - "get" (C-GET): Works without PACS-side AE configuration, images received directly
-# - "move" (C-MOVE): Requires PACS to know SCU's AE title and network address
-dimse_operation = "get"
 
 # ------------------------
 # DICOM backend (remote PACS)
@@ -45,6 +41,10 @@ aet = "ORTHANC"              # Remote AE (Orthanc)
 host = "127.0.0.1"
 port = 4242
 local_aet = "HARMONY_SCU"    # Our AE title
+# DICOM retrieval mode: "get" (default) or "move"
+# - "get" (C-GET): Works without PACS-side AE configuration, images received directly
+# - "move" (C-MOVE): Requires PACS to know SCU's AE title and network address
+dimse_retrieve_mode = "get"
 incoming_store_port = 11112  # Port Orthanc will push C-STORE to
 persistent_store_scp = true  # keep a persistent C-STORE SCP listening
 

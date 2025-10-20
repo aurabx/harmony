@@ -108,6 +108,24 @@ impl ServiceType for DicomEndpoint {
         if self.is_backend_usage(options) {
             // Backend usage - validate remote connection parameters
             self.create_remote_node(options)?;
+            
+            // Validate dimse_retrieve_mode option if provided
+            if let Some(retrieve_mode) = options.get("dimse_retrieve_mode") {
+                if let Some(mode_str) = retrieve_mode.as_str() {
+                    let mode_lower = mode_str.to_lowercase();
+                    if !matches!(mode_lower.as_str(), "get" | "move") {
+                        return Err(ConfigError::InvalidEndpoint {
+                            name: "dicom".to_string(),
+                            reason: "dimse_retrieve_mode must be either 'get' or 'move'".to_string(),
+                        });
+                    }
+                } else {
+                    return Err(ConfigError::InvalidEndpoint {
+                        name: "dicom".to_string(),
+                        reason: "dimse_retrieve_mode must be a string value".to_string(),
+                    });
+                }
+            }
         } else {
             // Endpoint usage - validate local AET only for SCP listener
             let local_aet =
@@ -354,18 +372,32 @@ impl DicomEndpoint {
         // Create SCU client
         let scu = DimseScu::new(dimse_config);
 
-        // Extract path for context and resolve operation (prefer dimse_op set by middleware)
+        // Extract path for context and resolve operation
         let path = envelope
             .request_details
             .metadata
             .get("path")
             .cloned()
             .unwrap_or_default();
+        
+        // Operation precedence: dimse_op (middleware) > dimse_retrieve_mode (backend config) > path (fallback)
+        // Note: dimse_retrieve_mode only applies to retrieval operations (get/move)
         let op = envelope
             .request_details
             .metadata
             .get("dimse_op")
             .cloned()
+            .or_else(|| {
+                // Only use retrieve mode for retrieval-related operations
+                if path.is_empty() || matches!(path.as_str(), "get" | "move" | "/get" | "/move") {
+                    options
+                        .get("dimse_retrieve_mode")
+                        .and_then(|v| v.as_str())
+                        .map(|s| s.to_string())
+                } else {
+                    None
+                }
+            })
             .unwrap_or_else(|| path.clone());
 
         let result = match op.as_str() {

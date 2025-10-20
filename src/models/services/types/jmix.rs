@@ -53,23 +53,6 @@ impl ServiceType for JmixEndpoint {
             }
         }
 
-        // Validate dimse_operation option if provided
-        if let Some(dimse_op) = options.get("dimse_operation") {
-            if let Some(op_str) = dimse_op.as_str() {
-                let op_lower = op_str.to_lowercase();
-                if op_lower != "get" && op_lower != "move" {
-                    return Err(ConfigError::InvalidEndpoint {
-                        name: "jmix".to_string(),
-                        reason: "dimse_operation must be either 'get' or 'move'".to_string(),
-                    });
-                }
-            } else {
-                return Err(ConfigError::InvalidEndpoint {
-                    name: "jmix".to_string(),
-                    reason: "dimse_operation must be a string value".to_string(),
-                });
-            }
-        }
 
         Ok(())
     }
@@ -304,24 +287,8 @@ impl ServiceHandler<Value> for JmixEndpoint {
                         .insert("skip_listing".to_string(), "true".to_string());
                 }
 
-                // Determine which DICOM operation to use (C-GET or C-MOVE)
-                // Default to C-GET if not specified, as it works without PACS-side AE configuration
-                // C-MOVE requires the PACS to be configured with the SCU's AE title and network address
-                // C-GET receives images directly without requiring bidirectional network setup
-                let dimse_operation = options
-                    .get("dimse_operation")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("get")
-                    .to_lowercase();
-                
-                envelope
-                    .request_details
-                    .metadata
-                    .insert("dimse_op".to_string(), dimse_operation.clone());
-                envelope
-                    .request_details
-                    .metadata
-                    .insert("path".to_string(), dimse_operation);
+                // Let the DICOM backend determine the appropriate operation
+                // based on its dimse_operation configuration
 
                 // Let middleware check if local JMIX exists; if not, backends will handle it
                 return Ok(envelope);

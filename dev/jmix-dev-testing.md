@@ -74,12 +74,12 @@ curl -fsS -X POST -H "Content-Type: application/zip" \
 - `./tmp/jmix-store/jmix-index.redb` (search index)
 
 **Configuration options:**
-- `path_prefix` - API path (default: `/jmix`)
-- `skip_hashing` - Skip SHA256 for performance (default: `false`)
-- `skip_listing` - Skip file listings (default: `false`) 
-- `store_dir` - Storage directory (default: `./tmp/jmix-store`)
+- `path_prefix` - API path (default: `/jmix`) - configured on endpoint
+- `skip_hashing` - Skip SHA256 for performance (default: `false`) - configured on jmix_builder middleware
+- `skip_listing` - Skip file listings (default: `false`) - configured on jmix_builder middleware
+- `store_dir` - Storage directory (default: `./tmp/jmix-store`) - configured on endpoint
 
-Query parameters can override config defaults: `?skip_hashing=true&skip_listing=true`
+**Note**: Performance options (`skip_hashing`, `skip_listing`) are now configured on the jmix_builder middleware in the configuration file, not as query parameters or endpoint options.
 
 ## Troubleshooting
 
