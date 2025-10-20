@@ -20,7 +20,7 @@ type = "passthru"
 # Public endpoints
 #-------------------------
 [endpoints.echo_endpoint]
-service = "http"
+service = "echo"
 [endpoints.echo_endpoint.options]
 path_prefix = "/echo"
 

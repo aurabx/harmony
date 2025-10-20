@@ -16,18 +16,28 @@ use std::sync::Arc;
 pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Router {
     let mut app = Router::new();
     let mut route_registry: HashSet<(Method, String)> = HashSet::new();
+    
+    tracing::info!("🔧 Building router for network '{}' with {} pipelines", network_name, config.pipelines.len());
+    for (name, pipeline) in &config.pipelines {
+        tracing::debug!("Pipeline '{}': networks={:?}, endpoints={:?}", name, pipeline.networks, pipeline.endpoints);
+    }
 
     for (pipeline_name, pipeline) in &config.pipelines {
         if !pipeline.networks.contains(&network_name.to_string()) {
+            tracing::debug!("Skipping pipeline '{}' - not on network '{}'", pipeline_name, network_name);
             continue;
         }
+        
+        tracing::info!("Processing pipeline '{}' for network '{}'", pipeline_name, network_name);
 
         // Collect routes for this pipeline
         let mut planned: Vec<(String, crate::router::route_config::RouteConfig)> = Vec::new();
         let mut has_conflict = false;
 
         for endpoint_name in &pipeline.endpoints {
+            tracing::debug!("Looking for endpoint '{}'", endpoint_name);
             if let Some(endpoint) = config.endpoints.get(endpoint_name) {
+                tracing::debug!("Found endpoint '{}' with service '{}'", endpoint_name, endpoint.service);
                 let service = match endpoint.resolve_service() {
                     Ok(service) => service,
                     Err(err) => {
@@ -47,6 +57,10 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
                 // HTTP router no longer launches DIMSE listeners
 
                 let route_configs = service.build_router(&opts_map);
+                tracing::debug!("Service '{}' generated {} route configs", endpoint.service, route_configs.len());
+                for route_config in &route_configs {
+                    tracing::debug!("Route: {} {:?}", route_config.path, route_config.methods);
+                }
 
                 for route_config in route_configs.clone() {
                     for m in &route_config.methods {
@@ -70,6 +84,8 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
                 if has_conflict {
                     break;
                 }
+            } else {
+                tracing::warn!("Endpoint '{}' not found in config", endpoint_name);
             }
         }
 
@@ -122,6 +138,7 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
                 }
 
                 if added_any {
+                    tracing::info!("✅ Registered route: {}", path);
                     app = app.route(&path, method_router);
                 }
             }

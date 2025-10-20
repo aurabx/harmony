@@ -37,11 +37,20 @@ impl ServiceType for EchoEndpoint {
             .and_then(|v| v.as_str())
             .unwrap_or("/echo");
 
-        vec![RouteConfig {
-            path: format!("{}/{{*wildcard}}", path_prefix), // Use {*wildcard} syntax
-            methods: vec![Method::POST],
-            description: Some("Handles Echo POST requests".to_string()),
-        }]
+        vec![
+            // Handle exact path match (e.g., /echo)
+            RouteConfig {
+                path: path_prefix.to_string(),
+                methods: vec![Method::POST, Method::GET],
+                description: Some("Handles Echo requests at exact path".to_string()),
+            },
+            // Handle subpaths (e.g., /echo/anything)
+            RouteConfig {
+                path: format!("{}/{{*wildcard}}", path_prefix),
+                methods: vec![Method::POST, Method::GET],
+                description: Some("Handles Echo requests with subpaths".to_string()),
+            },
+        ]
     }
 
     async fn build_protocol_envelope(
