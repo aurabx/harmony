@@ -15,6 +15,7 @@ fn find_samples_root() -> Option<PathBuf> {
     let candidates = [
         PathBuf::from("./samples/study_1"),
         PathBuf::from("./samples/dicom/study_1"),
+        PathBuf::from("./dev/samples/study_1"),
         PathBuf::from("../../dev/samples/study_1"),
     ];
     candidates.into_iter().find(|p| p.exists())
@@ -239,10 +240,18 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
         return;
     }
 
-    assert_eq!(status, StatusCode::OK);
+    // Extract body once
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
+    
+    // If not OK, print the error response and exit
+    if status != StatusCode::OK {
+        let body_str = String::from_utf8_lossy(&bytes);
+        eprintln!("Error response (status {}): {}", status, body_str);
+        assert_eq!(status, StatusCode::OK, "Expected OK status, got {}", status);
+    }
+    
     let jmix_index: serde_json::Value = serde_json::from_slice(&bytes).expect("json parse");
     let id = jmix_index
         .get("jmixEnvelopes")

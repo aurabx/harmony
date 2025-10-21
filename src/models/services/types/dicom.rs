@@ -367,36 +367,62 @@ impl DicomEndpoint {
         // Create SCU client
         let scu = DimseScu::new(dimse_config);
 
-        // Extract path for context and resolve operation
-        let path = envelope
-            .request_details
-            .metadata
-            .get("path")
-            .cloned()
-            .unwrap_or_default();
+        // Resolve DIMSE operation with proper precedence:
+        // 1. Check target_details.metadata["dimse_op"] (set by middleware)
+        // 2. Check request_details.metadata["dimse_op"] (fallback for compatibility)
+        // 3. Check dimse_retrieve_mode option (only applies to get/move operations)
+        // 4. Check if path is a valid DIMSE operation name (for direct HTTP->DICOM calls)
+        // 5. Default to "get" for data retrieval
+        let valid_ops = ["echo", "find", "get", "move", "store"];
         
-        // Operation precedence: dimse_op (middleware) > dimse_retrieve_mode (backend config) > path (fallback)
-        // Note: dimse_retrieve_mode only applies to retrieval operations (get/move)
         let op = envelope
-            .request_details
-            .metadata
-            .get("dimse_op")
+            .target_details
+            .as_ref()
+            .and_then(|td| td.metadata.get("dimse_op"))
             .cloned()
             .or_else(|| {
-                // Only use retrieve mode for retrieval-related operations
-                if path.is_empty() || matches!(path.as_str(), "get" | "move" | "/get" | "/move") {
-                    options
-                        .get("dimse_retrieve_mode")
-                        .and_then(|v| v.as_str())
-                        .map(|s| s.to_string())
+                envelope
+                    .request_details
+                    .metadata
+                    .get("dimse_op")
+                    .cloned()
+            })
+            .or_else(|| {
+                // Only use dimse_retrieve_mode for retrieval operations
+                // This allows backend configuration to override default "get" with "move"
+                options
+                    .get("dimse_retrieve_mode")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .or_else(|| {
+                // Check if path is a valid DIMSE operation (for direct HTTP->DICOM calls)
+                let path = envelope
+                    .request_details
+                    .metadata
+                    .get("path")
+                    .map(|s| s.trim_start_matches('/').to_lowercase())?;
+                
+                if valid_ops.contains(&path.as_str()) {
+                    Some(path)
                 } else {
                     None
                 }
             })
-            .unwrap_or_else(|| path.clone());
+            .unwrap_or_else(|| "get".to_string());
 
-        let result = match op.as_str() {
-            "echo" | "/echo" => {
+        // Validate operation is a valid DIMSE operation
+        let normalized_op = op.trim_start_matches('/').to_lowercase();
+        if !valid_ops.contains(&normalized_op.as_str()) {
+            return Err(Error::from(format!(
+                "Invalid DIMSE operation: '{}'. Valid operations are: {}",
+                op,
+                valid_ops.join(", ")
+            )));
+        }
+
+        let result = match normalized_op.as_str() {
+            "echo" => {
                 // Perform C-ECHO
                 match scu.echo(&remote_node).await {
                     Ok(success) => serde_json::json!({
@@ -413,7 +439,7 @@ impl DicomEndpoint {
                     }),
                 }
             }
-            "find" | "/find" => {
+            "find" => {
                 // Parse request body as either wrapper or raw identifier JSON
                 let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
                     .unwrap_or(serde_json::Value::Null);
@@ -495,22 +521,12 @@ impl DicomEndpoint {
                     query = query.with_parameter(k, v);
                 }
 
-                // Debug logging for series and instances queries
-                if path.contains("/series") || path.contains("/instances") {
-                    eprintln!("[DEBUG] DIMSE C-FIND Query:");
-                    eprintln!("[DEBUG]   Path: {}", path);
-                    eprintln!("[DEBUG]   Query Level: {:?}", query.query_level);
-                    eprintln!("[DEBUG]   Query: {:?}", query);
-                }
-
                 // Perform C-FIND and collect results
                 match scu.find(&remote_node, query).await {
                     Ok(mut stream) => {
                         use futures_util::StreamExt;
                         let mut matches: Vec<serde_json::Value> = Vec::new();
-                        let mut item_count = 0;
                         while let Some(item) = stream.next().await {
-                            item_count += 1;
                             match item {
                                 Ok(dimse::types::DatasetStream::File { ref path, .. }) => {
                                     if let Ok(obj) = dicom_object::open_file(path) {
@@ -545,15 +561,6 @@ impl DicomEndpoint {
                             }
                         }
 
-                        if path.contains("/series") || path.contains("/instances") {
-                            eprintln!("[DEBUG] DIMSE Results:");
-                            eprintln!("[DEBUG]   Stream items received: {}", item_count);
-                            eprintln!("[DEBUG]   Matches processed: {}", matches.len());
-                            if !matches.is_empty() {
-                                eprintln!("[DEBUG]   First match: {:?}", matches[0]);
-                            }
-                        }
-
                         serde_json::json!({
                             "operation": "find",
                             "success": true,
@@ -567,7 +574,7 @@ impl DicomEndpoint {
                     }),
                 }
             }
-            "move" | "/move" => {
+            "move" => {
                 // Parse request body to build a MoveQuery (destination defaults to our local AET)
                 let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
                     .unwrap_or(serde_json::Value::Null);
@@ -894,7 +901,7 @@ impl DicomEndpoint {
                     }),
                 }
             }
-            "get" | "/get" => {
+            "get" => {
                 // Parse request body to build a GetQuery
                 let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
                     .unwrap_or(serde_json::Value::Null);
@@ -1049,11 +1056,14 @@ impl DicomEndpoint {
                     }),
                 }
             }
-            _ => serde_json::json!({
-                "operation": "unknown",
-                "success": false,
-                "error": format!("Unknown DIMSE operation: {}", path)
-            }),
+            _ => {
+                // This should never be reached due to validation above, but handle it gracefully
+                serde_json::json!({
+                    "operation": "unknown",
+                    "success": false,
+                    "error": format!("Unsupported DIMSE operation: '{}'. Valid operations are: echo, find, get, move, store", op)
+                })
+            }
         };
 
         envelope.normalized_data = Some(result);

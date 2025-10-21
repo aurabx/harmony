@@ -250,7 +250,7 @@ async fn dicom_move_with_dcmqrscp() {
     }
 
     // Optionally preload dev/samples into QR SCP (up to 20 DICOMs)
-    let samples_root = std::path::Path::new("../../dev/samples");
+    let samples_root = std::path::Path::new("./dev/samples");
     if samples_root.exists() {
         let files = collect_dcm_files(samples_root, 20);
         if !files.is_empty() {

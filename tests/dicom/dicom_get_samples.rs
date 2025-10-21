@@ -29,12 +29,13 @@ async fn dicom_get_writes_samples_to_tmp() {
     let candidates = [
         PathBuf::from("./samples/study_1"),
         PathBuf::from("./samples/dicom/study_1"),
+        PathBuf::from("./dev/samples/study_1"),
         PathBuf::from("../../dev/samples/study_1"),
     ];
     let samples_root = candidates
         .into_iter()
         .find(|p| p.exists())
-        .unwrap_or_else(|| PathBuf::from("../../dev/samples/study_1"));
+        .unwrap_or_else(|| PathBuf::from("./dev/samples/study_1"));
     if !samples_root.exists() {
         eprintln!("Skipping: samples directory missing at {:?}", samples_root);
         return;
