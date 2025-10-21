@@ -17,16 +17,14 @@ pub struct MiddlewareConfig {
 
 pub fn initialise_middleware_registry(config: &Config) {
     // Populate the registry using middleware types from the provided config
-    let registry = config
-        .middleware_types
-        .iter()
-        .map(|(key, value)| (key.clone(), value.module.clone()))
-        .collect();
-
-    // Set the MIDDLEWARE_REGISTRY value; this will panic if called more than once
-    MIDDLEWARE_REGISTRY
-        .set(registry)
-        .expect("MIDDLEWARE_REGISTRY can only be initialized once");
+    // Use get_or_init to allow safe re-initialization in tests
+    MIDDLEWARE_REGISTRY.get_or_init(|| {
+        config
+            .middleware_types
+            .iter()
+            .map(|(key, value)| (key.clone(), value.module.clone()))
+            .collect()
+    });
 }
 
 /// Resolves a middleware type from the registry and returns a boxed Middleware

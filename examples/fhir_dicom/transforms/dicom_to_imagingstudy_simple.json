@@ -1,0 +1,110 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "data": {
+        "matches": {
+          "*": {
+            "0020000D": {
+              "Value": {
+                "0": "data.entry[&(3)].resource.id"
+              }
+            },
+            "00100020": {
+              "Value": {
+                "0": "data.entry[&(3)].resource._patient_id"
+              }
+            },
+            "00100010": {
+              "Value": {
+                "0": {
+                  "Alphabetic": "data.entry[&(4)].resource.subject.display"
+                }
+              }
+            },
+            "00080020": {
+              "Value": {
+                "0": "data.entry[&(3)].resource._study_date"
+              }
+            },
+            "00080030": {
+              "Value": {
+                "0": "data.entry[&(3)].resource._study_time"
+              }
+            },
+            "00081030": {
+              "Value": {
+                "0": "data.entry[&(3)].resource.description"
+              }
+            },
+            "00200010": {
+              "Value": {
+                "0": "data.entry[&(3)].resource._study_id"
+              }
+            },
+            "_jmix_url": "data.entry[&(1)].resource.endpoint[0].address"
+          }
+        }
+      }
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "data": {
+        "resourceType": "Bundle",
+        "type": "searchset",
+        "entry": [
+          {
+            "resource": {
+              "resourceType": "ImagingStudy",
+              "status": "available",
+              "identifier": [
+                {
+                  "system": "urn:dicom:uid"
+                },
+                {
+                  "system": "http://example.org/studyid"
+                }
+              ],
+              "endpoint": [
+                {
+                  "resourceType": "Endpoint",
+                  "status": "active",
+                  "connectionType": {
+                    "system": "http://terminology.hl7.org/CodeSystem/endpoint-connection-type",
+                    "code": "hl7-fhir-rest"
+                  },
+                  "payloadType": [
+                    {
+                      "coding": [
+                        {
+                          "system": "http://hl7.org/fhir/resource-types",
+                          "code": "ImagingStudy"
+                        }
+                      ]
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        ]
+      }
+    }
+  },
+  {
+    "operation": "remove",
+    "spec": {
+      "data": {
+        "entry": {
+          "*": {
+            "resource": {
+              "_*": ""
+            }
+          }
+        }
+      }
+    }
+  }
+]

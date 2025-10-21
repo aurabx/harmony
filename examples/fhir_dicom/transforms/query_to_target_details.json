@@ -1,0 +1,32 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "query_params": {
+        "patient": {
+          "0": "metadata.PatientID"
+        },
+        "identifier": {
+          "0": "metadata.StudyInstanceUID"
+        },
+        "modality": {
+          "0": "metadata.Modality"
+        },
+        "studyDate": {
+          "0": "metadata.StudyDate"
+        },
+        "accessionNumber": {
+          "0": "metadata.AccessionNumber"
+        }
+      }
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "base_url": "",
+      "method": "GET",
+      "uri": "/"
+    }
+  }
+]

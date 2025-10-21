@@ -1,0 +1,89 @@
+# ------------------------
+# Basic configuration
+#-------------------------
+[proxy]
+# The name of the proxy, required
+id = "harmony-fhir-dicom"
+# The log level. Defaults to 'error'
+log_level = "debug"
+# Directories are resolved relative to this config file's directory
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+
+# ------------------------
+# Network
+#
+# Defines 0 or more network configurations.
+#-------------------------
+[network.default]
+# Whether to enable wireguard connections on this network
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.http]
+bind_address = "0.0.0.0"  # Listen on all interfaces
+bind_port = 8081          # Use port 8081
+
+[network.management]
+# Management-only listener – used implicitly by the Management API
+enable_wireguard = false
+interface = "wg0"
+
+[network.management.http]
+bind_address = "127.0.0.1"  # Management connections only
+bind_port = 9091            # Management API port
+
+# ------------------------
+# Management API
+# 
+# Explicitly specify which network to use for management endpoints
+#-------------------------
+[management]
+enabled = true              # Enable management endpoints
+base_path = "admin"         # Base path for management endpoints
+network = "management"      # Use the management network
+
+# ------------------------
+# Logging
+#-------------------------
+[logging]
+log_to_file = true
+log_file_path = "./tmp/harmony_test.log"
+
+# ------------------------
+# Storage
+#
+# Configurable storage backend for temporary files
+#-------------------------
+[storage]
+backend = "filesystem"
+
+[storage.options]
+path = "./tmp"
+
+# ------------------------
+# Service types
+#-------------------------
+[services.dicom]
+module=""
+
+[services.fhir]
+module=""
+
+[services.http]
+module=""
+
+[services.mock_dicom]
+module=""
+
+[services.echo]
+module=""
+
+[middleware_types.transform]
+module=""
+
+[middleware_types.json_extractor]
+module=""
+
+[middleware_types.dicomweb_bridge]
+module=""

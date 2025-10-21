@@ -28,9 +28,7 @@ pub fn initialise_service_registry(config: &Config) {
         .collect();
 
     // Set the SERVICE_REGISTRY value; this will panic if called more than once
-    SERVICE_REGISTRY
-        .set(registry)
-        .expect("SERVICE_REGISTRY can only be initialized once");
+    SERVICE_REGISTRY.get_or_init(move || registry);
 }
 
 /// Resolves a service type from the registry and returns a boxed ServiceType

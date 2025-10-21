@@ -1,0 +1,49 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "context": {
+        "target_details": {
+          "metadata": {
+            "PatientID": "data.dimse_identifier.00100020.Value[0]",
+            "StudyInstanceUID": "data.dimse_identifier.0020000D.Value[0]",
+            "Modality": "data.dimse_identifier.00080060.Value[0]",
+            "StudyDate": "data.dimse_identifier.00080020.Value[0]",
+            "AccessionNumber": "data.dimse_identifier.00080050.Value[0]"
+          }
+        }
+      }
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "data": {
+        "dimse_identifier": {
+          "00100020": {
+            "vr": "LO",
+            "Value": []
+          },
+          "0020000D": {
+            "vr": "UI",
+            "Value": []
+          },
+          "00080060": {
+            "vr": "CS",
+            "Value": []
+          },
+          "00080020": {
+            "vr": "DA",
+            "Value": []
+          },
+          "00080050": {
+            "vr": "SH",
+            "Value": []
+          }
+        },
+        "dimse_op": "find",
+        "operation_type": "C-FIND"
+      }
+    }
+  }
+]

@@ -17,6 +17,9 @@ pub struct MetadataTransformConfig {
     /// Whether to fail the request on transform errors
     #[serde(default = "default_fail_on_error")]
     pub fail_on_error: bool,
+    /// What to transform: "metadata" (legacy), "target_details" (new default)
+    #[serde(default = "default_transform_target")]
+    pub transform_target: String,
 }
 
 fn default_apply() -> String {
@@ -25,6 +28,10 @@ fn default_apply() -> String {
 
 fn default_fail_on_error() -> bool {
     true
+}
+
+fn default_transform_target() -> String {
+    "target_details".to_string()
 }
 
 impl From<MetadataTransformConfig> for TransformConfig {
@@ -39,16 +46,125 @@ impl From<MetadataTransformConfig> for TransformConfig {
 
 pub struct MetadataTransformMiddleware {
     engine: JoltTransformEngine,
+    transform_target: String,
 }
 
 impl MetadataTransformMiddleware {
     pub fn new(config: MetadataTransformConfig) -> Result<Self, String> {
-        let transform_config: TransformConfig = config.into();
+        let transform_config: TransformConfig = config.clone().into();
         let engine = JoltTransformEngine::new(transform_config)
             .map_err(|e| format!("Failed to create metadata transform engine: {}", e))?;
 
-        tracing::info!("Metadata transform middleware initialized");
-        Ok(Self { engine })
+        tracing::info!(
+            "Metadata transform middleware initialized (target: {})",
+            config.transform_target
+        );
+        Ok(Self {
+            engine,
+            transform_target: config.transform_target,
+        })
+    }
+}
+
+impl MetadataTransformMiddleware {
+    /// Convert JSON value to TargetDetails structure
+    fn json_to_target_details(&self, json: &Value) -> Result<crate::models::envelope::envelope::TargetDetails, Error> {
+        use crate::models::envelope::envelope::TargetDetails;
+        
+        let obj = json.as_object().ok_or_else(|| {
+            Error::from("Transformed JSON must be an object for target_details")
+        })?;
+
+        // Extract fields with defaults
+        let base_url = obj
+            .get("base_url")
+            .and_then(|v| v.as_str())
+            .unwrap_or("")
+            .to_string();
+        
+        let method = obj
+            .get("method")
+            .and_then(|v| v.as_str())
+            .unwrap_or("GET")
+            .to_string();
+        
+        let uri = obj
+            .get("uri")
+            .and_then(|v| v.as_str())
+            .unwrap_or("/")
+            .to_string();
+
+        // Convert nested objects/arrays to HashMaps
+        let headers = self.json_to_string_map(obj.get("headers"));
+        let cookies = self.json_to_string_map(obj.get("cookies"));
+        let query_params = self.json_to_string_vec_map(obj.get("query_params"));
+        let metadata = self.json_to_string_map(obj.get("metadata"));
+
+        Ok(TargetDetails {
+            base_url,
+            method,
+            uri,
+            headers,
+            cookies,
+            query_params,
+            metadata,
+        })
+    }
+
+    /// Convert JSON object to HashMap<String, String>
+    fn json_to_string_map(&self, json: Option<&Value>) -> HashMap<String, String> {
+        json.and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Convert JSON object to HashMap<String, Vec<String>>
+    fn json_to_string_vec_map(&self, json: Option<&Value>) -> HashMap<String, Vec<String>> {
+        json.and_then(|v| v.as_object())
+            .map(|obj| {
+                obj.iter()
+                    .map(|(k, v)| {
+                        let vec = match v {
+                            Value::Array(arr) => arr
+                                .iter()
+                                .filter_map(|item| item.as_str().map(|s| s.to_string()))
+                                .collect(),
+                            Value::String(s) => vec![s.clone()],
+                            _ => vec![],
+                        };
+                        (k.clone(), vec)
+                    })
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+
+    /// Merge transformed target_details into existing target_details
+    fn merge_target_details(
+        &self,
+        existing: &mut crate::models::envelope::envelope::TargetDetails,
+        new: &crate::models::envelope::envelope::TargetDetails,
+    ) {
+        // Only update non-empty/non-default values
+        if !new.base_url.is_empty() {
+            existing.base_url = new.base_url.clone();
+        }
+        if !new.method.is_empty() {
+            existing.method = new.method.clone();
+        }
+        if !new.uri.is_empty() {
+            existing.uri = new.uri.clone();
+        }
+        
+        // Merge maps (new values override existing)
+        existing.headers.extend(new.headers.clone());
+        existing.cookies.extend(new.cookies.clone());
+        existing.query_params.extend(new.query_params.clone());
+        existing.metadata.extend(new.metadata.clone());
     }
 }
 
@@ -62,40 +178,85 @@ impl Middleware for MetadataTransformMiddleware {
             return Ok(envelope);
         }
 
-        // Convert metadata HashMap<String, String> to serde_json::Value
-        let metadata_json: serde_json::Value = {
-            let mut map = serde_json::Map::new();
-            for (key, value) in envelope.request_details.metadata.iter() {
-                map.insert(key.clone(), serde_json::Value::String(value.clone()));
-            }
-            serde_json::Value::Object(map)
-        };
+        match self.transform_target.as_str() {
+            "target_details" => {
+                // Build input JSON from request_details (source of query_params, headers, etc.)
+                let input_json = serde_json::json!({
+                    "query_params": envelope.request_details.query_params,
+                    "headers": envelope.request_details.headers,
+                    "cookies": envelope.request_details.cookies,
+                    "metadata": envelope.request_details.metadata,
+                    "method": envelope.request_details.method,
+                    "uri": envelope.request_details.uri,
+                });
 
-        // Apply transform to metadata
-        match self.engine.transform(metadata_json) {
-            Ok(transformed) => {
-                // Update metadata with transformed values (only string values)
-                if let Some(obj) = transformed.as_object() {
-                    for (key, value) in obj.iter() {
-                        if let Some(string_value) = value.as_str() {
-                            envelope
-                                .request_details
-                                .metadata
-                                .insert(key.clone(), string_value.to_string());
+                // Apply transform to create/modify target_details
+                match self.engine.transform(input_json) {
+                    Ok(transformed) => {
+                        // Create or update target_details from transformed JSON
+                        let target_details = self.json_to_target_details(&transformed)?;
+                        
+                        // Initialize target_details if not present
+                        if envelope.target_details.is_none() {
+                            envelope.target_details = Some(target_details);
+                        } else {
+                            // Merge with existing target_details
+                            self.merge_target_details(envelope.target_details.as_mut().unwrap(), &target_details);
                         }
-                        // Ignore non-string values
+                        
+                        tracing::debug!("Applied metadata transform to target_details on left side");
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Metadata transform failed on left side: {}", e);
+                        if self.engine.should_fail_on_error() {
+                            tracing::error!("{}", error_msg);
+                            return Err(Error::from(error_msg));
+                        } else {
+                            tracing::warn!("{}, continuing without target_details modification", error_msg);
+                        }
                     }
                 }
-                tracing::debug!("Applied metadata transform on left side");
             }
-            Err(e) => {
-                let error_msg = format!("Metadata transform failed on left side: {}", e);
-                if self.engine.should_fail_on_error() {
-                    tracing::error!("{}", error_msg);
-                    return Err(Error::from(error_msg));
-                } else {
-                    tracing::warn!("{}, continuing with original metadata", error_msg);
+            "metadata" => {
+                // Legacy behavior: transform request_details.metadata only
+                let metadata_json: serde_json::Value = {
+                    let mut map = serde_json::Map::new();
+                    for (key, value) in envelope.request_details.metadata.iter() {
+                        map.insert(key.clone(), serde_json::Value::String(value.clone()));
+                    }
+                    serde_json::Value::Object(map)
+                };
+
+                match self.engine.transform(metadata_json) {
+                    Ok(transformed) => {
+                        if let Some(obj) = transformed.as_object() {
+                            for (key, value) in obj.iter() {
+                                if let Some(string_value) = value.as_str() {
+                                    envelope
+                                        .request_details
+                                        .metadata
+                                        .insert(key.clone(), string_value.to_string());
+                                }
+                            }
+                        }
+                        tracing::debug!("Applied metadata transform on left side (legacy mode)");
+                    }
+                    Err(e) => {
+                        let error_msg = format!("Metadata transform failed on left side: {}", e);
+                        if self.engine.should_fail_on_error() {
+                            tracing::error!("{}", error_msg);
+                            return Err(Error::from(error_msg));
+                        } else {
+                            tracing::warn!("{}, continuing with original metadata", error_msg);
+                        }
+                    }
                 }
+            }
+            _ => {
+                return Err(Error::from(format!(
+                    "Unknown transform_target: {}. Must be 'metadata' or 'target_details'",
+                    self.transform_target
+                )));
             }
         }
 
@@ -170,10 +331,17 @@ pub fn parse_config(options: &HashMap<String, Value>) -> Result<MetadataTransfor
         .and_then(|v| v.as_bool())
         .unwrap_or_else(default_fail_on_error);
 
+    let transform_target = options
+        .get("transform_target")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .unwrap_or_else(default_transform_target);
+
     Ok(MetadataTransformConfig {
         spec_path,
         apply,
         fail_on_error,
+        transform_target,
     })
 }
 
@@ -213,6 +381,7 @@ mod tests {
             spec_path: temp_file.path().to_string_lossy().to_string(),
             apply: "left".to_string(),
             fail_on_error: true,
+            transform_target: "metadata".to_string(),
         };
 
         let middleware = MetadataTransformMiddleware::new(config).unwrap();
@@ -243,6 +412,7 @@ mod tests {
             spec_path: temp_file.path().to_string_lossy().to_string(),
             apply: "right".to_string(),
             fail_on_error: true,
+            transform_target: "metadata".to_string(),
         };
 
         let middleware = MetadataTransformMiddleware::new(config).unwrap();
@@ -295,6 +465,7 @@ mod tests {
             spec_path: temp_file.path().to_string_lossy().to_string(),
             apply: "left".to_string(),
             fail_on_error: true,
+            transform_target: "metadata".to_string(),
         };
 
         let middleware = MetadataTransformMiddleware::new(config).unwrap();
@@ -332,6 +503,7 @@ mod tests {
             spec_path: temp.path().to_string_lossy().to_string(),
             apply: "left".to_string(),
             fail_on_error: true,
+            transform_target: "metadata".to_string(),
         };
         let mw = MetadataTransformMiddleware::new(cfg).unwrap();
 
@@ -393,6 +565,7 @@ mod tests {
             spec_path,
             apply: "left".into(),
             fail_on_error: true,
+            transform_target: "metadata".to_string(),
         };
         let mw = MetadataTransformMiddleware::new(cfg).unwrap();
         let out = mw.left(env).await.unwrap();
