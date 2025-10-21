@@ -30,6 +30,8 @@ Status: under active development. For more information, visit https://harmonypro
 
 ## Quick start
 
+### Local development
+
 Prerequisites:
 - Rust (stable) via rustup
 - macOS or Linux
@@ -52,6 +54,42 @@ curl -i http://127.0.0.1:8080/echo
 ```
 
 If configured, you should receive an echoed response from the sample backend. Explore more examples under the `examples/` directory (each has its own README).
+
+### Docker
+
+Run with Docker Compose:
+
+```bash
+# Build and run
+docker-compose up
+
+# Alternatively, to force a rebuild
+docker compose up --build --force-recreate -d
+
+# Test the service
+curl -i http://localhost:8080/echo
+```
+
+Or build and run manually:
+
+```bash
+# Build image
+docker build -t harmony-proxy .
+
+# Run with default config
+docker run -p 8080:8080 -p 9090:9090 \
+  -v $(pwd)/config:/etc/harmony:ro \
+  harmony-proxy
+
+# Run with example config
+docker run -p 8080:8080 \
+  -v $(pwd)/examples:/examples:ro \
+  harmony-proxy --config /examples/basic-echo/config.toml
+```
+
+Ports:
+- 8080: Main service endpoints
+- 9090: Management API (if enabled)
 
 ## Configuration
 Harmony's configuration is file-based (TOML) and can include additional pipeline/transform files from a directory.

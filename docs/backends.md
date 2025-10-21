@@ -115,8 +115,21 @@ aet = "REMOTE_AET"           # Remote Application Entity Title
 host = "pacs.example.com"
 port = 4242
 local_aet = "HARMONY_SCU"    # Local AE title
+dimse_retrieve_mode = "get" # DICOM retrieval mode: "get" or "move"
 use_tls = false
 ```
+
+**Configuration Options**:
+- `aet` (string, required): Remote Application Entity Title
+- `host` (string, required): PACS hostname or IP address
+- `port` (integer, required): PACS port number
+- `local_aet` (string, optional): Local AE title (default: "HARMONY_SCU")
+- `dimse_retrieve_mode` (string, optional): DICOM retrieval mode (default: "get")
+  - `"get"` (C-GET): Direct image retrieval, works without PACS-side AE configuration
+  - `"move"` (C-MOVE): Requires PACS to know SCU's AE title and network address
+- `use_tls` (boolean, optional): Enable TLS encryption (default: false)
+- `incoming_store_port` (integer, optional): Port for C-STORE SCP when using C-MOVE
+- `persistent_store_scp` (boolean, optional): Keep persistent C-STORE SCP listening
 
 **Example**: DICOM PACS backend
 ```toml
@@ -127,6 +140,9 @@ aet = "ORTHANC"
 host = "localhost"
 port = 4242
 local_aet = "HARMONY_SCU"
+dimse_retrieve_mode = "get"
+incoming_store_port = 11112
+persistent_store_scp = true
 use_tls = false
 ```
 

@@ -1,0 +1,13 @@
+target/
+tmp/
+.git/
+tests/
+docs/
+*.md
+.DS_Store
+.vscode/
+.idea/
+*.log
+*.tmp
+.env
+.env.*

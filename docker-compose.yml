@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  harmony:
+    build: .
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    volumes:
+      - ./config:/etc/harmony:ro
+      - ./tmp:/tmp/harmony
+      - ./examples:/examples:ro
+    environment:
+      - RUST_LOG=harmony=info
