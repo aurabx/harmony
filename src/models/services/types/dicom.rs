@@ -172,7 +172,7 @@ impl ServiceType for DicomEndpoint {
         _options: &HashMap<String, Value>,
     ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error>
     {
-        use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
+        use crate::models::envelope::envelope::RequestEnvelope;
         use crate::utils::Error;
         use std::collections::HashMap as Map;
 
@@ -189,28 +189,23 @@ impl ServiceType for DicomEndpoint {
             .cloned()
             .unwrap_or_else(|| "DIMSE".into());
         let uri = format!("mock-dicom://scp/{}", op.to_lowercase());
-        let backend_request_details = RequestDetails {
-            method: op,
-            uri,
-            headers: Map::new(),
-            cookies: Map::new(),
-            query_params: Map::new(),
-            cache_status: None,
-            metadata,
-        };
 
         // Prefer normalized_data as the JSON body if payload is JSON
         let normalized: Option<serde_json::Value> = serde_json::from_slice(&ctx.payload).ok();
-        // @todo We shouldnt really need this but currently it's required
-        let request_details = backend_request_details.clone();
 
-        Ok(RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: ctx.payload,
-            normalized_data: normalized,
-            normalized_snapshot: None,
-        })
+        RequestEnvelope::builder()
+            .method(op)
+            .uri(uri)
+            .headers(Map::new())
+            .cookies(Map::new())
+            .query_params(Map::new())
+            .cache_status(None)
+            .metadata(metadata)
+            .target_details(None)
+            .original_data(ctx.payload)
+            .normalized_data(normalized)
+            .normalized_snapshot(None)
+            .build()
     }
 }
 

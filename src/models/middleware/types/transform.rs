@@ -164,30 +164,19 @@ pub fn parse_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::envelope::envelope::{RequestDetails, ResponseDetails, ResponseEnvelope};
+    use crate::models::envelope::envelope::{RequestDetails, RequestEnvelopeBuilder, ResponseDetails, ResponseEnvelope};
     use serde_json::json;
     use std::fs;
     use tempfile::NamedTempFile;
 
     fn create_test_envelope(data: Value) -> RequestEnvelope<Value> {
-        let request_details = RequestDetails {
-            method: "POST".to_string(),
-            uri: "/test".to_string(),
-            headers: Default::default(),
-            cookies: Default::default(),
-            query_params: Default::default(),
-            cache_status: None,
-            metadata: Default::default(),
-        };
-        let backend_request_details = request_details.clone();
-
-        RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: data.clone(),
-            normalized_data: Some(data),
-            normalized_snapshot: None,
-        }
+        RequestEnvelopeBuilder::new()
+            .method("POST")
+            .uri("/test")
+            .original_data(data.clone())
+            .normalized_data(Some(data))
+            .build()
+            .unwrap()
     }
 
     fn request_to_response(req: RequestEnvelope<Value>) -> ResponseEnvelope<Value> {
@@ -349,28 +338,18 @@ mod tests {
     #[tokio::test]
     async fn test_middleware_with_real_fhir_to_dicom_params_left() {
         // Build envelope resembling FHIR endpoint normalized_data
-        let request_details = RequestDetails {
-            method: "GET".into(),
-            uri: "/fhir/ImagingStudy?patient=PID156695".into(),
-            headers: Default::default(),
-            cookies: Default::default(),
-            query_params: Default::default(),
-            cache_status: None,
-            metadata: Default::default(),
-        };
-        let backend_request_details = request_details.clone();
-        let mut env = RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: serde_json::json!({}),
-            normalized_data: Some(serde_json::json!({
+        let mut env = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/fhir/ImagingStudy?patient=PID156695")
+            .original_data(serde_json::json!({}))
+            .normalized_data(Some(serde_json::json!({
                 "full_path": "/fhir/ImagingStudy?patient=PID156695",
                 "path": "ImagingStudy",
                 "headers": {},
                 "original_data": {}
-            })),
-            normalized_snapshot: None,
-        };
+            })))
+            .build()
+            .unwrap();
 
         // Use real spec file
         let spec_path = format!(

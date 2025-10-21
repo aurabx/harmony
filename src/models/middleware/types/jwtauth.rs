@@ -217,7 +217,7 @@ impl Middleware for JwtAuthMiddleware {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
+    use crate::models::envelope::envelope::RequestEnvelopeBuilder;
     use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
     use rand::thread_rng;
     use rsa::pkcs8::EncodePublicKey;
@@ -238,29 +238,17 @@ mod tests {
     }
 
     fn create_test_envelope_with_auth(auth_header: Option<&str>) -> RequestEnvelope<JsonValue> {
-        let mut headers = HashMap::new();
+        let mut builder = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/test")
+            .original_data(serde_json::json!({}))
+            .normalized_data(Some(serde_json::json!({"test": "data"})));
+
         if let Some(auth) = auth_header {
-            headers.insert("authorization".to_string(), auth.to_string());
+            builder = builder.header("authorization", auth);
         }
 
-        let request_details = RequestDetails {
-            method: "GET".to_string(),
-            uri: "/test".to_string(),
-            headers,
-            cookies: HashMap::new(),
-            query_params: HashMap::new(),
-            cache_status: None,
-            metadata: HashMap::new(),
-        };
-        let backend_request_details = request_details.clone();
-
-        RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: serde_json::json!({}),
-            normalized_data: Some(serde_json::json!({"test": "data"})),
-            normalized_snapshot: None,
-        }
+        builder.build().unwrap()
     }
 
     fn get_current_timestamp() -> i64 {

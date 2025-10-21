@@ -180,30 +180,20 @@ pub fn parse_config(options: &HashMap<String, Value>) -> Result<MetadataTransfor
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::envelope::envelope::RequestDetails;
+    use crate::models::envelope::envelope::RequestEnvelopeBuilder;
     use serde_json::json;
     use std::fs;
     use tempfile::NamedTempFile;
 
     fn create_test_envelope(metadata: HashMap<String, String>) -> RequestEnvelope<Value> {
-        let request_details = RequestDetails {
-            method: "POST".to_string(),
-            uri: "/test".to_string(),
-            headers: Default::default(),
-            cookies: Default::default(),
-            query_params: Default::default(),
-            cache_status: None,
-            metadata,
-        };
-        let backend_request_details = request_details.clone();
-
-        RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: serde_json::Value::Null,
-            normalized_data: Some(serde_json::Value::Null),
-            normalized_snapshot: None,
-        }
+        RequestEnvelopeBuilder::new()
+            .method("POST")
+            .uri("/test")
+            .metadata(metadata)
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap()
     }
 
     #[tokio::test]
@@ -388,24 +378,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_metadata_middleware_with_real_spec_left_sets_dimse() {
-        use crate::models::envelope::envelope::RequestDetails;
-        let request_details = RequestDetails {
-            method: "GET".into(),
-            uri: "/fhir/ImagingStudy".into(),
-            headers: Default::default(),
-            cookies: Default::default(),
-            query_params: Default::default(),
-            cache_status: None,
-            metadata: Default::default(),
-        };
-        let backend_request_details = request_details.clone();
-        let env = RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: serde_json::Value::Null,
-            normalized_data: Some(serde_json::Value::Null),
-            normalized_snapshot: None,
-        };
+        let env = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/fhir/ImagingStudy")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
         let spec_path = format!(
             "{}/samples/jolt/metadata_set_dimse_op.json",
             env!("CARGO_MANIFEST_DIR")

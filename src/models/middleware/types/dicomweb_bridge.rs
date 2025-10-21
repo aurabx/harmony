@@ -963,7 +963,7 @@ impl Middleware for DicomwebBridgeMiddleware {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
+    use crate::models::envelope::envelope::{RequestDetails, RequestEnvelopeBuilder};
     use std::collections::HashMap;
 
     #[tokio::test]
@@ -981,27 +981,14 @@ mod tests {
             ],
         );
 
-        let mut metadata: HashMap<String, String> = HashMap::new();
-        metadata.insert("path".to_string(), "studies".to_string());
-
-        let request_details = RequestDetails {
-            method: "GET".to_string(),
-            uri: "/api/dicom/studies".to_string(),
-            headers: HashMap::new(),
-            cookies: HashMap::new(),
-            query_params,
-            cache_status: None,
-            metadata,
-        };
-        let backend_request_details = request_details.clone();
-
-        let envelope = RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: serde_json::json!({}),
-            normalized_data: None,
-            normalized_snapshot: None,
-        };
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/api/dicom/studies")
+            .query_params(query_params)
+            .metadata_entry("path", "studies")
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
 
         // Process through the middleware
         let result = bridge.left(envelope).await;
@@ -1056,27 +1043,13 @@ mod tests {
         let bridge = DicomwebBridgeMiddleware::new();
 
         // Create a mock request envelope without includefield
-        let mut metadata: HashMap<String, String> = HashMap::new();
-        metadata.insert("path".to_string(), "studies".to_string());
-
-        let request_details = RequestDetails {
-            method: "GET".to_string(),
-            uri: "/api/dicom/studies".to_string(),
-            headers: HashMap::new(),
-            cookies: HashMap::new(),
-            query_params: HashMap::new(),
-            cache_status: None,
-            metadata,
-        };
-        let backend_request_details = request_details.clone();
-
-        let envelope = RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: serde_json::json!({}),
-            normalized_data: None,
-            normalized_snapshot: None,
-        };
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/api/dicom/studies")
+            .metadata_entry("path", "studies")
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
 
         // Process through the middleware
         let result = bridge.left(envelope).await;
@@ -1129,27 +1102,14 @@ mod tests {
             vec!["PatientID".to_string(), "PatientName".to_string()],
         );
 
-        let mut metadata: HashMap<String, String> = HashMap::new();
-        metadata.insert("path".to_string(), "studies".to_string());
-
-        let request_details = RequestDetails {
-            method: "GET".to_string(),
-            uri: "/api/dicom/studies".to_string(),
-            headers: HashMap::new(),
-            cookies: HashMap::new(),
-            query_params,
-            cache_status: None,
-            metadata,
-        };
-        let backend_request_details = request_details.clone();
-
-        let envelope = RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: serde_json::json!({}),
-            normalized_data: None,
-            normalized_snapshot: None,
-        };
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/api/dicom/studies")
+            .query_params(query_params)
+            .metadata_entry("path", "studies")
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
 
         // Process through the middleware
         let result = bridge.left(envelope).await;
@@ -1268,27 +1228,14 @@ mod tests {
         query_params.insert("includefield".to_string(), vec!["PatientName".to_string()]); // Should be skipped
         query_params.insert("limit".to_string(), vec!["100".to_string()]); // Should be skipped
 
-        let mut metadata: HashMap<String, String> = HashMap::new();
-        metadata.insert("path".to_string(), "studies".to_string());
-
-        let request_details = RequestDetails {
-            method: "GET".to_string(),
-            uri: "/dicomweb/studies".to_string(),
-            headers: HashMap::new(),
-            cookies: HashMap::new(),
-            query_params,
-            cache_status: None,
-            metadata,
-        };
-        let backend_request_details = request_details.clone();
-
-        let envelope = RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: serde_json::json!({}),
-            normalized_data: None,
-            normalized_snapshot: None,
-        };
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/dicomweb/studies")
+            .query_params(query_params)
+            .metadata_entry("path", "studies")
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
 
         // Process through the middleware
         let result = bridge.left(envelope).await;

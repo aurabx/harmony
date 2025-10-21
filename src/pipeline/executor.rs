@@ -141,15 +141,25 @@ impl PipelineExecutor {
 
         // Convert to JSON envelope for middleware processing
         let normalized_data = envelope.normalized_data.clone();
-        let json_envelope = RequestEnvelope {
-            request_details: envelope.request_details.clone(),
-            backend_request_details: envelope.backend_request_details.clone(),
-            original_data: normalized_data.unwrap_or_else(|| {
-                serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
-            }),
-            normalized_data: envelope.normalized_data.clone(),
-            normalized_snapshot: envelope.normalized_snapshot.clone(),
-        };
+        let json_value = normalized_data.unwrap_or_else(|| {
+            serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
+        });
+        
+        let json_envelope = RequestEnvelope::builder()
+            .method(envelope.request_details.method.clone())
+            .uri(envelope.request_details.uri.clone())
+            .headers(envelope.request_details.headers.clone())
+            .cookies(envelope.request_details.cookies.clone())
+            .query_params(envelope.request_details.query_params.clone())
+            .cache_status(envelope.request_details.cache_status.clone())
+            .metadata(envelope.request_details.metadata.clone())
+            .backend_request_details(envelope.backend_request_details.clone())
+            .target_details(envelope.target_details.clone())
+            .original_data(json_value.clone())
+            .normalized_data(Some(json_value))
+            .normalized_snapshot(envelope.normalized_snapshot.clone())
+            .build()
+            .expect("Failed to build json_envelope");
 
         // Build middleware instances
         let middleware_instances =
@@ -169,13 +179,21 @@ impl PipelineExecutor {
             .map_err(PipelineError::MiddlewareError)?;
 
         // Convert back to Vec<u8> envelope
-        let processed_envelope = RequestEnvelope {
-            request_details: processed_json_envelope.request_details,
-            backend_request_details: processed_json_envelope.backend_request_details,
-            original_data: envelope.original_data,
-            normalized_data: processed_json_envelope.normalized_data,
-            normalized_snapshot: processed_json_envelope.normalized_snapshot,
-        };
+        let processed_envelope = RequestEnvelope::builder()
+            .method(processed_json_envelope.request_details.method)
+            .uri(processed_json_envelope.request_details.uri)
+            .headers(processed_json_envelope.request_details.headers)
+            .cookies(processed_json_envelope.request_details.cookies)
+            .query_params(processed_json_envelope.request_details.query_params)
+            .cache_status(processed_json_envelope.request_details.cache_status)
+            .metadata(processed_json_envelope.request_details.metadata)
+            .backend_request_details(processed_json_envelope.backend_request_details)
+            .target_details(processed_json_envelope.target_details)
+            .original_data(envelope.original_data)
+            .normalized_data(processed_json_envelope.normalized_data)
+            .normalized_snapshot(processed_json_envelope.normalized_snapshot)
+            .build()
+            .expect("Failed to build processed_envelope");
 
         Ok(processed_envelope)
     }

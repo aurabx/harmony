@@ -1,0 +1,36 @@
+# HTTP Backend Example Configuration
+# Demonstrates HTTP passthrough with actual backend calls
+
+[proxy]
+id = "harmony-http-backend"
+log_level = "debug"
+pipelines_path = "pipelines"
+
+# Network configuration
+[network.http_net]
+enable_wireguard = false
+interface = "wg0"
+
+[network.http_net.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+# Logging
+[logging]
+log_to_file = true
+log_file_path = "./tmp/harmony_http_backend.log"
+
+# Storage
+[storage]
+backend = "filesystem"
+
+[storage.options]
+path = "./tmp"
+
+# Service types
+[services.http]
+module = ""
+
+# Middleware types
+[middleware_types.passthru]
+module = ""

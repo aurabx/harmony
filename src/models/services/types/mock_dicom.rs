@@ -435,8 +435,7 @@ impl ServiceType for MockDicomEndpoint {
         _options: &HashMap<String, Value>,
     ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error>
     {
-        use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
-        use std::collections::HashMap as Map;
+        use crate::models::envelope::envelope::RequestEnvelopeBuilder;
 
         if ctx.protocol != crate::models::protocol::Protocol::Dimse {
             return Err(Error::from(
@@ -445,34 +444,24 @@ impl ServiceType for MockDicomEndpoint {
         }
 
         // Build minimal RequestDetails using meta
-        let metadata: Map<String, String> = ctx.meta.clone();
-        let op = metadata
+        let op = ctx
+            .meta
             .get("operation")
             .cloned()
             .unwrap_or_else(|| "DIMSE".into());
         let uri = format!("mock-dicom://scp/{}", op.to_lowercase());
-        let backend_request_details = RequestDetails {
-            method: op,
-            uri,
-            headers: Map::new(),
-            cookies: Map::new(),
-            query_params: Map::new(),
-            cache_status: None,
-            metadata,
-        };
 
         // Prefer normalized_data as the JSON body if payload is JSON
         let normalized: Option<serde_json::Value> = serde_json::from_slice(&ctx.payload).ok();
-        // @todo We shouldnt really need this but currently it's required
-        let request_details = backend_request_details.clone();
 
-        Ok(RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: ctx.payload,
-            normalized_data: normalized,
-            normalized_snapshot: None,
-        })
+        RequestEnvelopeBuilder::new()
+            .method(op)
+            .uri(uri)
+            .metadata(ctx.meta)
+            .original_data(ctx.payload)
+            .normalized_data(normalized)
+            .build()
+            .map_err(|e| Error::from(format!("Failed to build envelope: {}", e)))
     }
 }
 
@@ -647,18 +636,28 @@ impl MockDicomEndpoint {
         debug!("[MOCK DICOM] C-GET Operation - Path: {}", path);
 
         // Create mock DICOM data directory and file
-        let mock_dir = std::path::Path::new("/tmp/mock_dicom_data");
-        if !mock_dir.exists() {
-            if let Err(e) = std::fs::create_dir_all(mock_dir) {
-                debug!("[MOCK DICOM] Failed to create mock dir: {}", e);
-            } else {
-                // Create a minimal mock DICOM file
-                let mock_file = mock_dir.join("instance1.dcm");
-                if let Err(e) = std::fs::write(&mock_file, b"MOCK DICOM FILE DATA") {
-                    debug!("[MOCK DICOM] Failed to create mock DICOM file: {}", e);
-                }
-            }
+        let mock_dir = std::path::Path::new("./tmp/mock_dicom_data");
+        if let Err(e) = std::fs::create_dir_all(mock_dir) {
+            debug!("[MOCK DICOM] Failed to create mock dir: {}", e);
+            return serde_json::json!({
+                "operation": "get",
+                "success": false,
+                "error": format!("Failed to create mock directory: {}", e)
+            });
         }
+        
+        // Create a minimal mock DICOM file
+        let mock_file = mock_dir.join("instance1.dcm");
+        if let Err(e) = std::fs::write(&mock_file, b"MOCK DICOM FILE DATA") {
+            debug!("[MOCK DICOM] Failed to create mock DICOM file: {}", e);
+            return serde_json::json!({
+                "operation": "get",
+                "success": false,
+                "error": format!("Failed to create mock file: {}", e)
+            });
+        }
+        
+        debug!("[MOCK DICOM] Created mock DICOM file at: {}", mock_file.display());
 
         // Check if this is a frame request
         if path.contains("/frames/") {
@@ -678,7 +677,7 @@ impl MockDicomEndpoint {
                         return serde_json::json!({
                             "operation": "get",
                             "success": true,
-                            "folder_path": "/tmp/mock_dicom_data"
+                            "folder_path": "./tmp/mock_dicom_data"
                         });
                     }
                 }
@@ -689,11 +688,11 @@ impl MockDicomEndpoint {
         serde_json::json!({
             "operation": "get",
             "success": true,
-            "folder_path": "/tmp/mock_dicom_data",
+            "folder_path": "./tmp/mock_dicom_data",
             "instances": [
                 {
                     "sop_instance_uid": MockDicomData::instance().series[0].instances[0].instance_uid,
-                    "file_path": "/tmp/mock_dicom_data/instance1.dcm"
+                    "file_path": "./tmp/mock_dicom_data/instance1.dcm"
                 }
             ]
         })

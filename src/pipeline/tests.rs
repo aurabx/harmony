@@ -2,7 +2,7 @@ use super::executor::{PipelineError, PipelineExecutor};
 use crate::config::config::Config;
 use crate::models::backends::backends::Backend;
 use crate::models::endpoints::endpoint::Endpoint;
-use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
+use crate::models::envelope::envelope::{RequestEnvelope, RequestEnvelopeBuilder};
 use crate::models::pipelines::config::Pipeline;
 use crate::models::protocol::{Protocol, ProtocolCtx};
 use std::collections::HashMap;
@@ -50,29 +50,13 @@ fn create_test_pipeline(endpoints: Vec<String>, backends: Vec<String>) -> Pipeli
 
 /// Helper to create a test request envelope
 fn create_test_envelope() -> RequestEnvelope<Vec<u8>> {
-    RequestEnvelope {
-        request_details: RequestDetails {
-            method: "GET".to_string(),
-            uri: "/test".to_string(),
-            headers: HashMap::new(),
-            cookies: HashMap::new(),
-            query_params: HashMap::new(),
-            cache_status: None,
-            metadata: HashMap::new(),
-        },
-        backend_request_details: RequestDetails {
-            method: "GET".to_string(),
-            uri: "/test".to_string(),
-            headers: HashMap::new(),
-            cookies: HashMap::new(),
-            query_params: HashMap::new(),
-            cache_status: None,
-            metadata: HashMap::new(),
-        },
-        original_data: b"test data".to_vec(),
-        normalized_data: Some(serde_json::json!({"test": "data"})),
-        normalized_snapshot: None,
-    }
+    RequestEnvelopeBuilder::new()
+        .method("GET")
+        .uri("/test")
+        .original_data(b"test data".to_vec())
+        .normalized_data(Some(serde_json::json!({"test": "data"})))
+        .build()
+        .unwrap()
 }
 
 /// Helper to create a test protocol context

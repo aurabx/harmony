@@ -133,31 +133,18 @@ pub fn parse_config(options: &HashMap<String, Value>) -> Result<PathFilterConfig
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::envelope::envelope::RequestDetails;
+    use crate::models::envelope::envelope::RequestEnvelopeBuilder;
     use std::collections::HashMap;
 
     fn create_test_envelope(path: &str) -> RequestEnvelope<serde_json::Value> {
-        let mut metadata = HashMap::new();
-        metadata.insert("path".to_string(), path.to_string());
-
-        let request_details = RequestDetails {
-            method: "GET".to_string(),
-            uri: "/test".to_string(),
-            headers: HashMap::new(),
-            cookies: HashMap::new(),
-            query_params: HashMap::new(),
-            cache_status: None,
-            metadata,
-        };
-        let backend_request_details = request_details.clone();
-
-        RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: serde_json::Value::Null,
-            normalized_data: Some(serde_json::Value::Null),
-            normalized_snapshot: None,
-        }
+        RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/test")
+            .metadata_entry("path", path)
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap()
     }
 
     #[tokio::test]

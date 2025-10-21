@@ -35,16 +35,30 @@ impl ServiceType for HttpEndpoint {
             .and_then(|v| v.as_str())
             .unwrap_or("/");
 
-        vec![RouteConfig {
-            path: format!("{}/{{*wildcard}}", path_prefix),
-            methods: vec![
-                http::Method::GET,
-                http::Method::POST,
-                http::Method::PUT,
-                http::Method::DELETE,
-            ],
-            description: Some("Handles GET/POST/PUT/DELETE for HttpEndpoint".to_string()),
-        }]
+        vec![
+            // Handle exact path match
+            RouteConfig {
+                path: path_prefix.to_string(),
+                methods: vec![
+                    http::Method::GET,
+                    http::Method::POST,
+                    http::Method::PUT,
+                    http::Method::DELETE,
+                ],
+                description: Some("Handles HTTP requests at exact path".to_string()),
+            },
+            // Handle subpaths (e.g., /dicom/echo, /api/v1/users)
+            RouteConfig {
+                path: format!("{}/{{*wildcard}}", path_prefix),
+                methods: vec![
+                    http::Method::GET,
+                    http::Method::POST,
+                    http::Method::PUT,
+                    http::Method::DELETE,
+                ],
+                description: Some("Handles HTTP requests with subpaths".to_string()),
+            },
+        ]
     }
 
     // noinspection DuplicatedCode
@@ -55,7 +69,7 @@ impl ServiceType for HttpEndpoint {
         _options: &HashMap<String, Value>,
     ) -> Result<crate::models::envelope::envelope::RequestEnvelope<Vec<u8>>, crate::utils::Error>
     {
-        use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope};
+        use crate::models::envelope::envelope::RequestEnvelope;
         use crate::utils::Error;
         use std::collections::HashMap as Map;
 
@@ -132,27 +146,22 @@ impl ServiceType for HttpEndpoint {
             .unwrap_or("")
             .to_string();
 
-        let request_details = RequestDetails {
-            method,
-            uri,
-            headers: headers_map,
-            cookies: cookies_map,
-            query_params,
-            cache_status,
-            metadata,
-        };
-
         // Try to parse payload as JSON for normalized_data
         let normalized_data = serde_json::from_slice(&ctx.payload).ok();
-        let backend_request_details = request_details.clone();
 
-        Ok(RequestEnvelope {
-            request_details,
-            backend_request_details,
-            original_data: ctx.payload,
-            normalized_data,
-            normalized_snapshot: None,
-        })
+        RequestEnvelope::builder()
+            .method(method)
+            .uri(uri)
+            .headers(headers_map)
+            .cookies(cookies_map)
+            .query_params(query_params)
+            .cache_status(cache_status)
+            .metadata(metadata)
+            .target_details(None)
+            .original_data(ctx.payload)
+            .normalized_data(normalized_data)
+            .normalized_snapshot(None)
+            .build()
     }
 }
 
@@ -172,31 +181,120 @@ impl ServiceHandler<Value> for HttpEndpoint {
 
     async fn backend_outgoing_request(
         &self,
-        envelope: RequestEnvelope<Vec<u8>>,
-        _options: &HashMap<String, Value>,
+        mut envelope: RequestEnvelope<Vec<u8>>,
+        options: &HashMap<String, Value>,
     ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
-        // HTTP passthrough - convert request to response with 200 OK
-        // @todo In a real implementation, this would make an HTTP call to a backend
-        let status = 200;
-        let mut headers = HashMap::new();
-        headers.insert("content-type".to_string(), "application/json".to_string());
-
-        let body = if let Some(ref normalized) = envelope.normalized_data {
-            serde_json::to_vec(normalized).unwrap_or_default()
-        } else {
-            envelope.original_data.clone()
+        use crate::models::envelope::envelope::TargetDetails;
+        
+        // Extract base_url from backend options
+        let base_url = options
+            .get("base_url")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| Error::from("HTTP backend requires 'base_url' in options"))?;
+        
+        // Use the path from metadata (without endpoint prefix) if available,
+        // otherwise fall back to the full URI
+        let path = envelope
+            .request_details
+            .metadata
+            .get("path")
+            .map(|p| format!("/{}", p))
+            .unwrap_or_else(|| envelope.request_details.uri.clone());
+        
+        // Create TargetDetails from request_details with base_url
+        let mut target_details = TargetDetails::from_request_details(
+            base_url.to_string(),
+            &envelope.request_details
+        );
+        
+        // Override URI with the stripped path
+        target_details.uri = path;
+        
+        tracing::debug!(
+            "HTTP backend targeting: {} {}", 
+            target_details.method, 
+            target_details.full_url().unwrap_or_else(|_| "<invalid-url>".to_string())
+        );
+        
+        // Store target_details in envelope for future use (Targets model, etc.)
+        envelope.target_details = Some(target_details.clone());
+        
+        // Make the actual HTTP request
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| Error::from(format!("Failed to create HTTP client: {}", e)))?;
+        
+        let full_url = target_details.full_url()?;
+        
+        // Build the request
+        let mut request_builder = match target_details.method.as_str() {
+            "GET" => client.get(&full_url),
+            "POST" => client.post(&full_url),
+            "PUT" => client.put(&full_url),
+            "DELETE" => client.delete(&full_url),
+            "PATCH" => client.patch(&full_url),
+            "HEAD" => client.head(&full_url),
+            method => {
+                return Err(Error::from(format!("Unsupported HTTP method: {}", method)));
+            }
         };
-
+        
+        // Add headers from target_details
+        for (key, value) in &target_details.headers {
+            request_builder = request_builder.header(key, value);
+        }
+        
+        // Add request body if present
+        if !envelope.original_data.is_empty() {
+            request_builder = request_builder.body(envelope.original_data.clone());
+        }
+        
+        tracing::debug!("Sending HTTP request to: {}", full_url);
+        
+        // Execute the request
+        let response = request_builder
+            .send()
+            .await
+            .map_err(|e| Error::from(format!("HTTP request failed: {}", e)))?;
+        
+        let status = response.status().as_u16();
+        tracing::debug!("HTTP backend response status: {}", status);
+        
+        // Extract response headers
+        let mut response_headers = HashMap::new();
+        for (key, value) in response.headers() {
+            if let Ok(value_str) = value.to_str() {
+                response_headers.insert(key.to_string(), value_str.to_string());
+            }
+        }
+        
+        // Get response body
+        let body_bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::from(format!("Failed to read response body: {}", e)))?
+            .to_vec();
+        
+        tracing::debug!("HTTP backend response body size: {} bytes", body_bytes.len());
+        
         let mut response_envelope = ResponseEnvelope::from_backend(
             envelope.request_details.clone(),
             status,
-            headers,
-            body,
+            response_headers,
+            body_bytes,
             None,
         );
-
-        response_envelope.normalized_data = envelope.normalized_data;
-
+        
+        // Try to parse response as JSON if content-type indicates JSON
+        if let Some(content_type) = response_envelope.response_details.headers.get("content-type") {
+            if content_type.contains("application/json") {
+                if let Ok(json_value) = serde_json::from_slice::<serde_json::Value>(&response_envelope.original_data) {
+                    response_envelope.normalized_data = Some(json_value);
+                }
+            }
+        }
+        
         Ok(response_envelope)
     }
 

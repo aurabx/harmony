@@ -6,8 +6,11 @@ use std::collections::HashMap;
 pub struct RequestEnvelope<T> {
     /// Request details, such as method, headers, cookies, query params, cache status, and metadata.
     pub request_details: RequestDetails,
-    /// Backend request details
+    /// Backend request details (for backward compatibility)
     pub backend_request_details: RequestDetails,
+    /// Target details for the backend call (base_url, method, headers, etc.)
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub target_details: Option<TargetDetails>,
     /// Original data received from the source (not serialized).
     #[serde(skip)]
     pub original_data: T,
@@ -17,6 +20,67 @@ pub struct RequestEnvelope<T> {
     /// Only populated when transform middleware is used to preserve original state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normalized_snapshot: Option<serde_json::Value>,
+}
+
+/// Details about the backend target that the request will be sent to.
+#[derive(Debug, Serialize, Deserialize, Clone)]
+pub struct TargetDetails {
+    /// Base URL of the target backend (e.g., "https://api.example.com")
+    pub base_url: String,
+    /// HTTP method (e.g., GET, POST) - can be overridden from RequestDetails
+    pub method: String,
+    /// Request URI or path (can be overridden from RequestDetails)
+    pub uri: String,
+    /// HTTP headers as key-value pairs (can be merged/overridden)
+    pub headers: HashMap<String, String>,
+    /// Cookies: name -> value (can be merged/overridden)
+    pub cookies: HashMap<String, String>,
+    /// Query parameters: name -> list of values (can be merged/overridden)
+    pub query_params: HashMap<String, Vec<String>>,
+    /// Additional target metadata
+    pub metadata: HashMap<String, String>,
+}
+
+impl TargetDetails {
+    /// Creates TargetDetails from RequestDetails with a base_url
+    pub fn from_request_details(base_url: String, request_details: &RequestDetails) -> Self {
+        Self {
+            base_url,
+            method: request_details.method.clone(),
+            uri: request_details.uri.clone(),
+            headers: request_details.headers.clone(),
+            cookies: request_details.cookies.clone(),
+            query_params: request_details.query_params.clone(),
+            metadata: request_details.metadata.clone(),
+        }
+    }
+    
+    /// Constructs the full URL by combining base_url with uri and query_params
+    pub fn full_url(&self) -> Result<String, crate::utils::Error> {
+        let mut url = format!("{}{}", self.base_url, self.uri);
+        
+        // Add query parameters if any exist
+        if !self.query_params.is_empty() {
+            let params: Vec<String> = self.query_params
+                .iter()
+                .flat_map(|(key, values)| {
+                    values.iter().map(move |value| {
+                        format!("{}={}", 
+                            urlencoding::encode(key), 
+                            urlencoding::encode(value)
+                        )
+                    })
+                })
+                .collect();
+            
+            if !params.is_empty() {
+                url.push('?');
+                url.push_str(&params.join("&"));
+            }
+        }
+        
+        Ok(url)
+    }
 }
 
 /// Details about the request being processed.
@@ -76,10 +140,285 @@ where
         RequestEnvelope {
             request_details,
             backend_request_details,
+            target_details: None,
             original_data,
             normalized_data,
             normalized_snapshot: None,
         }
+    }
+
+    /// Creates a new RequestEnvelopeBuilder.
+    /// 
+    /// # Example
+    /// 
+    /// ```ignore
+    /// let envelope = RequestEnvelope::builder()
+    ///     .method("GET")
+    ///     .uri("/test")
+    ///     .original_data(b"test".to_vec())
+    ///     .build()?;
+    /// ```
+    pub fn builder() -> RequestEnvelopeBuilder<T> {
+        RequestEnvelopeBuilder::new()
+    }
+}
+
+/// Builder for constructing RequestEnvelope instances with sensible defaults.
+/// 
+/// This builder simplifies creating RequestEnvelope instances by:
+/// - Providing default values for optional fields (empty HashMaps, None)
+/// - Automatically cloning request_details to backend_request_details
+/// - Auto-normalizing original_data to JSON when T implements Serialize
+/// 
+/// # Examples
+/// 
+/// ## Minimal usage
+/// ```ignore
+/// let envelope = RequestEnvelopeBuilder::new()
+///     .method("POST")
+///     .uri("/api/resource")
+///     .original_data(vec![1, 2, 3])
+///     .build()?;
+/// ```
+/// 
+/// ## From existing RequestDetails
+/// ```ignore
+/// let request_details = RequestDetails { /* ... */ };
+/// let envelope = RequestEnvelopeBuilder::from_request_details(request_details)
+///     .original_data(serde_json::json!({"key": "value"}))
+///     .build()?;
+/// ```
+/// 
+/// ## With metadata and headers
+/// ```ignore
+/// let envelope = RequestEnvelopeBuilder::new()
+///     .method("GET")
+///     .uri("/test")
+///     .header("Content-Type", "application/json")
+///     .metadata_entry("request_id", "123")
+///     .original_data(vec![])
+///     .build()?;
+/// ```
+#[derive(Debug, Clone)]
+pub struct RequestEnvelopeBuilder<T> {
+    method: Option<String>,
+    uri: Option<String>,
+    headers: HashMap<String, String>,
+    cookies: HashMap<String, String>,
+    query_params: HashMap<String, Vec<String>>,
+    cache_status: Option<String>,
+    metadata: HashMap<String, String>,
+    backend_request_details: Option<RequestDetails>,
+    target_details: Option<TargetDetails>,
+    original_data: Option<T>,
+    normalized_data: Option<serde_json::Value>,
+    normalized_snapshot: Option<serde_json::Value>,
+}
+
+impl<T> RequestEnvelopeBuilder<T> {
+    /// Creates a new empty builder.
+    pub fn new() -> Self {
+        Self {
+            method: None,
+            uri: None,
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata: HashMap::new(),
+            backend_request_details: None,
+            target_details: None,
+            original_data: None,
+            normalized_data: None,
+            normalized_snapshot: None,
+        }
+    }
+
+    /// Creates a builder initialized with existing RequestDetails.
+    pub fn from_request_details(details: RequestDetails) -> Self {
+        Self {
+            method: Some(details.method.clone()),
+            uri: Some(details.uri.clone()),
+            headers: details.headers.clone(),
+            cookies: details.cookies.clone(),
+            query_params: details.query_params.clone(),
+            cache_status: details.cache_status.clone(),
+            metadata: details.metadata.clone(),
+            backend_request_details: None,
+            target_details: None,
+            original_data: None,
+            normalized_data: None,
+            normalized_snapshot: None,
+        }
+    }
+
+    /// Creates a minimal envelope with only required fields.
+    pub fn with_minimal(method: impl Into<String>, uri: impl Into<String>, original_data: T) -> Self {
+        Self {
+            method: Some(method.into()),
+            uri: Some(uri.into()),
+            original_data: Some(original_data),
+            ..Self::new()
+        }
+    }
+
+    /// Sets the HTTP method.
+    pub fn method(mut self, method: impl Into<String>) -> Self {
+        self.method = Some(method.into());
+        self
+    }
+
+    /// Sets the request URI.
+    pub fn uri(mut self, uri: impl Into<String>) -> Self {
+        self.uri = Some(uri.into());
+        self
+    }
+
+    /// Replaces all headers.
+    pub fn headers(mut self, headers: HashMap<String, String>) -> Self {
+        self.headers = headers;
+        self
+    }
+
+    /// Adds a single header.
+    pub fn header(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.headers.insert(key.into(), value.into());
+        self
+    }
+
+    /// Replaces all cookies.
+    pub fn cookies(mut self, cookies: HashMap<String, String>) -> Self {
+        self.cookies = cookies;
+        self
+    }
+
+    /// Adds a single cookie.
+    pub fn cookie(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.cookies.insert(key.into(), value.into());
+        self
+    }
+
+    /// Replaces all query parameters.
+    pub fn query_params(mut self, query_params: HashMap<String, Vec<String>>) -> Self {
+        self.query_params = query_params;
+        self
+    }
+
+    /// Adds a single query parameter.
+    pub fn query_param(mut self, key: impl Into<String>, values: Vec<String>) -> Self {
+        self.query_params.insert(key.into(), values);
+        self
+    }
+
+    /// Sets the cache status.
+    pub fn cache_status(mut self, cache_status: Option<String>) -> Self {
+        self.cache_status = cache_status;
+        self
+    }
+
+    /// Replaces all metadata.
+    pub fn metadata(mut self, metadata: HashMap<String, String>) -> Self {
+        self.metadata = metadata;
+        self
+    }
+
+    /// Adds a single metadata entry.
+    pub fn metadata_entry(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
+        self.metadata.insert(key.into(), value.into());
+        self
+    }
+
+    /// Sets the backend request details explicitly.
+    /// If not called, backend_request_details will be cloned from request_details.
+    pub fn backend_request_details(mut self, details: RequestDetails) -> Self {
+        self.backend_request_details = Some(details);
+        self
+    }
+
+    /// Sets the target details.
+    pub fn target_details(mut self, details: Option<TargetDetails>) -> Self {
+        self.target_details = details;
+        self
+    }
+
+    /// Sets the original data.
+    pub fn original_data(mut self, data: T) -> Self {
+        self.original_data = Some(data);
+        self
+    }
+
+    /// Sets the normalized data explicitly.
+    /// If not called and T implements Serialize, it will be auto-generated from original_data.
+    pub fn normalized_data(mut self, data: Option<serde_json::Value>) -> Self {
+        self.normalized_data = data;
+        self
+    }
+
+    /// Sets the normalized snapshot.
+    pub fn normalized_snapshot(mut self, snapshot: Option<serde_json::Value>) -> Self {
+        self.normalized_snapshot = snapshot;
+        self
+    }
+}
+
+impl<T> RequestEnvelopeBuilder<T>
+where
+    T: Serialize,
+{
+    /// Builds the RequestEnvelope, validating required fields and applying defaults.
+    /// 
+    /// # Errors
+    /// 
+    /// Returns an error if:
+    /// - method is not set
+    /// - uri is not set  
+    /// - original_data is not set
+    pub fn build(self) -> Result<RequestEnvelope<T>, crate::utils::Error> {
+        let method = self
+            .method
+            .ok_or_else(|| crate::utils::Error::from("method is required"))?;
+        let uri = self
+            .uri
+            .ok_or_else(|| crate::utils::Error::from("uri is required"))?;
+        let original_data = self
+            .original_data
+            .ok_or_else(|| crate::utils::Error::from("original_data is required"))?;
+
+        // Build request_details
+        let request_details = RequestDetails {
+            method,
+            uri,
+            headers: self.headers,
+            cookies: self.cookies,
+            query_params: self.query_params,
+            cache_status: self.cache_status,
+            metadata: self.metadata,
+        };
+
+        // Auto-clone request_details to backend_request_details if not explicitly set
+        let backend_request_details = self
+            .backend_request_details
+            .unwrap_or_else(|| request_details.clone());
+
+        // Auto-normalize original_data if normalized_data not explicitly set
+        let normalized_data = self
+            .normalized_data
+            .or_else(|| serde_json::to_value(&original_data).ok());
+
+        Ok(RequestEnvelope {
+            request_details,
+            backend_request_details,
+            target_details: self.target_details,
+            original_data,
+            normalized_data,
+            normalized_snapshot: self.normalized_snapshot,
+        })
+    }
+}
+
+impl<T> Default for RequestEnvelopeBuilder<T> {
+    fn default() -> Self {
+        Self::new()
     }
 }
 

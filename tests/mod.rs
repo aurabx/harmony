@@ -4,3 +4,4 @@ mod dicom;
 mod dicomweb;
 mod fhir;
 mod jmix;
+mod http;
