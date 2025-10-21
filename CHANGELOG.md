@@ -1,5 +1,19 @@
 # Changelog
 
+## [0.3.1] - 2025-10-21
+
+### Added
+- Improved ability to set TargetDetails in middleware
+- (AURA-2103) HTTP backend with tests and related fixes
+- (AURA-2113) Docker build support
+
+### Fixed
+- DIMSE op selection in DICOM backend
+- Correctly extract manifest from zip if not available
+- Echo endpoint functionality and added extra tracing
+- Moved dimse_retrieve_mode to DICOM backend configuration
+- Moved jmix options to the jmix_builder
+
 ## [0.3.0] - 2025-10-19
 
 ### Highlights
@@ -71,5 +85,6 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.3.1]: https://github.com/aurabx/harmony/compare/0.3.0...0.3.1
 [0.3.0]: https://github.com/aurabx/harmony/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/aurabx/harmony/compare/0.1.1...0.2.0
