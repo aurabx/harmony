@@ -135,22 +135,43 @@ impl Middleware for JmixBuilderMiddleware {
             // Serve manifest
             if wants_manifest {
                 let manifest_path = package_dir.join("manifest.json");
-                if !manifest_path.exists() {
-                    set_response_and_skip(
-                        404,
-                        HashMap::new(),
-                        Some("manifest.json not found".into()),
-                        None,
-                        None,
-                        None,
-                    );
-                    return Ok(envelope);
-                }
+                
+                // Try to read manifest from file first, then from ZIP if not found
+                let manifest_json_opt = if manifest_path.exists() {
+                    fs::read_to_string(&manifest_path)
+                        .ok()
+                        .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
+                } else {
+                    // Manifest not found as file - try to extract from ZIP
+                    let zip_file = package_dir.join(format!("{}.zip", id));
+                    let mut manifest_from_zip = None;
+                    if zip_file.exists() {
+                        // Read and parse ZIP to find manifest.json
+                        if let Ok(zip_bytes) = fs::read(&zip_file) {
+                            use std::io::Cursor;
+                            if let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(zip_bytes)) {
+                                // Try to find manifest.json in the archive
+                                for i in 0..archive.len() {
+                                    if let Ok(mut file) = archive.by_index(i) {
+                                        if file.name().ends_with("manifest.json") {
+                                            use std::io::Read;
+                                            let mut contents = String::new();
+                                            if file.read_to_string(&mut contents).is_ok() {
+                                                if let Ok(json) = serde_json::from_str(&contents) {
+                                                    manifest_from_zip = Some(json);
+                                                    break;
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                    manifest_from_zip
+                };
 
-                match fs::read_to_string(&manifest_path)
-                    .ok()
-                    .and_then(|s| serde_json::from_str::<serde_json::Value>(&s).ok())
-                {
+                match manifest_json_opt {
                     Some(mut json) => {
                         // Ensure manifest has id; inject if missing
                         let has_id = json.get("id").and_then(|v| v.as_str()).is_some();
@@ -165,9 +186,9 @@ impl Middleware for JmixBuilderMiddleware {
                     }
                     None => {
                         set_response_and_skip(
-                            500,
+                            404,
                             HashMap::new(),
-                            Some("failed to parse manifest.json".into()),
+                            Some("manifest.json not found".into()),
                             None,
                             None,
                             None,
@@ -222,15 +243,43 @@ impl Middleware for JmixBuilderMiddleware {
         }
 
         // Case 2: GET/HEAD /api/jmix?studyInstanceUid=...
-        // Always returns a zip file (never JSON index)
+        // Returns ZIP file if Accept: application/zip, otherwise returns JSON index
         if let Some(uid) = study_uid {
             let matches = query_by_study_uid(&store_root, &uid)?;
 
             if matches.is_empty() {
                 // No local matches - let backends handle it
+                // Set dimse_op for DICOM backend to use "get" operation (retrieve study data)
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("dimse_op".to_string(), "get".to_string());
                 return Ok(envelope);
             }
 
+            // Check Accept header to determine response format
+            let accept = envelope
+                .request_details
+                .headers
+                .get("accept")
+                .map(|s| s.to_lowercase())
+                .unwrap_or_default();
+            let wants_zip = accept.contains("application/zip");
+            let wants_json = accept.contains("application/json") || accept.contains("*/*") || accept.is_empty();
+
+            // If client wants JSON, return index listing
+            if wants_json && !wants_zip {
+                // Build JSON response with list of matching packages
+                let json_response = serde_json::json!({
+                    "jmixEnvelopes": matches
+                });
+                let mut hdrs = HashMap::new();
+                hdrs.insert("content-type".to_string(), "application/json".to_string());
+                set_response_and_skip(200, hdrs, None, Some(json_response), None, None);
+                return Ok(envelope);
+            }
+
+            // Client wants ZIP - serve the zip file
             // Use the first match (most recent or only one)
             let m = &matches[0];
             let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
@@ -250,6 +299,11 @@ impl Middleware for JmixBuilderMiddleware {
                     zip_file.display()
                 );
                 // Pass through to backends without setting skip_backends
+                // Set dimse_op for DICOM backend to use "get" operation
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("dimse_op".to_string(), "get".to_string());
                 return Ok(envelope);
             }
 
