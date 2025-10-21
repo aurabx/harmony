@@ -192,23 +192,37 @@ impl ServiceHandler<Value> for HttpEndpoint {
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::from("HTTP backend requires 'base_url' in options"))?;
         
-        // Use the path from metadata (without endpoint prefix) if available,
-        // otherwise fall back to the full URI
-        let path = envelope
-            .request_details
-            .metadata
-            .get("path")
-            .map(|p| format!("/{}", p))
-            .unwrap_or_else(|| envelope.request_details.uri.clone());
-        
-        // Create TargetDetails from request_details with base_url
-        let mut target_details = TargetDetails::from_request_details(
-            base_url.to_string(),
-            &envelope.request_details
-        );
-        
-        // Override URI with the stripped path
-        target_details.uri = path;
+        // Check if middleware has already set target_details
+        let target_details = if let Some(existing_target) = envelope.target_details.take() {
+            // Middleware has set target_details - use it
+            // But merge base_url from backend options if not set by middleware
+            let mut target = existing_target;
+            if target.base_url.is_empty() {
+                target.base_url = base_url.to_string();
+            }
+            tracing::debug!("HTTP backend using middleware-provided target_details");
+            target
+        } else {
+            // No target_details set by middleware - create from request_details
+            // Use the path from metadata (without endpoint prefix) if available,
+            // otherwise fall back to the full URI
+            let path = envelope
+                .request_details
+                .metadata
+                .get("path")
+                .map(|p| format!("/{}", p))
+                .unwrap_or_else(|| envelope.request_details.uri.clone());
+            
+            // Create TargetDetails from request_details with base_url
+            let mut target = TargetDetails::from_request_details(
+                base_url.to_string(),
+                &envelope.request_details
+            );
+            
+            // Override URI with the stripped path
+            target.uri = path;
+            target
+        };
         
         tracing::debug!(
             "HTTP backend targeting: {} {}", 
