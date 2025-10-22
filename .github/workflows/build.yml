@@ -1,9 +1,11 @@
 name: Release Harmony
 
+#on:
+#  push:
+#    tags:
+#      - 'v*' # triggers only on version tags (e.g. v1.0.0)
 on:
-  push:
-    tags:
-      - 'v*' # triggers only on version tags (e.g. v1.0.0)
+  workflow_dispatch:
 
 env:
   CARGO_TERM_COLOR: always
