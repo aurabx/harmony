@@ -62,7 +62,19 @@ jobs:
           cp target/${{ matrix.target }}/release/harmony* release/ || true
           cd release
           tar czf harmony-${{ matrix.target }}.tar.gz harmony* || true
-          shasum -a 256 harmony-${{ matrix.target }}.tar.gz > harmony-${{ matrix.target }}.sha256
+
+      - name: Generate SHA256 (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          Get-FileHash "release/harmony-${{ matrix.target }}.tar.gz" -Algorithm SHA256 |
+            ForEach-Object { $_.Hash } | Out-File "release/harmony-${{ matrix.target }}.sha256" -Encoding ascii
+
+      - name: Generate SHA256 (non-Windows)
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          shasum -a 256 release/harmony-${{ matrix.target }}.tar.gz > release/harmony-${{ matrix.target }}.sha256
 
       - name: Upload artefacts
         uses: actions/upload-artifact@v4
