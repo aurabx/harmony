@@ -52,10 +52,11 @@ tempfile = "3.10"
 uuid = { version = "1", features = ["v4"] }
 redb = "2.1"
 urlencoding = "2.1"
-reqwest = { version = "0.12", features = ["json", "stream", "multipart"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls-webpki-roots", "json", "stream", "multipart"] }
 matchit = "0.8"
 anyhow = "1.0.100"
 tokio-util = "0.7.16"
+rustls = { version = "0.23", default-features = false, features = ["std"] }
 
 [dev-dependencies]
 tokio-test = "0.4"
