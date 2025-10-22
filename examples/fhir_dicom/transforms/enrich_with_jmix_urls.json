@@ -2,59 +2,16 @@
   {
     "operation": "shift",
     "spec": {
-      "data": {
-        "matches": {
-          "*": {
-            "@": "data.matches[&1]",
-            "0020000D": {
-              "Value": {
-                "0": "data.matches[&3]._jmix_study_uid"
-              }
-            }
-          }
-        },
-        "*": "data.&"
-      },
-      "context": "context"
+      "*": "&"
     }
   },
   {
-    "operation": "shift",
+    "operation": "default",
     "spec": {
       "data": {
         "matches": {
           "*": {
-            "@": "data.matches[&1]",
-            "_jmix_study_uid": {
-              "@": "data.matches[&2]._jmix_url_temp"
-            }
-          }
-        },
-        "*": "data.&"
-      },
-      "context": "context"
-    }
-  },
-  {
-    "operation": "modify-overwrite-beta",
-    "spec": {
-      "data": {
-        "matches": {
-          "*": {
-            "_jmix_url": "=concat('/api/jmix?studyInstanceUid=',@(1,_jmix_url_temp))"
-          }
-        }
-      }
-    }
-  },
-  {
-    "operation": "remove",
-    "spec": {
-      "data": {
-        "matches": {
-          "*": {
-            "_jmix_url_temp": "",
-            "_jmix_study_uid": ""
+            "_jmix_url": "/api/jmix"
           }
         }
       }

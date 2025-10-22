@@ -191,7 +191,10 @@ async fn handle_request(
     // 3. Execute pipeline (NEW: using PipelineExecutor!)
     let response_envelope = PipelineExecutor::execute(envelope, pipeline, &config, &ctx)
         .await
-        .map_err(|err| map_pipeline_error_to_status(&err))?;
+        .map_err(|err| {
+            tracing::error!("Pipeline execution failed: {}", err);
+            map_pipeline_error_to_status(&err)
+        })?;
 
     // 4. Convert ResponseEnvelope → HTTP Response
     let response = service

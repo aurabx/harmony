@@ -328,7 +328,7 @@ curl "http://localhost:8081/fhir/ImagingStudy?patient=PID156695" \
         "id": "1.2.826.0.1.3680043.9.7133.3280065491876470",
         "identifier": [
           {
-            "system": "urn:dicom:uid",
+            "system": "urn:dicom:uid"
             "value": "1.2.826.0.1.3680043.9.7133.3280065491876470"
           },
           {
