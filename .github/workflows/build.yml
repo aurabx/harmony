@@ -4,7 +4,7 @@ name: Release Harmony
 on:
   push:
     tags:
-      - '*'
+      - '**'      # match all tags, e.g. 1.0.0, release-1, beta, etc.
   workflow_dispatch:
 
 env:
