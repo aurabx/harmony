@@ -38,18 +38,21 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # Force bash to avoid PowerShell/zsh syntax issues
-      - name: Build Harmony
+      # Linux builds (use cross)
+      - name: Build Harmony (Linux cross)
+        if: runner.os == 'Linux'
         shell: bash
         run: |
-          if [ "$RUNNER_OS" = "Linux" ]; then
-            echo "Building using cross for target ${{ matrix.target }}"
-            cargo install cross --git https://github.com/cross-rs/cross
-            cross build --release --target ${{ matrix.target }}
-          else
-            echo "Building natively for target ${{ matrix.target }}"
-            cargo build --release --target ${{ matrix.target }}
-          fi
+          echo "Detected Linux runner. Installing and using cross."
+          cargo install cross --git https://github.com/cross-rs/cross
+          cross build --release --target ${{ matrix.target }}
+
+      # Non-Linux builds (macOS + Windows)
+      - name: Build Harmony (native)
+        if: runner.os != 'Linux'
+        run: |
+          echo "Detected non-Linux runner. Building natively."
+          cargo build --release --target ${{ matrix.target }}
 
       - name: Package artefacts
         shell: bash
@@ -93,7 +96,8 @@ jobs:
         id: meta
         shell: bash
         run: |
-          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+          if [ "${GITHUB_REF_TYPE}" = "tag" ]; then
+            echo "Detected release tag ${GITHUB_REF_NAME}"
             echo "tags=${REGISTRY}/${IMAGE_NAME}:${GITHUB_REF_NAME},${REGISTRY}/${IMAGE_NAME}:latest" >> $GITHUB_OUTPUT
           else
             SHORT_SHA="${GITHUB_SHA::7}"
