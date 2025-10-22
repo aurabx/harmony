@@ -38,12 +38,16 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
+      # Force bash to avoid PowerShell/zsh syntax issues
       - name: Build Harmony
+        shell: bash
         run: |
-          if [[ "$RUNNER_OS" == "Linux" ]]; then
+          if [ "$RUNNER_OS" = "Linux" ]; then
+            echo "Building using cross for target ${{ matrix.target }}"
             cargo install cross --git https://github.com/cross-rs/cross
             cross build --release --target ${{ matrix.target }}
           else
+            echo "Building natively for target ${{ matrix.target }}"
             cargo build --release --target ${{ matrix.target }}
           fi
 
