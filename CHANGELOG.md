@@ -1,5 +1,23 @@
 # Changelog
 
+## [0.3.2] - 2025-10-22
+
+### Added
+- (AURA-2086) FHIR to DICOM pipeline support
+- Unified CI/CD workflows for builds and releases
+- Helm chart for Kubernetes deployment
+
+### Changed
+- Updated metadata transform functionality
+- Unified Docker build workflows
+- DockerHub repository naming
+
+### Fixed
+- FHIR to DICOM conversion
+- Windows build shasum dependency
+- OpenSSL dependency handling in builds
+- Docker image tagging for releases
+
 ## [0.3.1] - 2025-10-21
 
 ### Added
@@ -85,6 +103,7 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.3.2]: https://github.com/aurabx/harmony/compare/0.3.1...0.3.2
 [0.3.1]: https://github.com/aurabx/harmony/compare/0.3.0...0.3.1
 [0.3.0]: https://github.com/aurabx/harmony/compare/0.2.0...0.3.0
 [0.2.0]: https://github.com/aurabx/harmony/compare/0.1.1...0.2.0
