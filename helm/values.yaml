@@ -1,0 +1,28 @@
+replicaCount: 1
+
+image:
+  repository: harmony-proxy
+  pullPolicy: IfNotPresent
+  tag: "latest"
+
+service:
+  type: ClusterIP
+  port: 8080
+
+config:
+  # Path to mounted config file
+  path: /etc/harmony/harmony-config.toml
+
+resources:
+  limits:
+    cpu: 1000m
+    memory: 512Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+nodeSelector: {}
+
+tolerations: []
+
+affinity: {}
