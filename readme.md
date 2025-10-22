@@ -57,23 +57,36 @@ If configured, you should receive an echoed response from the sample backend. Ex
 
 ### Docker
 
-Run with Docker Compose:
+#### Option 1 – Run with Docker Compose (recommended)
+
+For local development or quick testing:
 
 ```bash
-# Build and run
-docker-compose up
+# Build and start containers
+docker compose up
 
-# Alternatively, to force a rebuild
+# Alternatively, to rebuild and restart cleanly
 docker compose up --build --force-recreate -d
 
 # Test the service
 curl -i http://localhost:8080/echo
 ```
 
-Or build and run manually:
+Compose uses the included `Dockerfile.build` so everything builds from source inside Docker—no Rust toolchain required on the host.
+
+**Ports**
+
+* **8080** – Main service endpoints
+* **9090** – Management API (if enabled)
+
+---
+
+#### Option 2 – Build and run manually (from prebuilt or local binaries)
+
+If you have prebuilt binaries or are running from CI output, use the lean runtime image (`Dockerfile`):
 
 ```bash
-# Build image
+# Build image from prebuilt binaries (fast path)
 docker build -t harmony-proxy .
 
 # Run with default config
@@ -87,9 +100,32 @@ docker run -p 8080:8080 \
   harmony-proxy --config /examples/basic-echo/config.toml
 ```
 
-Ports:
-- 8080: Main service endpoints
-- 9090: Management API (if enabled)
+If you’d rather build everything from scratch (no prebuilt binaries), specify the full build image explicitly:
+
+```bash
+docker build -f Dockerfile.build -t harmony-proxy .
+docker run -p 8080:8080 harmony-proxy
+```
+
+---
+
+#### Option 3 – Use the published image
+
+Once your CI workflow pushes to GHCR:
+
+```bash
+docker pull ghcr.io/aurabx/harmony:latest
+docker run -p 8080:8080 -p 9090:9090 ghcr.io/aurabx/harmony:latest
+```
+
+---
+
+This layout clarifies:
+
+* **Compose / Dockerfile.build** → full source build (developer-friendly)
+* **Dockerfile** → prebuilt-binary runtime (used by CI and GHCR images)
+* **Published image** → fastest start for end-users
+
 
 ## Configuration
 Harmony's configuration is file-based (TOML) and can include additional pipeline/transform files from a directory.
