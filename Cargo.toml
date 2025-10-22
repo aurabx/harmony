@@ -117,6 +117,10 @@ path = "tests/dicomweb/integration.rs"
 name = "fhir_service"
 path = "tests/fhir/fhir_service.rs"
 
+[[test]]
+name = "fhir_backend"
+path = "tests/fhir/fhir_backend.rs"
+
 # JMIX tests
 [[test]]
 name = "jmix_skip_backends"
