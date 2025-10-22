@@ -1,10 +1,9 @@
 name: Release Harmony
 
-#on:
-#  push:
-#    tags:
-#      - 'v*' # triggers only on version tags (e.g. v1.0.0)
 on:
+  push:
+    tags:
+      - 'v*'            # real releases
   workflow_dispatch:
 
 env:
@@ -26,7 +25,7 @@ jobs:
           - x86_64-pc-windows-msvc
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
       - name: Install Rust toolchain
@@ -37,10 +36,10 @@ jobs:
       - name: Install cross
         run: cargo install cross --git https://github.com/cross-rs/cross
 
-      - name: Build release binary
+      - name: Build
         run: cross build --release --target ${{ matrix.target }}
 
-      - name: Prepare release artefacts
+      - name: Package artefacts
         run: |
           mkdir -p release
           cp target/${{ matrix.target }}/release/harmony* release/ || true
@@ -64,28 +63,41 @@ jobs:
       id-token: write
 
     steps:
-      - name: Checkout code
+      - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Set up Docker Buildx
+      - name: Set up Buildx
         uses: docker/setup-buildx-action@v3
 
-      - name: Login to GitHub Container Registry
+      - name: Login to GHCR
         uses: docker/login-action@v3
         with:
           registry: ${{ env.REGISTRY }}
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
-      - name: Build and push multi-arch image
+      - name: Compute image tags
+        id: meta
+        shell: bash
+        run: |
+          if [[ "${GITHUB_REF_TYPE}" == "tag" ]]; then
+            echo "tags=${REGISTRY}/${IMAGE_NAME}:${GITHUB_REF_NAME},${REGISTRY}/${IMAGE_NAME}:latest" >> $GITHUB_OUTPUT
+          else
+            SHORT_SHA="${GITHUB_SHA::7}"
+            SAFE_BRANCH="${GITHUB_REF_NAME//\//-}"
+            echo "tags=${REGISTRY}/${IMAGE_NAME}:${SAFE_BRANCH}-${SHORT_SHA}" >> $GITHUB_OUTPUT
+          fi
+        env:
+          REGISTRY: ${{ env.REGISTRY }}
+          IMAGE_NAME: ${{ env.IMAGE_NAME }}
+
+      - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           push: true
           platforms: linux/amd64,linux/arm64
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${{ github.ref_name }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:latest
+          tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
@@ -93,8 +105,9 @@ jobs:
     name: Publish GitHub release
     runs-on: ubuntu-latest
     needs: [build-binaries, docker]
+    if: startsWith(github.ref, 'refs/tags/v')   # only for real releases
     steps:
-      - name: Download built artefacts
+      - name: Download artefacts
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
