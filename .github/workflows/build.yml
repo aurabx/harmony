@@ -10,7 +10,7 @@ on:
 env:
   CARGO_TERM_COLOR: always
   REGISTRY_GHCR: ghcr.io/aurabx/harmony
-  REGISTRY_DOCKERHUB: aurabx/harmony
+  REGISTRY_DOCKERHUB: aurabox/harmony
   IMAGE_NAME: harmony
 
 jobs:
