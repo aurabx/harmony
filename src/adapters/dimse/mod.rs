@@ -63,9 +63,9 @@ impl ProtocolAdapter for DimseAdapter {
     ) -> anyhow::Result<JoinHandle<()>> {
         let network_name = self.network_name.clone();
         
-        tracing::info!("Starting DIMSE adapter for network '{}'", network_name);
+        tracing::debug!("Starting DIMSE adapter for network '{}'", network_name);
 
-        // Get all DIMSE endpoints for this network from pipelines
+        // Collect all DIMSE-related endpoints and backends for this network
         let mut scp_configs: Vec<(String, String, HashMap<String, serde_json::Value>)> = Vec::new();
         
         for (pipeline_name, pipeline_cfg) in &config.pipelines {
@@ -74,11 +74,11 @@ impl ProtocolAdapter for DimseAdapter {
                 continue;
             }
             
-            // Check all endpoints in this pipeline
+            // Check all endpoints in this pipeline for DIMSE services
             for endpoint_name in &pipeline_cfg.endpoints {
                 if let Some(endpoint) = config.endpoints.get(endpoint_name) {
-                    // Check if this endpoint is DIMSE by service name
-                    if endpoint.service == "dimse" {
+                    // Support: "dimse" (legacy), "dicom_scp" (new)
+                    if matches!(endpoint.service.as_str(), "dimse" | "dicom_scp") {
                         scp_configs.push((
                             pipeline_name.clone(),
                             endpoint_name.clone(),
@@ -87,13 +87,41 @@ impl ProtocolAdapter for DimseAdapter {
                     }
                 }
             }
+            
+            // Also check for persistent SCP backends (legacy support)
+            for backend_name in &pipeline_cfg.backends {
+                if let Some(backend) = config.backends.get(backend_name) {
+                    // Legacy persistent DICOM SCP backends
+                    if backend.service == "dicom" {
+                        if let Some(options) = &backend.options {
+                            let needs_persistent = options
+                                .get("persistent_store_scp")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                                || (options.contains_key("host") && options.contains_key("port"));
+                            
+                            if needs_persistent && options.contains_key("incoming_store_port") {
+                                scp_configs.push((
+                                    pipeline_name.clone(),
+                                    format!("persistent_{}", backend_name),
+                                    options.clone(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if scp_configs.is_empty() {
-            tracing::warn!(
-                "No DIMSE endpoints found for network '{}', adapter will be idle",
+            tracing::debug!(
+                "No DIMSE endpoints or persistent SCPs found for network '{}'",
                 network_name
             );
+            // Return idle adapter
+            return Ok(tokio::spawn(async move {
+                shutdown.cancelled().await;
+            }));
         }
 
         // Spawn task to manage SCPs
@@ -159,8 +187,10 @@ impl DimseAdapter {
             .and_then(|s| s.parse::<IpAddr>().ok())
             .unwrap_or_else(|| IpAddr::from(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
+        // For persistent backends, use incoming_store_port; for endpoints, use port
         let port = options
-            .get("port")
+            .get("incoming_store_port")
+            .or_else(|| options.get("port"))
             .and_then(|v| v.as_u64())
             .map(|p| p as u16)
             .unwrap_or(DEFAULT_DIMSE_PORT);
