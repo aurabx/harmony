@@ -241,35 +241,38 @@ impl DicomwebBridgeMiddleware {
 
     /// Add default return keys when no includefield is specified
     fn add_default_return_keys(ident: &mut serde_json::Map<String, Value>, level: &str) {
-        let add_tag_by_name = |ident: &mut serde_json::Map<String, Value>, name: &str| {
+        let add_tag_if_missing = |ident: &mut serde_json::Map<String, Value>, name: &str| {
             let tag_hex = Self::dicom_name_to_hex(name);
-            let vr = Self::infer_vr_for_tag(&tag_hex);
-            Self::add_tag(ident, &tag_hex, &vr, vec![]);
+            // Only add if not already present (preserves query parameters)
+            if !ident.contains_key(&tag_hex) {
+                let vr = Self::infer_vr_for_tag(&tag_hex);
+                Self::add_tag(ident, &tag_hex, &vr, vec![]);
+            }
         };
 
         match level {
             "study" => {
                 // Default study-level return keys for full metadata
-                add_tag_by_name(ident, "StudyInstanceUID");
-                add_tag_by_name(ident, "StudyDate");
-                add_tag_by_name(ident, "ModalitiesInStudy");
-                add_tag_by_name(ident, "PatientID");
-                add_tag_by_name(ident, "PatientName");
-                add_tag_by_name(ident, "StudyDescription");
-                add_tag_by_name(ident, "AccessionNumber");
+                add_tag_if_missing(ident, "StudyInstanceUID");
+                add_tag_if_missing(ident, "StudyDate");
+                add_tag_if_missing(ident, "ModalitiesInStudy");
+                add_tag_if_missing(ident, "PatientID");
+                add_tag_if_missing(ident, "PatientName");
+                add_tag_if_missing(ident, "StudyDescription");
+                add_tag_if_missing(ident, "AccessionNumber");
             }
             "series" => {
                 // Default series-level return keys
-                add_tag_by_name(ident, "SeriesInstanceUID");
-                add_tag_by_name(ident, "Modality");
-                add_tag_by_name(ident, "SeriesDescription");
-                add_tag_by_name(ident, "SeriesNumber");
+                add_tag_if_missing(ident, "SeriesInstanceUID");
+                add_tag_if_missing(ident, "Modality");
+                add_tag_if_missing(ident, "SeriesDescription");
+                add_tag_if_missing(ident, "SeriesNumber");
             }
             "instance" => {
                 // Default instance-level return keys
-                add_tag_by_name(ident, "SOPInstanceUID");
-                add_tag_by_name(ident, "InstanceNumber");
-                add_tag_by_name(ident, "SOPClassUID");
+                add_tag_if_missing(ident, "SOPInstanceUID");
+                add_tag_if_missing(ident, "InstanceNumber");
+                add_tag_if_missing(ident, "SOPClassUID");
             }
             _ => {}
         }
@@ -339,7 +342,37 @@ impl Middleware for DicomwebBridgeMiddleware {
         // Build DICOM identifier JSON using hex tags
         let mut ident = serde_json::Map::<String, Value>::new();
 
-        // Process all query parameters (except special ones like includefield)
+        // Extract pagination parameters for QIDO-RS queries
+        // Per DICOMweb spec: limit controls maximum results, offset controls skip count
+        let limit = qp
+            .get("limit")
+            .and_then(|v| v.first())
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(100); // Default limit of 100 results
+
+        let offset = qp
+            .get("offset")
+            .and_then(|v| v.first())
+            .and_then(|s| s.parse::<u32>().ok())
+            .unwrap_or(0);
+
+        // Store pagination parameters in metadata for right-side processing
+        envelope
+            .request_details
+            .metadata
+            .insert("dicomweb_limit".to_string(), limit.to_string());
+        envelope
+            .request_details
+            .metadata
+            .insert("dicomweb_offset".to_string(), offset.to_string());
+
+        tracing::debug!(
+            "DICOMweb pagination: limit={}, offset={}",
+            limit,
+            offset
+        );
+
+        // Process all query parameters (except special ones like includefield/limit/offset)
         for (param_name, param_values) in qp {
             // Skip special DICOMweb parameters that aren't DICOM tags
             if matches!(
@@ -354,6 +387,7 @@ impl Middleware for DicomwebBridgeMiddleware {
             let vr = Self::infer_vr_for_tag(&tag_hex);
 
             // Use all values for this parameter (DICOMweb allows multiple values)
+            // Date ranges in DICOM format (YYYYMMDD-YYYYMMDD) are passed through as-is
             let values: Vec<String> = param_values.to_vec();
             if !values.is_empty() {
                 Self::add_tag(&mut ident, &tag_hex, &vr, values);
@@ -597,9 +631,17 @@ impl Middleware for DicomwebBridgeMiddleware {
             // Attach identifier for backend to consume
             if let Some(obj) = nd.as_object_mut() {
                 obj.insert("dimse_identifier".to_string(), Value::Object(ident));
+                // For QIDO-RS (find) operations, pass limit to DIMSE backend
+                // Note: offset will be applied in right() since DIMSE doesn't support it natively
+                if op_name == "find" {
+                    obj.insert("max_results".to_string(), Value::Number((limit + offset).into()));
+                }
             } else {
                 let mut map = serde_json::Map::new();
                 map.insert("dimse_identifier".to_string(), Value::Object(ident));
+                if op_name == "find" {
+                    map.insert("max_results".to_string(), Value::Number((limit + offset).into()));
+                }
                 nd = Value::Object(map);
             }
             envelope.normalized_data = Some(nd);
@@ -672,10 +714,48 @@ impl Middleware for DicomwebBridgeMiddleware {
             .get("dicomweb_includefield")
             .and_then(|json_str| serde_json::from_str(json_str).ok());
 
+        // Parse pagination parameters from request metadata (set by left-side middleware)
+        let limit = envelope
+            .request_details
+            .metadata
+            .get("dicomweb_limit")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(100);
+
+        let offset = envelope
+            .request_details
+            .metadata
+            .get("dicomweb_offset")
+            .and_then(|s| s.parse::<usize>().ok())
+            .unwrap_or(0);
+
         // QIDO lists -> DICOMweb JSON data
         if operation == "find" {
             let matches_val = nd.get("matches").cloned().unwrap_or(Value::Array(vec![]));
-            let json = Self::build_qido_json_from_matches(&matches_val, includefield.as_ref());
+            let mut json = Self::build_qido_json_from_matches(&matches_val, includefield.as_ref());
+
+            // Apply pagination to QIDO-RS results
+            // Offset is applied here since DIMSE C-FIND doesn't natively support it
+            if let Value::Array(ref mut results) = json {
+                let total_results = results.len();
+                tracing::debug!(
+                    total_results = total_results,
+                    limit = limit,
+                    offset = offset,
+                    "Applying pagination to QIDO-RS results"
+                );
+
+                // Skip offset items and take limit items
+                let start = offset.min(total_results);
+                let end = (start + limit).min(total_results);
+                *results = results.drain(start..end).collect();
+
+                tracing::debug!(
+                    paginated_count = results.len(),
+                    "Pagination applied, returning {} results",
+                    results.len()
+                );
+            }
 
             // Create metadata indicating whether results were found
             let has_results = match &json {
@@ -1288,5 +1368,223 @@ mod tests {
             !all_keys.iter().any(|k| k.starts_with("limit")),
             "limit should not be processed as DICOM tag"
         );
+    }
+
+    #[tokio::test]
+    async fn test_pagination_default_limit() {
+        let bridge = DicomwebBridgeMiddleware::new();
+
+        // No limit specified - should use default of 100
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/dicomweb/studies")
+            .metadata_entry("path", "studies")
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
+
+        let result = bridge.left(envelope).await;
+        assert!(result.is_ok());
+
+        let processed = result.unwrap();
+        assert_eq!(
+            processed.request_details.metadata.get("dicomweb_limit"),
+            Some(&"100".to_string())
+        );
+        assert_eq!(
+            processed.request_details.metadata.get("dicomweb_offset"),
+            Some(&"0".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_pagination_custom_limit_offset() {
+        let bridge = DicomwebBridgeMiddleware::new();
+
+        let mut query_params = HashMap::new();
+        query_params.insert("limit".to_string(), vec!["25".to_string()]);
+        query_params.insert("offset".to_string(), vec!["10".to_string()]);
+
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/dicomweb/studies?limit=25&offset=10")
+            .query_params(query_params)
+            .metadata_entry("path", "studies")
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
+
+        let result = bridge.left(envelope).await;
+        assert!(result.is_ok());
+
+        let processed = result.unwrap();
+        assert_eq!(
+            processed.request_details.metadata.get("dicomweb_limit"),
+            Some(&"25".to_string())
+        );
+        assert_eq!(
+            processed.request_details.metadata.get("dicomweb_offset"),
+            Some(&"10".to_string())
+        );
+
+        // Verify max_results = limit + offset
+        let nd = processed.normalized_data.unwrap();
+        assert_eq!(nd.get("max_results").and_then(|v| v.as_u64()), Some(35));
+    }
+
+    #[tokio::test]
+    async fn test_pagination_filtering_right_side() {
+        let bridge = DicomwebBridgeMiddleware::new();
+
+        // Create mock response with 10 results
+        let mock_matches = serde_json::json!([
+            {"00100020": {"vr": "LO", "Value": ["P001"]}},
+            {"00100020": {"vr": "LO", "Value": ["P002"]}},
+            {"00100020": {"vr": "LO", "Value": ["P003"]}},
+            {"00100020": {"vr": "LO", "Value": ["P004"]}},
+            {"00100020": {"vr": "LO", "Value": ["P005"]}},
+            {"00100020": {"vr": "LO", "Value": ["P006"]}},
+            {"00100020": {"vr": "LO", "Value": ["P007"]}},
+            {"00100020": {"vr": "LO", "Value": ["P008"]}},
+            {"00100020": {"vr": "LO", "Value": ["P009"]}},
+            {"00100020": {"vr": "LO", "Value": ["P010"]}},
+        ]);
+
+        let mut metadata = HashMap::new();
+        metadata.insert("path".to_string(), "studies".to_string());
+        metadata.insert("full_path".to_string(), "/dicomweb/studies".to_string());
+        metadata.insert("dicomweb_limit".to_string(), "3".to_string());
+        metadata.insert("dicomweb_offset".to_string(), "2".to_string());
+
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies?limit=3&offset=2".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata,
+        };
+
+        let normalized_data = serde_json::json!({
+            "operation": "find",
+            "success": true,
+            "matches": mock_matches
+        });
+
+        let envelope = ResponseEnvelope {
+            request_details,
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
+            original_data: serde_json::json!({}),
+            normalized_data: Some(normalized_data),
+            normalized_snapshot: None,
+        };
+
+        let result = bridge.right(envelope).await;
+        assert!(result.is_ok());
+
+        let processed = result.unwrap();
+        let nd = processed.normalized_data.unwrap();
+
+        // Verify pagination was applied: offset=2, limit=3 -> indices 2,3,4 (P003, P004, P005)
+        let data = nd.get("dicomweb_data").and_then(|v| v.as_array());
+        assert!(data.is_some());
+        let data_array = data.unwrap();
+        assert_eq!(data_array.len(), 3);
+
+        // Verify correct results
+        assert_eq!(
+            data_array[0]
+                .get("00100020")
+                .and_then(|v| v.get("Value"))
+                .and_then(|v| v.get(0))
+                .and_then(|v| v.as_str()),
+            Some("P003")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_date_range_query_passed_through() {
+        let bridge = DicomwebBridgeMiddleware::new();
+
+        let mut query_params = HashMap::new();
+        query_params.insert(
+            "StudyDate".to_string(),
+            vec!["20240101-20240131".to_string()],
+        );
+
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/dicomweb/studies?StudyDate=20240101-20240131")
+            .query_params(query_params)
+            .metadata_entry("path", "studies")
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
+
+        let result = bridge.left(envelope).await;
+        assert!(result.is_ok());
+
+        let processed = result.unwrap();
+        let nd = processed.normalized_data.unwrap();
+        let identifier = nd.get("dimse_identifier").unwrap().as_object().unwrap();
+
+        // Verify StudyDate tag is present with date range
+        assert!(identifier.contains_key("00080020"), "StudyDate tag should be present");
+        let study_date = identifier.get("00080020").unwrap();
+        let values = study_date.get("Value").and_then(|v| v.as_array());
+        assert!(values.is_some(), "StudyDate should have Value array");
+        let values = values.unwrap();
+        assert!(!values.is_empty(), "StudyDate Value array should not be empty");
+        assert_eq!(values[0].as_str(), Some("20240101-20240131"));
+    }
+
+    #[tokio::test]
+    async fn test_combined_pagination_and_date_range() {
+        let bridge = DicomwebBridgeMiddleware::new();
+
+        let mut query_params = HashMap::new();
+        query_params.insert(
+            "StudyDate".to_string(),
+            vec!["20240101-20240131".to_string()],
+        );
+        query_params.insert("limit".to_string(), vec!["10".to_string()]);
+        query_params.insert("offset".to_string(), vec!["5".to_string()]);
+
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/dicomweb/studies?StudyDate=20240101-20240131&limit=10&offset=5")
+            .query_params(query_params)
+            .metadata_entry("path", "studies")
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
+
+        let result = bridge.left(envelope).await;
+        assert!(result.is_ok());
+
+        let processed = result.unwrap();
+
+        // Verify pagination parameters
+        assert_eq!(
+            processed.request_details.metadata.get("dicomweb_limit"),
+            Some(&"10".to_string())
+        );
+        assert_eq!(
+            processed.request_details.metadata.get("dicomweb_offset"),
+            Some(&"5".to_string())
+        );
+
+        // Verify date range is in identifier
+        let nd = processed.normalized_data.unwrap();
+        let identifier = nd.get("dimse_identifier").unwrap().as_object().unwrap();
+        assert!(identifier.contains_key("00080020"));
+
+        // Verify max_results = limit + offset
+        assert_eq!(nd.get("max_results").and_then(|v| v.as_u64()), Some(15));
     }
 }

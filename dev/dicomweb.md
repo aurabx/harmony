@@ -201,6 +201,67 @@ curl -X OPTIONS \
   -v
 ```
 
+## Pagination
+
+Pagination allows limiting the number of results returned by QIDO-RS queries. Two parameters control pagination:
+
+- **`limit`**: Maximum number of results to return (default: 100)
+- **`offset`**: Number of results to skip before returning (default: 0)
+
+**Note**: The `offset` parameter is applied in the Harmony middleware layer after receiving results from the DIMSE backend, since DIMSE C-FIND does not natively support offset. The `limit` parameter is passed to the DIMSE backend as `max_results`.
+
+**Paginate studies:**
+```zsh
+# Get first 10 studies
+curl -X GET \
+  -H "Accept: application/dicom+json" \
+  "http://127.0.0.1:8081/dicomweb/studies?limit=10"
+```
+
+**Paginate with offset:**
+```zsh
+# Skip first 20 studies, return next 10
+curl -X GET \
+  -H "Accept: application/dicom+json" \
+  "http://127.0.0.1:8081/dicomweb/studies?limit=10&offset=20"
+```
+
+**Pagination with query filters:**
+```zsh
+# Search with pagination
+curl -X GET \
+  -H "Accept: application/dicom+json" \
+  "http://127.0.0.1:8081/dicomweb/studies?PatientName=SMITH*&limit=25&offset=0"
+```
+
+## Date Range Queries
+
+DICOM date attributes support range queries using the format `YYYYMMDD-YYYYMMDD`. Date ranges are passed directly to the DIMSE backend, which natively supports range matching.
+
+**Study date range:**
+```zsh
+# Studies from January 2024
+curl -X GET \
+  -H "Accept: application/dicom+json" \
+  "http://127.0.0.1:8081/dicomweb/studies?StudyDate=20240101-20240131"
+```
+
+**Single date:**
+```zsh
+# Studies on a specific date
+curl -X GET \
+  -H "Accept: application/dicom+json" \
+  "http://127.0.0.1:8081/dicomweb/studies?StudyDate=20240115"
+```
+
+**Multiple date filters:**
+```zsh
+# Combine StudyDate and SeriesDate
+curl -X GET \
+  -H "Accept: application/dicom+json" \
+  "http://127.0.0.1:8081/dicomweb/studies?StudyDate=20240101-20240131&SeriesDate=20240115"
+```
+
 ## Advanced Query Examples
 
 **Complex study search with multiple criteria:**
@@ -208,6 +269,13 @@ curl -X OPTIONS \
 curl -X GET \
   -H "Accept: application/dicom+json" \
   "http://127.0.0.1:8081/dicomweb/studies?PatientName=DOE*&StudyDate=20231015-20231020&Modality=CT,MR&StudyDescription=*BRAIN*&includefield=PatientName,PatientID,StudyDate,StudyTime,StudyDescription,Modality"
+```
+
+**Paginated search with date range:**
+```zsh
+curl -X GET \
+  -H "Accept: application/dicom+json" \
+  "http://127.0.0.1:8081/dicomweb/studies?StudyDate=20240101-20240331&PatientName=DOE*&limit=50&offset=0"
 ```
 
 **Series search with detailed filtering:**
