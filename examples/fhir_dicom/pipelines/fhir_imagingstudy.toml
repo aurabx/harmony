@@ -85,7 +85,7 @@ path_prefix = "/fhir"
 
 # Production DICOM backend
 #[backends.dicom_backend]
-#service = "dicom"
+#service = "dicom_scu"
 #[backends.dicom_backend.options]
 #local_aet = "HARMONY_SCU"
 #aet = "PACSCLINIC"

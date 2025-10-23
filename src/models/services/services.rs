@@ -75,13 +75,26 @@ fn create_builtin_service(
         "fhir" => Ok(Box::new(
             crate::models::services::types::fhir::FhirEndpoint {},
         )),
-        "dicom" => Ok(Box::new(
-            crate::models::services::types::dicom::DicomEndpoint {
+        // Backward compatibility: "dicom" maps to "dicom_scu"
+        "dicom" | "dicom_scu" => Ok(Box::new(
+            crate::models::services::types::dicom::DicomScuBackend {
                 local_aet: None,
                 aet: None,
                 host: None,
                 port: None,
                 use_tls: None,
+            },
+        )),
+        "dicom_scp" => Ok(Box::new(
+            crate::models::services::types::dicom_scp::DicomScpEndpoint {
+                local_aet: None,
+                bind_addr: None,
+                port: None,
+                enable_echo: None,
+                enable_find: None,
+                enable_move: None,
+                enable_get: None,
+                storage_dir: None,
             },
         )),
         "dicomweb" => Ok(Box::new(

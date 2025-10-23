@@ -163,7 +163,7 @@ async fn dicom_move_persistent_relocates_into_per_move_dir() {
         path_prefix = "/dicom"
 
         [backends.dicom_pacs]
-        service = "dicom"
+        service = "dicom_scu"
         [backends.dicom_pacs.options]
         aet = "QR_SCP"
         host = "127.0.0.1"

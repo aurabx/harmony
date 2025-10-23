@@ -73,15 +73,22 @@ let handle = adapter.start(config, shutdown).await?;
 
 **Features**:
 - DIMSE SCP (Service Class Provider) listener
-- Support for C-FIND, C-STORE, C-MOVE, C-ECHO
+- Support for C-ECHO, C-FIND, C-MOVE, C-GET, C-STORE
 - AE title-based routing
 - Dataset encoding/decoding
+- Integration with PipelineExecutor via QueryProvider trait
+
+**Service Integration**:
+The DimseAdapter works with `dicom_scp` endpoints to receive incoming DICOM requests. It does not handle backend/SCU operations - those are handled by the `dicom_scu` service through the SCU client.
 
 **Usage**:
 ```rust
 let adapter = DimseAdapter::new(network_name);
 let handle = adapter.start(config, shutdown).await?;
 ```
+
+**Configuration Detection**:
+The adapter automatically detects and starts SCP listeners for endpoints with `service = "dicom_scp"`. Legacy `service = "dimse"` is also supported with a deprecation warning.
 
 ## Implementing a New Adapter
 

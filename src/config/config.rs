@@ -351,6 +351,25 @@ impl Config {
 
     fn validate_endpoints(&self) -> Result<(), ConfigError> {
         for (name, endpoint) in &self.endpoints {
+            // Check if service type is allowed as endpoint
+            match endpoint.service.to_lowercase().as_str() {
+                "dicom_scu" => {
+                    return Err(ConfigError::InvalidEndpoint {
+                        name: name.clone(),
+                        reason: "Service 'dicom_scu' cannot be used as an endpoint. Use 'dicom_scp' for DICOM endpoints.".to_string(),
+                    });
+                }
+                // "dicom" is allowed for backward compatibility (maps to dicom_scu)
+                // but should only be used as a backend, not endpoint
+                "dicom" => {
+                    return Err(ConfigError::InvalidEndpoint {
+                        name: name.clone(),
+                        reason: "Service 'dicom' (legacy name) cannot be used as an endpoint. Use 'dicom_scp' for DICOM endpoints.".to_string(),
+                    });
+                }
+                _ => {}
+            }
+
             let service =
                 endpoint
                     .resolve_service()
@@ -372,6 +391,17 @@ impl Config {
 
     fn validate_backends(&self) -> Result<(), ConfigError> {
         for (name, backend) in &self.backends {
+            // Check if service type is allowed as backend
+            match backend.service.to_lowercase().as_str() {
+                "dicom_scp" => {
+                    return Err(ConfigError::InvalidBackend {
+                        name: name.clone(),
+                        reason: "Service 'dicom_scp' cannot be used as a backend. Use 'dicom_scu' for DICOM backends.".to_string(),
+                    });
+                }
+                _ => {}
+            }
+
             // Try to resolve the backend service; if it fails, warn and skip validation
             let service = match backend.resolve_service() {
                 Ok(svc) => svc,

@@ -39,7 +39,7 @@ async fn http_to_dicom_backend_echo_succeeds() {
         path_prefix = "/dicom"
 
         [backends.dicom_pacs]
-        service = "dicom"
+        service = "dicom_scu"
 
         [backends.dicom_pacs.options]
         aet = "ORTHANC"

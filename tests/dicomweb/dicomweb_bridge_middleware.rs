@@ -38,7 +38,7 @@ fn cfg() -> &'static str {
         path_prefix = "/dicomweb"
 
         [backends.dicom_pacs]
-        service = "dicom"
+        service = "dicom_scu"
         [backends.dicom_pacs.options]
         aet = "ORTHANC"
         host = "localhost"

@@ -64,7 +64,7 @@ path = "./tmp"
 # ------------------------
 # Service types
 #-------------------------
-[services.dicom]
+[services.dicom_scu]
 module=""
 
 [services.fhir]

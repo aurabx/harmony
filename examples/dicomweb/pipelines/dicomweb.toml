@@ -22,7 +22,7 @@ path_prefix = "/dicomweb"
 # DICOM Backend (DIMSE target for bridged requests)
 #-------------------------
 [backends.dicom_pacs]
-service = "dicom"
+service = "dicom_scu"
 [backends.dicom_pacs.options]
 aet = "ORTHANC"
 host = "localhost"

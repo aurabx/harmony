@@ -236,7 +236,7 @@ async fn dicomweb_frames_with_dcmqrscp() {
         path_prefix = "/dicomweb"
 
         [backends.dicom_pacs]
-        service = "dicom"
+        service = "dicom_scu"
         [backends.dicom_pacs.options]
         aet = "QR_SCP"
         host = "127.0.0.1"
@@ -525,7 +525,7 @@ async fn dicomweb_multiframes_with_dcmqrscp() {
         path_prefix = "/dicomweb"
 
         [backends.dicom_pacs]
-        service = "dicom"
+        service = "dicom_scu"
         [backends.dicom_pacs.options]
         aet = "QR_SCP"
         host = "127.0.0.1"

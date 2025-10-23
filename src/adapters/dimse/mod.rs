@@ -77,8 +77,8 @@ impl ProtocolAdapter for DimseAdapter {
             // Check all endpoints in this pipeline
             for endpoint_name in &pipeline_cfg.endpoints {
                 if let Some(endpoint) = config.endpoints.get(endpoint_name) {
-                    // Check if this endpoint is DIMSE by service name
-                    if endpoint.service == "dimse" {
+                    // Check if this endpoint is DICOM SCP by service name
+                    if endpoint.service == "dicom_scp" {
                         scp_configs.push((
                             pipeline_name.clone(),
                             endpoint_name.clone(),
@@ -207,6 +207,9 @@ impl DimseAdapter {
         }
         if let Some(b) = options.get("enable_move").and_then(|v| v.as_bool()) {
             dimse_config.enable_move = b;
+        }
+        if let Some(b) = options.get("enable_get").and_then(|v| v.as_bool()) {
+            dimse_config.enable_get = b;
         }
 
         let pipeline = pipeline_name.to_string();

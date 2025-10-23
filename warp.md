@@ -177,6 +177,107 @@ This proxy is part of the larger Runbeam ecosystem:
 
 For troubleshooting configuration issues, always check that `examples/test-config.toml` works as a baseline, then adapt your configuration to match its structure.
 
+## DICOM Services (SCU/SCP)
+
+Harmony supports both DICOM Service Class User (SCU) and Service Class Provider (SCP) operations through separate service types.
+
+### DICOM SCU (Backend - Outgoing Requests)
+
+Use `dicom_scu` service for backends that make outgoing requests to remote PACS systems.
+
+**Configuration Example:**
+```toml
+[backends.remote_pacs]
+service = "dicom_scu"
+
+[backends.remote_pacs.options]
+aet = "REMOTE_PACS"              # Remote AE Title (required)
+host = "pacs.example.com"        # Remote host (required)
+port = 4242                       # Remote port (required)
+local_aet = "HARMONY_SCU"        # Local AE Title (default: HARMONY_SCU)
+dimse_retrieve_mode = "get"      # "get" or "move" (default: get)
+use_tls = false                   # Enable TLS (default: false)
+```
+
+**Supported Operations:**
+- `C-ECHO` - Test connectivity
+- `C-FIND` - Query for studies/series/images
+- `C-MOVE` - Request dataset transfer to destination AET
+- `C-GET` - Direct dataset retrieval (recommended)
+
+### DICOM SCP (Endpoint - Incoming Requests)
+
+Use `dicom_scp` service for endpoints that receive incoming DICOM requests.
+
+**Configuration Example:**
+```toml
+[endpoints.dicom_listener]
+service = "dicom_scp"
+
+[endpoints.dicom_listener.options]
+local_aet = "HARMONY_SCP"        # Local AE Title (required, 1-16 chars)
+bind_addr = "0.0.0.0"            # Bind address (default: 0.0.0.0)
+port = 11112                      # Listen port (default: 11112)
+enable_echo = true                # Enable C-ECHO (default: true)
+enable_find = true                # Enable C-FIND (default: false)
+enable_move = true                # Enable C-MOVE (default: false)
+enable_get = true                 # Enable C-GET (default: false)
+storage_dir = "./data/dicom"     # Storage directory (optional)
+```
+
+**Supported Operations:**
+- `C-ECHO` - Connectivity test (always enabled by default)
+- `C-FIND` - Query operations (must enable explicitly)
+- `C-MOVE` - Transfer requests (must enable explicitly)
+- `C-GET` - Direct retrieval (must enable explicitly)
+- `C-STORE` - Store incoming datasets (planned)
+
+### Complete Pipeline Example
+
+**Scenario:** Receive DICOM queries via SCP, proxy to remote PACS via SCU
+
+```toml
+[network.dicom_network]
+enable_wireguard = false
+interface = "wg0"
+
+[network.dicom_network.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+[pipelines.dicom_bridge]
+description = "DICOM SCP to SCU bridge"
+networks = ["dicom_network"]
+endpoints = ["dicom_listener"]
+backends = ["remote_pacs"]
+middleware = []  # Add auth/transforms as needed
+
+[endpoints.dicom_listener]
+service = "dicom_scp"
+
+[endpoints.dicom_listener.options]
+local_aet = "BRIDGE_SCP"
+port = 11112
+enable_echo = true
+enable_find = true
+enable_get = true
+
+[backends.remote_pacs]
+service = "dicom_scu"
+
+[backends.remote_pacs.options]
+aet = "PACS_AET"
+host = "pacs.hospital.org"
+port = 4242
+local_aet = "BRIDGE_SCU"
+
+[services.dicom_scp]
+module = ""
+
+[services.dicom_scu]
+module = ""
+```
+
 ## Transform Middleware
 
 The transform middleware uses [Fluvio JOLT](https://github.com/infinyon/fluvio-jolt) to perform JSON-to-JSON transformations on request/response data.

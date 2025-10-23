@@ -133,7 +133,7 @@ async fn jmix_manifest_and_archive_skip_backends() {
         path_prefix = "/jmix"
 
         [backends.dicom_bad]
-        service = "dicom"
+        service = "dicom_scu"
         [backends.dicom_bad.options]
         host = "127.0.0.1"
         port = 104

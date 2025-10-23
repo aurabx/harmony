@@ -43,7 +43,7 @@ path_prefix = "/jmix"
 # DICOM backend (remote PACS)
 #-------------------------
 [backends.dicom_pacs]
-service = "dicom"
+service = "dicom_scu"
 [backends.dicom_pacs.options]
 aet = "ORTHANC"              # Remote AE (Orthanc)
 host = "127.0.0.1"

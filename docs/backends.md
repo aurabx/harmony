@@ -96,20 +96,20 @@ service = "dicomweb"
 base_url = "https://pacs.example.com/dicomweb"
 ```
 
-### DICOM (DIMSE)
+### DICOM SCU (Service Class User)
 
-A DICOM DIMSE backend for connecting to DICOM PACS via C-ECHO/C-FIND/C-MOVE/C-GET operations.
+A DICOM DIMSE backend for connecting to remote DICOM PACS via C-ECHO/C-FIND/C-MOVE/C-GET operations.
 
 **Service behavior**:
-- Converts `RequestEnvelope` to DICOM DIMSE operations (SCU)
-- Communicates with DICOM nodes using AE titles
+- Converts `RequestEnvelope` to DICOM DIMSE operations (SCU - outgoing requests)
+- Communicates with remote DICOM nodes using AE titles
 - Converts DICOM responses back to `ResponseEnvelope`
 - Supports C-ECHO, C-FIND, C-MOVE, C-GET operations
 
 **Configuration**:
 ```toml
 [backends.<name>]
-service = "dicom"
+service = "dicom_scu"
 [backends.<name>.options]
 aet = "REMOTE_AET"           # Remote Application Entity Title
 host = "pacs.example.com"
@@ -134,7 +134,7 @@ use_tls = false
 **Example**: DICOM PACS backend
 ```toml
 [backends.orthanc_pacs]
-service = "dicom"
+service = "dicom_scu"  # Use "dicom_scu" for SCU backend
 [backends.orthanc_pacs.options]
 aet = "ORTHANC"
 host = "localhost"

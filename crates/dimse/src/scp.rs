@@ -31,6 +31,13 @@ pub trait QueryProvider: Send + Sync {
         parameters: &std::collections::HashMap<String, String>,
     ) -> Result<Vec<DatasetStream>>;
 
+    /// Retrieve datasets for get operations (C-GET)
+    async fn get(
+        &self,
+        query_level: QueryLevel,
+        parameters: &std::collections::HashMap<String, String>,
+    ) -> Result<Vec<DatasetStream>>;
+
     /// Store a dataset (for C-STORE operations)
     async fn store(&self, dataset: DatasetStream) -> Result<()>;
 }
@@ -282,6 +289,66 @@ impl DimseScp {
                 }
             }
 
+            DimseRequestPayload::Get(ref query) => {
+                debug!(
+                    "Processing C-GET request: level={}",
+                    query.query_level
+                );
+
+                if !self.config.enable_get {
+                    let response =
+                        DimseResponse::error(request_id, "C-GET not supported".to_string());
+                    self.send_response(request, response, router).await?;
+                    return Ok(());
+                }
+
+                match self
+                    .query_provider
+                    .get(query.query_level, &query.parameters)
+                    .await
+                {
+                    Ok(datasets) => {
+                        let total = datasets.len() as u32;
+                        debug!("Retrieved {} datasets for get", total);
+
+                        // Send each dataset as a pending response
+                        for (i, dataset) in datasets.iter().enumerate() {
+                            let is_final = i == datasets.len() - 1;
+                            let remaining = total - (i as u32) - 1;
+                            let completed = (i as u32) + 1;
+                            
+                            let response = DimseResponse::get_response(
+                                request_id,
+                                Some(dataset.clone()),
+                                remaining,
+                                completed,
+                                0, // failed
+                                0, // warning
+                                is_final,
+                            );
+
+                            if let Some(ref stream_tx) = request.stream_tx {
+                                stream_tx.send(response).await.map_err(|_| {
+                                    DimseError::router("Failed to send stream response")
+                                })?;
+                            }
+                        }
+
+                        // Send final empty response if no datasets found
+                        if datasets.is_empty() {
+                            let response = DimseResponse::get_response(
+                                request_id, None, 0, 0, 0, 0, true
+                            );
+                            self.send_response(request, response, router).await?;
+                        }
+                    }
+                    Err(e) => {
+                        let response = DimseResponse::error(request_id, e.to_string());
+                        self.send_response(request, response, router).await?;
+                    }
+                }
+            }
+
             DimseRequestPayload::Store(ref dataset) => {
                 debug!("Processing C-STORE request");
 
@@ -351,6 +418,16 @@ impl QueryProvider for DefaultQueryProvider {
     ) -> Result<Vec<DatasetStream>> {
         // TODO: Implement actual locate logic
         warn!("DefaultQueryProvider::locate not yet implemented");
+        Ok(vec![])
+    }
+
+    async fn get(
+        &self,
+        _query_level: QueryLevel,
+        _parameters: &std::collections::HashMap<String, String>,
+    ) -> Result<Vec<DatasetStream>> {
+        // TODO: Implement actual get logic
+        warn!("DefaultQueryProvider::get not yet implemented");
         Ok(vec![])
     }
 

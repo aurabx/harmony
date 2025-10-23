@@ -35,7 +35,7 @@ skip_hashing = true   # Skip SHA256 hashing for faster processing
 skip_listing = true   # Skip DICOM files from files.json manifest
 
 [backends.dicom_pacs]
-service = "dicom"
+service = "dicom_scu"
 [backends.dicom_pacs.options]
 aet = "ORTHANC"              # Remote AE (Orthanc)
 host = "127.0.0.1"

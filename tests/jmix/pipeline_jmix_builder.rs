@@ -198,7 +198,7 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
         path_prefix = "/jmix"
 
         [backends.dicom_pacs]
-        service = "dicom"
+        service = "dicom_scu"
         [backends.dicom_pacs.options]
         aet = "QR_SCP"
         host = "127.0.0.1"

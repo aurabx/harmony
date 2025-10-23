@@ -197,7 +197,7 @@ async fn dicom_get_writes_samples_to_tmp() {
         path_prefix = "/dicom"
 
         [backends.dicom_pacs]
-        service = "dicom"
+        service = "dicom_scu"
 
         [backends.dicom_pacs.options]
         aet = "QR_SCP"

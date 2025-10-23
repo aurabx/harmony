@@ -20,7 +20,7 @@ path_prefix = "/trigger-dicom"
 # DICOM Backend
 #-------------------------
 [backends.dicom_pacs]
-service = "dicom"
+service = "dicom_scu"
 [backends.dicom_pacs.options]
 aet = "ORTHANC"
 host = "localhost"
