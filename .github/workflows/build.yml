@@ -144,11 +144,13 @@ jobs:
       contents: write
 
     steps:
-      - name: Download artefacts
+      - name: Download Harmony build artefacts only
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
-
+          pattern: harmony-*           # only match your real binaries
+          merge-multiple: true         # flattens them into one directory
+          
       - name: Generate combined checksums manifest
         shell: bash
         run: |
