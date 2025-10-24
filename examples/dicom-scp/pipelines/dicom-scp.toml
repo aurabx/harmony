@@ -12,7 +12,7 @@ backends = []
 # DICOM Endpoint (SCP)
 #-------------------------
 [endpoints.dicom_scp]
-service = "dicom_scp"
+service = "dicom"
 [endpoints.dicom_scp.options]
 local_aet = "HARMONY_SCP"
 # Optional listener details (router may manage lifecycle):

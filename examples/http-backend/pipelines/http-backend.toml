@@ -23,7 +23,7 @@ type = "passthru"
 [endpoints.proxy_endpoint]
 service = "http"
 [endpoints.proxy_endpoint.options]
-path_prefix = "/api"
+path_prefix = "/"
 
 # ------------------------
 # Backends - External HTTP service
@@ -31,4 +31,4 @@ path_prefix = "/api"
 [backends.external_api]
 service = "http"
 [backends.external_api.options]
-base_url = "https://httpbin.org"
+base_url = "http://127.0.0.1:8888"
