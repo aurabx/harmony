@@ -152,6 +152,15 @@ impl Config {
     }
 
     pub fn from_args(cli: Cli) -> Self {
+        // Verify the config file has a .toml extension
+        let config_path = Path::new(&cli.config_path);
+        if config_path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            panic!(
+                "Configuration file must have a .toml extension: {}",
+                cli.config_path
+            );
+        }
+
         // Load the base configuration file
         let contents =
             std::fs::read_to_string(&cli.config_path).expect("Failed to read config file");
