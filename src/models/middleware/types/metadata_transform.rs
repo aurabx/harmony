@@ -313,12 +313,24 @@ impl Middleware for MetadataTransformMiddleware {
 }
 
 /// Parse configuration from HashMap for middleware registry
-pub fn parse_config(options: &HashMap<String, Value>) -> Result<MetadataTransformConfig, String> {
-    let spec_path = options
+pub fn parse_config(
+    options: &HashMap<String, Value>,
+    transforms_path: Option<&str>,
+) -> Result<MetadataTransformConfig, String> {
+    let spec_path_raw = options
         .get("spec_path")
         .and_then(|v| v.as_str())
         .ok_or("Missing required 'spec_path' in metadata_transform middleware config")?
         .to_string();
+
+    // Resolve spec_path relative to transforms_path if provided
+    let spec_path = if let Some(base_path) = transforms_path {
+        use std::path::Path;
+        let full_path = Path::new(base_path).join(&spec_path_raw);
+        full_path.to_string_lossy().to_string()
+    } else {
+        spec_path_raw
+    };
 
     let apply = options
         .get("apply")

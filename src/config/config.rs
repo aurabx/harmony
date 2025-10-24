@@ -51,6 +51,9 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub transforms: (),
+    /// Resolved absolute path to transforms directory (not serialized)
+    #[serde(skip)]
+    pub resolved_transforms_path: Option<String>,
 }
 
 impl Config {
@@ -165,6 +168,17 @@ impl Config {
         let contents =
             std::fs::read_to_string(&cli.config_path).expect("Failed to read config file");
         let mut config: Config = toml::from_str(&contents).expect("Failed to parse config");
+
+        // Resolve transforms_path relative to config file directory
+        let base_dir = config_path
+            .parent()
+            .expect("Failed to get config file directory");
+        let transforms_path = base_dir.join(&config.proxy.transforms_path);
+        config.resolved_transforms_path = Some(
+            transforms_path
+                .to_string_lossy()
+                .to_string()
+        );
 
         // Attempt to load additional configs and merge them into the current config.
         if let Ok(additional_configs) = Self::load_additional_configs(&config, &cli.config_path) {

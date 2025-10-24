@@ -13,10 +13,12 @@ impl MiddlewareInstance {
     /// Resolves the middleware type using the centralized middleware resolver
     pub fn resolve_middleware(
         &self,
+        transforms_path: Option<&str>,
     ) -> Result<Box<dyn crate::models::middleware::middleware::Middleware>, String> {
         crate::models::middleware::middleware::resolve_middleware_type(
             &self.middleware_type,
             &self.options,
+            transforms_path,
         )
     }
 }
