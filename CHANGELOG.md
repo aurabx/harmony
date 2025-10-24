@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.4.0] - 2025-10-24
+
+### Added
+- FHIR backend support (AURA-2102)
+- DICOMweb pagination, offset, filters, and date range queries (AURA-2087, AURA-2088)
+- Config validation for TOML files
+- End-to-end testing scripts
+
+### Fixed
+- JMIX builder wrong response with wrong header
+- Incorrect slashes in paths
+- mock_dicom backend patient level queries
+- Transforms loading from non-app-root
+- Missing middleware in validation
+- Examples and test configurations
+
+### Changed
+- Refactored adaptor spawning logic
+
 ## [0.3.2] - 2025-10-22
 
 ### Added
@@ -103,6 +122,7 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.4.0]: https://github.com/aurabx/harmony/compare/0.3.4...0.4.0
 [0.3.2]: https://github.com/aurabx/harmony/compare/0.3.1...0.3.2
 [0.3.1]: https://github.com/aurabx/harmony/compare/0.3.0...0.3.1
 [0.3.0]: https://github.com/aurabx/harmony/compare/0.2.0...0.3.0

@@ -1,6 +1,6 @@
 [package]
 name = "dicom_json_tool"
-version = "0.3.0"
+version = "0.4.0"
 edition = "2021"
 description = "Convert between DICOM (DIMSE identifier datasets) and DICOM JSON (Part 18) with optional command/query metadata wrapper"
 

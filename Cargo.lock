@@ -926,7 +926,7 @@ dependencies = [
 
 [[package]]
 name = "dicom_json_tool"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -956,7 +956,7 @@ dependencies = [
 
 [[package]]
 name = "dimse"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1477,7 +1477,7 @@ dependencies = [
 
 [[package]]
 name = "harmony"
-version = "0.3.1"
+version = "0.4.0"
 dependencies = [
  "anyhow",
  "async-trait",
@@ -1526,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "harmony_transform"
-version = "0.3.0"
+version = "0.4.0"
 dependencies = [
  "fluvio-jolt",
  "serde",
