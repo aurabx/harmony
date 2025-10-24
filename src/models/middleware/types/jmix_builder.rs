@@ -243,7 +243,7 @@ impl Middleware for JmixBuilderMiddleware {
         }
 
         // Case 2: GET/HEAD /api/jmix?studyInstanceUid=...
-        // Returns ZIP file if Accept: application/zip, otherwise returns JSON index
+        // Always returns ZIP file for the matching envelope
         if let Some(uid) = study_uid {
             let matches = query_by_study_uid(&store_root, &uid)?;
 
@@ -257,30 +257,7 @@ impl Middleware for JmixBuilderMiddleware {
                 return Ok(envelope);
             }
 
-            // Check Accept header to determine response format
-            let accept = envelope
-                .request_details
-                .headers
-                .get("accept")
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
-            let wants_zip = accept.contains("application/zip");
-            let wants_json = accept.contains("application/json") || accept.contains("*/*") || accept.is_empty();
-
-            // If client wants JSON, return index listing
-            if wants_json && !wants_zip {
-                // Build JSON response with list of matching packages
-                let json_response = serde_json::json!({
-                    "jmixEnvelopes": matches
-                });
-                let mut hdrs = HashMap::new();
-                hdrs.insert("content-type".to_string(), "application/json".to_string());
-                set_response_and_skip(200, hdrs, None, Some(json_response), None, None);
-                return Ok(envelope);
-            }
-
-            // Client wants ZIP - serve the zip file
-            // Use the first match (most recent or only one)
+            // Serve the ZIP file for the first match (most recent or only one)
             let m = &matches[0];
             let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let path = m.get("path").and_then(|v| v.as_str()).unwrap_or("");
