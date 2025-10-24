@@ -150,7 +150,7 @@ jobs:
           path: ./artifacts
           pattern: harmony-*           # only match your real binaries
           merge-multiple: true         # flattens them into one directory
-          
+
       - name: Generate combined checksums manifest
         shell: bash
         run: |

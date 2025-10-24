@@ -29,5 +29,5 @@ backend = "filesystem"
 path = "./tmp"
 
 # Service types
-[services.dicom]
+[services.dicom_scp]
 module = ""
