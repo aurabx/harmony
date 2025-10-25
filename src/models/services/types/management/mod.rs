@@ -163,7 +163,13 @@ impl ServiceHandler<Value> for ManagementEndpoint {
             p if p == "authorize" || p == format!("{}/authorize", base_path) => {
                 // Handle gateway authorization
                 let auth_header = envelope.request_details.headers.get("authorization").map(|s| s.as_str());
-                match self::authorize::handle_authorize(auth_header, &envelope.original_data).await {
+
+                // Get JWKS cache duration from global config (default to 24 hours if not available)
+                let jwks_cache_duration = crate::globals::get_config()
+                    .map(|cfg| cfg.proxy.jwks_cache_duration_hours)
+                    .unwrap_or(24);
+
+                match self::authorize::handle_authorize(auth_header, &envelope.original_data, jwks_cache_duration).await {
                     Ok(value) => (value, 201),
                     Err((status, message)) => {
                         let error_json = serde_json::json!({

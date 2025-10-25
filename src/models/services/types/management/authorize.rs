@@ -49,13 +49,14 @@ pub struct ErrorResponse {
 /// Handle gateway authorization request
 ///
 /// This endpoint:
-/// 1. Extracts and validates the JWT token from Authorization header
+/// 1. Extracts and validates the JWT token from Authorization header (RS256)
 /// 2. Calls Runbeam Cloud API to exchange user token for machine token
 /// 3. Stores the machine token locally
 /// 4. Returns success response with gateway details
 pub async fn handle_authorize(
     auth_header: Option<&str>,
     body: &[u8],
+    jwks_cache_duration_hours: u64,
 ) -> Result<serde_json::Value, (u16, String)> {
     tracing::info!("Processing gateway authorization request");
 
@@ -80,13 +81,13 @@ pub async fn handle_authorize(
 
     tracing::info!("Authorizing gateway: {}", request.gateway_code);
 
-    // Validate JWT and extract claims
-    // TODO: Get JWT secret from configuration (currently using placeholder)
-    let jwt_secret = get_jwt_secret();
-    let claims = jwt::validate_jwt_token(user_token, jwt_secret.as_bytes()).map_err(|e| {
-        tracing::error!("JWT validation failed: {}", e);
-        (401, format!("Invalid or expired token: {}", e))
-    })?;
+    // Validate JWT using RS256 with JWKS
+    let claims = jwt::validate_jwt_token(user_token, jwks_cache_duration_hours)
+        .await
+        .map_err(|e| {
+            tracing::error!("JWT validation failed: {}", e);
+            (401, format!("Invalid or expired token: {}", e))
+        })?;
 
     // Extract Runbeam API base URL from JWT issuer claim
     let api_base_url = claims.api_base_url();
@@ -170,28 +171,6 @@ pub async fn handle_authorize(
     })
 }
 
-/// Get the JWT secret for validation
-///
-/// TODO: This should come from configuration. For now, it's hardcoded to match
-/// the default JWT_SECRET used by Runbeam Cloud in development.
-///
-/// In production, this should be:
-/// 1. Read from config file ([runbeam] section)
-/// 2. Or from environment variable
-/// 3. Must match the secret used by Runbeam Cloud to sign JWTs
-fn get_jwt_secret() -> String {
-    // Check environment variable first
-    if let Ok(secret) = std::env::var("RUNBEAM_JWT_SECRET") {
-        tracing::debug!("Using JWT secret from RUNBEAM_JWT_SECRET environment variable");
-        return secret;
-    }
-
-    // Fallback to development default
-    // This matches the default JWT_SECRET in Runbeam Cloud's .env.example
-    tracing::warn!("Using default JWT secret for development. Set RUNBEAM_JWT_SECRET environment variable for production.");
-    "base64:your-secret-key-goes-here".to_string()
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -241,7 +220,7 @@ mod tests {
 
         let json = serde_json::to_string(&response).unwrap();
         assert!(json.contains("\"success\":true"));
-        assert!(json.contains("\"gateway_code\":\"test-gateway\""));
+        assert!(json.contains("\"code\":\"test-gateway\""));
     }
 
     #[test]

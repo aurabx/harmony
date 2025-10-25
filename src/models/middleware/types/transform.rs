@@ -418,7 +418,7 @@ mod tests {
         options.insert("apply".to_string(), json!("both"));
         options.insert("fail_on_error".to_string(), json!(false));
 
-        let config = parse_config(&options).unwrap();
+        let config = parse_config(&options, None).unwrap();
         assert_eq!(config.spec_path, "/path/to/spec.json");
         assert_eq!(config.apply, "both");
         assert!(!config.fail_on_error);
@@ -427,7 +427,7 @@ mod tests {
     #[test]
     fn test_parse_config_missing_spec_path() {
         let options = HashMap::new();
-        let result = parse_config(&options);
+        let result = parse_config(&options, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing required 'spec_path'"));
     }
