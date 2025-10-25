@@ -6,6 +6,7 @@ pub mod integrations;
 pub mod models;
 pub mod pipeline;
 pub mod router;
+pub mod runbeam_api;
 pub mod storage;
 mod utils;
 

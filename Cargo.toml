@@ -57,6 +57,7 @@ matchit = "0.8"
 anyhow = "1.0.100"
 tokio-util = "0.7.16"
 rustls = { version = "0.23", default-features = false, features = ["std"] }
+chrono = { version = "0.4", features = ["serde"] }
 
 [dev-dependencies]
 tokio-test = "0.4"

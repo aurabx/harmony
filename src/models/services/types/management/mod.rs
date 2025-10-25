@@ -12,6 +12,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
+pub mod authorize;
 pub mod config;
 pub mod info;
 pub mod pipelines;
@@ -64,6 +65,11 @@ impl ServiceType for ManagementEndpoint {
                 path: format!("/{}/routes", base_path),
                 methods: vec![Method::GET],
                 description: Some("List all configured routes".to_string()),
+            },
+            RouteConfig {
+                path: format!("/{}/authorize", base_path),
+                methods: vec![Method::POST],
+                description: Some("Authorize gateway with Runbeam Cloud".to_string()),
             },
         ]
     }
@@ -123,11 +129,12 @@ impl ServiceHandler<Value> for ManagementEndpoint {
         // Remove leading slash and match the specific endpoint
         let clean_path = path.trim_start_matches('/');
 
-        let response_value = match clean_path {
+        let (response_value, status_code) = match clean_path {
             p if p == "info" || p == format!("{}/info", base_path) => {
                 let info = handle_info().await;
-                serde_json::to_value(info.0)
-                    .map_err(|_| Error::from("Failed to serialize info response"))?
+                let value = serde_json::to_value(info.0)
+                    .map_err(|_| Error::from("Failed to serialize info response"))?;
+                (value, 200)
             }
             p if p == "pipelines" || p == format!("{}/pipelines", base_path) => {
                 // Use global config access to get pipelines
@@ -137,8 +144,9 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                 } else {
                     self::pipelines::PipelinesResponse { pipelines: vec![] }
                 };
-                serde_json::to_value(pipelines_response)
-                    .map_err(|_| Error::from("Failed to serialize pipelines response"))?
+                let value = serde_json::to_value(pipelines_response)
+                    .map_err(|_| Error::from("Failed to serialize pipelines response"))?;
+                (value, 200)
             }
             p if p == "routes" || p == format!("{}/routes", base_path) => {
                 // Use global config access since we need full config for routes analysis
@@ -148,10 +156,25 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                 } else {
                     self::routes::RoutesResponse { routes: vec![] }
                 };
-                serde_json::to_value(routes_response)
-                    .map_err(|_| Error::from("Failed to serialize routes response"))?
+                let value = serde_json::to_value(routes_response)
+                    .map_err(|_| Error::from("Failed to serialize routes response"))?;
+                (value, 200)
             }
-            _ => serde_json::json!({"error": "Not found"}),
+            p if p == "authorize" || p == format!("{}/authorize", base_path) => {
+                // Handle gateway authorization
+                let auth_header = envelope.request_details.headers.get("authorization").map(|s| s.as_str());
+                match self::authorize::handle_authorize(auth_header, &envelope.original_data).await {
+                    Ok(value) => (value, 201),
+                    Err((status, message)) => {
+                        let error_json = serde_json::json!({
+                            "error": http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR).canonical_reason().unwrap_or("Error"),
+                            "message": message
+                        });
+                        (error_json, status)
+                    }
+                }
+            }
+            _ => (serde_json::json!({"error": "Not found"}), 404),
         };
 
         let body = serde_json::to_vec(&response_value)
@@ -162,7 +185,7 @@ impl ServiceHandler<Value> for ManagementEndpoint {
 
         let mut response_envelope = ResponseEnvelope::from_backend(
             envelope.request_details.clone(),
-            200,
+            status_code,
             headers,
             body,
             None,
