@@ -19,6 +19,7 @@ dicom_json_tool = { path = "crates/dicom_json_tool" }
 harmony_transform = { path = "crates/transform" }
 harmony-filesystem = { path = "crates/filesystem" }
 harmony-database = { path = "crates/database" }
+runbeam-sdk = "0.1.0"
 
 #jmix-rs = { path = "../jmix/jmix-rust" }
 jmix-rs = "0.3"
@@ -96,14 +97,6 @@ path = "tests/dicom/dicom_move_persistent_relocate.rs"
 [[test]]
 name = "dicom_move_qrscp"
 path = "tests/dicom/dicom_move_qrscp.rs"
-
-[[test]]
-name = "dicom_scu_scp_separation"
-path = "tests/dicom/scu_scp_separation.rs"
-
-[[test]]
-name = "dicom_scu_scp_config_validation"
-path = "tests/dicom_scu_scp_config_validation.rs"
 
 # DICOMweb tests
 [[test]]

@@ -1,5 +1,5 @@
-use crate::runbeam_api::{jwt, token_storage, RunbeamClient};
-use crate::runbeam_api::token_storage::MachineToken;
+use runbeam_sdk::{extract_bearer_token, validate_jwt_token, save_token, MachineToken, RunbeamClient, ApiError, RunbeamError};
+use crate::storage_adapter::StorageAdapter;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
@@ -66,7 +66,7 @@ pub async fn handle_authorize(
         (401, "Missing Authorization header".to_string())
     })?;
 
-    let user_token = jwt::extract_bearer_token(auth_header).map_err(|e| {
+    let user_token = extract_bearer_token(auth_header).map_err(|e| {
         tracing::error!("Failed to extract Bearer token: {}", e);
         (401, format!("Invalid Authorization header: {}", e))
     })?;
@@ -82,7 +82,7 @@ pub async fn handle_authorize(
     tracing::info!("Authorizing gateway: {}", request.gateway_code);
 
     // Validate JWT using RS256 with JWKS
-    let claims = jwt::validate_jwt_token(user_token, jwks_cache_duration_hours)
+    let claims = validate_jwt_token(user_token, jwks_cache_duration_hours)
         .await
         .map_err(|e| {
             tracing::error!("JWT validation failed: {}", e);
@@ -110,10 +110,10 @@ pub async fn handle_authorize(
             
             // Map error to appropriate HTTP status code
             let status_code = match &e {
-                crate::runbeam_api::types::RunbeamError::JwtValidation(_) => 401,
-                crate::runbeam_api::types::RunbeamError::Api(api_err) => {
+                RunbeamError::JwtValidation(_) => 401,
+                RunbeamError::Api(api_err) => {
                     match api_err {
-                        crate::runbeam_api::types::ApiError::Http { status, .. } => *status,
+                        ApiError::Http { status, .. } => *status,
                         _ => 500,
                     }
                 }
@@ -143,7 +143,9 @@ pub async fn handle_authorize(
         (500, "Internal server error: storage not available".to_string())
     })?;
 
-    token_storage::save_token(storage.as_ref(), &machine_token)
+    // Wrap the harmony-filesystem storage with an adapter for runbeam-sdk compatibility
+    let adapter = StorageAdapter::new(storage.as_ref());
+    save_token(&adapter, &machine_token)
         .await
         .map_err(|e| {
             tracing::error!("Failed to save machine token: {}", e);

@@ -6,8 +6,8 @@ pub mod integrations;
 pub mod models;
 pub mod pipeline;
 pub mod router;
-pub mod runbeam_api;
 pub mod storage;
+pub mod storage_adapter;
 mod utils;
 
 use crate::adapters::dimse::DimseAdapter;
