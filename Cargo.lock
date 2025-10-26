@@ -1493,6 +1493,8 @@ dependencies = [
  "flate2",
  "fs_extra",
  "futures-util",
+ "harmony-database",
+ "harmony-filesystem",
  "harmony_transform",
  "http",
  "image 0.24.9",
@@ -1523,6 +1525,26 @@ dependencies = [
  "uuid",
  "walkdir",
  "zip 0.6.6",
+]
+
+[[package]]
+name = "harmony-database"
+version = "0.1.0"
+dependencies = [
+ "once_cell",
+ "redb",
+ "serial_test",
+ "tempfile",
+ "tracing",
+]
+
+[[package]]
+name = "harmony-filesystem"
+version = "0.1.0"
+dependencies = [
+ "async-trait",
+ "tempfile",
+ "tokio",
 ]
 
 [[package]]

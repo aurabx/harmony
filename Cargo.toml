@@ -17,6 +17,8 @@ path = "src/lib.rs"
 dimse = { path = "crates/dimse" }
 dicom_json_tool = { path = "crates/dicom_json_tool" }
 harmony_transform = { path = "crates/transform" }
+harmony-filesystem = { path = "crates/filesystem" }
+harmony-database = { path = "crates/database" }
 
 #jmix-rs = { path = "../jmix/jmix-rust" }
 jmix-rs = "0.3"
