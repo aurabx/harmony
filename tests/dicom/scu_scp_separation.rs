@@ -5,6 +5,9 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
 
+mod helpers;
+use helpers::ScpTestHarness;
+
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     let config: Config = toml::from_str(toml).expect("TOML parse error");
     config.validate()?;
@@ -222,11 +225,8 @@ async fn test_dicom_scu_backend_cfind() {
     let _ = qr_child.kill().await;
 }
 
-/// Test 2: dicom_scp endpoint with incoming C-FIND
-/// NOTE: This test requires the full service to be running with SCP listeners.
-/// Currently ignored as it requires starting the DIMSE adapter's SCP listener.
+/// Test 2: dicom_scp endpoint with incoming C-ECHO
 #[tokio::test]
-#[ignore]
 async fn test_dicom_scp_endpoint_cfind() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -276,39 +276,33 @@ async fn test_dicom_scp_endpoint_cfind() {
     );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    let _app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    
+    // Start the DIMSE adapter with test harness
+    let mut harness = ScpTestHarness::new(cfg, "default");
+    harness.start().await.expect("Failed to start test harness");
 
-    // Spawn the Harmony router in a background task
-    let _app_handle = tokio::spawn(async move {
-        // This would normally be served via axum::Server, but for testing we just keep it alive
-        tokio::time::sleep(std::time::Duration::from_secs(60)).await;
-    });
-
-    // Wait for SCP port to be ready
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-
-    // Use findscu to query the Harmony SCP endpoint
+    // Use echoscu to test the Harmony SCP endpoint (C-ECHO doesn't need backends)
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
-    let mut findscu = tokio::process::Command::new("findscu");
-    findscu
+    let mut echoscu = tokio::process::Command::new("echoscu");
+    echoscu
         .arg("--aetitle")
         .arg("TEST_SCU")
         .arg("--call")
         .arg("HARMONY_SCP")
-        .arg("-P")
         .arg("127.0.0.1")
-        .arg(scp_port.to_string())
-        .arg("-k")
-        .arg("0010,0020=*");
+        .arg(scp_port.to_string());
     if !verbose {
-        findscu
+        echoscu
             .stdout(std::process::Stdio::null())
             .stderr(std::process::Stdio::null());
     }
 
-    let status = findscu.status().await.expect("run findscu");
-    // findscu returns 0 on success (even if no matches found)
-    assert!(status.success(), "findscu should complete successfully");
+    let status = echoscu.status().await.expect("run echoscu");
+    // echoscu returns 0 on success
+    assert!(status.success(), "echoscu should complete successfully");
+    
+    // Cleanup
+    harness.shutdown().await.expect("Failed to shutdown harness");
 }
 
 /// Test 3: Configuration validation - dicom_scu cannot be used as endpoint
@@ -496,10 +490,7 @@ async fn test_legacy_dicom_service_backward_compat() {
 }
 
 /// Test 6: Pipeline integration - SCP endpoint receiving from external SCU
-/// NOTE: This test requires the full service to be running with SCP listeners.
-/// Currently ignored as it requires starting the DIMSE adapter's SCP listener.
 #[tokio::test]
-#[ignore]
 async fn test_pipeline_scp_receives_external_find() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -549,10 +540,10 @@ async fn test_pipeline_scp_receives_external_find() {
     );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    let _app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
-
-    // Give the SCP listener time to start
-    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    
+    // Start the DIMSE adapter with test harness
+    let mut harness = ScpTestHarness::new(cfg, "default");
+    harness.start().await.expect("Failed to start test harness");
 
     // Test C-ECHO first
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
@@ -593,6 +584,9 @@ async fn test_pipeline_scp_receives_external_find() {
 
     let status = findscu.status().await.expect("run findscu");
     assert!(status.success(), "C-FIND should complete successfully");
+    
+    // Cleanup
+    harness.shutdown().await.expect("Failed to shutdown harness");
 }
 
 /// Test 7: Full pipeline - HTTP -> SCU backend -> external PACS

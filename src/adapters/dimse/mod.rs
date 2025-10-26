@@ -125,12 +125,13 @@ impl ProtocolAdapter for DimseAdapter {
         }
 
         // Spawn task to manage SCPs
+        let shutdown_clone = shutdown.clone();
         let handle = tokio::spawn(async move {
             let mut scp_handles = Vec::new();
 
             // Start each SCP
             for (pipeline_name, endpoint_name, options) in scp_configs {
-                match Self::start_scp(&pipeline_name, &endpoint_name, &options).await {
+                match Self::start_scp(&pipeline_name, &endpoint_name, &options, shutdown_clone.clone()).await {
                     Ok(scp_handle) => {
                         scp_handles.push(scp_handle);
                     }
@@ -146,7 +147,7 @@ impl ProtocolAdapter for DimseAdapter {
             }
 
             // Wait for shutdown signal
-            shutdown.cancelled().await;
+            shutdown_clone.cancelled().await;
             tracing::info!("DIMSE adapter for network '{}' shutting down", network_name);
 
             // Wait for all SCPs to complete
@@ -171,6 +172,7 @@ impl DimseAdapter {
         pipeline_name: &str,
         endpoint_name: &str,
         options: &std::collections::HashMap<String, serde_json::Value>,
+        shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
         use dimse::{DimseConfig, DEFAULT_DIMSE_PORT};
         use std::net::IpAddr;
@@ -257,10 +259,10 @@ impl DimseAdapter {
 
         if use_dcmtk_store {
             // Spawn DCMTK storescp process
-            Self::start_dcmtk_scp(key, local_aet, port, dimse_config, pipeline, endpoint).await
+            Self::start_dcmtk_scp(key, local_aet, port, dimse_config, pipeline, endpoint, shutdown).await
         } else {
             // Use internal SCP with pipeline query provider
-            Self::start_internal_scp(key, local_aet, bind_addr, port, dimse_config, pipeline, endpoint).await
+            Self::start_internal_scp(key, local_aet, bind_addr, port, dimse_config, pipeline, endpoint, shutdown).await
         }
     }
 
@@ -272,6 +274,7 @@ impl DimseAdapter {
         dimse_config: dimse::DimseConfig,
         pipeline: String,
         endpoint: String,
+        shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
         use tokio::process::Command;
 
@@ -314,7 +317,7 @@ impl DimseAdapter {
                     let provider: Arc<dyn dimse::scp::QueryProvider> =
                         Arc::new(query_provider::PipelineQueryProvider::new(pipeline, endpoint));
                     let scp = dimse::DimseScp::new(dimse_config, provider);
-                    if let Err(e2) = scp.run().await {
+                    if let Err(e2) = scp.run(shutdown).await {
                         tracing::error!("DIMSE SCP '{}' failed: {}", local_aet, e2);
                     } else {
                         tracing::info!("DIMSE SCP '{}' stopped gracefully", local_aet);
@@ -340,6 +343,7 @@ impl DimseAdapter {
         dimse_config: dimse::DimseConfig,
         pipeline: String,
         endpoint: String,
+        shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
         let handle = tokio::spawn(async move {
             let provider: Arc<dyn dimse::scp::QueryProvider> =
@@ -353,7 +357,7 @@ impl DimseAdapter {
                 port
             );
 
-            if let Err(e) = scp.run().await {
+            if let Err(e) = scp.run(shutdown).await {
                 tracing::error!("DIMSE SCP '{}' failed: {}", local_aet, e);
             } else {
                 tracing::info!("DIMSE SCP '{}' stopped gracefully", local_aet);

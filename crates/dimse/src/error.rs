@@ -82,6 +82,21 @@ impl DimseError {
         Self::Router(msg.into())
     }
 
+    /// Create a new association error
+    pub fn association(msg: impl Into<String>) -> Self {
+        Self::DicomUl(msg.into())
+    }
+
+    /// Create a new network error
+    pub fn network(msg: impl Into<String>) -> Self {
+        Self::Network(std::io::Error::new(std::io::ErrorKind::Other, msg.into()))
+    }
+
+    /// Create a new parse error
+    pub fn parse(msg: impl Into<String>) -> Self {
+        Self::DicomParsing(msg.into())
+    }
+
     /// Check if this error is recoverable
     pub fn is_recoverable(&self) -> bool {
         matches!(

@@ -952,6 +952,7 @@ dependencies = [
  "dicom-encoding",
  "dicom-transfer-syntax-registry",
  "snafu",
+ "tokio",
  "tracing",
 ]
 
@@ -999,6 +1000,7 @@ dependencies = [
  "dicom-encoding",
  "dicom-object",
  "dicom-parser",
+ "dicom-transfer-syntax-registry",
  "dicom-ul",
  "env_logger",
  "futures",
