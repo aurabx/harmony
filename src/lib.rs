@@ -63,20 +63,25 @@ pub async fn run(config: Config) {
         let config_clone = Arc::clone(&config);
         let shutdown_clone = shutdown.clone();
 
-        // Create and start all adapters for this network
-        let adapters: Vec<Box<dyn ProtocolAdapter>> = vec![
-            // HTTP adapter
-            Box::new({
-                let bind_addr = format!("{}:{}", network.http.bind_address, network.http.bind_port)
-                    .parse::<SocketAddr>()
-                    .unwrap_or_else(|_| {
-                        panic!("Invalid bind address or port for network {}", network_name)
-                    });
-                HttpAdapter::new(network_name.clone(), bind_addr)
-            }),
-            // DIMSE adapter
-            Box::new(DimseAdapter::new(network_name.clone())),
-        ];
+        // Determine which adapters are needed for this network
+        let (needs_http, needs_dimse) = check_network_protocols(&config, &network_name);
+
+        let mut adapters: Vec<Box<dyn ProtocolAdapter>> = Vec::new();
+
+        // Only create HTTP adapter if there are HTTP endpoints
+        if needs_http {
+            let bind_addr = format!("{}:{}", network.http.bind_address, network.http.bind_port)
+                .parse::<SocketAddr>()
+                .unwrap_or_else(|_| {
+                    panic!("Invalid bind address or port for network {}", network_name)
+                });
+            adapters.push(Box::new(HttpAdapter::new(network_name.clone(), bind_addr)));
+        }
+
+        // Only create DIMSE adapter if there are DICOM endpoints
+        if needs_dimse {
+            adapters.push(Box::new(DimseAdapter::new(network_name.clone())));
+        }
 
         // Start each adapter
         for adapter in adapters {
@@ -117,4 +122,48 @@ pub async fn run(config: Config) {
     }
 
     tracing::info!("✓ Harmony shut down gracefully.");
+}
+
+/// Check which protocol adapters are needed for a given network
+fn check_network_protocols(config: &Config, network_name: &str) -> (bool, bool) {
+    let mut needs_http = false;
+    let mut needs_dimse = false;
+
+    for pipeline in config.pipelines.values() {
+        // Skip pipelines not on this network
+        if !pipeline.networks.contains(&network_name.to_string()) {
+            continue;
+        }
+
+        // Check endpoints
+        for endpoint_name in &pipeline.endpoints {
+            if let Some(endpoint) = config.endpoints.get(endpoint_name) {
+                match endpoint.service.as_str() {
+                    "dicom_scp" => needs_dimse = true,
+                    _ => needs_http = true,
+                }
+            }
+        }
+
+        // Check backends for legacy persistent DICOM SCPs
+        for backend_name in &pipeline.backends {
+            if let Some(backend) = config.backends.get(backend_name) {
+                if backend.service == "dicom" {
+                    if let Some(options) = &backend.options {
+                        let needs_persistent = options
+                            .get("persistent_store_scp")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                            || (options.contains_key("host") && options.contains_key("port"));
+
+                        if needs_persistent && options.contains_key("incoming_store_port") {
+                            needs_dimse = true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    (needs_http, needs_dimse)
 }
