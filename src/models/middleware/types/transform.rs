@@ -214,12 +214,22 @@ impl Middleware for JoltTransformMiddleware {
 /// Parse configuration from HashMap for middleware registry
 pub fn parse_config(
     options: &HashMap<String, Value>,
+    transforms_path: Option<&str>,
 ) -> Result<JoltTransformMiddlewareConfig, String> {
-    let spec_path = options
+    let spec_path_raw = options
         .get("spec_path")
         .and_then(|v| v.as_str())
         .ok_or("Missing required 'spec_path' in transform middleware config")?
         .to_string();
+
+    // Resolve spec_path relative to transforms_path if provided
+    let spec_path = if let Some(base_path) = transforms_path {
+        use std::path::Path;
+        let full_path = Path::new(base_path).join(&spec_path_raw);
+        full_path.to_string_lossy().to_string()
+    } else {
+        spec_path_raw
+    };
 
     let apply = options
         .get("apply")
@@ -408,7 +418,7 @@ mod tests {
         options.insert("apply".to_string(), json!("both"));
         options.insert("fail_on_error".to_string(), json!(false));
 
-        let config = parse_config(&options).unwrap();
+        let config = parse_config(&options, None).unwrap();
         assert_eq!(config.spec_path, "/path/to/spec.json");
         assert_eq!(config.apply, "both");
         assert!(!config.fail_on_error);
@@ -417,7 +427,7 @@ mod tests {
     #[test]
     fn test_parse_config_missing_spec_path() {
         let options = HashMap::new();
-        let result = parse_config(&options);
+        let result = parse_config(&options, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing required 'spec_path'"));
     }

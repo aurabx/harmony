@@ -1,13 +1,22 @@
 # DICOM SCP Example
 
-This example demonstrates a DICOM SCP (Service Class Provider) endpoint that accepts incoming DIMSE connections and C-STORE operations.
+**Implementation Status:**
+- ✅ C-ECHO (Verification)
+- ✅ C-FIND (Query)
+- ✅ C-GET (Retrieve)
+- ✅ C-MOVE (Move)
+- ⏳ C-STORE (Storage) - **NOT YET IMPLEMENTED**
+
+This example demonstrates a DICOM SCP (Service Class Provider) endpoint that accepts incoming DIMSE connections for query and retrieve operations.
 
 ## What This Example Demonstrates
 
 - DICOM SCP endpoint configuration
 - Accepting DIMSE associations
-- Receiving C-STORE operations
-- Storage of received DICOM objects
+- C-ECHO verification service
+- C-FIND query operations
+- C-GET retrieve operations  
+- C-MOVE move operations
 - DICOM network listener setup
 
 ## Prerequisites
@@ -38,30 +47,58 @@ apt-get install dcmtk
 ## How to Run
 
 1. From the project root, run:
-   ```bash
-   cargo run -- --config examples/dicom-scp/config.toml
-   ```
+```bash
+cargo run -- --config examples/dicom-scp/config.toml
+```
 
 2. The service will start and bind DICOM listener to `0.0.0.0:11112`
 
 ## Testing
 
-### Using DCMTK storescu
+### Using DCMTK echoscu (C-ECHO)
 
 ```bash
-# Send a single DICOM file
-storescu -aec HARMONY_SCP 127.0.0.1 11112 /path/to/file.dcm
+# Verify connectivity
+echoscu -aec HARMONY_SCP 127.0.0.1 11112
+```
 
-# Send multiple files
-storescu -aec HARMONY_SCP 127.0.0.1 11112 /path/to/dicom/directory/
+### Using DCMTK findscu (C-FIND)
 
-# With verbose output
-storescu -v -aec HARMONY_SCP 127.0.0.1 11112 /path/to/file.dcm
+```bash
+# Query for all patients
+findscu -aec HARMONY_SCP -P 127.0.0.1 11112 -k 0010,0020="*"
+
+# Query for specific patient
+findscu -aec HARMONY_SCP -P 127.0.0.1 11112 -k 0010,0020="PATIENT123"
+
+# Study-level query
+findscu -aec HARMONY_SCP -S 127.0.0.1 11112 -k 0020,000D="*"
+```
+
+### Using DCMTK getscu (C-GET)
+
+```bash
+# Retrieve study
+getscu -aec HARMONY_SCP 127.0.0.1 11112 -k 0020,000D="1.2.3.4.5"
+```
+
+### Using DCMTK movescu (C-MOVE)
+
+```bash
+# Move study to destination AET
+movescu -aec HARMONY_SCP -aem DEST_AET 127.0.0.1 11112 -k 0020,000D="1.2.3.4.5"
+```
+
+### C-STORE (Not Yet Implemented)
+
+```bash
+# This will NOT work yet - C-STORE is not implemented
+# storescu -aec HARMONY_SCP 127.0.0.1 11112 /path/to/file.dcm
 ```
 
 ### Using Orthanc
 
-Configure Orthanc to push studies to Harmony:
+Configure Orthanc to query/retrieve from Harmony:
 
 ```json
 {
@@ -71,33 +108,52 @@ Configure Orthanc to push studies to Harmony:
 }
 ```
 
-Then send via Orthanc UI or API:
+Then query via Orthanc UI or API:
 ```bash
-curl -X POST http://localhost:8042/modalities/harmony/store \
-  -d '{"Resources":["study-id-here"]}'
+# Query for studies
+curl -X POST http://localhost:8042/modalities/harmony/query \
+  -d '{"Level":"Study","Query":{"PatientID":"*"}}'
 ```
+
+**Note:** C-STORE to Harmony is not yet supported. Use query/retrieve operations instead.
 
 ## Expected Behavior
 
+### C-ECHO
 1. DICOM client establishes association with `HARMONY_SCP`
-2. Client sends C-STORE request with DICOM object
-3. Harmony SCP accepts the object
-4. Object is stored in `./tmp` directory
+2. Client sends C-ECHO request
+3. Harmony SCP responds with success
+4. Association is released
+
+### C-FIND
+1. DICOM client establishes association
+2. Client sends C-FIND query request
+3. Harmony SCP searches and returns matching results
+4. Results streamed back to client
 5. Association is released
-6. Event is logged to `./tmp/harmony_dicom_scp.log`
+
+### C-GET / C-MOVE
+1. DICOM client establishes association
+2. Client sends C-GET/C-MOVE request with identifier
+3. Harmony SCP retrieves matching datasets
+4. Datasets sent back to client (C-GET) or forwarded to destination (C-MOVE)
+5. Association is released
+
+All events are logged to `./tmp/harmony_dicom_scp.log`
 
 ## Use Cases
 
-- **PACS Storage Node**: Act as a DICOM storage destination
-- **DICOM Router**: Accept studies and forward to other destinations
-- **Archive Endpoint**: Store received DICOM objects for processing
-- **Testing Tool**: Validate DICOM client implementations
+- **DICOM Query Server**: Respond to C-FIND queries from PACS/workstations
+- **Retrieve Service**: Provide C-GET/C-MOVE access to stored studies
+- **DICOM Router**: Query and route studies between systems
+- **Testing Tool**: Validate DICOM SCU client implementations
+- **Future - PACS Storage**: Will support C-STORE when implemented
 
-## Stored Files
+## Storage
 
-Received DICOM files are stored in:
+Currently, the SCP queries and retrieves from configured backends/data sources. When C-STORE is implemented, received DICOM files will be stored in:
 ```
-./tmp/
+./tmp/dimse/
 ├── [StudyInstanceUID]/
 │   └── [SeriesInstanceUID]/
 │       └── [SOPInstanceUID].dcm
@@ -115,18 +171,22 @@ Received DICOM files are stored in:
 - **Called AE Title**: `HARMONY_SCP`
 - **Maximum PDU Size**: 16384 bytes (default)
 - **Transfer Syntaxes**: ImplicitVRLittleEndian, ExplicitVRLittleEndian
-- **SOP Classes**: Storage SOP classes (CT, MR, US, etc.)
+- **SOP Classes Supported**:
+  - Verification SOP Class (C-ECHO)
+  - Patient Root Query/Retrieve (C-FIND, C-GET, C-MOVE)
+  - Study Root Query/Retrieve (C-FIND, C-GET, C-MOVE)
+  - Storage SOP Classes (C-STORE) - Coming soon
 
 ## Verification
 
-Check that files were received:
+Verify the SCP is working:
 
 ```bash
-# List received files
-ls -lR ./tmp/
+# Test connectivity
+echoscu -aec HARMONY_SCP 127.0.0.1 11112
 
-# Validate DICOM file
-dcmdump ./tmp/[study]/[series]/[instance].dcm
+# Test query
+findscu -aec HARMONY_SCP -P 127.0.0.1 11112 -k 0010,0020="*"
 
 # Check logs
 tail -f ./tmp/harmony_dicom_scp.log

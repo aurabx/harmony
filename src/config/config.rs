@@ -51,6 +51,9 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub transforms: (),
+    /// Resolved absolute path to transforms directory (not serialized)
+    #[serde(skip)]
+    pub resolved_transforms_path: Option<String>,
 }
 
 impl Config {
@@ -152,10 +155,30 @@ impl Config {
     }
 
     pub fn from_args(cli: Cli) -> Self {
+        // Verify the config file has a .toml extension
+        let config_path = Path::new(&cli.config_path);
+        if config_path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            panic!(
+                "Configuration file must have a .toml extension: {}",
+                cli.config_path
+            );
+        }
+
         // Load the base configuration file
         let contents =
             std::fs::read_to_string(&cli.config_path).expect("Failed to read config file");
         let mut config: Config = toml::from_str(&contents).expect("Failed to parse config");
+
+        // Resolve transforms_path relative to config file directory
+        let base_dir = config_path
+            .parent()
+            .expect("Failed to get config file directory");
+        let transforms_path = base_dir.join(&config.proxy.transforms_path);
+        config.resolved_transforms_path = Some(
+            transforms_path
+                .to_string_lossy()
+                .to_string()
+        );
 
         // Attempt to load additional configs and merge them into the current config.
         if let Ok(additional_configs) = Self::load_additional_configs(&config, &cli.config_path) {
@@ -462,7 +485,8 @@ impl Config {
                 // Built-in middleware, validate that it exists
                 match name.as_str() {
                     "jwtauth" | "basic_auth" | "connect" | "passthru" | "json_extractor"
-                    | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "transform" => {}
+                    | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "transform"
+                    | "metadata_transform" | "path_filter" => {}
                     _ => {
                         return Err(ConfigError::InvalidMiddleware {
                             name: name.clone(),

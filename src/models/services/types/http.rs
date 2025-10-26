@@ -35,6 +35,15 @@ impl ServiceType for HttpEndpoint {
             .and_then(|v| v.as_str())
             .unwrap_or("/");
 
+        // Ensure clean wildcard path by trimming trailing slashes
+        let prefix_trimmed = path_prefix.trim_end_matches('/');
+        let wildcard_path = if prefix_trimmed.is_empty() {
+            // Root path case
+            "/{*wildcard}".to_string()
+        } else {
+            format!("{}/{{*wildcard}}", prefix_trimmed)
+        };
+
         vec![
             // Handle exact path match
             RouteConfig {
@@ -49,7 +58,7 @@ impl ServiceType for HttpEndpoint {
             },
             // Handle subpaths (e.g., /dicom/echo, /api/v1/users)
             RouteConfig {
-                path: format!("{}/{{*wildcard}}", path_prefix),
+                path: wildcard_path,
                 methods: vec![
                     http::Method::GET,
                     http::Method::POST,

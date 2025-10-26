@@ -9,6 +9,8 @@ log_level = "debug"
 # Directories are resolved relative to this config file's directory
 pipelines_path = "pipelines"
 transforms_path = "transforms"
+# Duration (in hours) to cache JWKS keys from Runbeam Cloud (default: 24)
+jwks_cache_duration_hours = 24
 
 # ------------------------
 # Management API

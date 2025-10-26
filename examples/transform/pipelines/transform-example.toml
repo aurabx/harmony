@@ -12,7 +12,7 @@ middleware = [
     "json_extractor",
     "patient_transform",
 ]
-backends = []
+backends = ["echo_backend"]
 
 # ------------------------
 # Middleware
@@ -23,7 +23,7 @@ type = "json_extractor"
 [middleware.patient_transform]
 type = "transform"
 [middleware.patient_transform.options]
-spec_path = "transforms/patient_to_fhir.json"
+spec_path = "patient_to_fhir.json"
 apply = "left"
 fail_on_error = true
 
@@ -34,4 +34,10 @@ fail_on_error = true
 service = "http"
 [endpoints.http_endpoint.options]
 path_prefix = "/transform"
+
+# ------------------------
+# Backends
+#-------------------------
+[backends.echo_backend]
+service = "echo"
 

@@ -87,7 +87,7 @@ async fn jmix_manifest_and_archive_skip_backends() {
     harmony::globals::reset_storage();
     
     // Initialize storage backend before creating test data
-    use harmony::storage::filesystem::FilesystemStorage;
+    use harmony::storage::FilesystemStorage;
     let storage = Arc::new(FilesystemStorage::new("./tmp").expect("Failed to create test storage"));
     
     harmony::globals::set_storage(storage.clone());

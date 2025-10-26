@@ -35,6 +35,9 @@ skip_listing = false  # Still include file listings by default for inventory
 service = "jmix"
 [endpoints.jmix_api_performance.options]
 path_prefix = "/jmix"
+# Performance optimization flags
+skip_hashing = true   # Skip SHA256 hashing for faster processing
+skip_listing = true   # Skip DICOM files from files.json manifest
 
 # Optional: custom storage directory
 # store_dir = "./tmp/jmix-store-performance"
@@ -49,5 +52,9 @@ aet = "ORTHANC"              # Remote AE (Orthanc)
 host = "127.0.0.1"
 port = 4242
 local_aet = "HARMONY_SCU"    # Our AE title
+# DICOM retrieval mode: "get" (default) or "move"
+# - "get" (C-GET): Works without PACS-side AE configuration, images received directly
+# - "move" (C-MOVE): Requires PACS to know SCU's AE title and network address
+dimse_retrieve_mode = "get"
 incoming_store_port = 11112  # Port Orthanc will push C-STORE to
 persistent_store_scp = true  # keep a persistent C-STORE SCP listening

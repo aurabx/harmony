@@ -31,6 +31,7 @@ pub fn initialise_middleware_registry(config: &Config) {
 pub fn resolve_middleware_type(
     middleware_type: &str,
     options: &HashMap<String, Value>,
+    transforms_path: Option<&str>,
 ) -> Result<Box<dyn Middleware>, String> {
     // Check the registry first
     if let Some(registry) = MIDDLEWARE_REGISTRY.get() {
@@ -38,7 +39,7 @@ pub fn resolve_middleware_type(
             match module.as_str() {
                 "" => {
                     // Default built-in modules
-                    create_builtin_middleware_type(middleware_type, options)
+                    create_builtin_middleware_type(middleware_type, options, transforms_path)
                 }
                 module_path => {
                     // Custom module loading would go here
@@ -50,14 +51,14 @@ pub fn resolve_middleware_type(
             }
         } else {
             // Registry is present but does not include this middleware. Attempt built-in fallback.
-            match create_builtin_middleware_type(middleware_type, options) {
+            match create_builtin_middleware_type(middleware_type, options, transforms_path) {
                 Ok(mw) => Ok(mw),
                 Err(_) => Err(format!("Unknown middleware type: {}", middleware_type)),
             }
         }
     } else {
         // Fallback to hardcoded types if registry isn't initialized
-        create_builtin_middleware_type(middleware_type, options)
+        create_builtin_middleware_type(middleware_type, options, transforms_path)
     }
 }
 
@@ -65,6 +66,7 @@ pub fn resolve_middleware_type(
 fn create_builtin_middleware_type(
     middleware_type: &str,
     options: &HashMap<String, Value>,
+    transforms_path: Option<&str>,
 ) -> Result<Box<dyn Middleware>, String> {
     use crate::models::middleware::types::auth::AuthSidecarMiddleware;
     use crate::models::middleware::types::connect::AuraboxConnectMiddleware;
@@ -99,7 +101,7 @@ fn create_builtin_middleware_type(
             crate::models::middleware::types::dicomweb_bridge::DicomwebBridgeMiddleware::new(),
         )),
         "transform" => {
-            let config = crate::models::middleware::types::transform::parse_config(options)?;
+            let config = crate::models::middleware::types::transform::parse_config(options, transforms_path)?;
             Ok(Box::new(JoltTransformMiddleware::new(config)?))
         }
         "path_filter" => {
@@ -108,7 +110,7 @@ fn create_builtin_middleware_type(
         }
         "metadata_transform" => {
             let config =
-                crate::models::middleware::types::metadata_transform::parse_config(options)?;
+                crate::models::middleware::types::metadata_transform::parse_config(options, transforms_path)?;
             Ok(Box::new(MetadataTransformMiddleware::new(config)?))
         }
         _ => Err(format!(
@@ -125,10 +127,11 @@ pub fn build_middleware_instances_for_pipeline(
     config: &Config,
 ) -> Result<Vec<Box<dyn Middleware>>, String> {
     let mut instances = Vec::new();
+    let transforms_path = config.resolved_transforms_path.as_deref();
 
     for name in names {
         if let Some(middleware_instance) = config.middleware.get(name) {
-            let middleware = middleware_instance.resolve_middleware().map_err(|err| {
+            let middleware = middleware_instance.resolve_middleware(transforms_path).map_err(|err| {
                 format!("Failed to resolve middleware instance '{}': {}", name, err)
             })?;
             instances.push(middleware);
@@ -137,7 +140,7 @@ pub fn build_middleware_instances_for_pipeline(
             // allow referencing it directly without an instance block.
             // This supports conveniences like using "json_extractor" without an options table.
             let empty_opts: HashMap<String, Value> = HashMap::new();
-            match resolve_middleware_type(name, &empty_opts) {
+            match resolve_middleware_type(name, &empty_opts, transforms_path) {
                 Ok(mw) => instances.push(mw),
                 Err(_) => {
                     return Err(format!("Unknown middleware instance '{}'", name));

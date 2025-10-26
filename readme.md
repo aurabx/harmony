@@ -19,6 +19,7 @@ Highlights:
 - Configurable pipelines: endpoints + ordered middleware + services/backends
 - Authentication: JWT (recommend RS256 in production), optional Basic
 - Transformations: JSON transforms (JOLT), DICOM↔DICOMweb bridging, JMIX packaging
+- Runbeam Cloud Integration: Gateway authorization for autonomous API access with 30-day machine tokens
 - Operationally sound: structured logging, local ./tmp storage convention, file-system storage backend
 
 Status: under active development. For more information, visit https://harmonyproxy.com.
@@ -159,6 +160,7 @@ See [docs/configuration.md](docs/configuration.md), [docs/endpoints.md](docs/end
 - Backends: [docs/backends.md](docs/backends.md)
 - Router: [docs/router.md](docs/router.md)
 - Envelope model: [docs/envelope.md](docs/envelope.md)
+- Management API: [docs/management-api.md](docs/management-api.md) (includes Runbeam Cloud authorization)
 - DIMSE integration: [docs/dimse-integration.md](docs/dimse-integration.md)
 - Testing: [docs/testing.md](docs/testing.md)
 - Security: [docs/security.md](docs/security.md)

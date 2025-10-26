@@ -154,6 +154,118 @@ curl http://localhost:9090/admin/routes
   - `service_type`: Type of service (e.g., "fhir", "management")
   - `pipeline`: Name of the pipeline containing this route
 
+### POST /{base_path}/authorize
+
+Authorize the Harmony gateway with Runbeam Cloud and obtain a machine-scoped token for autonomous API access.
+
+This endpoint implements the gateway authorization flow:
+1. Validates the user's JWT token from the Authorization header
+2. Calls Runbeam Cloud API to exchange the user token for a machine token
+3. Stores the machine token locally for future API calls
+4. Returns gateway details and token expiry information
+
+**Authentication Required:** Yes (JWT Bearer token from Runbeam Cloud)
+
+**Example Request:**
+```bash
+# Authorize gateway with Runbeam Cloud
+curl -X POST http://localhost:9090/admin/authorize \
+  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "Content-Type: application/json" \
+  -d '{
+    "gateway_code": "harmony-prod-01",
+    "machine_public_key": "ssh-rsa AAAAB3...",
+    "metadata": {
+      "version": "0.4.0",
+      "os": "linux",
+      "arch": "x86_64"
+    }
+  }'
+```
+
+**Request Body:**
+```json
+{
+  "gateway_code": "harmony-prod-01",
+  "machine_public_key": "optional-public-key",
+  "metadata": {
+    "version": "0.4.0",
+    "os": "linux"
+  }
+}
+```
+
+**Request Fields:**
+- `gateway_code` (required): Gateway instance ID or code
+- `machine_public_key` (optional): Public key for secure communication
+- `metadata` (optional): Additional gateway metadata (version, OS, etc.)
+
+**Success Response (201 Created):**
+```json
+{
+  "success": true,
+  "message": "Gateway authorized successfully",
+  "gateway": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "code": "harmony-prod-01",
+    "name": "Gateway harmony-prod-01"
+  },
+  "expires_at": "2025-11-24T12:48:46Z",
+  "expires_in": 2592000
+}
+```
+
+**Response Fields:**
+- `success`: Boolean indicating success
+- `message`: Human-readable status message
+- `gateway`: Gateway details
+  - `id`: Unique gateway ID from Runbeam Cloud
+  - `code`: Gateway code (instance ID)
+  - `name`: Human-readable gateway name
+- `expires_at`: ISO 8601 timestamp when machine token expires
+- `expires_in`: Seconds until token expiry (typically 30 days = 2,592,000 seconds)
+
+**Error Responses:**
+
+**400 Bad Request** - Invalid request body:
+```json
+{
+  "error": "Bad Request",
+  "message": "Invalid request body: missing field `gateway_code`"
+}
+```
+
+**401 Unauthorized** - Missing or invalid JWT token:
+```json
+{
+  "error": "Unauthorized",
+  "message": "Invalid or expired token: Token validation failed"
+}
+```
+
+**403 Forbidden** - User not authorized for this gateway:
+```json
+{
+  "error": "Forbidden",
+  "message": "This gateway belongs to a different team"
+}
+```
+
+**500 Internal Server Error** - Runbeam Cloud API error:
+```json
+{
+  "error": "Internal Server Error",
+  "message": "Authorization failed: Network error"
+}
+```
+
+**Notes:**
+- The JWT token is obtained via the `runbeam login` CLI command
+- The JWT secret must match what Runbeam Cloud uses (set via `RUNBEAM_JWT_SECRET` env var)
+- The machine token is stored at `./tmp/runbeam/auth.json` by default
+- Machine tokens expire after 30 days and must be renewed
+- The Runbeam API base URL is extracted from the JWT's `iss` (issuer) claim
+
 ## Security Considerations
 
 ### Default Disabled
@@ -165,11 +277,19 @@ The recommended configuration binds the Management API to the management network
 - **Management network** (`127.0.0.1:9090`): Management API endpoints only
 - **External network** (`0.0.0.0:8080`): Client-facing application endpoints
 
-### No Authentication (Yet)
-The current implementation does not include authentication within the management endpoints themselves. The network-level isolation provides the primary security boundary. Consider additional measures:
+### Authorization Endpoint Authentication
+The `/authorize` endpoint requires JWT authentication:
+
+- **JWT Token Required**: Must provide valid JWT from Runbeam Cloud in `Authorization: Bearer <token>` header
+- **Token Validation**: Uses HS256 algorithm with shared secret (configured via `RUNBEAM_JWT_SECRET` environment variable)
+- **Token Claims**: Extracts Runbeam API base URL from `iss` (issuer) claim
+- **Machine Token**: Exchanges user JWT for 30-day machine-scoped token stored locally
+
+### Other Management Endpoints
+The info/pipelines/routes endpoints currently do not require authentication. Network-level isolation provides the primary security boundary. Consider additional measures:
 
 - Network-level restrictions (firewall, VPN) for remote management access
-- Planning to add authentication in future versions
+- JWT authentication may be extended to all endpoints in future versions
 
 ### Information Disclosure
 The API exposes:

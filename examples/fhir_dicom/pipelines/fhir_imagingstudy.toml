@@ -31,7 +31,7 @@ rules = ["/ImagingStudy"]
 [middleware.query_to_target]
 type = "metadata_transform"
 [middleware.query_to_target.options]
-spec_path = "examples/fhir_dicom/transforms/query_to_target_details.json"
+spec_path = "query_to_target_details.json"
 apply = "left"
 fail_on_error = false
 transform_target = "target_details"
@@ -42,14 +42,14 @@ type = "json_extractor"
 [middleware.fhir_dimse_meta]
 type = "metadata_transform"
 [middleware.fhir_dimse_meta.options]
-spec_path = "examples/fhir_dicom/transforms/metadata_set_dimse_op.json"
+spec_path = "metadata_set_dimse_op.json"
 apply = "left"
 fail_on_error = true
 
 [middleware.fhir_to_dicom_transform]
 type = "transform"
 [middleware.fhir_to_dicom_transform.options]
-spec_path = "examples/fhir_dicom/transforms/fhir_to_dicom_params.json"
+spec_path = "fhir_to_dicom_params.json"
 apply = "left"  # Transform request to DICOM parameters
 fail_on_error = false
 inject_context = true  # Enable context injection for query params access
@@ -57,7 +57,7 @@ inject_context = true  # Enable context injection for query params access
 [middleware.enrich_jmix_urls]
 type = "transform"
 [middleware.enrich_jmix_urls.options]
-spec_path = "examples/fhir_dicom/transforms/enrich_with_jmix_urls.json"
+spec_path = "enrich_with_jmix_urls.json"
 apply = "right"  # Transform DICOM response to add JMIX URLs
 fail_on_error = false
 inject_context = true
@@ -65,7 +65,7 @@ inject_context = true
 [middleware.dicom_to_fhir_transform]
 type = "transform"
 [middleware.dicom_to_fhir_transform.options]
-spec_path = "examples/fhir_dicom/transforms/dicom_to_imagingstudy_simple.json"
+spec_path = "dicom_to_imagingstudy_simple.json"
 apply = "right"  # Transform DICOM response to FHIR
 fail_on_error = true
 inject_context = true  # Enable context injection
