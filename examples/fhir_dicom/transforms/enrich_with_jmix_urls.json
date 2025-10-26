@@ -2,16 +2,24 @@
   {
     "operation": "shift",
     "spec": {
+      "data": {
+        "matches": {
+          "*": {
+            "@(0,0020000D)": "data.matches[&1].StudyInstanceUID",
+            "*": "data.matches[&1].&"
+          }
+        }
+      },
       "*": "&"
     }
   },
   {
-    "operation": "default",
+    "operation": "modify-overwrite-beta",
     "spec": {
       "data": {
         "matches": {
           "*": {
-            "_jmix_url": "/api/jmix"
+            "_jmix_url": "=concat('/api/jmix?studyInstanceUid=',@(1,StudyInstanceUID))"
           }
         }
       }

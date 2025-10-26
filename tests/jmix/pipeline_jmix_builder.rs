@@ -219,13 +219,14 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
 
     // Step 1: query JMIX by StudyInstanceUID; if none exists, pipeline triggers DICOM C-GET and builds JMIX
+    // The endpoint returns a ZIP file directly
     let response = app
         .clone()
         .oneshot(
             Request::builder()
                 .uri(format!("/jmix/api/jmix?studyInstanceUid={}", study_uid))
                 .method("GET")
-                .header("accept", "application/json")
+                .header("accept", "application/zip")
                 .body(Body::empty())
                 .unwrap(),
         )
@@ -240,26 +241,46 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
         return;
     }
 
-    // Extract body once
-    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+    // Extract ZIP body
+    let zip_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
     
     // If not OK, print the error response and exit
     if status != StatusCode::OK {
-        let body_str = String::from_utf8_lossy(&bytes);
+        let body_str = String::from_utf8_lossy(&zip_bytes);
         eprintln!("Error response (status {}): {}", status, body_str);
         assert_eq!(status, StatusCode::OK, "Expected OK status, got {}", status);
     }
     
-    let jmix_index: serde_json::Value = serde_json::from_slice(&bytes).expect("json parse");
-    let id = jmix_index
-        .get("jmixEnvelopes")
-        .and_then(|v| v.as_array())
-        .and_then(|a| a.first())
-        .and_then(|o| o.get("id"))
-        .and_then(|s| s.as_str())
-        .expect("jmix id");
+    // Verify we got a ZIP file
+    if zip_bytes.is_empty() {
+        eprintln!("Error: Empty response body with status {}", status);
+        assert!(!zip_bytes.is_empty(), "Response body should not be empty");
+    }
+    
+    // Extract the JMIX ID from the ZIP's manifest.json
+    use std::io::Cursor;
+    let mut archive = zip::ZipArchive::new(Cursor::new(&zip_bytes))
+        .expect("Valid ZIP archive");
+    
+    let mut manifest_content = String::new();
+    for i in 0..archive.len() {
+        let mut file = archive.by_index(i).expect("ZIP entry");
+        if file.name().ends_with("manifest.json") {
+            use std::io::Read;
+            file.read_to_string(&mut manifest_content).expect("Read manifest");
+            break;
+        }
+    }
+    
+    assert!(!manifest_content.is_empty(), "manifest.json should exist in ZIP");
+    let manifest_json: serde_json::Value = serde_json::from_str(&manifest_content)
+        .expect("Valid manifest JSON");
+    let id = manifest_json
+        .get("id")
+        .and_then(|v| v.as_str())
+        .expect("manifest should have id");
 
     // Step 2: fetch the JMIX manifest via JMIX endpoint
     let manifest_resp = app

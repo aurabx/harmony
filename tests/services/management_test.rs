@@ -55,10 +55,11 @@ async fn test_management_service_enabled() {
     // Test router configuration
     let routes = service.build_router(endpoint_options);
     let paths: Vec<_> = routes.iter().map(|r| r.path.as_str()).collect();
-    assert_eq!(routes.len(), 3); // Updated to match actual count
+    assert_eq!(routes.len(), 4); // Updated to match actual count (info, pipelines, routes, authorize)
     assert!(paths.contains(&"/admin/info"));
     assert!(paths.contains(&"/admin/pipelines"));
     assert!(paths.contains(&"/admin/routes"));
+    assert!(paths.contains(&"/admin/authorize"));
 }
 
 #[tokio::test]
