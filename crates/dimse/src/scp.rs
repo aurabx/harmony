@@ -211,12 +211,16 @@ impl DimseScp {
             peer_addr, association.client_ae_title()
         );
 
+        // Buffer for accumulating identifier data across multiple PDUs
+        let mut pending_command: Option<(u16, u16)> = None; // (command_field, message_id)
+        let mut accumulated_identifier = Vec::new();
+
         // Process PDUs until association is released or aborted
         loop {
             match association.receive().await {
                 Ok(Pdu::PData { data }) => {
                     // Handle P-DATA PDU containing DIMSE commands
-                    if let Err(e) = self.handle_pdata(&mut association, data).await {
+                    if let Err(e) = self.handle_pdata(&mut association, data, &mut pending_command, &mut accumulated_identifier).await {
                         error!("Error handling P-DATA: {}", e);
                         // Send abort and break
                         let _ = association.abort().await;
@@ -260,12 +264,16 @@ impl DimseScp {
         &self,
         association: &mut ServerAssociation<tokio::net::TcpStream>,
         pdata: Vec<dicom_ul::pdu::PDataValue>,
+        pending_command: &mut Option<(u16, u16)>,
+        accumulated_identifier: &mut Vec<u8>,
     ) -> Result<()> {
-        // Separate command and data PDUs
+        // Separate command and data PDUs, track presentation context ID
         let mut command_data = Vec::new();
         let mut identifier_data = Vec::new();
+        let mut presentation_context_id = 1u8; // Default to 1
         
         for pdata_value in pdata {
+            presentation_context_id = pdata_value.presentation_context_id;
             match pdata_value.value_type {
                 dicom_ul::pdu::PDataValueType::Command => {
                     command_data.extend_from_slice(&pdata_value.data);
@@ -278,8 +286,20 @@ impl DimseScp {
 
         // Check if we have command data
         if command_data.is_empty() {
-            debug!("Received P-DATA with no command (identifier_data len: {})", identifier_data.len());
-            // This might be a trailing data-only PDU - just ignore it
+            // This is a data-only PDU - accumulate it for pending command
+            if !identifier_data.is_empty() {
+                debug!("Received data-only P-DATA ({} bytes), accumulating", identifier_data.len());
+                accumulated_identifier.extend_from_slice(&identifier_data);
+                
+                // Check if we have a pending command to dispatch
+                if let Some((command_field, message_id)) = *pending_command {
+                    // Dispatch the command with accumulated data
+                    debug!("Dispatching pending command 0x{:04X} with {} bytes of data", command_field, accumulated_identifier.len());
+                    self.dispatch_command(association, command_field, message_id, accumulated_identifier.clone(), presentation_context_id).await?;
+                    *pending_command = None;
+                    accumulated_identifier.clear();
+                }
+            }
             return Ok(());
         }
 
@@ -312,23 +332,57 @@ impl DimseScp {
 
         debug!("Received DIMSE command: 0x{:04X}, message ID: {}", command_field, message_id);
 
+        // Check if this command expects a dataset
+        let expects_dataset = command_obj
+            .element(tags::COMMAND_DATA_SET_TYPE)
+            .ok()
+            .and_then(|e| e.uint16().ok())
+            .map(|v| v != 0x0101) // 0x0101 = no dataset present
+            .unwrap_or(false);
+
+        // If we have identifier data in this PDU, use it immediately
+        if !identifier_data.is_empty() {
+            debug!("Command has {} bytes of identifier data in same PDU", identifier_data.len());
+            return self.dispatch_command(association, command_field, message_id, identifier_data, presentation_context_id).await;
+        }
+
+        // If command expects dataset but we don't have it yet, buffer the command
+        if expects_dataset {
+            debug!("Command expects dataset, buffering command for next PDU");
+            *pending_command = Some((command_field, message_id));
+            return Ok(());
+        }
+
+        // No dataset expected, dispatch immediately
+        self.dispatch_command(association, command_field, message_id, Vec::new(), presentation_context_id).await
+    }
+
+    /// Dispatch a DIMSE command to the appropriate handler
+    async fn dispatch_command(
+        &self,
+        association: &mut ServerAssociation<tokio::net::TcpStream>,
+        command_field: u16,
+        message_id: u16,
+        identifier_data: Vec<u8>,
+        presentation_context_id: u8,
+    ) -> Result<()> {
         // Dispatch based on command type
         match command_field {
             0x0030 => {
                 // C-ECHO-RQ
-                self.handle_c_echo(association, message_id).await
+                self.handle_c_echo(association, message_id, presentation_context_id).await
             }
             0x0020 => {
                 // C-FIND-RQ
-                self.handle_c_find(association, message_id, identifier_data).await
+                self.handle_c_find(association, message_id, identifier_data, presentation_context_id).await
             }
             0x0021 => {
                 // C-MOVE-RQ
-                self.handle_c_move(association, message_id, identifier_data).await
+                self.handle_c_move(association, message_id, identifier_data, presentation_context_id).await
             }
             0x0010 => {
                 // C-GET-RQ
-                self.handle_c_get(association, message_id, identifier_data).await
+                self.handle_c_get(association, message_id, identifier_data, presentation_context_id).await
             }
             0x0001 => {
                 // C-STORE-RQ
@@ -350,6 +404,7 @@ impl DimseScp {
         &self,
         association: &mut ServerAssociation<tokio::net::TcpStream>,
         message_id: u16,
+        presentation_context_id: u8,
     ) -> Result<()> {
         if !self.config.enable_echo {
             return Err(DimseError::operation_failed("C-ECHO not enabled"));
@@ -406,9 +461,8 @@ impl DimseScp {
             .map_err(|e| DimseError::operation_failed(format!("Failed to encode response: {}", e)))?;
 
         // Send as P-DATA PDU
-        // Get presentation context ID (for now, use context 1)
         let pdata_value = dicom_ul::pdu::PDataValue {
-            presentation_context_id: 1,
+            presentation_context_id,
             value_type: dicom_ul::pdu::PDataValueType::Command,
             is_last: true,
             data: response_bytes,
@@ -431,6 +485,7 @@ impl DimseScp {
         association: &mut ServerAssociation<tokio::net::TcpStream>,
         message_id: u16,
         identifier_data: Vec<u8>,
+        presentation_context_id: u8,
     ) -> Result<()> {
         if !self.config.enable_find {
             return Err(DimseError::operation_failed("C-FIND not enabled"));
@@ -451,10 +506,13 @@ impl DimseScp {
             return Ok(());
         }
 
-        // Parse the identifier dataset
-        let ts = TransferSyntaxRegistry
-            .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
-            .ok_or_else(|| DimseError::parse("Implicit VR Little Endian TS not found"))?;
+        // Get the transfer syntax for this presentation context
+        let ts = association
+            .presentation_contexts()
+            .iter()
+            .find(|pc| pc.id == presentation_context_id)
+            .and_then(|pc| TransferSyntaxRegistry.get(&pc.transfer_syntax))
+            .ok_or_else(|| DimseError::parse(format!("Transfer syntax not found for presentation context {}", presentation_context_id)))?;
         
         let cursor = std::io::Cursor::new(&identifier_data);
         let identifier = InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
@@ -649,6 +707,7 @@ impl DimseScp {
         association: &mut ServerAssociation<tokio::net::TcpStream>,
         message_id: u16,
         identifier_data: Vec<u8>,
+        _presentation_context_id: u8,
     ) -> Result<()> {
         if !self.config.enable_move {
             return Err(DimseError::operation_failed("C-MOVE not enabled"));
@@ -802,6 +861,7 @@ impl DimseScp {
         association: &mut ServerAssociation<tokio::net::TcpStream>,
         message_id: u16,
         identifier_data: Vec<u8>,
+        _presentation_context_id: u8,
     ) -> Result<()> {
         if !self.config.enable_get {
             return Err(DimseError::operation_failed("C-GET not enabled"));
