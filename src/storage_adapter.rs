@@ -86,3 +86,6 @@ impl<'a> SdkStorage for StorageAdapter<'a> {
         })
     }
 }
+
+#[cfg(test)]
+mod tests;

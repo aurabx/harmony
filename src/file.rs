@@ -27,3 +27,6 @@ pub fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Error> {
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod tests;

@@ -30,3 +30,6 @@ pub fn reset_storage() {
     let mut cell = STORAGE_CELL.write().unwrap();
     *cell = None;
 }
+
+#[cfg(test)]
+mod tests;

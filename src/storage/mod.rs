@@ -58,3 +58,6 @@ pub fn create_storage_backend(config: &StorageConfig) -> StorageResult<Arc<dyn S
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests;
