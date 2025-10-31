@@ -17,6 +17,7 @@ Harmony Proxy is a production-ready, extensible data mesh proxy/gateway for hete
 Highlights:
 - Multi-protocol: HTTP/JSON passthrough, FHIR, DICOM/DICOMweb (QIDO-RS/WADO-RS), JMIX
 - Configurable pipelines: endpoints + ordered middleware + services/backends
+- Hot configuration reload: zero-downtime updates for most config changes
 - Authentication: JWT (recommend RS256 in production), optional Basic
 - Transformations: JSON transforms (JOLT), DICOM↔DICOMweb bridging, JMIX packaging
 - Runbeam Cloud Integration: Gateway authorization for autonomous API access with 30-day machine tokens
@@ -148,6 +149,7 @@ Core building blocks:
 - Middleware: ordered request/response modifiers (e.g., JWT auth, transforms)
 - Services/Backends: where work is performed (e.g., DICOMweb client, echo service)
 - Storage: project-local filesystem path (./tmp by default)
+- Hot-reload: automatic config updates with zero-downtime for most changes
 
 See [docs/configuration.md](docs/configuration.md), [docs/endpoints.md](docs/endpoints.md), [docs/middleware.md](docs/middleware.md), and [docs/backends.md](docs/backends.md) for details.
 

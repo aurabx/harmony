@@ -10,17 +10,18 @@ pub mod storage;
 pub mod storage_adapter;
 mod utils;
 
-use crate::adapters::dimse::DimseAdapter;
-use crate::adapters::http::HttpAdapter;
-use crate::adapters::ProtocolAdapter;
+use crate::adapters::registry::AdapterRegistry;
 use crate::config::config::Config;
+use crate::config::watcher::ConfigWatcher;
 use crate::storage::create_storage_backend;
-use std::net::SocketAddr;
 use std::sync::Arc;
-use tokio_util::sync::CancellationToken;
 use tracing_subscriber::{self, prelude::*};
 
 pub async fn run(config: Config) {
+    run_with_reload(config, None).await;
+}
+
+pub async fn run_with_reload(config: Config, config_path: Option<String>) {
     let config = Arc::new(config);
     crate::globals::set_config(config.clone());
 
@@ -54,67 +55,37 @@ pub async fn run(config: Config) {
 
     tracing::info!("🔧 Starting Harmony '{}'", config.proxy.id);
 
-    // Create shared shutdown token
-    let shutdown = CancellationToken::new();
-    let mut adapter_handles = Vec::new();
+    // Create adapter registry
+    let registry = Arc::new(AdapterRegistry::new());
 
     // Start protocol adapters for each network
-    for (network_name, network) in config.network.clone() {
-        let config_clone = Arc::clone(&config);
-        let shutdown_clone = shutdown.clone();
+    for network_name in config.network.keys() {
+        registry
+            .start_network(network_name.clone(), config.clone())
+            .await
+            .expect("Failed to start network");
+    }
 
-        // Create and start all adapters for this network
-        let adapters: Vec<Box<dyn ProtocolAdapter>> = vec![
-            // HTTP adapter
-            Box::new({
-                let bind_addr = format!("{}:{}", network.http.bind_address, network.http.bind_port)
-                    .parse::<SocketAddr>()
-                    .unwrap_or_else(|_| {
-                        panic!("Invalid bind address or port for network {}", network_name)
-                    });
-                HttpAdapter::new(network_name.clone(), bind_addr)
-            }),
-            // DIMSE adapter
-            Box::new(DimseAdapter::new(network_name.clone())),
-        ];
+    tracing::info!("✓ All adapters started. Press Ctrl+C to shutdown.");
 
-        // Start each adapter
-        for adapter in adapters {
-            match adapter.start(config_clone.clone(), shutdown_clone.clone()).await {
-                Ok(handle) => {
-                    tracing::info!(
-                        "🚀 Started {} for network '{}'",
-                        adapter.summary(),
-                        network_name
-                    );
-                    adapter_handles.push(handle);
-                }
-                Err(e) => {
-                    tracing::error!(
-                        "Failed to start {} for network '{}': {}",
-                        adapter.summary(),
-                        network_name,
-                        e
-                    );
-                }
+    // Start config watcher if config path provided
+    if let Some(path) = config_path {
+        let watcher = ConfigWatcher::new(path, registry.clone());
+        tokio::spawn(async move {
+            if let Err(e) = watcher.start().await {
+                tracing::error!("Config watcher error: {}", e);
             }
-        }
+        });
     }
 
     // Wait for ctrl-c signal
-    tracing::info!("✓ All adapters started. Press Ctrl+C to shutdown.");
     tokio::signal::ctrl_c()
         .await
         .expect("Failed to listen for ctrl-c signal");
 
     // Trigger shutdown
     tracing::info!("⏳ Shutting down...");
-    shutdown.cancel();
-
-    // Wait for all adapters to complete
-    for handle in adapter_handles {
-        let _ = handle.await;
-    }
+    registry.stop_all().await.expect("Failed to stop adapters");
 
     tracing::info!("✓ Harmony shut down gracefully.");
 }

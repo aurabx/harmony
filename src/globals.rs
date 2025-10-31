@@ -1,18 +1,22 @@
 use crate::config::config::Config;
 use crate::storage::StorageBackend;
+use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, RwLock};
 
-static CONFIG_CELL: Lazy<RwLock<Option<Arc<Config>>>> = Lazy::new(|| RwLock::new(None));
+/// Global configuration using ArcSwap for lock-free reads
+static CONFIG: Lazy<ArcSwap<Option<Config>>> = Lazy::new(|| ArcSwap::from_pointee(None));
 static STORAGE_CELL: Lazy<RwLock<Option<Arc<dyn StorageBackend>>>> = Lazy::new(|| RwLock::new(None));
 
+/// Set the global configuration (initial setup or reload)
 pub fn set_config(config: Arc<Config>) {
-    let mut cell = CONFIG_CELL.write().unwrap();
-    *cell = Some(config);
+    CONFIG.store(Arc::new(Some((*config).clone())));
 }
 
+/// Get the current configuration (lock-free read)
 pub fn get_config() -> Option<Arc<Config>> {
-    CONFIG_CELL.read().unwrap().clone()
+    let guard = CONFIG.load();
+    guard.as_ref().as_ref().map(|c| Arc::new(c.clone()))
 }
 
 pub fn set_storage(storage: Arc<dyn StorageBackend>) {

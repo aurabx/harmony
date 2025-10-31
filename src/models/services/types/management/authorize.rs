@@ -102,7 +102,7 @@ pub async fn handle_authorize(
             user_token,
             &request.gateway_code,
             request.machine_public_key.clone(),
-            request.metadata.clone(),
+            request.metadata.as_ref().map(|m| m.keys().cloned().collect()),
         )
         .await
         .map_err(|e| {

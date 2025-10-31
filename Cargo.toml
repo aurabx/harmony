@@ -19,7 +19,7 @@ dicom_json_tool = { path = "crates/dicom_json_tool" }
 harmony_transform = { path = "crates/transform" }
 harmony-filesystem = { path = "crates/filesystem" }
 harmony-database = { path = "crates/database" }
-runbeam-sdk = "0.1.0"
+runbeam-sdk = "0.3.0"
 
 #jmix-rs = { path = "../jmix/jmix-rust" }
 jmix-rs = "0.3"
@@ -61,6 +61,8 @@ anyhow = "1.0.100"
 tokio-util = "0.7.16"
 rustls = { version = "0.23", default-features = false, features = ["std"] }
 chrono = { version = "0.4", features = ["serde"] }
+notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
+arc-swap = "1.7"
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -145,6 +147,10 @@ path = "tests/http/http_backend.rs"
 [[test]]
 name = "http_echo_tests"
 path = "tests/http/smoke_http_echo.rs"
+
+[[test]]
+name = "config_reload_integration"
+path = "tests/config_reload_integration.rs"
 
 [profile.profiling]
 inherits = "release"
