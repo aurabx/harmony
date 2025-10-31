@@ -13,10 +13,13 @@ use serde_json::Value;
 use std::collections::HashMap;
 
 pub mod authorize;
+pub mod cloud_poller;
 pub mod config;
+pub mod config_status;
 pub mod info;
 pub mod pipelines;
 pub mod routes;
+pub mod token;
 
 #[derive(Debug, Deserialize)]
 pub struct ManagementEndpoint {}
@@ -70,6 +73,16 @@ impl ServiceType for ManagementEndpoint {
                 path: format!("/{}/authorize", base_path),
                 methods: vec![Method::POST],
                 description: Some("Authorize gateway with Runbeam Cloud".to_string()),
+            },
+            RouteConfig {
+                path: format!("/{}/config/status", base_path),
+                methods: vec![Method::GET],
+                description: Some("Get configuration status".to_string()),
+            },
+            RouteConfig {
+                path: format!("/{}/token", base_path),
+                methods: vec![Method::POST],
+                description: Some("Save machine token from CLI".to_string()),
             },
         ]
     }
@@ -164,13 +177,65 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                 // Handle gateway authorization
                 let auth_header = envelope.request_details.headers.get("authorization").map(|s| s.as_str());
 
-                // Get JWKS cache duration from global config (default to 24 hours if not available)
-                let jwks_cache_duration = crate::globals::get_config()
+                // Get configuration parameters from global config
+                let config = crate::globals::get_config();
+                let jwks_cache_duration = config
+                    .as_ref()
                     .map(|cfg| cfg.proxy.jwks_cache_duration_hours)
                     .unwrap_or(24);
+                let poll_interval = config
+                    .as_ref()
+                    .map(|cfg| cfg.management.poll_interval())
+                    .unwrap_or_else(|| std::time::Duration::from_secs(30));
+                let api_base_url = config
+                    .as_ref()
+                    .and_then(|cfg| cfg.management.cloud_api_base_url.clone())
+                    .unwrap_or_else(|| "https://api.runbeam.cloud".to_string());
 
-                match self::authorize::handle_authorize(auth_header, &envelope.original_data, jwks_cache_duration).await {
+                // Get adapter registry for cloud polling
+                let registry = crate::globals::get_adapter_registry()
+                    .ok_or_else(|| Error::from("Adapter registry not available"))?;
+
+                match self::authorize::handle_authorize(
+                    auth_header,
+                    &envelope.original_data,
+                    jwks_cache_duration,
+                    registry,
+                    poll_interval,
+                    api_base_url,
+                ).await {
                     Ok(value) => (value, 201),
+                    Err((status, message)) => {
+                        let error_json = serde_json::json!({
+                            "error": http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR).canonical_reason().unwrap_or("Error"),
+                            "message": message
+                        });
+                        (error_json, status)
+                    }
+                }
+            }
+            p if p == "config/status" || p == format!("{}/config/status", base_path) => {
+                // Handle config status
+                let registry = crate::globals::get_adapter_registry()
+                    .ok_or_else(|| Error::from("Adapter registry not available"))?;
+                let config_path = crate::globals::get_config_path()
+                    .unwrap_or_else(|| "./config/config.toml".to_string());
+
+                match self::config_status::handle_config_status(config_path, registry).await {
+                    Ok(value) => (value, 200),
+                    Err((status, message)) => {
+                        let error_json = serde_json::json!({
+                            "error": http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR).canonical_reason().unwrap_or("Error"),
+                            "message": message
+                        });
+                        (error_json, status)
+                    }
+                }
+            }
+            p if p == "token" || p == format!("{}/token", base_path) => {
+                // Handle token save from CLI
+                match self::token::handle_token_post(&envelope.original_data).await {
+                    Ok(value) => (value, 200),
                     Err((status, message)) => {
                         let error_json = serde_json::json!({
                             "error": http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR).canonical_reason().unwrap_or("Error"),

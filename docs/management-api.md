@@ -191,7 +191,8 @@ curl -X POST http://localhost:9090/admin/authorize \
   "metadata": {
     "version": "0.4.0",
     "os": "linux"
-  }
+  },
+  "encryption_key": "QUdFLVNFQ1JFVC1LRVktMTIzNDU2Nzg5MA=="
 }
 ```
 
@@ -199,6 +200,7 @@ curl -X POST http://localhost:9090/admin/authorize \
 - `gateway_code` (required): Gateway instance ID or code
 - `machine_public_key` (optional): Public key for secure communication
 - `metadata` (optional): Additional gateway metadata (version, OS, etc.)
+- `encryption_key` (optional): Base64-encoded age X25519 encryption key for token storage
 
 **Success Response (201 Created):**
 ```json
@@ -260,11 +262,99 @@ curl -X POST http://localhost:9090/admin/authorize \
 ```
 
 **Notes:**
-- The JWT token is obtained via the `runbeam login` CLI command
-- The JWT secret must match what Runbeam Cloud uses (set via `RUNBEAM_JWT_SECRET` env var)
-- The machine token is stored at `./tmp/runbeam/auth.json` by default
+- The JWT token is obtained via the `runbeam login` CLI command or as a Laravel Sanctum API token
+- Both JWT and Sanctum tokens are supported for authorization
+- Machine tokens are securely stored using:
+  - **OS Keyring** (macOS Keychain, Linux Secret Service, Windows Credential Manager) when available
+  - **Encrypted Filesystem** (`~/.runbeam/<gateway_code>/auth.json`) as fallback with age X25519 encryption
+  - Storage selection is automatic - no configuration needed
+- **Encryption Key Management:**
+  - If `encryption_key` is provided in the request, it will be used for token encryption
+  - If not provided, Harmony uses the `RUNBEAM_ENCRYPTION_KEY` environment variable
+  - If neither is set, the SDK auto-generates and stores a unique key per instance
+  - CLI-managed keys allow centralized encryption key management across Harmony instances
 - Machine tokens expire after 30 days and must be renewed
-- The Runbeam API base URL is extracted from the JWT's `iss` (issuer) claim
+- The Runbeam API base URL is extracted from the JWT's `iss` (issuer) claim (JWT tokens) or configured directly (Sanctum tokens)
+- Each gateway instance uses its `gateway_code` as the storage `instance_id` for isolated token storage
+
+### POST /{base_path}/token
+
+Save a machine token to the Harmony proxy. This endpoint is typically called by the `runbeam` CLI after authorizing a gateway with Runbeam Cloud.
+
+**Authentication Required:** No (relies on network security - localhost only)
+
+**Example Request:**
+```bash
+# Save machine token from CLI
+curl -X POST http://localhost:9090/admin/token \
+  -H "Content-Type: application/json" \
+  -d '{
+    "machine_token": "mt_abc123...",
+    "expires_at": "2025-11-24T12:48:46Z",
+    "gateway_id": "550e8400-e29b-41d4-a716-446655440000",
+    "gateway_code": "harmony-prod-01",
+    "abilities": ["gateway:read", "gateway:write"],
+    "encryption_key": "AGE-SECRET-KEY-1ABC..."
+  }'
+```
+
+**Request Body:**
+```json
+{
+  "machine_token": "mt_abc123...",
+  "expires_at": "2025-11-24T12:48:46Z",
+  "gateway_id": "550e8400-e29b-41d4-a716-446655440000",
+  "gateway_code": "harmony-prod-01",
+  "abilities": ["gateway:read", "gateway:write"],
+  "encryption_key": "AGE-SECRET-KEY-1ABC..."
+}
+```
+
+**Request Fields:**
+- `machine_token` (required): Machine token from Runbeam Cloud
+- `expires_at` (required): ISO 8601 timestamp when token expires
+- `gateway_id` (required): Gateway UUID from Runbeam Cloud
+- `gateway_code` (required): Gateway code/instance ID
+- `abilities` (optional): Token abilities/scopes
+- `encryption_key` (optional): Base64-encoded age encryption key for token storage
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Machine token saved successfully"
+}
+```
+
+**Error Responses:**
+
+**400 Bad Request** - Invalid request:
+```json
+{
+  "error": "Bad Request",
+  "message": "Machine token cannot be empty"
+}
+```
+
+**500 Internal Server Error** - Storage failure:
+```json
+{
+  "error": "Internal Server Error",
+  "message": "Failed to save token: <error details>"
+}
+```
+
+**Notes:**
+- This endpoint is called automatically by the `runbeam harmony:authorize` CLI command
+- If `encryption_key` is provided, it will be used to encrypt the token (via `RUNBEAM_ENCRYPTION_KEY` environment variable)
+- If no `encryption_key` is provided, Harmony will auto-generate one
+- The CLI manages encryption keys in the OS keyring for convenience
+- For manual authorization without the CLI, you can generate an age encryption key:
+  ```bash
+  # Generate a new encryption key
+  age-keygen
+  # Output: AGE-SECRET-KEY-1ABC...
+  ```
 
 ## Security Considerations
 

@@ -19,10 +19,11 @@ dicom_json_tool = { path = "crates/dicom_json_tool" }
 harmony_transform = { path = "crates/transform" }
 harmony-filesystem = { path = "crates/filesystem" }
 harmony-database = { path = "crates/database" }
-runbeam-sdk = "0.3.0"
 
 #jmix-rs = { path = "../jmix/jmix-rust" }
 jmix-rs = "0.3"
+runbeam-sdk = { path = "../runbeam-sdk" }
+#runbeam-sdk = "0.3.1"
 
 dicom-object = "0.9"
 dicom-pixeldata = { version = "0.9", features = ["image", "rle", "jpeg"] }

@@ -21,7 +21,8 @@ Highlights:
 - Authentication: JWT (recommend RS256 in production), optional Basic
 - Transformations: JSON transforms (JOLT), DICOM↔DICOMweb bridging, JMIX packaging
 - Runbeam Cloud Integration: Gateway authorization for autonomous API access with 30-day machine tokens
-- Operationally sound: structured logging, local ./tmp storage convention, file-system storage backend
+- Secure Token Storage: Automatic selection of OS keyring or encrypted filesystem (no configuration needed)
+- Operationally sound: structured logging, local ./tmp storage convention
 
 Status: under active development. For more information, visit https://harmonyproxy.com.
 
@@ -177,10 +178,83 @@ See [docs/configuration.md](docs/configuration.md), [docs/endpoints.md](docs/end
 
 ## Security
 - JWT: prefer RS256 with strict algorithm enforcement; validate exp/nbf/iat and iss/aud where applicable
-- Encryption: where applicable, AES-256-GCM with ephemeral public key, IV, and authentication tag encoded in base64
+- Encryption: AES-256-GCM with ephemeral public key, IV, and authentication tag encoded in base64
 - Secrets: do not commit secrets; use environment variables or secret managers
 - Temporary files: prefer ./tmp within the working directory
-See docs/security.md for guidance.
+
+**Key Environment Variables:**
+- `RUNBEAM_MACHINE_TOKEN`: Pre-provisioned machine token (JSON format) for headless deployments - bypasses `/admin/authorize`
+- `RUNBEAM_ENCRYPTION_KEY`: Encryption key for secure token storage in production/container deployments (base64-encoded age X25519 key)
+- `RUNBEAM_JWT_SECRET`: Shared secret for Runbeam Cloud JWT validation
+- `RUST_LOG`: Logging verbosity control
+
+See [Security Documentation](docs/security.md#environment-variables) for complete environment variable reference, generation commands (Linux/macOS), secret management integration (Vault, AWS, Azure), and production deployment examples.
+
+**Encryption Key Management:**
+
+Harmony Proxy supports flexible encryption key management for securing machine tokens with three options:
+
+**1. CLI-Managed Keys (Recommended for Multiple Instances)**
+
+The `runbeam-cli` can manage encryption keys for specific Harmony instances:
+
+```bash
+# Add instance with CLI-managed encryption key
+runbeam harmony:add my-instance https://my-instance.com --generate-key
+
+# Or provide your own key
+runbeam harmony:add my-instance https://my-instance.com \
+  --encryption-key AGE-SECRET-KEY-...
+
+# Manage keys after setup
+runbeam harmony:set-key my-instance AGE-SECRET-KEY-...
+runbeam harmony:show-key my-instance
+runbeam harmony:delete-key my-instance
+```
+
+The CLI stores keys in your OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager) and automatically sends them to Harmony's `/admin/authorize` endpoint during gateway authorization.
+
+**2. Environment Variable (Recommended for Single Instance/Container)**
+
+Set `RUNBEAM_ENCRYPTION_KEY` for the Harmony process:
+
+```bash
+export RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-...
+./harmony-proxy --config config.toml
+```
+
+This is ideal for containerized deployments where you want consistent encryption across restarts.
+
+**3. Auto-Generated Keys (Development/Fallback)**
+
+If neither CLI keys nor environment variables are provided, Harmony auto-generates and stores a unique encryption key per instance at `~/.runbeam/<proxy_id>/encryption.key` with 0600 permissions.
+
+**Priority Order:**
+1. CLI-provided key (via `/admin/authorize` request)
+2. `RUNBEAM_ENCRYPTION_KEY` environment variable
+3. Auto-generated key
+
+**Storage Backends:**
+- **OS Keyring** (preferred): Uses native credential storage when available
+- **Encrypted Filesystem** (fallback): `~/.runbeam/<proxy_id>/auth.json` encrypted with age X25519
+
+**Headless/Pre-Provisioned Deployments:**
+
+For fully automated deployments where you can't call `/admin/authorize`, provide the machine token directly:
+
+```bash
+# Export machine token as JSON
+export RUNBEAM_MACHINE_TOKEN='{"machine_token":"mt_abc...","expires_at":"2025-12-31T23:59:59Z","gateway_id":"gw-123","gateway_code":"prod-gw","abilities":[],"issued_at":"2025-01-01T00:00:00Z"}'
+
+# Optionally set encryption key for storage persistence
+export RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-...
+
+./harmony-proxy --config config.toml
+```
+
+Harmony will use `RUNBEAM_MACHINE_TOKEN` on startup and optionally persist it to storage if it needs to be reused. Priority: environment variable > stored token.
+
+See [Management API Documentation](docs/management-api.md#post-base_pathauthorize) for API details and [Security Documentation](docs/security.md) for key generation best practices.
 
 ## Contributing
 We welcome issues and pull requests! Please read [CONTRIBUTING.md](CONTRIBUTING.md) and [DEVELOPER.md](DEVELOPER.md) for workflow and development standards. Our community guidelines are defined in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

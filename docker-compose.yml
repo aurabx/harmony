@@ -10,5 +10,24 @@ services:
       - ./config:/etc/harmony:ro
       - ./tmp:/tmp/harmony
       - ./examples:/examples:ro
+    # Environment variables for runtime configuration
+    # For production deployments:
+    #   1. Generate encryption key: age-keygen | base64 | tr -d '\n'
+    #   2. Store secrets in .env file (DO NOT commit to version control)
+    #   3. Or use Docker secrets: docker secret create harmony_encryption_key <key-file>
+    # See docs/security.md for detailed setup instructions
     environment:
+      # Logging verbosity (info, debug, trace)
       - RUST_LOG=harmony=info
+      
+      # Encryption key for secure token storage (recommended for production)
+      # Ensures machine tokens persist across container restarts
+      # Without this, tokens are lost on container restart (acceptable for development)
+      # Generate: age-keygen | base64 | tr -d '\n' (macOS) or base64 -w 0 (Linux)
+      # - RUNBEAM_ENCRYPTION_KEY=${RUNBEAM_ENCRYPTION_KEY}
+      
+      # JWT secret for Runbeam Cloud authentication
+      # Required for production use with Runbeam Cloud integration
+      # Must match the secret configured in Runbeam Cloud
+      # Generate: openssl rand -base64 32
+      # - RUNBEAM_JWT_SECRET=${RUNBEAM_JWT_SECRET}
