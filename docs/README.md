@@ -15,6 +15,7 @@ Welcome to Harmony Proxy's documentation. Harmony is a general-purpose data mesh
 ## Integration & Features
 - DIMSE integration (DICOM SCU/SCP): dimse-integration.md (requires DCMTK)
 - Management API: management-api.md
+- Encryption key management: encryption-key-management.md
 - Testing (including DCMTK verbosity): testing.md
 - Security: security.md
 - System description: system-description.md

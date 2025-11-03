@@ -10,6 +10,7 @@ Harmony is a proxy/gateway that handles, transforms and proxies data between sys
 
 **Key Features:**
 - Multi-protocol support: HTTP passthrough, FHIR, JMIX, DICOM, DICOMweb (QIDO-RS/WADO-RS endpoints)
+- Hot configuration reload: zero-downtime updates for routes/middleware/backends, selective adapter restart for network changes
 - Configurable routing with groups, endpoints, backends, and middleware
 - JWT and basic authentication
 - Request/response transformation pipeline
@@ -124,6 +125,77 @@ cargo test --test config_validation
 # With logging enabled
 RUST_LOG=harmony=debug,info cargo test -- --nocapture
 ```
+
+## Hot Configuration Reload
+
+**Status**: Available since v0.4.0
+
+Harmony supports hot-reloading configuration changes without requiring a full application restart.
+
+### Quick Reference
+
+**Zero-downtime changes** (instant):
+- Middleware configuration (transforms, auth rules)
+- Route definitions (endpoints, backends, pipelines)
+- Backend URLs, timeouts
+- Logging settings
+- Storage configuration
+
+**Adapter restart required** (~1-2s interruption for affected networks):
+- Network bind addresses/ports
+- Adding/removing networks
+- WireGuard settings
+- Protocol-specific settings
+
+### How It Works
+
+1. File watcher monitors config file (200ms debounce)
+2. Changes validated before applying
+3. Diff computed to classify change impact
+4. For zero-downtime changes: atomic config swap via `ArcSwap`
+5. For network changes: selective adapter restart (only affected networks)
+6. Invalid configs rejected, old config retained
+
+### Automatic Reload
+
+Enabled by default - just edit and save your config file:
+
+```bash
+cargo run -- --config examples/test-config.toml
+# Edit config file in another window
+# Changes detected and applied automatically
+```
+
+### Monitoring
+
+Watch logs for reload events:
+```
+📡 Watching config file for changes: config.toml
+✓ Config reloaded successfully
+  Zero-downtime changes: ["middleware", "endpoints"]
+```
+
+For adapter restarts:
+```
+✓ Config reloaded successfully
+  Networks restarted: ["default"]
+```
+
+### Testing
+
+Integration tests verify hot-reload behavior:
+```bash
+cargo test --test config_reload_integration
+```
+
+Tests cover:
+- Zero-downtime middleware changes
+- Adapter restart on port change
+- Invalid config rejection
+- Network add/remove
+- Adapter registry lifecycle
+
+See [docs/config-reload.md](docs/config-reload.md) for full architecture details.
 
 ## Configuration Validation
 

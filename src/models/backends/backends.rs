@@ -3,7 +3,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct Backend {
     pub service: String, // The service type, e.g., "http", "fhir", "dicom", etc.
     #[serde(default)]

@@ -12,7 +12,7 @@ pub use harmony_database::{
 };
 
 /// Configuration for storage backend
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct StorageConfig {
     #[serde(default = "default_backend")]
     pub backend: String,
@@ -58,3 +58,6 @@ pub fn create_storage_backend(config: &StorageConfig) -> StorageResult<Arc<dyn S
         ))),
     }
 }
+
+#[cfg(test)]
+mod tests;

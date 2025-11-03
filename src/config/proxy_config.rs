@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 /// Represents the configuration for the proxy
-#[derive(Debug, Deserialize, Default)]
+#[derive(Debug, Deserialize, Default, Clone)]
 pub struct ProxyConfig {
     pub id: String,
     #[serde(default = "default_log_level")]

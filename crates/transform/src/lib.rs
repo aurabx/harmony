@@ -1,4 +1,4 @@
-use fluvio_jolt::{transform, TransformSpec};
+use harmony_jolt::{transform, TransformSpec};
 use serde::Deserialize;
 use serde_json::Value;
 use std::path::Path;

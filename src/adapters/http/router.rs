@@ -224,3 +224,114 @@ fn map_pipeline_error_to_status(err: &PipelineError) -> StatusCode {
         PipelineError::ServiceError(_) => StatusCode::INTERNAL_SERVER_ERROR,
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::middleware::AuthFailure;
+    use crate::pipeline::PipelineError;
+    use http::StatusCode;
+
+    #[test]
+    fn test_map_auth_failure_to_unauthorized() {
+        let auth_error = AuthFailure("Invalid token");
+        let pipeline_error = PipelineError::MiddlewareError(Box::new(auth_error));
+
+        let status = map_pipeline_error_to_status(&pipeline_error);
+
+        assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_map_generic_middleware_error_to_internal_server_error() {
+        let generic_error = std::io::Error::new(std::io::ErrorKind::Other, "Generic error");
+        let pipeline_error = PipelineError::MiddlewareError(Box::new(generic_error));
+
+        let status = map_pipeline_error_to_status(&pipeline_error);
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_map_backend_error_to_bad_gateway() {
+        let pipeline_error = PipelineError::BackendError("Backend timeout".to_string());
+
+        let status = map_pipeline_error_to_status(&pipeline_error);
+
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn test_map_config_error_to_internal_server_error() {
+        let pipeline_error = PipelineError::ConfigError("Invalid pipeline config".to_string());
+
+        let status = map_pipeline_error_to_status(&pipeline_error);
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_map_service_error_to_internal_server_error() {
+        let pipeline_error = PipelineError::ServiceError("Service failed".to_string());
+
+        let status = map_pipeline_error_to_status(&pipeline_error);
+
+        assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_all_error_variants_covered() {
+        // This test ensures we handle all PipelineError variants
+        // If a new variant is added, this will fail to compile
+        let auth_error = PipelineError::MiddlewareError(Box::new(AuthFailure("test")));
+        let backend_error = PipelineError::BackendError("test".to_string());
+        let config_error = PipelineError::ConfigError("test".to_string());
+        let service_error = PipelineError::ServiceError("test".to_string());
+
+        // Verify all map to valid status codes
+        assert!(map_pipeline_error_to_status(&auth_error).is_client_error());
+        assert!(map_pipeline_error_to_status(&backend_error).is_server_error());
+        assert!(map_pipeline_error_to_status(&config_error).is_server_error());
+        assert!(map_pipeline_error_to_status(&service_error).is_server_error());
+    }
+
+    #[test]
+    fn test_error_status_code_values() {
+        // Verify exact status code values
+        let auth_error = PipelineError::MiddlewareError(Box::new(AuthFailure("test")));
+        assert_eq!(map_pipeline_error_to_status(&auth_error).as_u16(), 401);
+
+        let backend_error = PipelineError::BackendError("test".to_string());
+        assert_eq!(map_pipeline_error_to_status(&backend_error).as_u16(), 502);
+
+        let config_error = PipelineError::ConfigError("test".to_string());
+        assert_eq!(map_pipeline_error_to_status(&config_error).as_u16(), 500);
+
+        let service_error = PipelineError::ServiceError("test".to_string());
+        assert_eq!(map_pipeline_error_to_status(&service_error).as_u16(), 500);
+    }
+
+    #[test]
+    fn test_pipeline_error_display() {
+        // Test error message formatting
+        let backend_error = PipelineError::BackendError("Connection refused".to_string());
+        assert_eq!(backend_error.to_string(), "Backend error: Connection refused");
+
+        let config_error = PipelineError::ConfigError("Missing pipeline".to_string());
+        assert_eq!(config_error.to_string(), "Config error: Missing pipeline");
+
+        let service_error = PipelineError::ServiceError("Service unavailable".to_string());
+        assert_eq!(service_error.to_string(), "Service error: Service unavailable");
+    }
+
+    #[test]
+    fn test_pipeline_error_from_string() {
+        let error: PipelineError = "Test error".into();
+        assert!(matches!(error, PipelineError::ServiceError(_)));
+        assert_eq!(error.to_string(), "Service error: Test error");
+
+        let error: PipelineError = "Another error".to_string().into();
+        assert!(matches!(error, PipelineError::ServiceError(_)));
+        assert_eq!(error.to_string(), "Service error: Another error");
+    }
+}

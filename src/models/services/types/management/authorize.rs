@@ -1,8 +1,10 @@
-use runbeam_sdk::{extract_bearer_token, validate_jwt_token, save_token, MachineToken, RunbeamClient, ApiError, RunbeamError};
-use crate::storage_adapter::StorageAdapter;
+use runbeam_sdk::{extract_bearer_token, validate_jwt_token, save_token, save_token_with_key, MachineToken, RunbeamClient, ApiError, RunbeamError};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
+use std::sync::Arc;
+use std::time::Duration;
+use crate::adapters::registry::AdapterRegistry;
 
 /// Request body for gateway authorization
 #[derive(Debug, Deserialize)]
@@ -15,6 +17,11 @@ pub struct AuthorizeRequest {
     /// Optional metadata about the gateway
     #[serde(default)]
     pub metadata: Option<HashMap<String, JsonValue>>,
+    /// Optional encryption key for token storage (base64-encoded age X25519 key)
+    /// If provided, this key will be used to encrypt the machine token.
+    /// If not provided, Harmony will use RUNBEAM_ENCRYPTION_KEY env var or auto-generate a key.
+    #[serde(default)]
+    pub encryption_key: Option<String>,
 }
 
 /// Response for successful authorization
@@ -52,11 +59,15 @@ pub struct ErrorResponse {
 /// 1. Extracts and validates the JWT token from Authorization header (RS256)
 /// 2. Calls Runbeam Cloud API to exchange user token for machine token
 /// 3. Stores the machine token locally
-/// 4. Returns success response with gateway details
+/// 4. Starts cloud polling immediately
+/// 5. Returns success response with gateway details
 pub async fn handle_authorize(
     auth_header: Option<&str>,
     body: &[u8],
     jwks_cache_duration_hours: u64,
+    registry: Arc<AdapterRegistry>,
+    poll_interval: Duration,
+    api_base_url_override: String,
 ) -> Result<serde_json::Value, (u16, String)> {
     tracing::info!("Processing gateway authorization request");
 
@@ -82,19 +93,20 @@ pub async fn handle_authorize(
     tracing::info!("Authorizing gateway: {}", request.gateway_code);
 
     // Validate JWT using RS256 with JWKS
-    let claims = validate_jwt_token(user_token, jwks_cache_duration_hours)
+    let _claims = validate_jwt_token(user_token, jwks_cache_duration_hours)
         .await
         .map_err(|e| {
             tracing::error!("JWT validation failed: {}", e);
             (401, format!("Invalid or expired token: {}", e))
         })?;
 
-    // Extract Runbeam API base URL from JWT issuer claim
-    let api_base_url = claims.api_base_url();
+    // Use the override API base URL provided by the caller (from config)
+    // This is the base URL that will be used for both the authorization call and cloud polling
+    let api_base_url = api_base_url_override;
     tracing::debug!("Runbeam API base URL: {}", api_base_url);
 
     // Create Runbeam Cloud API client
-    let client = RunbeamClient::new(api_base_url);
+    let client = RunbeamClient::new(api_base_url.clone());
 
     // Call Runbeam Cloud API to authorize gateway
     let auth_response = client
@@ -102,7 +114,7 @@ pub async fn handle_authorize(
             user_token,
             &request.gateway_code,
             request.machine_public_key.clone(),
-            request.metadata.clone(),
+            request.metadata.as_ref().map(|m| m.keys().cloned().collect()),
         )
         .await
         .map_err(|e| {
@@ -137,22 +149,39 @@ pub async fn handle_authorize(
         auth_response.abilities.clone(),
     );
 
-    // Save machine token to storage
-    let storage = crate::globals::get_storage().ok_or_else(|| {
-        tracing::error!("Storage backend not initialized");
-        (500, "Internal server error: storage not available".to_string())
-    })?;
+    // Get proxy ID for instance isolation
+    let proxy_id = crate::globals::get_config()
+        .map(|config| config.proxy.id.clone())
+        .unwrap_or_else(|| "harmony".to_string());
 
-    // Wrap the harmony-filesystem storage with an adapter for runbeam-sdk compatibility
-    let adapter = StorageAdapter::new(storage.as_ref());
-    save_token(&adapter, &machine_token)
-        .await
-        .map_err(|e| {
-            tracing::error!("Failed to save machine token: {}", e);
-            (500, format!("Failed to save token: {}", e))
-        })?;
+    // Save machine token using appropriate method based on whether encryption key was provided
+    if let Some(ref encryption_key) = request.encryption_key {
+        tracing::debug!("Using encryption key provided by CLI");
+        save_token_with_key(&proxy_id, &machine_token, encryption_key)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to save machine token with provided key: {}", e);
+                (500, format!("Failed to save token: {}", e))
+            })?;
+    } else {
+        tracing::debug!("No encryption key provided, using default key management");
+        save_token(&proxy_id, "auth", &machine_token)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to save machine token: {}", e);
+                (500, format!("Failed to save token: {}", e))
+            })?;
+    }
 
     tracing::info!("Machine token saved successfully");
+
+    // Start cloud polling with the new machine token
+    start_cloud_polling_task(
+        api_base_url,
+        machine_token.machine_token.clone(),
+        poll_interval,
+        registry,
+    );
 
     // Build success response
     let response = AuthorizeResponse {
@@ -187,6 +216,7 @@ mod tests {
         assert_eq!(request.gateway_code, "test-gateway-123");
         assert!(request.machine_public_key.is_none());
         assert!(request.metadata.is_none());
+        assert!(request.encryption_key.is_none());
     }
 
     #[test]
@@ -197,13 +227,15 @@ mod tests {
             "metadata": {
                 "version": "0.4.0",
                 "os": "macos"
-            }
+            },
+            "encryption_key": "QUdFLVNFQ1JFVC1LRVktMTIzNDU2Nzg5MA=="
         }"#;
 
         let request: AuthorizeRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.gateway_code, "test-gateway-123");
         assert_eq!(request.machine_public_key.as_deref(), Some("pubkey123"));
         assert!(request.metadata.is_some());
+        assert_eq!(request.encryption_key.as_deref(), Some("QUdFLVNFQ1JFVC1LRVktMTIzNDU2Nzg5MA=="));
     }
 
     #[test]
@@ -236,4 +268,41 @@ mod tests {
         assert!(json.contains("\"error\":\"Unauthorized\""));
         assert!(json.contains("\"message\":\"Invalid or expired token\""));
     }
+}
+
+/// Start cloud polling task in the background
+///
+/// This function spawns a tokio task that continuously polls Runbeam Cloud
+/// for pending config changes.
+fn start_cloud_polling_task(
+    api_base_url: String,
+    machine_token: String,
+    poll_interval: Duration,
+    registry: Arc<AdapterRegistry>,
+) {
+    tracing::info!(
+        "🌥️  Starting cloud config polling after successful authorization (interval: {:?})",
+        poll_interval
+    );
+
+    // Create a new cancellation token for this polling session
+    let shutdown = tokio_util::sync::CancellationToken::new();
+    
+    // Store the cancellation token globally so it can be cancelled later
+    crate::globals::set_cloud_polling_token(shutdown.clone());
+
+    // Create Runbeam API client
+    let client = RunbeamClient::new(api_base_url);
+
+    // Spawn the cloud polling task
+    tokio::spawn(async move {
+        super::cloud_poller::start_cloud_polling(
+            client,
+            machine_token,
+            poll_interval,
+            registry,
+            shutdown,
+        )
+        .await;
+    });
 }

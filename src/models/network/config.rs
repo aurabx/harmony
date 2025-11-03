@@ -1,6 +1,6 @@
 use serde::Deserialize;
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 #[serde(default)]
 pub struct NetworkConfig {
     #[serde(default = "default_enable_wireguard")]
@@ -19,7 +19,7 @@ fn default_interface() -> String {
     "wg0".to_string()
 }
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(default)]
 pub struct HttpConfig {
     #[serde(default = "default_bind_address")]

@@ -92,6 +92,52 @@ Conventions
 - Temporary files: prefer ./tmp within the working directory over /tmp
 - Logging: use RUST_LOG=harmony=debug,info for local debugging
 
+## Environment Variables
+
+Harmony uses environment variables for runtime configuration and security settings. These are optional for local development but recommended for production deployments.
+
+### Quick Reference
+
+| Variable | Purpose | Required | Default | Example |
+|----------|---------|----------|---------|--------|
+| `RUST_LOG` | Logging verbosity | No | `info` | `harmony=debug,info` |
+| `RUNBEAM_ENCRYPTION_KEY` | Token storage encryption key | No (containers: recommended) | Auto-generated | `$(age-keygen \| base64)` |
+| `RUNBEAM_JWT_SECRET` | JWT validation secret for Runbeam Cloud | No (production: yes) | Development default | `your-secret-key` |
+| `RUNBEAM_DISABLE_KEYRING` | Force encrypted filesystem storage | No (testing only) | Not set | `1` |
+
+### Local Development Example
+
+```bash
+# Set logging level for detailed output
+export RUST_LOG=harmony=debug,info
+
+# Run with example configuration
+cargo run -- --config examples/basic-echo/config.toml
+```
+
+### Production Container Example
+
+```bash
+# Generate encryption key for persistent token storage
+export RUNBEAM_ENCRYPTION_KEY=$(age-keygen | base64 | tr -d '\n')
+
+# Set JWT secret (must match Runbeam Cloud)
+export RUNBEAM_JWT_SECRET="your-production-secret"
+
+# Set production logging level
+export RUST_LOG=harmony=info
+
+# Run Harmony
+cargo run --release -- --config /etc/harmony/config.toml
+```
+
+**Notes**:
+- **RUNBEAM_ENCRYPTION_KEY**: In containers without OS keyring, this ensures tokens survive restarts. Without it, tokens are lost when container restarts. See [Security Documentation](security.md#runbeam_encryption_key) for platform-specific generation commands.
+- **RUNBEAM_JWT_SECRET**: Required for Runbeam Cloud integration. Falls back to insecure development default with warning.
+- **RUST_LOG**: Controls tracing output. Use `debug` for development, `info` for production.
+
+For comprehensive environment variable documentation, security best practices, and production deployment examples, see [Security Documentation](security.md#environment-variables).
+
 Next steps
 - Read [adapters.md](adapters.md) to understand protocol adapters (HTTP, DIMSE, and how to add new protocols)
 - Read [configuration.md](configuration.md) for config structure and pipeline files

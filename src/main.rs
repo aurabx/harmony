@@ -25,9 +25,9 @@ fn parse_cli_config_path() -> String {
 async fn main() {
     // Parse --config/-c from CLI or fall back to ./config/config.toml
     let config_path = parse_cli_config_path();
-    let cli = Cli::new(config_path);
+    let cli = Cli::new(config_path.clone());
     let config = Config::from_args(cli);
 
-    // Pass the Config into your application logic
-    harmony::run(config).await;
+    // Pass the Config and config path for hot-reload support
+    harmony::run_with_reload(config, Some(config_path)).await;
 }

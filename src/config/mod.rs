@@ -2,6 +2,8 @@
 pub mod config;
 mod logging_config;
 mod proxy_config;
+pub mod reload;
+pub mod watcher;
 mod tests;
 
 /// Structure representing application startup arguments or metadata.

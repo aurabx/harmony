@@ -1,5 +1,6 @@
 pub mod dimse;
 pub mod http;
+pub mod registry;
 
 use crate::config::config::Config;
 use crate::models::protocol::Protocol;
