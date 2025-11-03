@@ -147,5 +147,32 @@ mod tests {
         );
         
         assert_eq!(watcher.config_path, "test-config.toml");
+        assert_eq!(watcher.debounce_duration, Duration::from_millis(200));
     }
+
+    #[tokio::test]
+    async fn test_watcher_debounce_duration() {
+        let registry = Arc::new(AdapterRegistry::new());
+        let watcher = ConfigWatcher::new(
+            "config.toml".to_string(),
+            registry,
+        );
+        
+        // Verify default debounce duration is 200ms
+        assert_eq!(watcher.debounce_duration, Duration::from_millis(200));
+    }
+
+    #[test]
+    fn test_watcher_has_correct_debounce() {
+        // Verify debounce duration is exactly 200ms as specified
+        let registry = Arc::new(AdapterRegistry::new());
+        let watcher = ConfigWatcher::new("test.toml".to_string(), registry);
+        
+        assert_eq!(watcher.debounce_duration.as_millis(), 200);
+    }
+
+    // Note: More comprehensive integration tests for config reloading
+    // are in tests/config_reload_integration.rs which handles the full
+    // config lifecycle including validation, diff computation, and
+    // adapter registry coordination.
 }

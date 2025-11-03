@@ -153,6 +153,14 @@ path = "tests/http/smoke_http_echo.rs"
 name = "config_reload_integration"
 path = "tests/config_reload_integration.rs"
 
+[[test]]
+name = "cloud_poller_integration"
+path = "tests/cloud_poller_integration.rs"
+
+[[test]]
+name = "adapter_registry_integration"
+path = "tests/adapter_registry_integration.rs"
+
 [profile.profiling]
 inherits = "release"
 debug = true
