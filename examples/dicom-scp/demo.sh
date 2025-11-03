@@ -220,8 +220,8 @@ echo ""
 
 # Test 1: C-ECHO
 echo -e "${YELLOW}Test 1: C-ECHO (Verification)${NC}"
-echo "  Command: echoscu -aec $HARMONY_AET 127.0.0.1 $HARMONY_PORT"
-if echoscu -aec $HARMONY_AET 127.0.0.1 $HARMONY_PORT 2>&1 | grep -q "Association Accepted"; then
+echo "  Command: echoscu -v -aec $HARMONY_AET 127.0.0.1 $HARMONY_PORT"
+if echoscu -v -aec $HARMONY_AET 127.0.0.1 $HARMONY_PORT 2>&1 | grep -q "Association Accepted"; then
     echo -e "${GREEN}  ✓ C-ECHO successful${NC}"
 else
     echo -e "${RED}  ✗ C-ECHO failed${NC}"
@@ -230,9 +230,9 @@ echo ""
 
 # Test 2: C-FIND Patient Level
 echo -e "${YELLOW}Test 2: C-FIND (Patient Query)${NC}"
-echo "  Command: findscu -aec $HARMONY_AET -P 127.0.0.1 $HARMONY_PORT -k 0010,0020=\"*\""
-findscu -aec $HARMONY_AET -P 127.0.0.1 $HARMONY_PORT -k "0010,0020=*" > "$TMP_DIR/find_output.txt" 2>&1
-if grep -q "Association Release" "$TMP_DIR/find_output.txt"; then
+echo "  Command: findscu -v -aec $HARMONY_AET -P 127.0.0.1 $HARMONY_PORT -k 0010,0020=\"*\""
+findscu -v -aec $HARMONY_AET -P 127.0.0.1 $HARMONY_PORT -k "0010,0020=*" > "$TMP_DIR/find_output.txt" 2>&1
+if grep -q "Releasing Association" "$TMP_DIR/find_output.txt"; then
     MATCHES=$(grep -c "Response:" "$TMP_DIR/find_output.txt" || echo 0)
     echo -e "${GREEN}  ✓ C-FIND completed ($MATCHES responses)${NC}"
 else
@@ -242,9 +242,9 @@ echo ""
 
 # Test 3: C-FIND Study Level
 echo -e "${YELLOW}Test 3: C-FIND (Study Query)${NC}"
-echo "  Command: findscu -aec $HARMONY_AET -S 127.0.0.1 $HARMONY_PORT -k 0020,000D=\"*\""
-findscu -aec $HARMONY_AET -S 127.0.0.1 $HARMONY_PORT -k "0020,000D=*" > "$TMP_DIR/find_study_output.txt" 2>&1
-if grep -q "Association Release" "$TMP_DIR/find_study_output.txt"; then
+echo "  Command: findscu -v -aec $HARMONY_AET -S 127.0.0.1 $HARMONY_PORT -k 0020,000D=\"*\""
+findscu -v -aec $HARMONY_AET -S 127.0.0.1 $HARMONY_PORT -k "0020,000D=*" > "$TMP_DIR/find_study_output.txt" 2>&1
+if grep -q "Releasing Association" "$TMP_DIR/find_study_output.txt"; then
     MATCHES=$(grep -c "Response:" "$TMP_DIR/find_study_output.txt" || echo 0)
     echo -e "${GREEN}  ✓ C-FIND Study completed ($MATCHES responses)${NC}"
 else
