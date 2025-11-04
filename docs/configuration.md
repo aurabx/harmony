@@ -274,9 +274,36 @@ Changes are retrieved from the `/api/harmony/config-changes` endpoint and proces
 4. For each change:
    - Fetch full change details (including TOML content)
    - Acknowledge receipt to Cloud
+   - **Extract and download transforms** (if configuration references transform middleware)
    - Write TOML config to appropriate file location
    - File watcher detects change and triggers hot reload
    - Report success/failure back to Cloud
+
+### Automatic Transform Download
+
+When a cloud-sourced configuration references transform middleware (via `spec_path` in middleware options), Harmony automatically downloads the JOLT specifications before applying the configuration:
+
+1. **Extract Transform IDs**: Parse the TOML configuration to find all transform middleware sections
+2. **Download Specifications**: For each transform ID, call the Runbeam Cloud Transform API to retrieve the JOLT specification
+3. **Write to Disk**: Save transform files to the configured `transforms_path` directory (default: `transforms/`)
+4. **Overwrite Existing**: Transform files with the same ID are overwritten with the latest version
+5. **Validate Before Apply**: If any transform download fails, the entire config change is marked as failed and reported to Cloud
+
+This ensures that all transform specifications are available and up-to-date before the configuration is applied, preventing runtime errors due to missing transform files.
+
+**Example Middleware Configuration**:
+```toml
+[middleware.patient_transform]
+id = "01k81xgtn1hnbkfseyd82nar0m"
+type = "transform"
+
+[middleware.patient_transform.options]
+spec_path = "01k81xczrw551e1qj9rgrf0319.json"  # Transform ID - automatically downloaded
+apply = "both"
+fail_on_error = true
+```
+
+The gateway will automatically download the JOLT specification for transform `01k81xczrw551e1qj9rgrf0319` and save it to `transforms/01k81xczrw551e1qj9rgrf0319.json` before applying the pipeline configuration.
 
 ### Configuration
 

@@ -105,6 +105,15 @@ Error handling: Authentication failures (missing/invalid/expired tokens) return 
 ### Transform (JOLT)
 Applies JSON-to-JSON transformations using JOLT specifications. Supports configurable application on request/response sides with error handling options.
 
+**Cloud Integration**: When configurations are sourced from Runbeam Cloud, transform specifications (JOLT files) are automatically downloaded before the configuration is applied. The gateway:
+- Extracts transform IDs from middleware `spec_path` fields
+- Downloads JOLT specifications from Runbeam Cloud Transform API
+- Writes transform files to the configured `transforms_path` directory
+- Overwrites existing transforms with the same ID
+- Fails the config change if any transform download fails
+
+This ensures that all referenced transform specifications are available before pipeline execution begins. For manual configurations, transform files must be provided separately in the transforms directory.
+
 ## Path Filter
 
 Filters incoming requests based on URL path patterns using matchit syntax. Requests that don't match any configured rule are rejected with HTTP 404 and backend processing is skipped.

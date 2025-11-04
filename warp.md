@@ -301,6 +301,7 @@ When enabled, the gateway will:
 - Check for existing machine tokens at startup
 - Poll Runbeam Cloud for configuration changes
 - Apply cloud-sourced configuration updates automatically
+- Automatically download referenced transform specifications before applying configs
 - Require authorization via `/admin/authorize` endpoint
 
 ### Logging Configuration

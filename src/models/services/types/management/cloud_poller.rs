@@ -1,6 +1,8 @@
 use crate::adapters::registry::AdapterRegistry;
 use crate::globals;
 use runbeam_sdk::{MachineToken, RunbeamClient, load_token};
+use std::collections::HashSet;
+use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
 use tokio::time::sleep;
@@ -140,6 +142,76 @@ async fn poll_and_apply_changes(
             // Continue anyway - we still want to try applying
         }
 
+        // Determine transforms directory path
+        let config_path = globals::get_config_path()
+            .unwrap_or_else(|| "./config/config.toml".to_string());
+        let config_dir = std::path::Path::new(&config_path)
+            .parent()
+            .unwrap_or_else(|| std::path::Path::new("."));
+        
+        let transforms_path = globals::get_config()
+            .map(|c| c.proxy.transforms_path.clone())
+            .unwrap_or_else(|| "transforms".to_string());
+        
+        let transforms_dir = config_dir.join(transforms_path);
+
+        // Extract and fetch transforms before writing config
+        match extract_transform_ids(&detail.toml_config) {
+            Ok(transform_ids) if !transform_ids.is_empty() => {
+                tracing::info!(
+                    "Config change {} requires {} transform(s)",
+                    detail.id,
+                    transform_ids.len()
+                );
+                
+                // Fetch and write transforms
+                if let Err(e) = fetch_and_write_transforms(
+                    client,
+                    gateway_token,
+                    transform_ids,
+                    &transforms_dir,
+                )
+                .await
+                {
+                    tracing::error!(
+                        "✗ Failed to download transforms for config change {}: {}",
+                        detail.id,
+                        e
+                    );
+                    
+                    // Report failure to cloud and skip config write
+                    if let Err(report_err) = client
+                        .report_config_failed(
+                            gateway_token,
+                            &detail.id,
+                            &format!("Transform download failed: {}", e),
+                        )
+                        .await
+                    {
+                        tracing::warn!(
+                            "Failed to report transform error for {}: {}",
+                            detail.id,
+                            report_err
+                        );
+                    }
+                    
+                    // Skip to next change
+                    continue;
+                }
+            }
+            Ok(_) => {
+                tracing::debug!("No transforms required for config change {}", detail.id);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    "Failed to extract transform IDs from config {}: {}. Continuing anyway.",
+                    detail.id,
+                    e
+                );
+                // Continue - config might still be valid without transforms
+            }
+        }
+
         // Write config file (file watcher will detect and apply)
         match write_cloud_config(&detail.id, &detail.toml_config).await {
             Ok(()) => {
@@ -223,6 +295,145 @@ async fn write_cloud_config(
         tracing::warn!("Failed to write backup config to {}: {}", backup_path, e);
     } else {
         tracing::debug!("Backup saved to {}", backup_path);
+    }
+
+    Ok(())
+}
+
+/// Extract transform IDs from TOML configuration
+///
+/// Parses the TOML configuration string and extracts all transform IDs referenced
+/// in middleware sections. Returns a unique list of transform IDs that need to be
+/// downloaded from Runbeam Cloud.
+///
+/// # Arguments
+///
+/// * `toml_config` - The TOML configuration string
+///
+/// # Returns
+///
+/// * `Ok(Vec<String>)` - List of unique transform IDs (without .json extension)
+/// * `Err(String)` - Error message if TOML parsing fails critically
+fn extract_transform_ids(toml_config: &str) -> Result<Vec<String>, String> {
+    // Parse TOML configuration
+    let config: toml::Value = toml::from_str(toml_config)
+        .map_err(|e| format!("Failed to parse TOML config: {}", e))?;
+
+    let mut transform_ids = HashSet::new();
+
+    // Navigate to middleware section
+    if let Some(middleware) = config.get("middleware").and_then(|v| v.as_table()) {
+        // Iterate through each middleware entry
+        for (_middleware_name, middleware_config) in middleware {
+            // Check if this is a transform middleware
+            if let Some(middleware_type) = middleware_config.get("type").and_then(|v| v.as_str()) {
+                if middleware_type == "transform" {
+                    // Extract spec_path from options
+                    if let Some(spec_path) = middleware_config
+                        .get("options")
+                        .and_then(|opts| opts.get("spec_path"))
+                        .and_then(|v| v.as_str())
+                    {
+                        // Extract transform ID from spec_path
+                        // Handle both "id.json" and "path/to/id.json" formats
+                        let filename = spec_path
+                            .rsplit('/')
+                            .next()
+                            .unwrap_or(spec_path);
+                        
+                        // Remove .json extension if present
+                        let transform_id = filename.strip_suffix(".json").unwrap_or(filename);
+                        
+                        if !transform_id.is_empty() {
+                            transform_ids.insert(transform_id.to_string());
+                            tracing::debug!("Found transform reference: {}", transform_id);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    let ids: Vec<String> = transform_ids.into_iter().collect();
+    
+    if !ids.is_empty() {
+        tracing::info!("Extracted {} unique transform ID(s) from config", ids.len());
+    } else {
+        tracing::debug!("No transform middleware found in config");
+    }
+
+    Ok(ids)
+}
+
+/// Fetch transforms from Runbeam Cloud and write them to disk
+///
+/// Downloads JOLT transformation specifications from Runbeam Cloud and writes
+/// them as JSON files in the transforms directory. Existing files are overwritten.
+///
+/// # Arguments
+///
+/// * `client` - Runbeam API client
+/// * `gateway_token` - Machine token for authentication
+/// * `transform_ids` - List of transform IDs to fetch
+/// * `transforms_dir` - Directory to write transform files
+///
+/// # Returns
+///
+/// * `Ok(())` - All transforms fetched and written successfully
+/// * `Err(String)` - Error message if any transform fetch or write fails
+async fn fetch_and_write_transforms(
+    client: &RunbeamClient,
+    gateway_token: &str,
+    transform_ids: Vec<String>,
+    transforms_dir: &Path,
+) -> Result<(), String> {
+    if transform_ids.is_empty() {
+        return Ok(());
+    }
+
+    // Create transforms directory if it doesn't exist
+    std::fs::create_dir_all(transforms_dir)
+        .map_err(|e| format!("Failed to create transforms directory: {}", e))?;
+
+    tracing::info!(
+        "Downloading {} transform(s) to {}",
+        transform_ids.len(),
+        transforms_dir.display()
+    );
+
+    // Fetch and write each transform
+    for transform_id in transform_ids {
+        tracing::debug!("Fetching transform: {}", transform_id);
+
+        // Fetch transform from API
+        let transform_response = client
+            .get_transform(gateway_token, &transform_id)
+            .await
+            .map_err(|e| {
+                format!("Failed to fetch transform {}: {}", transform_id, e)
+            })?;
+
+        // Extract JOLT specification from response
+        let jolt_spec = transform_response
+            .data
+            .options
+            .as_ref()
+            .and_then(|opts| opts.instructions.as_ref())
+            .ok_or_else(|| {
+                format!(
+                    "Transform {} does not contain instructions field",
+                    transform_id
+                )
+            })?;
+
+        // Write transform to file
+        let filename = format!("{}.json", transform_id);
+        let file_path = transforms_dir.join(&filename);
+        
+        std::fs::write(&file_path, jolt_spec)
+            .map_err(|e| format!("Failed to write transform file {}: {}", filename, e))?;
+
+        tracing::info!("✓ Downloaded transform: {} -> {}", transform_id, filename);
     }
 
     Ok(())
