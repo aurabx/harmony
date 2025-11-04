@@ -175,42 +175,58 @@ impl ServiceHandler<Value> for ManagementEndpoint {
             }
             p if p == "authorize" || p == format!("{}/authorize", base_path) => {
                 // Handle gateway authorization
-                let auth_header = envelope.request_details.headers.get("authorization").map(|s| s.as_str());
-
-                // Get configuration parameters from global config
+                // First check if Runbeam Cloud integration is enabled
                 let config = crate::globals::get_config();
-                let jwks_cache_duration = config
+                
+                // Check if runbeam is enabled
+                let runbeam_enabled = config
                     .as_ref()
-                    .map(|cfg| cfg.proxy.jwks_cache_duration_hours)
-                    .unwrap_or(24);
-                let poll_interval = config
-                    .as_ref()
-                    .map(|cfg| cfg.management.poll_interval())
-                    .unwrap_or_else(|| std::time::Duration::from_secs(30));
-                let api_base_url = config
-                    .as_ref()
-                    .and_then(|cfg| cfg.management.cloud_api_base_url.clone())
-                    .unwrap_or_else(|| "https://api.runbeam.cloud".to_string());
+                    .map(|cfg| cfg.runbeam.enabled)
+                    .unwrap_or(false);
+                
+                if !runbeam_enabled {
+                    let error_json = serde_json::json!({
+                        "error": "Forbidden",
+                        "message": "Runbeam Cloud integration is disabled. Set runbeam.enabled=true in configuration to use this endpoint."
+                    });
+                    (error_json, 403)
+                } else {
+                    let auth_header = envelope.request_details.headers.get("authorization").map(|s| s.as_str());
 
-                // Get adapter registry for cloud polling
-                let registry = crate::globals::get_adapter_registry()
-                    .ok_or_else(|| Error::from("Adapter registry not available"))?;
+                    // Get configuration parameters from global config
+                    let jwks_cache_duration = config
+                        .as_ref()
+                        .map(|cfg| cfg.proxy.jwks_cache_duration_hours)
+                        .unwrap_or(24);
+                    let poll_interval = config
+                        .as_ref()
+                        .map(|cfg| cfg.runbeam.poll_interval())
+                        .unwrap_or_else(|| std::time::Duration::from_secs(30));
+                    let api_base_url = config
+                        .as_ref()
+                        .map(|cfg| cfg.runbeam.effective_cloud_api_base_url())
+                        .unwrap_or_else(|| "https://api.runbeam.cloud".to_string());
 
-                match self::authorize::handle_authorize(
-                    auth_header,
-                    &envelope.original_data,
-                    jwks_cache_duration,
-                    registry,
-                    poll_interval,
-                    api_base_url,
-                ).await {
-                    Ok(value) => (value, 201),
-                    Err((status, message)) => {
-                        let error_json = serde_json::json!({
-                            "error": http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR).canonical_reason().unwrap_or("Error"),
-                            "message": message
-                        });
-                        (error_json, status)
+                    // Get adapter registry for cloud polling
+                    let registry = crate::globals::get_adapter_registry()
+                        .ok_or_else(|| Error::from("Adapter registry not available"))?;
+
+                    match self::authorize::handle_authorize(
+                        auth_header,
+                        &envelope.original_data,
+                        jwks_cache_duration,
+                        registry,
+                        poll_interval,
+                        api_base_url,
+                    ).await {
+                        Ok(value) => (value, 201),
+                        Err((status, message)) => {
+                            let error_json = serde_json::json!({
+                                "error": http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR).canonical_reason().unwrap_or("Error"),
+                                "message": message
+                            });
+                            (error_json, status)
+                        }
                     }
                 }
             }

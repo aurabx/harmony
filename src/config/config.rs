@@ -1,5 +1,6 @@
 use crate::config::logging_config::LoggingConfig;
 use crate::config::proxy_config::ProxyConfig;
+use crate::config::runbeam_config::RunbeamConfig;
 use crate::config::Cli;
 use crate::models::backends::backends::Backend;
 use crate::models::endpoints::endpoint::Endpoint;
@@ -25,6 +26,8 @@ static DEFAULT_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(Has
 pub struct Config {
     #[serde(default)]
     pub proxy: ProxyConfig,
+    #[serde(default)]
+    pub runbeam: RunbeamConfig,
     #[serde(default)]
     pub management: ManagementConfig,
     #[serde(default)]
@@ -268,6 +271,8 @@ impl Config {
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.validate_proxy()?;
+        self.validate_logging()?;
+        self.validate_runbeam()?;
         self.validate_networks()?;
         self.validate_management()?;
         self.validate_services()?;
@@ -282,26 +287,27 @@ impl Config {
     }
 
     fn validate_proxy(&self) -> Result<(), ConfigError> {
-        if self.proxy.id.trim().is_empty() {
-            return Err(ConfigError::InvalidProxy {
+        self.proxy.validate()
+            .map_err(|e| ConfigError::InvalidProxy {
                 name: self.proxy.id.clone(),
-                reason: "No proxy id provided".to_string(),
-            });
-        }
+                reason: e,
+            })
+    }
 
-        // Check if the log_level is valid; default to "error" if not provided
-        let valid_log_levels = ["trace", "debug", "info", "warn", "error"];
-        if !valid_log_levels.contains(&self.proxy.log_level.as_str()) {
-            return Err(ConfigError::InvalidProxy {
-                name: self.proxy.id.clone(),
-                reason: format!(
-                    "Invalid log_level '{}'. Valid options are: {:?}",
-                    self.proxy.log_level, valid_log_levels
-                ),
-            });
-        }
+    fn validate_logging(&self) -> Result<(), ConfigError> {
+        self.logging.validate()
+            .map_err(|e| ConfigError::InvalidProxy {
+                name: "logging".to_string(),
+                reason: e,
+            })
+    }
 
-        Ok(())
+    fn validate_runbeam(&self) -> Result<(), ConfigError> {
+        self.runbeam.validate()
+            .map_err(|e| ConfigError::InvalidProxy {
+                name: "runbeam".to_string(),
+                reason: e,
+            })
     }
 
     fn validate_networks(&self) -> Result<(), ConfigError> {

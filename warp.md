@@ -94,6 +94,9 @@ cargo clippy --all-targets -- -D warnings
    - Groups must reference existing endpoints/backends/middleware
    - Unknown middleware names cause immediate validation failure
    - Use only: `jwt_auth`, `auth_sidecar`, `aurabox_connect` unless extending config
+   - **Runbeam Cloud**: Optional cloud integration controlled by `[runbeam]` section
+     - Default: `enabled = false` (all cloud features disabled)
+     - When enabled, requires valid OAuth token for `/admin/authorize` endpoint
 
 3. **Directory Structure**:
    ```
@@ -250,6 +253,73 @@ This proxy is part of the larger Runbeam ecosystem:
 - Compatible with Rust CLI tools that may consume its output
 
 For troubleshooting configuration issues, always check that `examples/test-config.toml` works as a baseline, then adapt your configuration to match its structure.
+
+## Configuration Structure
+
+Harmony uses a layered configuration approach with the following key sections:
+
+### Basic Configuration
+
+```toml
+[proxy]
+id = "harmony-proxy"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+jwks_cache_duration_hours = 24  # JWKS cache for JWT validation (1-168 hours)
+
+[logging]
+log_level = "error"  # trace, debug, info, warn, error
+log_to_file = true
+log_file_path = "./tmp/harmony.log"
+
+[runbeam]
+enabled = false  # Set to true to enable cloud integration
+# cloud_api_base_url = "https://api.runbeam.cloud"  # Optional, defaults to this URL
+# poll_interval_secs = 30  # Optional, polling interval (5-3600 seconds, default 30)
+
+[management]
+enabled = true
+base_path = "admin"
+network = "management"  # Network to bind management API
+```
+
+### Runbeam Cloud Integration
+
+The `[runbeam]` section controls integration with Runbeam Cloud for configuration management:
+
+- **enabled**: Controls all cloud features. When false (default), no cloud operations are performed.
+- **cloud_api_base_url**: API endpoint for Runbeam Cloud (defaults to https://api.runbeam.cloud)
+- **poll_interval_secs**: How often to poll for configuration updates (5-3600 seconds, default 30)
+
+When cloud integration is disabled:
+- No token loading from environment or storage
+- No cloud polling at startup  
+- `/admin/authorize` endpoint returns 403 Forbidden
+- Gateway runs in standalone mode
+
+When enabled, the gateway will:
+- Check for existing machine tokens at startup
+- Poll Runbeam Cloud for configuration changes
+- Apply cloud-sourced configuration updates automatically
+- Require authorization via `/admin/authorize` endpoint
+
+### Logging Configuration
+
+**Note**: Log level has been moved from `[proxy]` to `[logging]` section (schema v1.2.0+):
+
+```toml
+# OLD (schema v1.1.0 and earlier)
+[proxy]
+log_level = "debug"  # Deprecated
+
+# NEW (schema v1.2.0+) 
+[logging]
+log_level = "debug"  # Moved here
+log_to_file = true
+log_file_path = "./tmp/harmony.log"
+```
+
+Environment variable `RUST_LOG` overrides `logging.log_level` if set.
 
 ## DICOM Services (SCU/SCP)
 

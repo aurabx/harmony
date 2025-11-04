@@ -11,12 +11,14 @@ Harmony uses a two-layer configuration model:
 **Protocol adapters** (HTTP, DIMSE, etc.) are automatically spawned based on pipeline configurations. See [adapters.md](adapters.md) for details.
 
 Top-level config (examples/default/config.toml)
-- [proxy]: service identity, logging level, and store_dir
+- [proxy]: service identity, paths, and JWKS cache duration
+- [runbeam]: Runbeam Cloud integration settings (enabled, API URL, poll interval)
+- [management]: Management API settings (enabled, base path, network)
 - [network.<name>]: network interfaces and options
   - [network.<name>.http]: bind_address and bind_port
 - pipelines_path: directory containing pipeline files
 - transforms_path: directory for custom transforms (if used)
-- [logging]: file logging options
+- [logging]: file logging options and log level
 - [services.*]: built-in or custom service types
 - [middleware_types.*]: built-in or custom middleware types
 
@@ -211,9 +213,36 @@ Or for adapter restarts:
 
 For more details on the hot-reload architecture, see [docs/config-reload.md](config-reload.md).
 
-## Cloud Configuration Polling
+## Runbeam Cloud Integration
 
 **Status**: Available since v0.4.0
+
+### Overview
+
+Harmony Proxy provides optional integration with Runbeam Cloud for centralized configuration management. This integration is controlled by the `[runbeam]` configuration section and is **disabled by default**.
+
+### Configuration
+
+```toml
+[runbeam]
+enabled = false  # Set to true to enable cloud integration
+cloud_api_base_url = "https://api.runbeam.cloud"  # Optional, defaults to this URL
+poll_interval_secs = 30  # Optional, defaults to 30 (valid range: 5-3600)
+```
+
+| Field | Type | Default | Description |
+|-------|------|---------|-------------|
+| enabled | bool | false | Enable Runbeam Cloud integration |
+| cloud_api_base_url | string | "https://api.runbeam.cloud" | Runbeam Cloud API endpoint |
+| poll_interval_secs | u64 | 30 | Cloud polling interval (5-3600 seconds) |
+
+**Important**: When `enabled = false` (default):
+- No token loading from environment or storage
+- No cloud polling at startup
+- `/admin/authorize` endpoint returns 403 Forbidden
+- Gateway runs in standalone mode without cloud connectivity
+
+### Cloud Configuration Polling
 
 Harmony Proxy can automatically poll Runbeam Cloud for configuration changes when running in managed mode. This enables centralized configuration management through the Runbeam Cloud dashboard.
 
@@ -269,11 +298,17 @@ curl -X POST http://localhost:9090/admin/authorize \
 **Configuration Options**:
 
 ```toml
+# Enable Runbeam Cloud integration
+[runbeam]
+enabled = true
+cloud_api_base_url = "https://api.runbeam.cloud"
+poll_interval_secs = 30  # Optional: polling interval (default: 30, range: 5-3600)
+
+# Management API configuration
 [management]
 enabled = true
 base_path = "/admin"
 network = "default"
-poll_interval_secs = 30  # Optional: polling interval (default: 30)
 ```
 
 ### Monitoring
@@ -397,7 +432,7 @@ Harmony supports several environment variables that affect runtime behavior. Mos
 **Purpose**: Controls logging verbosity via tracing filter directives.
 
 **Interaction with Configuration**:
-- **Overrides** `proxy.log_level` setting in TOML configuration
+- **Overrides** `logging.log_level` setting in TOML configuration
 - Environment variable takes precedence when both are set
 - More flexible than TOML (supports per-module filtering)
 
@@ -413,7 +448,7 @@ export RUST_LOG=harmony::router=trace,harmony::middleware=debug,harmony=info
 export RUST_LOG=debug
 ```
 
-**Precedence**: `RUST_LOG` environment variable > `proxy.log_level` in TOML.
+**Precedence**: `RUST_LOG` environment variable > `logging.log_level` in TOML.
 
 #### RUNBEAM_DISABLE_KEYRING
 
@@ -432,7 +467,7 @@ export RUST_LOG=debug
 ### Environment Variable Precedence Rules
 
 **Settings with Environment Variable Override**:
-- **Logging**: `RUST_LOG` environment variable **overrides** `proxy.log_level` in TOML
+- **Logging**: `RUST_LOG` environment variable **overrides** `logging.log_level` in TOML
 
 **Settings Without Override** (environment variables are supplemental):
 - **Network configuration**: TOML only (bind addresses, ports, WireGuard settings)

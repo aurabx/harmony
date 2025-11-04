@@ -16,11 +16,14 @@ fn create_test_config(dir: &TempDir, port: u16) -> PathBuf {
         r#"
 [proxy]
 id = "test-proxy"
-log_level = "info"
 pipelines_path = "pipelines"
 transforms_path = "transforms"
 
+[runbeam]
+enabled = false
+
 [logging]
+log_level = "info"
 log_to_file = false
 log_file_path = ""
 
@@ -62,11 +65,14 @@ fn create_config_with_middleware(dir: &TempDir, port: u16) -> PathBuf {
         r#"
 [proxy]
 id = "test-proxy"
-log_level = "info"
 pipelines_path = "pipelines"
 transforms_path = "transforms"
 
+[runbeam]
+enabled = false
+
 [logging]
+log_level = "info"
 log_to_file = false
 log_file_path = ""
 
@@ -109,11 +115,14 @@ fn create_config_with_different_port(dir: &TempDir, port: u16) -> PathBuf {
         r#"
 [proxy]
 id = "test-proxy"
-log_level = "info"
 pipelines_path = "pipelines"
 transforms_path = "transforms"
 
+[runbeam]
+enabled = false
+
 [logging]
+log_level = "info"
 log_to_file = false
 log_file_path = ""
 
@@ -149,11 +158,14 @@ fn create_invalid_config(dir: &TempDir) -> PathBuf {
     let config_content = r#"
 [proxy]
 id = "test-proxy"
-log_level = "info"
 pipelines_path = "pipelines"
 transforms_path = "transforms"
 
+[runbeam]
+enabled = false
+
 [logging]
+log_level = "info"
 log_to_file = false
 log_file_path = ""
 

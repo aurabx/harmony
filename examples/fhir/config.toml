@@ -3,8 +3,13 @@
 
 [proxy]
 id = "harmony-fhir"
-log_level = "debug"
 pipelines_path = "pipelines"
+
+# Runbeam Cloud Integration
+[runbeam]
+enabled = false
+# cloud_api_base_url = "https://api.runbeam.cloud"
+# poll_interval_secs = 30
 
 # Network configuration
 [network.http_net]
@@ -17,6 +22,7 @@ bind_port = 8081
 
 # Logging
 [logging]
+log_level = "debug"
 log_to_file = true
 log_file_path = "./tmp/harmony_fhir.log"
 

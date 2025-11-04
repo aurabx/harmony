@@ -70,7 +70,7 @@ pub async fn handle_config_status(
         current_networks,
         running_networks,
         proxy_id: config.proxy.id.clone(),
-        log_level: config.proxy.log_level.clone(),
+        log_level: config.logging.log_level.clone(),
     };
 
     serde_json::to_value(response)

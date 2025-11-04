@@ -4,13 +4,20 @@
 [proxy]
 # The name of the proxy, required
 id = "harmony"
-# The log level. Defaults to 'error'
-log_level = "debug"
 # Directories are resolved relative to this config file's directory
 pipelines_path = "pipelines"
 transforms_path = "transforms"
 # Duration (in hours) to cache JWKS keys from Runbeam Cloud (default: 24)
 jwks_cache_duration_hours = 24
+
+# ------------------------
+# Runbeam Cloud Integration
+#-------------------------
+[runbeam]
+enabled = false
+# cloud_api_base_url = "https://api.runbeam.cloud"  # Optional, defaults to this URL
+# poll_interval_secs = 30  # Optional, defaults to 30 (valid range: 5-3600)
+poll_interval_secs = 30
 
 # ------------------------
 # Management API
@@ -49,6 +56,7 @@ bind_port = 9090            # Management API port
 # Logging
 #-------------------------
 [logging]
+log_level = "debug"  # trace, debug, info, warn, error (default: error)
 log_to_file = true
 log_file_path = "./tmp/harmony_test.log"
 
