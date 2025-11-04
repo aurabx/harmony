@@ -473,3 +473,164 @@ async fn test_file_watcher_detects_changes() {
     watcher_handle.abort();
     registry.stop_all().await.ok();
 }
+
+#[tokio::test]
+#[ignore] // This test simulates cloud poller + file watcher integration - only run manually
+async fn test_cloud_poller_writes_file_watcher_applies() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = create_test_config(&temp_dir, 19090);
+
+    // Load initial config and set up globals
+    let cli = Cli::new(config_path.to_string_lossy().to_string());
+    let config = Config::from_args(cli);
+    globals::set_config(Arc::new(config));
+    globals::set_config_path(config_path.to_string_lossy().to_string());
+
+    // Verify initial state - no middleware
+    let initial = globals::get_config().unwrap();
+    assert!(initial.middleware.is_empty());
+
+    // Create registry and start file watcher
+    let registry = Arc::new(AdapterRegistry::new());
+    let watcher = ConfigWatcher::new(
+        config_path.to_string_lossy().to_string(),
+        registry.clone(),
+    );
+
+    // Spawn watcher in background
+    let watcher_handle = tokio::spawn(async move {
+        watcher.start().await
+    });
+
+    // Give watcher time to start watching
+    sleep(Duration::from_millis(500)).await;
+
+    // Simulate cloud poller writing new config
+    // This mimics what write_cloud_config() does in cloud_poller.rs
+    let cloud_config_content = format!(
+        r#"
+[proxy]
+id = "test-proxy"
+log_level = "info"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+
+[logging]
+log_to_file = false
+log_file_path = ""
+
+[storage]
+backend = "filesystem"
+
+[storage.options]
+path = "./tmp"
+
+[network.default]
+interface = "lo0"
+enable_wireguard = false
+
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 19090
+
+[management]
+enabled = true
+base_path = "/api"
+network = "default"
+
+[middleware.cloud_middleware]
+type = "passthru"
+
+[middleware_types.passthru]
+module = ""
+"#
+    );
+
+    tracing::info!("Simulating cloud poller writing config file...");
+    fs::write(&config_path, cloud_config_content)
+        .expect("Failed to write cloud config");
+
+    // Wait for file watcher to detect, debounce, and apply
+    // File watcher has 200ms debounce + processing time
+    sleep(Duration::from_secs(2)).await;
+
+    // Verify config was updated by file watcher
+    let updated = globals::get_config().unwrap();
+    assert!(
+        updated.middleware.contains_key("cloud_middleware"),
+        "File watcher should have detected and applied cloud config change"
+    );
+
+    tracing::info!("✓ Cloud poller → File watcher → Config application flow verified!");
+
+    // Cleanup
+    watcher_handle.abort();
+    registry.stop_all().await.ok();
+}
+
+#[tokio::test]
+async fn test_cloud_config_backup_path_generation() {
+    // Test that backup paths are generated correctly
+    let change_id = "01k8vdq9wrcrezzbdpbjwsfwnz";
+    let backup_dir = "./tmp/cloud_configs";
+    let backup_path = format!("{}/config_{}.toml", backup_dir, change_id);
+    
+    assert!(backup_path.contains("tmp/cloud_configs"));
+    assert!(backup_path.contains("config_01k8vdq9"));
+    assert!(backup_path.ends_with(".toml"));
+}
+
+#[tokio::test]
+async fn test_cloud_poller_file_write_simulation() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = temp_dir.path().join("test-config.toml");
+    
+    // Simulate what write_cloud_config() does
+    let toml_content = r#"
+[proxy]
+id = "from-cloud"
+log_level = "info"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+
+[logging]
+log_to_file = false
+log_file_path = ""
+
+[storage]
+backend = "filesystem"
+
+[storage.options]
+path = "./tmp"
+
+[network.default]
+interface = "lo0"
+enable_wireguard = false
+
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+[management]
+enabled = true
+base_path = "/api"
+network = "default"
+"#;
+    
+    // Write config
+    fs::create_dir_all(temp_dir.path()).unwrap();
+    fs::write(&config_path, toml_content).expect("Should write config");
+    
+    // Verify it can be read and parsed
+    assert!(config_path.exists());
+    let content = fs::read_to_string(&config_path).unwrap();
+    assert!(content.contains("from-cloud"));
+    
+    // Verify config is valid TOML and loads correctly
+    fs::create_dir_all(temp_dir.path().join("pipelines")).ok();
+    fs::create_dir_all(temp_dir.path().join("transforms")).ok();
+    
+    let cli = Cli::new(config_path.to_string_lossy().to_string());
+    let config = Config::from_args(cli);
+    assert_eq!(config.proxy.id, "from-cloud");
+}

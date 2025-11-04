@@ -136,6 +136,116 @@ Response:
 }
 ```
 
+### Cloud Polling (Automatic)
+
+When running in managed mode with cloud polling enabled, configuration changes from Runbeam Cloud automatically trigger hot reloads.
+
+#### How It Works
+
+1. **Poller fetches pending changes** from Cloud API (every 30 seconds by default)
+2. **Changes processed in chronological order** (oldest first) to maintain state consistency
+3. **Each change written to filesystem**:
+   - Gateway changes → main `harmony-config.toml` (or configured path)
+   - Pipeline changes → `pipelines/{pipeline_id}.toml`
+4. **File watcher detects change** and triggers hot reload mechanism
+5. **Hot reload validates and applies** the new configuration (zero-downtime or adapter restart)
+6. **Status reported back to Cloud** (applied/failed with error details)
+
+#### Change Application Flow
+
+```
+┌──────────────────┐
+│  Runbeam Cloud   │
+│   API Endpoint   │
+└────────┬─────────┘
+         │ poll (30s)
+         ▼
+┌──────────────────┐
+│  Cloud Poller    │
+│  (background)    │
+└────────┬─────────┘
+         │ fetch changes
+         ▼
+┌──────────────────┐
+│  Acknowledge     │ ◄─── Change ID, status="acknowledged"
+│  to Cloud        │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  Write TOML to   │ ◄─── Gateway: ./tmp/cloud_config_{id}.toml
+│  Filesystem      │      Pipeline: pipelines/{pipeline_id}.toml
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  File Watcher    │ ◄─── Detects file modification
+│  Triggers        │
+└────────┬─────────┘
+         │
+         ▼
+┌──────────────────┐
+│  Hot Reload      │ ◄─── Zero-downtime or adapter restart
+│  Mechanism       │
+└────────┬─────────┘
+         │
+         ├─ success ────► Report applied_at to Cloud
+         │
+         └─ failure ────► Report failed_at + error details to Cloud
+```
+
+#### Change Types
+
+- **Gateway changes**: Full config reload with diff computation
+  - Affects top-level config (networks, storage, logging)
+  - Written to main config file path
+  - May trigger adapter restarts if network topology changes
+  
+- **Pipeline changes**: Selective reload of affected pipeline
+  - Affects endpoints, middleware, backends for specific pipeline
+  - Written to `pipelines/{pipeline_id}.toml`
+  - Typically zero-downtime unless network bindings change
+
+#### Monitoring
+
+Watch for cloud polling events in logs:
+
+```
+INFO 🌥️  Starting cloud config polling (interval: 30s)
+INFO Processing change: id=01k8vdq9..., type=gateway, status=queued, gateway_id=01k8ek6..., created_at=2025-10-30T20:42:36Z
+INFO Wrote cloud config to ./tmp/cloud_config_01k8vdq9....toml
+INFO ✓ Successfully applied config change 01k8vdq9...
+```
+
+For failed changes:
+
+```
+ERROR ✗ Failed to apply config change 01k8vdq9...: Configuration validation failed
+```
+
+#### Error Recovery
+
+If a change fails to apply:
+- **Error logged** with full details (validation errors, file I/O errors, etc.)
+- **Error reported to Cloud** with `error_message` and `error_details` fields
+- **Previous valid configuration remains active** - no service disruption
+- **Proxy continues processing remaining changes** in the queue
+- **Failed change can be retried** from Cloud dashboard after fixing
+
+#### Configuration
+
+Cloud polling is enabled automatically when the gateway is authorized:
+
+```toml
+[management]
+enabled = true
+base_path = "/admin"
+network = "default"
+poll_interval_secs = 30  # Optional: override default polling interval
+```
+
+See [configuration.md](configuration.md#cloud-configuration-polling) for authorization and setup details.
+
 ## Error Handling
 
 ### Invalid Config

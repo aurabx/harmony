@@ -2,6 +2,7 @@ use harmony::adapters::registry::AdapterRegistry;
 use harmony::config::config::Config;
 use harmony::config::Cli;
 use harmony::globals;
+use runbeam_sdk::runbeam_api::{ConfigChange, ConfigChangeDetail};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -400,6 +401,325 @@ async fn test_tmp_directory_creation() {
 
     // Verify it exists
     assert!(PathBuf::from("./tmp").exists());
+}
+
+// ============================================================================
+// Config Change Processing Tests
+// ============================================================================
+
+#[tokio::test]
+async fn test_config_change_field_structure() {
+    use serde_json::json;
+    
+    // Test that ConfigChange deserializes correctly from API response
+    let json = json!({
+        "id": "01k8vdq9wrcrezzbdpbjwsfwnz",
+        "status": "queued",
+        "type": "gateway",
+        "gateway_id": "01k8ek6h9aahhnrv3benret1nn",
+        "pipeline_id": null,
+        "created_at": "2025-10-30T20:42:36.000000Z"
+    });
+    
+    let change: ConfigChange = serde_json::from_value(json).unwrap();
+    assert_eq!(change.id, "01k8vdq9wrcrezzbdpbjwsfwnz");
+    assert_eq!(change.status, "queued");
+    assert_eq!(change.change_type, "gateway");
+    assert_eq!(change.gateway_id, "01k8ek6h9aahhnrv3benret1nn");
+    assert_eq!(change.pipeline_id, None);
+    assert_eq!(change.created_at, "2025-10-30T20:42:36.000000Z");
+}
+
+#[tokio::test]
+async fn test_config_change_detail_field_structure() {
+    use serde_json::json;
+    
+    // Test that ConfigChangeDetail deserializes with all fields
+    let json = json!({
+        "id": "01k8vdq9wrcrezzbdpbjwsfwnz",
+        "status": "queued",
+        "type": "gateway",
+        "gateway_id": "01k8ek6h9aahhnrv3benret1nn",
+        "pipeline_id": null,
+        "toml_config": "[proxy]\nid = \"gateway-aaace14a\"\n",
+        "metadata": {
+            "gateway_name": "gateway-aaace14a",
+            "generated_at": "2025-10-30T20:42:36+00:00"
+        },
+        "created_at": "2025-10-30T20:42:36.000000Z",
+        "acknowledged_at": null,
+        "applied_at": null,
+        "failed_at": null,
+        "error_message": null,
+        "error_details": null
+    });
+    
+    let detail: ConfigChangeDetail = serde_json::from_value(json).unwrap();
+    assert_eq!(detail.id, "01k8vdq9wrcrezzbdpbjwsfwnz");
+    assert_eq!(detail.status, "queued");
+    assert_eq!(detail.change_type, "gateway");
+    assert!(detail.toml_config.contains("gateway-aaace14a"));
+    assert!(detail.metadata.is_some());
+    assert!(detail.acknowledged_at.is_none());
+    assert!(detail.applied_at.is_none());
+    assert!(detail.failed_at.is_none());
+}
+
+#[tokio::test]
+async fn test_config_change_with_error_fields() {
+    use serde_json::json;
+    
+    // Test that ConfigChangeDetail handles error fields correctly
+    let json = json!({
+        "id": "01k8abc123",
+        "status": "failed",
+        "type": "gateway",
+        "gateway_id": "01k8gateway",
+        "pipeline_id": null,
+        "toml_config": "[invalid toml",
+        "metadata": null,
+        "created_at": "2025-10-30T20:42:36.000000Z",
+        "acknowledged_at": "2025-10-30T20:42:40.000000Z",
+        "applied_at": null,
+        "failed_at": "2025-10-30T20:42:45.000000Z",
+        "error_message": "Invalid TOML syntax",
+        "error_details": {
+            "line": 1,
+            "column": 13,
+            "expected": "value"
+        }
+    });
+    
+    let detail: ConfigChangeDetail = serde_json::from_value(json).unwrap();
+    assert_eq!(detail.status, "failed");
+    assert!(detail.acknowledged_at.is_some());
+    assert!(detail.applied_at.is_none());
+    assert_eq!(detail.failed_at, Some("2025-10-30T20:42:45.000000Z".to_string()));
+    assert_eq!(detail.error_message, Some("Invalid TOML syntax".to_string()));
+    assert!(detail.error_details.is_some());
+}
+
+#[tokio::test]
+async fn test_pipeline_config_change() {
+    use serde_json::json;
+    
+    // Test that pipeline-type changes deserialize correctly
+    let json = json!({
+        "id": "01k8pipeline123",
+        "status": "applied",
+        "type": "pipeline",
+        "gateway_id": "01k8gateway",
+        "pipeline_id": "01k8pipe001",
+        "created_at": "2025-10-30T20:42:36.000000Z"
+    });
+    
+    let change: ConfigChange = serde_json::from_value(json).unwrap();
+    assert_eq!(change.change_type, "pipeline");
+    assert_eq!(change.pipeline_id, Some("01k8pipe001".to_string()));
+    assert_eq!(change.status, "applied");
+}
+
+#[tokio::test]
+async fn test_changes_should_be_reversed() {
+    // Test that we understand changes need to be processed in reverse order
+    let changes = vec![
+        ("change-3", "2025-10-30T20:45:00Z"), // Newest
+        ("change-2", "2025-10-30T20:44:00Z"),
+        ("change-1", "2025-10-30T20:43:00Z"), // Oldest
+    ];
+    
+    // Simulate reversing for processing (oldest first)
+    let mut reversed: Vec<_> = changes.iter().collect();
+    reversed.reverse();
+    
+    // Verify oldest comes first after reversal
+    assert_eq!(reversed[0].0, "change-1");
+    assert_eq!(reversed[1].0, "change-2");
+    assert_eq!(reversed[2].0, "change-3");
+}
+
+#[tokio::test]
+async fn test_toml_config_extraction() {
+    use serde_json::json;
+    
+    let toml_content = r#"[proxy]
+id = "test-gateway"
+log_level = "info"
+
+[network.default]
+interface = "eth0"
+enable_wireguard = false
+
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+"#;
+    
+    let json = json!({
+        "id": "01k8test",
+        "status": "queued",
+        "type": "gateway",
+        "gateway_id": "01k8gw",
+        "pipeline_id": null,
+        "toml_config": toml_content,
+        "metadata": null,
+        "created_at": "2025-10-30T20:42:36.000000Z",
+        "acknowledged_at": null,
+        "applied_at": null,
+        "failed_at": null,
+        "error_message": null,
+        "error_details": null
+    });
+    
+    let detail: ConfigChangeDetail = serde_json::from_value(json).unwrap();
+    
+    // Verify TOML content is preserved
+    assert!(detail.toml_config.contains("test-gateway"));
+    assert!(detail.toml_config.contains("bind_address"));
+    assert!(detail.toml_config.contains("127.0.0.1"));
+    
+    // Verify it can be parsed as TOML
+    let parsed: Result<toml::Value, _> = toml::from_str(&detail.toml_config);
+    assert!(parsed.is_ok(), "TOML config should be valid");
+}
+
+#[tokio::test]
+async fn test_metadata_json_structure() {
+    use serde_json::json;
+    
+    let json = json!({
+        "id": "01k8test",
+        "status": "queued",
+        "type": "gateway",
+        "gateway_id": "01k8gw",
+        "pipeline_id": null,
+        "toml_config": "[proxy]\nid = \"test\"\n",
+        "metadata": {
+            "gateway_name": "my-gateway",
+            "generated_at": "2025-10-30T20:42:36+00:00",
+            "version": "1.0",
+            "custom_field": "custom_value"
+        },
+        "created_at": "2025-10-30T20:42:36.000000Z",
+        "acknowledged_at": null,
+        "applied_at": null,
+        "failed_at": null,
+        "error_message": null,
+        "error_details": null
+    });
+    
+    let detail: ConfigChangeDetail = serde_json::from_value(json).unwrap();
+    assert!(detail.metadata.is_some());
+    
+    let metadata = detail.metadata.unwrap();
+    assert_eq!(metadata["gateway_name"], "my-gateway");
+    assert_eq!(metadata["version"], "1.0");
+    assert_eq!(metadata["custom_field"], "custom_value");
+}
+
+#[tokio::test]
+async fn test_change_lifecycle_timestamps() {
+    use serde_json::json;
+    
+    // Test a change that has been fully processed
+    let json = json!({
+        "id": "01k8complete",
+        "status": "applied",
+        "type": "gateway",
+        "gateway_id": "01k8gw",
+        "pipeline_id": null,
+        "toml_config": "[proxy]\nid = \"test\"\n",
+        "metadata": null,
+        "created_at": "2025-10-30T20:42:36.000000Z",
+        "acknowledged_at": "2025-10-30T20:42:40.000000Z",
+        "applied_at": "2025-10-30T20:42:45.000000Z",
+        "failed_at": null,
+        "error_message": null,
+        "error_details": null
+    });
+    
+    let detail: ConfigChangeDetail = serde_json::from_value(json).unwrap();
+    
+    // Verify all lifecycle timestamps
+    assert_eq!(detail.created_at, "2025-10-30T20:42:36.000000Z");
+    assert_eq!(detail.acknowledged_at, Some("2025-10-30T20:42:40.000000Z".to_string()));
+    assert_eq!(detail.applied_at, Some("2025-10-30T20:42:45.000000Z".to_string()));
+    assert!(detail.failed_at.is_none());
+    
+    // Verify status matches lifecycle
+    assert_eq!(detail.status, "applied");
+}
+
+#[tokio::test]
+async fn test_cloud_config_file_path_generation() {
+    // Test that cloud config file paths are generated correctly
+    let change_id = "01k8vdq9wrcrezzbdpbjwsfwnz";
+    let expected_path = format!("./tmp/cloud_config_{}.toml", change_id);
+    
+    assert!(expected_path.contains("./tmp/cloud_config_"));
+    assert!(expected_path.ends_with(".toml"));
+    assert!(expected_path.contains(change_id));
+    
+    // Verify it's a valid path
+    let path = PathBuf::from(&expected_path);
+    assert_eq!(path.extension().unwrap(), "toml");
+}
+
+#[tokio::test]
+async fn test_empty_changes_list() {
+    use serde_json::json;
+    
+    // Test empty changes array
+    let json = json!([]);
+    let changes: Vec<ConfigChange> = serde_json::from_value(json).unwrap();
+    assert_eq!(changes.len(), 0);
+}
+
+#[tokio::test]
+async fn test_multiple_changes_ordering() {
+    use serde_json::json;
+    
+    // Test multiple changes in response
+    let json = json!([
+        {
+            "id": "change-3",
+            "status": "queued",
+            "type": "gateway",
+            "gateway_id": "gw-1",
+            "pipeline_id": null,
+            "created_at": "2025-10-30T20:45:00.000000Z"
+        },
+        {
+            "id": "change-2",
+            "status": "queued",
+            "type": "gateway",
+            "gateway_id": "gw-1",
+            "pipeline_id": null,
+            "created_at": "2025-10-30T20:44:00.000000Z"
+        },
+        {
+            "id": "change-1",
+            "status": "queued",
+            "type": "gateway",
+            "gateway_id": "gw-1",
+            "pipeline_id": null,
+            "created_at": "2025-10-30T20:43:00.000000Z"
+        }
+    ]);
+    
+    let mut changes: Vec<ConfigChange> = serde_json::from_value(json).unwrap();
+    assert_eq!(changes.len(), 3);
+    
+    // Verify API returns newest first
+    assert_eq!(changes[0].id, "change-3");
+    assert_eq!(changes[1].id, "change-2");
+    assert_eq!(changes[2].id, "change-1");
+    
+    // Reverse for processing (oldest first)
+    changes.reverse();
+    assert_eq!(changes[0].id, "change-1");
+    assert_eq!(changes[1].id, "change-2");
+    assert_eq!(changes[2].id, "change-3");
 }
 
 // Note: Full integration tests with mock HTTP server for RunbeamClient

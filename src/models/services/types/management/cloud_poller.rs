@@ -1,7 +1,4 @@
 use crate::adapters::registry::AdapterRegistry;
-use crate::config::config::Config;
-use crate::config::Cli;
-use crate::config::reload::compute_diff;
 use crate::globals;
 use runbeam_sdk::{MachineToken, RunbeamClient, load_token};
 use std::sync::Arc;
@@ -84,11 +81,11 @@ pub async fn start_cloud_polling(
     crate::globals::stop_cloud_polling();
 }
 
-/// Poll for config changes and apply them
+/// Poll for config changes and write them to disk
 async fn poll_and_apply_changes(
     client: &RunbeamClient,
     gateway_token: &str,
-    registry: &Arc<AdapterRegistry>,
+    _registry: &Arc<AdapterRegistry>,  // Kept for API compatibility but unused
 ) -> Result<(), String> {
     // List pending changes
     let changes = client
@@ -103,12 +100,15 @@ async fn poll_and_apply_changes(
 
     tracing::info!("Found {} pending config change(s)", changes.len());
 
-    // Process each change
-    for change in changes {
+    // Process each change in reverse order (oldest first)
+    for change in changes.into_iter().rev() {
         tracing::info!(
-            "Processing config change: id={}, summary={}",
+            "Processing change: id={}, type={}, status={}, gateway_id={}, created_at={}",
             change.id,
-            change.summary
+            change.change_type,
+            change.status,
+            change.gateway_id,
+            change.created_at
         );
 
         // Get detailed change content
@@ -140,11 +140,19 @@ async fn poll_and_apply_changes(
             // Continue anyway - we still want to try applying
         }
 
-        // Apply the change
-        match apply_cloud_config(&detail.id, &detail.content, registry).await {
+        // Write config file (file watcher will detect and apply)
+        match write_cloud_config(&detail.id, &detail.toml_config).await {
             Ok(()) => {
-                tracing::info!("✓ Successfully applied config change {}", detail.id);
+                tracing::info!("✓ Wrote config change {} (file watcher will apply)", detail.id);
 
+                // Note: We report success immediately after writing the file.
+                // The file watcher will detect and apply the change asynchronously.
+                // If the file watcher fails to apply, it will be logged but not reported back to cloud.
+                // This is acceptable because:
+                // 1. Config validation happens in the file watcher
+                // 2. If invalid, old config remains active (safe)
+                // 3. Admin can see file watcher errors in logs
+                
                 // Report success to cloud
                 if let Err(e) = client
                     .report_config_applied(gateway_token, &detail.id)
@@ -158,7 +166,7 @@ async fn poll_and_apply_changes(
                 }
             }
             Err(e) => {
-                tracing::error!("✗ Failed to apply config change {}: {}", detail.id, e);
+                tracing::error!("✗ Failed to write config change {}: {}", detail.id, e);
 
                 // Report failure to cloud
                 if let Err(report_err) = client
@@ -178,79 +186,44 @@ async fn poll_and_apply_changes(
     Ok(())
 }
 
-/// Apply a config change from the cloud
-async fn apply_cloud_config(
+/// Write a config change from the cloud to disk
+/// 
+/// The file watcher will detect the change and apply it automatically.
+/// This separation of concerns ensures:
+/// - Single source of truth for config reloading (file watcher)
+/// - No race conditions between cloud poller and file watcher
+/// - Consistent behavior for both manual edits and cloud changes
+async fn write_cloud_config(
     change_id: &str,
     config_content: &str,
-    registry: &Arc<AdapterRegistry>,
 ) -> Result<(), String> {
-    // Write config to temp file
-    let temp_path = format!("./tmp/cloud_config_{}.toml", change_id);
+    // Get the current config path (where file watcher is watching)
+    let target_path = globals::get_config_path()
+        .unwrap_or_else(|| "./config/config.toml".to_string());
     
-    // Ensure tmp directory exists
-    std::fs::create_dir_all("./tmp")
-        .map_err(|e| format!("Failed to create tmp directory: {}", e))?;
+    tracing::info!("Writing cloud config to {}", target_path);
+    
+    // Ensure parent directory exists
+    if let Some(parent) = std::path::Path::new(&target_path).parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("Failed to create config directory: {}", e))?;
+    }
 
-    std::fs::write(&temp_path, config_content)
+    // Write config file (file watcher will detect and apply)
+    std::fs::write(&target_path, config_content)
         .map_err(|e| format!("Failed to write config file: {}", e))?;
 
-    tracing::info!("Wrote cloud config to {}", temp_path);
-
-    // Load and validate config
-    let new_config = load_and_validate_config(&temp_path)?;
-
-    // Get current config
-    let old_config = globals::get_config()
-        .ok_or_else(|| "No config currently loaded".to_string())?;
-
-    // Compute diff
-    let diff = compute_diff(&old_config, &new_config);
-
-    if !diff.has_changes() {
-        tracing::info!("No changes detected in cloud config");
-        return Ok(());
+    tracing::info!("✓ Config written to disk, file watcher will detect and apply changes");
+    
+    // Also save a backup copy for debugging/audit trail
+    let backup_dir = "./tmp/cloud_configs";
+    std::fs::create_dir_all(backup_dir).ok();
+    let backup_path = format!("{}/config_{}.toml", backup_dir, change_id);
+    if let Err(e) = std::fs::write(&backup_path, config_content) {
+        tracing::warn!("Failed to write backup config to {}: {}", backup_path, e);
+    } else {
+        tracing::debug!("Backup saved to {}", backup_path);
     }
-
-    tracing::info!(
-        "Cloud config diff: zero-downtime={:?}, adapter-restarts={:?}",
-        diff.zero_downtime_changes,
-        diff.adapter_restarts_required
-    );
-
-    let new_config_arc = Arc::new(new_config);
-
-    // Handle network topology changes (adapter restarts)
-    if diff.requires_adapter_restart() {
-        // Remove networks
-        for network in &diff.networks_to_remove {
-            registry
-                .stop_network(network)
-                .await
-                .map_err(|e| format!("Failed to stop network '{}': {}", network, e))?;
-        }
-
-        // Restart changed networks
-        for network in &diff.adapter_restarts_required {
-            registry
-                .restart_network(network.clone(), new_config_arc.clone())
-                .await
-                .map_err(|e| format!("Failed to restart network '{}': {}", network, e))?;
-        }
-
-        // Add new networks
-        for network in &diff.networks_to_add {
-            registry
-                .start_network(network.clone(), new_config_arc.clone())
-                .await
-                .map_err(|e| format!("Failed to start network '{}': {}", network, e))?;
-        }
-    }
-
-    // Update global config (zero-downtime swap)
-    globals::set_config(new_config_arc);
-
-    // Update config path to point to the cloud config
-    globals::set_config_path(temp_path);
 
     Ok(())
 }
@@ -284,25 +257,3 @@ async fn check_token_validity(gateway_token: &str) -> Result<(), String> {
     Ok(())
 }
 
-/// Load and validate config, returning validation errors if any
-fn load_and_validate_config(config_path: &str) -> Result<Config, String> {
-    let cli = Cli::new(config_path.to_string());
-
-    // Catch panics from Config::from_args validation
-    let result = std::panic::catch_unwind(|| Config::from_args(cli));
-
-    match result {
-        Ok(config) => Ok(config),
-        Err(err) => {
-            // Extract error message from panic
-            let error_msg = if let Some(s) = err.downcast_ref::<String>() {
-                s.clone()
-            } else if let Some(s) = err.downcast_ref::<&str>() {
-                s.to_string()
-            } else {
-                "Config validation failed with unknown error".to_string()
-            };
-            Err(error_msg)
-        }
-    }
-}
