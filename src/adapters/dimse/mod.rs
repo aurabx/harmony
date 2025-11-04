@@ -56,6 +56,15 @@ impl ProtocolAdapter for DimseAdapter {
         Protocol::Dimse
     }
 
+    fn from_network(
+        network_name: String,
+        _network_config: &crate::models::network::config::NetworkConfig,
+    ) -> Box<dyn ProtocolAdapter> {
+        // DIMSE adapter gets bind settings from network config at runtime
+        // via start_scp method, so we just need the network name here
+        Box::new(DimseAdapter::new(network_name))
+    }
+
     async fn start(
         &self,
         config: Arc<Config>,
@@ -124,6 +133,18 @@ impl ProtocolAdapter for DimseAdapter {
             }));
         }
 
+        // Log which DICOM endpoints will be served
+        let endpoint_names: Vec<&str> = scp_configs.iter().map(|(_, name, _)| name.as_str()).collect();
+        tracing::info!(
+            "DIMSE adapter for network '{}' will serve {} endpoint(s): [{}]",
+            network_name,
+            endpoint_names.len(),
+            endpoint_names.join(", ")
+        );
+
+        // Get network config for TCP bind settings
+        let network_config = config.network.get(&network_name).cloned();
+
         // Spawn task to manage SCPs
         let shutdown_clone = shutdown.clone();
         let handle = tokio::spawn(async move {
@@ -131,7 +152,7 @@ impl ProtocolAdapter for DimseAdapter {
 
             // Start each SCP
             for (pipeline_name, endpoint_name, options) in scp_configs {
-                match Self::start_scp(&pipeline_name, &endpoint_name, &options, shutdown_clone.clone()).await {
+                match Self::start_scp(&pipeline_name, &endpoint_name, &options, network_config.as_ref(), shutdown_clone.clone()).await {
                     Ok(scp_handle) => {
                         scp_handles.push(scp_handle);
                     }
@@ -172,6 +193,7 @@ impl DimseAdapter {
         pipeline_name: &str,
         endpoint_name: &str,
         options: &std::collections::HashMap<String, serde_json::Value>,
+        network_config: Option<&crate::models::network::config::NetworkConfig>,
         shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
         use dimse::{DimseConfig, DEFAULT_DIMSE_PORT};
@@ -183,18 +205,26 @@ impl DimseAdapter {
             .unwrap_or("HARMONY_SCP")
             .to_string();
 
+        // Use network's TCP bind address, with endpoint override option for backward compatibility
         let bind_addr = options
             .get("bind_addr")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse::<IpAddr>().ok())
+            .or_else(|| {
+                network_config.map(|nc| {
+                    nc.tcp_config.bind_address.parse::<IpAddr>().ok()
+                }).flatten()
+            })
             .unwrap_or_else(|| IpAddr::from(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
+        // Use network's TCP port, with endpoint/backend override for backward compatibility
         // For persistent backends, use incoming_store_port; for endpoints, use port
         let port = options
             .get("incoming_store_port")
             .or_else(|| options.get("port"))
             .and_then(|v| v.as_u64())
             .map(|p| p as u16)
+            .or_else(|| network_config.map(|nc| nc.tcp_config.bind_port))
             .unwrap_or(DEFAULT_DIMSE_PORT);
 
         let key = format!("{}@{}:{}#{}", local_aet, bind_addr, port, endpoint_name);

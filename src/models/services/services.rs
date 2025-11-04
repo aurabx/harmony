@@ -118,6 +118,16 @@ fn create_builtin_service(
 
 #[async_trait]
 pub trait ServiceType: ServiceHandler<Value> {
+    /// Returns the protocol this service requires for its adapter
+    /// 
+    /// Most services use HTTP (for REST/HTTP-based communication).
+    /// Services like dicom_scp use DIMSE (for DICOM network communication).
+    /// 
+    /// Default implementation returns HTTP for backward compatibility.
+    fn required_protocol(&self) -> crate::models::protocol::Protocol {
+        crate::models::protocol::Protocol::Http
+    }
+
     /// Validate the service configuration
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError>;
 

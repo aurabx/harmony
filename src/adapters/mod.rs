@@ -19,6 +19,24 @@ pub trait ProtocolAdapter: Send + Sync {
     /// Returns the protocol this adapter handles
     fn protocol(&self) -> Protocol;
 
+    /// Create an adapter instance from network configuration
+    /// 
+    /// Each adapter is responsible for extracting what it needs from the network config.
+    /// This keeps protocol-specific logic out of the registry.
+    /// 
+    /// # Arguments
+    /// * `network_name` - Name of the network
+    /// * `network_config` - Network configuration containing TCP bind settings, etc.
+    /// 
+    /// # Returns
+    /// A boxed adapter instance ready to start
+    fn from_network(
+        network_name: String,
+        network_config: &crate::models::network::config::NetworkConfig,
+    ) -> Box<dyn ProtocolAdapter>
+    where
+        Self: Sized;
+
     /// Start the adapter (listener, server, etc.)
     /// 
     /// # Arguments
@@ -55,6 +73,15 @@ mod tests {
     impl ProtocolAdapter for TestAdapter {
         fn protocol(&self) -> Protocol {
             self.protocol
+        }
+
+        fn from_network(
+            _network_name: String,
+            _network_config: &crate::models::network::config::NetworkConfig,
+        ) -> Box<dyn ProtocolAdapter> {
+            Box::new(TestAdapter {
+                protocol: Protocol::Http, // Default for tests
+            })
         }
 
         async fn start(

@@ -1,7 +1,7 @@
 use harmony::config::config::Config;
 use harmony::models::backends::backends::Backend;
 use harmony::models::endpoints::endpoint::Endpoint;
-use harmony::models::network::config::{NetworkConfig, HttpConfig};
+use harmony::models::network::config::{NetworkConfig, TcpConfig};
 use harmony::models::pipelines::config::Pipeline;
 use serde_json::json;
 use std::collections::HashMap;
@@ -14,7 +14,7 @@ fn create_test_config_with_backends(
     
     // Create a test network
     let mut network = NetworkConfig::default();
-    network.http = HttpConfig {
+    network.tcp_config = TcpConfig {
         bind_address: "127.0.0.1".to_string(),
         bind_port: 8080,
     };
@@ -66,7 +66,7 @@ fn create_test_config_with_endpoints(
     
     // Create a test network
     let mut network = NetworkConfig::default();
-    network.http = HttpConfig {
+    network.tcp_config = TcpConfig {
         bind_address: "127.0.0.1".to_string(),
         bind_port: 8080,
     };

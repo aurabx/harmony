@@ -9,8 +9,8 @@ async fn test_management_service_enabled() {
     // Add default network configuration
     let mut network_config = harmony::models::network::config::NetworkConfig::default();
     network_config.interface = "default".to_string();
-    network_config.http.bind_address = "127.0.0.1".to_string();
-    network_config.http.bind_port = 8080;
+    network_config.tcp_config.bind_address = "127.0.0.1".to_string();
+    network_config.tcp_config.bind_port = 8080;
     config.network.insert("default".to_string(), network_config);
 
     config.management.enabled = true;
@@ -71,8 +71,8 @@ async fn test_management_service_disabled() {
     // Add default network configuration
     let mut network_config = harmony::models::network::config::NetworkConfig::default();
     network_config.interface = "default".to_string();
-    network_config.http.bind_address = "127.0.0.1".to_string();
-    network_config.http.bind_port = 8080;
+    network_config.tcp_config.bind_address = "127.0.0.1".to_string();
+    network_config.tcp_config.bind_port = 8080;
     config.network.insert("default".to_string(), network_config);
 
     config.management.enabled = false;

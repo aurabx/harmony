@@ -59,8 +59,8 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigDiff {
         let new_net = &new.network[*network_name];
 
         // Check if bind address or port changed
-        if old_net.http.bind_address != new_net.http.bind_address
-            || old_net.http.bind_port != new_net.http.bind_port
+        if old_net.tcp_config.bind_address != new_net.tcp_config.bind_address
+            || old_net.tcp_config.bind_port != new_net.tcp_config.bind_port
         {
             diff.adapter_restarts_required.push((*network_name).clone());
             continue;
@@ -157,11 +157,11 @@ mod tests {
         
         // Add same network to both, but with different ports
         let mut old_net = crate::models::network::config::NetworkConfig::default();
-        old_net.http.bind_port = 8080;
+        old_net.tcp_config.bind_port = 8080;
         old_config.network.insert("default".to_string(), old_net);
         
         let mut new_net = crate::models::network::config::NetworkConfig::default();
-        new_net.http.bind_port = 8081;
+        new_net.tcp_config.bind_port = 8081;
         new_config.network.insert("default".to_string(), new_net);
         
         let diff = compute_diff(&old_config, &new_config);

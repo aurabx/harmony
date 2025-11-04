@@ -83,7 +83,7 @@ path_prefix = "/fhir"
 # Backends
 # ------------------------
 
-# Production DICOM backend
+# Production DICOM backend (commented for testing)
 #[backends.dicom_backend]
 #service = "dicom_scu"
 #[backends.dicom_backend.options]
@@ -92,6 +92,6 @@ path_prefix = "/fhir"
 #host = "127.0.0.1"
 #port = 104
 
-# Alternative: Mock backend for testing
+# Mock backend for testing
 [backends.dicom_backend]
 service = "mock_dicom"

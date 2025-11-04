@@ -7,8 +7,10 @@ pub struct NetworkConfig {
     pub enable_wireguard: bool,
     #[serde(default = "default_interface")]
     pub interface: String,
-    #[serde(default)]
-    pub http: HttpConfig,
+    /// TCP network bind settings - used by all protocol adapters (HTTP, DIMSE, etc.)
+    /// Accepts both 'tcp_config' and 'http' (alias) in TOML for backward compatibility
+    #[serde(default, alias = "http")]
+    pub tcp_config: TcpConfig,
 }
 
 fn default_enable_wireguard() -> bool {
@@ -19,9 +21,13 @@ fn default_interface() -> String {
     "wg0".to_string()
 }
 
+/// TCP network bind configuration
+/// 
+/// Can be configured as either `[network.name.tcp_config]` or `[network.name.http]` in TOML.
+/// These are TCP network settings used by all protocol adapters, not just HTTP.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(default)]
-pub struct HttpConfig {
+pub struct TcpConfig {
     #[serde(default = "default_bind_address")]
     pub bind_address: String,
     #[serde(default = "default_bind_port")]
@@ -36,7 +42,7 @@ fn default_bind_port() -> u16 {
     8080
 }
 
-impl Default for HttpConfig {
+impl Default for TcpConfig {
     fn default() -> Self {
         Self {
             bind_address: default_bind_address(),

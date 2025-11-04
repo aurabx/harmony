@@ -312,7 +312,7 @@ impl Config {
                     reason: "interface is empty".to_string(),
                 });
             }
-            if network.enable_wireguard && network.http.bind_port == 0 {
+            if network.enable_wireguard && network.tcp_config.bind_port == 0 {
                 return Err(ConfigError::InvalidNetwork {
                     name: name.clone(),
                     reason: "invalid bind port for Wireguard".to_string(),

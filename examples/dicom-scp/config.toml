@@ -11,10 +11,11 @@ pipelines_path = "pipelines"
 enable_wireguard = false
 interface = "wg0"
 
-[network.dicom_net.dicom]
+# TCP network bind settings - used by all protocol adapters
+# For DICOM SCP, this is where the DIMSE listener will bind
+[network.dicom_net.tcp_config]
 bind_address = "0.0.0.0"
 bind_port = 11112
-aet = "HARMONY_SCP"
 
 # Logging
 [logging]

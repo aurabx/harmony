@@ -68,6 +68,10 @@ impl DicomScpEndpoint {
 
 #[async_trait]
 impl ServiceType for DicomScpEndpoint {
+    fn required_protocol(&self) -> crate::models::protocol::Protocol {
+        crate::models::protocol::Protocol::Dimse
+    }
+
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         // Validate local AET
         let local_aet = self.get_local_aet(options);

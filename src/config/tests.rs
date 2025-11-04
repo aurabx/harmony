@@ -26,7 +26,7 @@ fn test_basic_config() {
         enable_wireguard = false
         interface = "wg0"
 
-        [network.default.http]
+        [network.default.tcp_config]
         bind_address = "127.0.0.1"
         bind_port = 8080
 
@@ -69,5 +69,5 @@ fn test_basic_config() {
     assert_eq!(config.proxy.id, "router-test");
     // Network fields
     assert_eq!(config.network["default"].interface, "wg0");
-    assert_eq!(config.network["default"].http.bind_address, "127.0.0.1");
+    assert_eq!(config.network["default"].tcp_config.bind_address, "127.0.0.1");
 }

@@ -15,8 +15,7 @@ backends = []
 service = "dicom_scp"
 [endpoints.dicom_scp.options]
 local_aet = "HARMONY_SCP"
-bind_addr = "0.0.0.0"
-port = 11112
+# Bind address and port are taken from network.dicom_net.http (TCP settings)
 enable_echo = true
 enable_find = true
 enable_move = true

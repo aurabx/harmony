@@ -186,6 +186,21 @@ impl ProtocolAdapter for HttpAdapter {
         Protocol::Http
     }
 
+    fn from_network(
+        network_name: String,
+        network_config: &crate::models::network::config::NetworkConfig,
+    ) -> Box<dyn ProtocolAdapter> {
+        let bind_addr = format!("{}:{}", network_config.tcp_config.bind_address, network_config.tcp_config.bind_port)
+            .parse::<SocketAddr>()
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Invalid TCP bind address or port for network '{}': {}:{}",
+                    network_name, network_config.tcp_config.bind_address, network_config.tcp_config.bind_port
+                )
+            });
+        Box::new(HttpAdapter::new(network_name, bind_addr))
+    }
+
     async fn start(
         &self,
         config: Arc<Config>,

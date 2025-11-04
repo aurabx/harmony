@@ -2,6 +2,8 @@
 
 This file provides guidance to WARP (warp.dev) when working with code in this repository.
 
+Follow the AI Agent Constitution at .aiassistant/rules/constitution.md at all times.
+
 Repository: harmony-proxy - Rust-based proxy/gateway for data meshes (with first-class healthcare support)
 
 ## What This Project Does
@@ -280,6 +282,8 @@ use_tls = false                   # Enable TLS (default: false)
 ### DICOM SCP (Endpoint - Incoming Requests)
 
 Use `dicom_scp` service for endpoints that receive incoming DICOM requests.
+
+**Automatic Adapter Selection**: When you configure a `dicom_scp` endpoint in a pipeline, Harmony automatically starts the `DimseAdapter` for that network. You don't need to explicitly configure protocol adapters—they're determined based on the services used in your pipelines.
 
 **Configuration Example:**
 ```toml

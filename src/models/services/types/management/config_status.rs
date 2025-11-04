@@ -53,8 +53,8 @@ pub async fn handle_config_status(
         current_networks.insert(
             network_name.clone(),
             NetworkStatus {
-                bind_address: network_config.http.bind_address.clone(),
-                bind_port: network_config.http.bind_port,
+                bind_address: network_config.tcp_config.bind_address.clone(),
+                bind_port: network_config.tcp_config.bind_port,
                 interface: network_config.interface.clone(),
                 wireguard_enabled: network_config.enable_wireguard,
             },

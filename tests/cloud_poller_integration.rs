@@ -187,7 +187,7 @@ async fn test_load_and_validate_config_success() {
     // Verify basic config properties
     assert_eq!(config.proxy.id, "test-proxy");
     assert!(config.network.contains_key("default"));
-    assert_eq!(config.network.get("default").unwrap().http.bind_port, 8080);
+    assert_eq!(config.network.get("default").unwrap().tcp_config.bind_port, 8080);
 }
 
 #[tokio::test]
