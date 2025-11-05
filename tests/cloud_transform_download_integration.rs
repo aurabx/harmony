@@ -621,7 +621,10 @@ spec_path = "transform1.json"
 type = "path_filter"
 
 [middleware.filter.options]
-rules = ["/api/*"]
+rules = [
+  { allow = "/api/*" },
+  { deny = "/{*rest}" }  # Catch-all deny
+]
 
 [middleware.transform2]
 type = "transform"

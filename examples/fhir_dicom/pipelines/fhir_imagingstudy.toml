@@ -26,7 +26,11 @@ backends = ["dicom_backend"]
 [middleware.imagingstudy_filter]
 type = "path_filter"
 [middleware.imagingstudy_filter.options]
-rules = ["/ImagingStudy"]
+# First match wins - rules processed in order
+rules = [
+  { allow = "/ImagingStudy" },  # Allow ImagingStudy endpoint
+  { deny = "/{*rest}" }          # Catch-all: deny all other paths
+]
 
 [middleware.query_to_target]
 type = "metadata_transform"

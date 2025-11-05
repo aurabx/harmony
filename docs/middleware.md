@@ -116,25 +116,101 @@ This ensures that all referenced transform specifications are available before p
 
 ## Path Filter
 
-Filters incoming requests based on URL path patterns using matchit syntax. Requests that don't match any configured rule are rejected with HTTP 404 and backend processing is skipped.
+Filters incoming requests based on URL path patterns with explicit allow/deny rules. Uses first-match-wins evaluation with matchit pattern syntax.
+
+### Configuration
 
 Config keys:
-- `rules` (array of strings, required): List of path patterns to allow using matchit syntax (e.g., "/ImagingStudy", "/Patient/{id}")
+- `rules` (array of objects, required): List of allow/deny rules, each with either an `allow` or `deny` key containing a matchit pattern
 
-Example:
+### Rule Structure
+
+Each rule must be an object with either:
+- `{ allow = "<pattern>" }` - Allow requests matching this pattern
+- `{ deny = "<pattern>" }` - Deny requests matching this pattern
+
+### Evaluation Logic
+
+**First-match-wins**: Rules are processed in order from first to last. The first matching rule determines the outcome:
+- **Allow rule matches**: Request continues to backend
+- **Deny rule matches**: Returns 404, sets `skip_backends=true`
+- **No rule matches**: Implicit deny (returns 404)
+
+### Pattern Syntax
+
+Supports matchit pattern syntax:
+- **Exact paths**: `/users`, `/api/health`
+- **Wildcards**: `/api/*` (matches `/api/anything`)
+- **Catch-all**: `/{*rest}` (matches any path, use for deny/allow-all rules)
+- **Parameters**: `/users/{id}` (matches `/users/123`, etc.)
+- **Multiple segments**: `/api/{version}/users/{id}`
+
+### Examples
+
+**Allow specific paths, deny rest:**
 ```toml
 [middleware.imagingstudy_filter]
 type = "path_filter"
 [middleware.imagingstudy_filter.options]
-rules = ["/ImagingStudy", "/Patient"]
+rules = [
+  { allow = "/ImagingStudy" },
+  { allow = "/Patient" },
+  { deny = "/{*rest}" }  # Catch-all: deny all other paths
+]
 ```
 
-Behavior:
+**Deny specific paths, allow rest:**
+```toml
+[middleware.api_filter]
+type = "path_filter"
+[middleware.api_filter.options]
+rules = [
+  { deny = "/admin/*" },     # Block admin paths first
+  { deny = "/internal/*" },  # Block internal paths
+  { allow = "/{*rest}" }      # Catch-all: allow everything else
+]
+```
+
+**Complex mixed allow/deny rules:**
+```toml
+[middleware.complex_filter]
+type = "path_filter"
+[middleware.complex_filter.options]
+rules = [
+  { allow = "/api/public/*" },   # Allow public API (checked first)
+  { deny = "/api/*" },            # Deny other API paths
+  { allow = "/health" },          # Allow health check
+  { allow = "/metrics" },         # Allow metrics endpoint
+  { deny = "/{*rest}" }           # Catch-all: deny everything else
+]
+```
+
+### Behavior
+
 - Only applies to incoming requests (left side of middleware chain)
-- Path matching uses the subpath after the endpoint's path_prefix
+- Path matching uses the subpath after the endpoint's `path_prefix`
 - Trailing slashes are normalized (e.g., "/ImagingStudy/" matches "/ImagingStudy")
-- On rejection: returns 404 status with empty body and sets skip_backends=true to avoid backend calls
-- Supports matchit patterns for dynamic routing (wildcards, parameters)
+- On denial: returns HTTP 404 status with empty body and sets `skip_backends=true` to avoid backend calls
+- Empty path becomes "/" (root)
+
+### Troubleshooting
+
+**Order matters**: More specific patterns should come before broader patterns
+- ✅ Good: `[{ allow = "/api/public/*" }, { deny = "/api/*" }]`
+- ❌ Bad: `[{ deny = "/api/*" }, { allow = "/api/public/*" }]` (public never reached)
+
+**Test incrementally**: Start with allow-all, then add specific denies (or vice versa)
+
+**Use explicit deny-all**: Makes intent clear and prevents implicit deny surprises
+```toml
+rules = [
+  { allow = "/path1" },
+  { allow = "/path2" },
+  { deny = "/{*rest}" }  # Catch-all: deny everything not allowed above
+]
+```
+
+**Debug logging**: Set `RUST_LOG=harmony=debug` to see which rules match
 
 ## Metadata Transform
 

@@ -254,6 +254,43 @@ This proxy is part of the larger Runbeam ecosystem:
 
 For troubleshooting configuration issues, always check that `examples/test-config.toml` works as a baseline, then adapt your configuration to match its structure.
 
+## Path Filter Middleware
+
+The path filter middleware uses explicit allow/deny rules with first-match-wins evaluation:
+
+**Configuration:**
+```toml
+[middleware.my_filter]
+type = "path_filter"
+[middleware.my_filter.options]
+rules = [
+  { allow = "/api/public/{*path}" },  # Allow public API (catch-all under /api/public)
+  { deny = "/api/{*path}" },           # Deny other API paths
+  { allow = "/health" },               # Allow health check
+  { deny = "/{*rest}" }                # Catch-all: deny everything else
+]
+```
+
+**Evaluation Rules:**
+- Rules are processed in order from first to last
+- First matching rule determines outcome (allow or deny)
+- Allow rule: request continues to backend
+- Deny rule: returns 404, sets skip_backends=true
+- No match: implicit deny (404)
+
+**Pattern Syntax:**
+- Exact paths: `/users`
+- Wildcards: `/api/{*path}` (catches all paths under /api/)
+- Parameters: `/users/{id}`
+- Multiple segments: `/api/{version}/users/{id}`
+
+See docs/middleware.md for complete documentation.
+
+**Important Notes:**
+- Rule order matters - more specific patterns should come before broader patterns
+- No backward compatibility with old string-based format (schema v1.1.0)
+- Use `{*name}` syntax for catch-all wildcards (matchit requirement)
+
 ## Configuration Structure
 
 Harmony uses a layered configuration approach with the following key sections:

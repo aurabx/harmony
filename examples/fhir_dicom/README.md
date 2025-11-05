@@ -112,7 +112,7 @@ curl http://127.0.0.1:9091/admin/pipelines | jq .
 ### Middleware Chain
 
 **Left Side (Request Processing):**
-1. `imagingstudy_filter` - Path validation (`path_filter`)
+1. `imagingstudy_filter` - Path validation (`path_filter` with allow/deny rules)
 2. `query_to_target` - Query param extraction (`metadata_transform`)
 3. `json_extractor` - Request normalization
 4. `fhir_dimse_meta` - Set DIMSE operation (`metadata_transform`)

@@ -3,40 +3,75 @@ use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use async_trait::async_trait;
 use matchit::Router;
-use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Debug, Deserialize, Clone)]
+/// Represents a path filter rule with either allow or deny action
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PathFilterRule {
+    /// Allow requests matching this pattern
+    Allow(String),
+    /// Deny requests matching this pattern
+    Deny(String),
+}
+
+impl PathFilterRule {
+    /// Returns the pattern regardless of rule type
+    pub fn pattern(&self) -> &str {
+        match self {
+            PathFilterRule::Allow(pattern) => pattern,
+            PathFilterRule::Deny(pattern) => pattern,
+        }
+    }
+
+    /// Returns true if this is an allow rule
+    pub fn is_allow(&self) -> bool {
+        matches!(self, PathFilterRule::Allow(_))
+    }
+
+    /// Returns true if this is a deny rule
+    pub fn is_deny(&self) -> bool {
+        matches!(self, PathFilterRule::Deny(_))
+    }
+}
+
+#[derive(Debug, Clone)]
 pub struct PathFilterConfig {
-    /// List of path patterns to allow using matchit syntax
-    pub rules: Vec<String>,
+    /// List of allow/deny rules with matchit patterns
+    /// Rules are evaluated in order (first match wins)
+    pub rules: Vec<PathFilterRule>,
 }
 
 pub struct PathFilterMiddleware {
-    router: Router<()>,
+    routers: Vec<(PathFilterRule, Router<()>)>,
 }
 
 impl PathFilterMiddleware {
     pub fn new(config: PathFilterConfig) -> Result<Self, String> {
-        let mut router = Router::new();
-
         if config.rules.is_empty() {
             return Err("PathFilter requires at least one rule".to_string());
         }
 
+        // Build a router for each rule to maintain order and rule type
+        let mut routers = Vec::new();
         for rule in &config.rules {
-            tracing::trace!("Loading path filter rule: {}", rule);
-            if let Err(e) = router.insert(rule, ()) {
+            let mut router = Router::new();
+            let pattern = rule.pattern();
+            
+            tracing::trace!("Loading path filter rule: {:?} {}", 
+                if rule.is_allow() { "allow" } else { "deny" }, pattern);
+            
+            if let Err(e) = router.insert(pattern, ()) {
                 return Err(format!(
                     "Failed to insert path filter rule '{}': {}",
-                    rule, e
+                    pattern, e
                 ));
             }
+            routers.push((rule.clone(), router));
         }
 
         tracing::info!("PathFilter initialized with {} rules", config.rules.len());
-        Ok(Self { router })
+        Ok(Self { routers })
     }
 }
 
@@ -72,33 +107,60 @@ impl Middleware for PathFilterMiddleware {
 
         tracing::debug!("PathFilter evaluating path: {}", path_to_match);
 
-        // Try to match the path
-        if self.router.at(&path_to_match).is_ok() {
-            tracing::debug!(
-                "PathFilter: path '{}' matched, allowing request",
-                path_to_match
-            );
-            Ok(envelope)
-        } else {
-            tracing::warn!(
-                "PathFilter: path '{}' rejected - no matching rule",
-                path_to_match
-            );
-
-            // Set skip_backends flag and 404 response
-            envelope
-                .request_details
-                .metadata
-                .insert("skip_backends".to_string(), "true".to_string());
-            envelope.normalized_data = Some(serde_json::json!({
-                "response": {
-                    "status": 404,
-                    "body": ""
+        // First-match-wins: iterate through rules in order
+        for (rule, router) in &self.routers {
+            if router.at(&path_to_match).is_ok() {
+                match rule {
+                    PathFilterRule::Allow(_) => {
+                        tracing::debug!(
+                            "PathFilter: path '{}' matched allow rule '{}', allowing request",
+                            path_to_match,
+                            rule.pattern()
+                        );
+                        return Ok(envelope);
+                    }
+                    PathFilterRule::Deny(_) => {
+                        tracing::warn!(
+                            "PathFilter: path '{}' matched deny rule '{}', rejecting request",
+                            path_to_match,
+                            rule.pattern()
+                        );
+                        // Set skip_backends flag and 404 response
+                        envelope
+                            .request_details
+                            .metadata
+                            .insert("skip_backends".to_string(), "true".to_string());
+                        envelope.normalized_data = Some(serde_json::json!({
+                            "response": {
+                                "status": 404,
+                                "body": ""
+                            }
+                        }));
+                        return Ok(envelope);
+                    }
                 }
-            }));
-
-            Ok(envelope)
+            }
         }
+
+        // No rules matched - implicit deny
+        tracing::warn!(
+            "PathFilter: path '{}' rejected - no matching rule (implicit deny)",
+            path_to_match
+        );
+
+        // Set skip_backends flag and 404 response
+        envelope
+            .request_details
+            .metadata
+            .insert("skip_backends".to_string(), "true".to_string());
+        envelope.normalized_data = Some(serde_json::json!({
+            "response": {
+                "status": 404,
+                "body": ""
+            }
+        }));
+
+        Ok(envelope)
     }
 
     async fn right(
@@ -112,16 +174,48 @@ impl Middleware for PathFilterMiddleware {
 
 /// Parse configuration from HashMap for middleware registry
 pub fn parse_config(options: &HashMap<String, Value>) -> Result<PathFilterConfig, String> {
-    let rules: Vec<String> = options
+    let rules_array = options
         .get("rules")
         .and_then(|v| v.as_array())
-        .ok_or("Missing required 'rules' array in path_filter middleware config")?
-        .iter()
-        .map(|v| v.as_str().ok_or("All rules must be strings"))
-        .collect::<Result<Vec<_>, _>>()?
-        .into_iter()
-        .map(|s| s.to_string())
-        .collect();
+        .ok_or("Missing required 'rules' array in path_filter middleware config")?;
+
+    let mut rules = Vec::new();
+
+    for (idx, rule_value) in rules_array.iter().enumerate() {
+        let rule_obj = rule_value.as_object()
+            .ok_or_else(|| format!("Rule at index {} must be an object with 'allow' or 'deny' key", idx))?;
+
+        // Check for "allow" key
+        if let Some(allow_val) = rule_obj.get("allow") {
+            let pattern = allow_val.as_str()
+                .ok_or_else(|| format!("Rule at index {}: 'allow' value must be a string", idx))?;
+            
+            if pattern.trim().is_empty() {
+                return Err(format!("Rule at index {}: 'allow' pattern cannot be empty", idx));
+            }
+
+            // Check that "deny" is not also present
+            if rule_obj.contains_key("deny") {
+                return Err(format!("Rule at index {}: cannot have both 'allow' and 'deny' keys", idx));
+            }
+
+            rules.push(PathFilterRule::Allow(pattern.to_string()));
+        }
+        // Check for "deny" key
+        else if let Some(deny_val) = rule_obj.get("deny") {
+            let pattern = deny_val.as_str()
+                .ok_or_else(|| format!("Rule at index {}: 'deny' value must be a string", idx))?;
+            
+            if pattern.trim().is_empty() {
+                return Err(format!("Rule at index {}: 'deny' pattern cannot be empty", idx));
+            }
+
+            rules.push(PathFilterRule::Deny(pattern.to_string()));
+        }
+        else {
+            return Err(format!("Rule at index {}: must have either 'allow' or 'deny' key", idx));
+        }
+    }
 
     if rules.is_empty() {
         return Err("PathFilter requires at least one rule".to_string());
@@ -150,7 +244,10 @@ mod tests {
     #[tokio::test]
     async fn test_matches_exact_route_passes() {
         let config = PathFilterConfig {
-            rules: vec!["/ImagingStudy".to_string()],
+            rules: vec![
+                PathFilterRule::Allow("/ImagingStudy".to_string()),
+                PathFilterRule::Deny("/{*rest}".to_string()),
+            ],
         };
         let middleware = PathFilterMiddleware::new(config).unwrap();
 
@@ -174,7 +271,10 @@ mod tests {
     #[tokio::test]
     async fn test_non_matching_returns_404_and_skips_backends() {
         let config = PathFilterConfig {
-            rules: vec!["/ImagingStudy".to_string()],
+            rules: vec![
+                PathFilterRule::Allow("/ImagingStudy".to_string()),
+                PathFilterRule::Deny("/{*rest}".to_string()),
+            ],
         };
         let middleware = PathFilterMiddleware::new(config).unwrap();
 
@@ -201,7 +301,10 @@ mod tests {
     #[tokio::test]
     async fn test_trailing_slash_handling() {
         let config = PathFilterConfig {
-            rules: vec!["/ImagingStudy".to_string()],
+            rules: vec![
+                PathFilterRule::Allow("/ImagingStudy".to_string()),
+                PathFilterRule::Deny("/{*rest}".to_string()),
+            ],
         };
         let middleware = PathFilterMiddleware::new(config).unwrap();
 
@@ -219,7 +322,9 @@ mod tests {
     #[tokio::test]
     async fn test_empty_path_becomes_root() {
         let config = PathFilterConfig {
-            rules: vec!["/".to_string()],
+            rules: vec![
+                PathFilterRule::Allow("/".to_string()),
+            ],
         };
         let middleware = PathFilterMiddleware::new(config).unwrap();
 
@@ -238,11 +343,21 @@ mod tests {
         let mut options = HashMap::new();
         options.insert(
             "rules".to_string(),
-            serde_json::json!(["/ImagingStudy", "/Patient"]),
+            serde_json::json!([
+                { "allow": "/ImagingStudy" },
+                { "allow": "/Patient" },
+                { "deny": "/{*rest}" }
+            ]),
         );
 
         let config = parse_config(&options).unwrap();
-        assert_eq!(config.rules, vec!["/ImagingStudy", "/Patient"]);
+        assert_eq!(config.rules.len(), 3);
+        assert!(matches!(config.rules[0], PathFilterRule::Allow(_)));
+        assert_eq!(config.rules[0].pattern(), "/ImagingStudy");
+        assert!(matches!(config.rules[1], PathFilterRule::Allow(_)));
+        assert_eq!(config.rules[1].pattern(), "/Patient");
+        assert!(matches!(config.rules[2], PathFilterRule::Deny(_)));
+        assert_eq!(config.rules[2].pattern(), "/{*rest}");
     }
 
     #[test]
@@ -261,5 +376,227 @@ mod tests {
         let result = parse_config(&options);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("requires at least one rule"));
+    }
+
+    #[test]
+    fn test_parse_config_invalid_rule_format() {
+        let mut options = HashMap::new();
+        options.insert(
+            "rules".to_string(),
+            serde_json::json!(["/invalid"]), // Should be object, not string
+        );
+
+        let result = parse_config(&options);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must be an object"));
+    }
+
+    #[test]
+    fn test_parse_config_both_allow_and_deny() {
+        let mut options = HashMap::new();
+        options.insert(
+            "rules".to_string(),
+            serde_json::json!([{ "allow": "/test", "deny": "/test" }]),
+        );
+
+        let result = parse_config(&options);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("cannot have both"));
+    }
+
+    #[test]
+    fn test_parse_config_neither_allow_nor_deny() {
+        let mut options = HashMap::new();
+        options.insert(
+            "rules".to_string(),
+            serde_json::json!([{ "foo": "/test" }]),
+        );
+
+        let result = parse_config(&options);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("must have either 'allow' or 'deny' key"));
+    }
+
+    // New tests for deny rules and first-match-wins behavior
+
+    #[tokio::test]
+    async fn test_deny_rule_blocks_request() {
+        let config = PathFilterConfig {
+            rules: vec![
+                PathFilterRule::Deny("/admin".to_string()),
+                PathFilterRule::Allow("/{*rest}".to_string()),
+            ],
+        };
+        let middleware = PathFilterMiddleware::new(config).unwrap();
+
+        let envelope = create_test_envelope("admin");
+        let result = middleware.left(envelope).await.unwrap();
+
+        // Should set skip_backends
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+
+        // Should set 404 response
+        let response = result.normalized_data.as_ref().unwrap().get("response").unwrap();
+        assert_eq!(response.get("status").unwrap().as_u64().unwrap(), 404);
+    }
+
+    #[tokio::test]
+    async fn test_first_match_wins_allow_then_deny() {
+        let config = PathFilterConfig {
+            rules: vec![
+                PathFilterRule::Allow("/api/public/{*path}".to_string()),
+                PathFilterRule::Deny("/api/{*path}".to_string()),
+            ],
+        };
+        let middleware = PathFilterMiddleware::new(config).unwrap();
+
+        // First allow rule should match
+        let envelope = create_test_envelope("api/public/data");
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+
+        // Second deny rule should match
+        let envelope = create_test_envelope("api/private/data");
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_first_match_wins_deny_then_allow() {
+        let config = PathFilterConfig {
+            rules: vec![
+                PathFilterRule::Deny("/admin/{*path}".to_string()),
+                PathFilterRule::Allow("/{*rest}".to_string()),
+            ],
+        };
+        let middleware = PathFilterMiddleware::new(config).unwrap();
+
+        // First deny rule should match
+        let envelope = create_test_envelope("admin/users");
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+
+        // Second allow rule should match
+        let envelope = create_test_envelope("api/data");
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+    }
+
+    #[tokio::test]
+    async fn test_implicit_deny_when_no_match() {
+        let config = PathFilterConfig {
+            rules: vec![
+                PathFilterRule::Allow("/health".to_string()),
+                PathFilterRule::Allow("/api/public".to_string()),
+            ],
+        };
+        let middleware = PathFilterMiddleware::new(config).unwrap();
+
+        // Allowed path should pass
+        let envelope = create_test_envelope("health");
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+
+        // Unmatched path should be denied (implicit deny)
+        let envelope = create_test_envelope("api/private");
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_deny_all_with_specific_allows() {
+        let config = PathFilterConfig {
+            rules: vec![
+                PathFilterRule::Allow("/health".to_string()),
+                PathFilterRule::Allow("/api/public/{*path}".to_string()),
+                PathFilterRule::Deny("/{*rest}".to_string()),
+            ],
+        };
+        let middleware = PathFilterMiddleware::new(config).unwrap();
+
+        // Allowed paths should pass
+        let envelope = create_test_envelope("health");
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+
+        let envelope = create_test_envelope("api/public/test");
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+
+        // Other paths should be denied by catch-all
+        let envelope = create_test_envelope("api/private");
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_wildcard_patterns_in_deny_rules() {
+        let config = PathFilterConfig {
+            rules: vec![
+                PathFilterRule::Deny("/internal/{*path}".to_string()),
+                PathFilterRule::Allow("/{*rest}".to_string()),
+            ],
+        };
+        let middleware = PathFilterMiddleware::new(config).unwrap();
+
+        // Internal paths should be denied
+        let envelope = create_test_envelope("internal/admin");
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+
+        // Other paths should be allowed
+        let envelope = create_test_envelope("api/data");
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+    }
+
+    #[tokio::test]
+    async fn test_parameter_patterns_work_for_both_allow_and_deny() {
+        let config = PathFilterConfig {
+            rules: vec![
+                PathFilterRule::Allow("/users/{id}".to_string()),
+                PathFilterRule::Deny("/users/{*path}".to_string()),
+            ],
+        };
+        let middleware = PathFilterMiddleware::new(config).unwrap();
+
+        // Parameter pattern should match and allow
+        let envelope = create_test_envelope("users/123");
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+
+        // Deny with parameter pattern
+        let config = PathFilterConfig {
+            rules: vec![
+                PathFilterRule::Deny("/admin/{path}".to_string()),
+                PathFilterRule::Allow("/{*rest}".to_string()),
+            ],
+        };
+        let middleware = PathFilterMiddleware::new(config).unwrap();
+
+        let envelope = create_test_envelope("admin/users");
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
     }
 }
