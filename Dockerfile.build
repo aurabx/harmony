@@ -3,6 +3,13 @@ FROM rust:1.87-bookworm AS builder
 
 WORKDIR /app
 
+# Install build dependencies for crates like libdbus-sys
+RUN apt-get update && \
+    apt-get install -y --no-install-recommends \
+        libdbus-1-dev \
+        pkg-config && \
+    rm -rf /var/lib/apt/lists/*
+
 # Copy Cargo files first for better layer caching
 COPY Cargo.toml Cargo.lock ./
 COPY crates/ ./crates/
@@ -16,19 +23,17 @@ RUN cargo build --release --bin harmony
 # Runtime stage
 FROM debian:bookworm-slim
 
-# Install minimal dependencies
+# Install minimal runtime dependencies
 RUN apt-get update && \
-    apt-get install -y ca-certificates && \
+    apt-get install -y --no-install-recommends \
+        ca-certificates && \
     rm -rf /var/lib/apt/lists/*
 
 # Create directories
 RUN mkdir -p /etc/harmony /var/log/harmony /tmp/harmony
 
-# Copy binary from builder
+# Copy built binary
 COPY --from=builder /app/target/release/harmony /usr/local/bin/harmony
 
-# Expose ports
 EXPOSE 8080 9090
-
-# Default command
 CMD ["harmony", "--config", "/etc/harmony/config.toml"]
