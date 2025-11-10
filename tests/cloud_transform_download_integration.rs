@@ -467,7 +467,7 @@ network = "default"
 fn test_config_change_with_transforms_structure() {
     use serde_json::json;
     
-    // Test a ConfigChangeDetail with transform middleware
+    // Test a Change with transform middleware
     let config_toml = r#"[proxy]
 id = "gateway-123"
 transforms_path = "transforms"
@@ -506,15 +506,16 @@ bind_port = 8080
         "error_details": null
     });
     
-    use runbeam_sdk::runbeam_api::ConfigChangeDetail;
-    let detail: ConfigChangeDetail = serde_json::from_value(json).unwrap();
+    use runbeam_sdk::runbeam_api::resources::Change;
+    let detail: Change = serde_json::from_value(json).unwrap();
     
     // Verify structure
     assert_eq!(detail.id, "01k8change123");
-    assert!(detail.toml_config.contains("patient_transform"));
+    let toml_config = detail.toml_config.as_ref().unwrap();
+    assert!(toml_config.contains("patient_transform"));
     
     // Verify transform extraction from TOML
-    let ids = extract_transform_ids_test(&detail.toml_config).unwrap();
+    let ids = extract_transform_ids_test(toml_config).unwrap();
     assert_eq!(ids.len(), 1);
     assert!(ids.contains(&"01k81xczrw551e1qj9rgrf0319".to_string()));
 }

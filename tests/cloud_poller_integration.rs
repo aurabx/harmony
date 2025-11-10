@@ -2,7 +2,7 @@ use harmony::adapters::registry::AdapterRegistry;
 use harmony::config::config::Config;
 use harmony::config::Cli;
 use harmony::globals;
-use runbeam_sdk::runbeam_api::{ConfigChange, ConfigChangeDetail};
+use runbeam_sdk::runbeam_api::resources::Change;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -423,7 +423,7 @@ async fn test_tmp_directory_creation() {
 async fn test_config_change_field_structure() {
     use serde_json::json;
     
-    // Test that ConfigChange deserializes correctly from API response
+    // Test that Change deserializes correctly from API response
     let json = json!({
         "id": "01k8vdq9wrcrezzbdpbjwsfwnz",
         "status": "queued",
@@ -433,10 +433,10 @@ async fn test_config_change_field_structure() {
         "created_at": "2025-10-30T20:42:36.000000Z"
     });
     
-    let change: ConfigChange = serde_json::from_value(json).unwrap();
+    let change: Change = serde_json::from_value(json).unwrap();
     assert_eq!(change.id, "01k8vdq9wrcrezzbdpbjwsfwnz");
-    assert_eq!(change.status, "queued");
-    assert_eq!(change.change_type, "gateway");
+    assert_eq!(change.status, Some("queued".to_string()));
+    assert_eq!(change.resource_type, "gateway");
     assert_eq!(change.gateway_id, "01k8ek6h9aahhnrv3benret1nn");
     assert_eq!(change.pipeline_id, None);
     assert_eq!(change.created_at, "2025-10-30T20:42:36.000000Z");
@@ -446,7 +446,7 @@ async fn test_config_change_field_structure() {
 async fn test_config_change_detail_field_structure() {
     use serde_json::json;
     
-    // Test that ConfigChangeDetail deserializes with all fields
+    // Test that Change deserializes with all fields (detail view)
     let json = json!({
         "id": "01k8vdq9wrcrezzbdpbjwsfwnz",
         "status": "queued",
@@ -466,11 +466,11 @@ async fn test_config_change_detail_field_structure() {
         "error_details": null
     });
     
-    let detail: ConfigChangeDetail = serde_json::from_value(json).unwrap();
+    let detail: Change = serde_json::from_value(json).unwrap();
     assert_eq!(detail.id, "01k8vdq9wrcrezzbdpbjwsfwnz");
-    assert_eq!(detail.status, "queued");
-    assert_eq!(detail.change_type, "gateway");
-    assert!(detail.toml_config.contains("gateway-aaace14a"));
+    assert_eq!(detail.status, Some("queued".to_string()));
+    assert_eq!(detail.resource_type, "gateway");
+    assert!(detail.toml_config.as_ref().unwrap().contains("gateway-aaace14a"));
     assert!(detail.metadata.is_some());
     assert!(detail.acknowledged_at.is_none());
     assert!(detail.applied_at.is_none());
@@ -481,7 +481,7 @@ async fn test_config_change_detail_field_structure() {
 async fn test_config_change_with_error_fields() {
     use serde_json::json;
     
-    // Test that ConfigChangeDetail handles error fields correctly
+    // Test that Change handles error fields correctly
     let json = json!({
         "id": "01k8abc123",
         "status": "failed",
@@ -502,8 +502,8 @@ async fn test_config_change_with_error_fields() {
         }
     });
     
-    let detail: ConfigChangeDetail = serde_json::from_value(json).unwrap();
-    assert_eq!(detail.status, "failed");
+    let detail: Change = serde_json::from_value(json).unwrap();
+    assert_eq!(detail.status, Some("failed".to_string()));
     assert!(detail.acknowledged_at.is_some());
     assert!(detail.applied_at.is_none());
     assert_eq!(detail.failed_at, Some("2025-10-30T20:42:45.000000Z".to_string()));
@@ -525,10 +525,10 @@ async fn test_pipeline_config_change() {
         "created_at": "2025-10-30T20:42:36.000000Z"
     });
     
-    let change: ConfigChange = serde_json::from_value(json).unwrap();
-    assert_eq!(change.change_type, "pipeline");
+    let change: Change = serde_json::from_value(json).unwrap();
+    assert_eq!(change.resource_type, "pipeline");
     assert_eq!(change.pipeline_id, Some("01k8pipe001".to_string()));
-    assert_eq!(change.status, "applied");
+    assert_eq!(change.status, Some("applied".to_string()));
 }
 
 #[tokio::test]
@@ -583,15 +583,16 @@ bind_port = 8080
         "error_details": null
     });
     
-    let detail: ConfigChangeDetail = serde_json::from_value(json).unwrap();
+    let detail: Change = serde_json::from_value(json).unwrap();
     
     // Verify TOML content is preserved
-    assert!(detail.toml_config.contains("test-gateway"));
-    assert!(detail.toml_config.contains("bind_address"));
-    assert!(detail.toml_config.contains("127.0.0.1"));
+    let toml_config = detail.toml_config.as_ref().unwrap();
+    assert!(toml_config.contains("test-gateway"));
+    assert!(toml_config.contains("bind_address"));
+    assert!(toml_config.contains("127.0.0.1"));
     
     // Verify it can be parsed as TOML
-    let parsed: Result<toml::Value, _> = toml::from_str(&detail.toml_config);
+    let parsed: Result<toml::Value, _> = toml::from_str(toml_config);
     assert!(parsed.is_ok(), "TOML config should be valid");
 }
 
@@ -620,7 +621,7 @@ async fn test_metadata_json_structure() {
         "error_details": null
     });
     
-    let detail: ConfigChangeDetail = serde_json::from_value(json).unwrap();
+    let detail: Change = serde_json::from_value(json).unwrap();
     assert!(detail.metadata.is_some());
     
     let metadata = detail.metadata.unwrap();
@@ -650,7 +651,7 @@ async fn test_change_lifecycle_timestamps() {
         "error_details": null
     });
     
-    let detail: ConfigChangeDetail = serde_json::from_value(json).unwrap();
+    let detail: Change = serde_json::from_value(json).unwrap();
     
     // Verify all lifecycle timestamps
     assert_eq!(detail.created_at, "2025-10-30T20:42:36.000000Z");
@@ -659,7 +660,7 @@ async fn test_change_lifecycle_timestamps() {
     assert!(detail.failed_at.is_none());
     
     // Verify status matches lifecycle
-    assert_eq!(detail.status, "applied");
+    assert_eq!(detail.status, Some("applied".to_string()));
 }
 
 #[tokio::test]
@@ -683,7 +684,7 @@ async fn test_empty_changes_list() {
     
     // Test empty changes array
     let json = json!([]);
-    let changes: Vec<ConfigChange> = serde_json::from_value(json).unwrap();
+    let changes: Vec<Change> = serde_json::from_value(json).unwrap();
     assert_eq!(changes.len(), 0);
 }
 
@@ -719,7 +720,7 @@ async fn test_multiple_changes_ordering() {
         }
     ]);
     
-    let mut changes: Vec<ConfigChange> = serde_json::from_value(json).unwrap();
+    let mut changes: Vec<Change> = serde_json::from_value(json).unwrap();
     assert_eq!(changes.len(), 3);
     
     // Verify API returns newest first

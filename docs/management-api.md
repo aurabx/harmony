@@ -356,6 +356,91 @@ curl -X POST http://localhost:9090/admin/token \
   # Output: AGE-SECRET-KEY-1ABC...
   ```
 
+### POST /{base_path}/update
+
+Uploads the current Harmony configuration to Runbeam Cloud. This endpoint is typically called by the `runbeam harmony:update` CLI command.
+
+**Authentication Required:** Yes (machine token required)
+
+**Example Request:**
+```bash
+# Trigger configuration upload
+curl -X POST http://localhost:9090/admin/update
+```
+
+**Request:** Empty POST body (no parameters required)
+
+**Success Response (200 OK):**
+```json
+{
+  "success": true,
+  "message": "Configuration uploaded successfully",
+  "config_size": 1234
+}
+```
+
+**Response Fields:**
+- `success`: Boolean indicating success
+- `message`: Human-readable status message
+- `config_size`: Size of uploaded configuration in bytes
+
+**Error Responses:**
+
+**401 Unauthorized** - No machine token found:
+```json
+{
+  "error": "Unauthorized",
+  "message": "Not authorized. Run `runbeam harmony:authorize` first to obtain a machine token."
+}
+```
+
+**403 Forbidden** - Runbeam Cloud integration disabled:
+```json
+{
+  "error": "Forbidden",
+  "message": "Runbeam Cloud integration is disabled. Set runbeam.enabled=true in configuration."
+}
+```
+
+**400 Bad Request** - Configuration validation failed:
+```json
+{
+  "error": "Bad Request",
+  "message": "Configuration must contain [proxy].id field"
+}
+```
+
+**500 Internal Server Error** - Configuration file not accessible:
+```json
+{
+  "error": "Internal Server Error",
+  "message": "Failed to read configuration file: <error details>"
+}
+```
+
+**503 Service Unavailable** - Unable to reach Runbeam Cloud:
+```json
+{
+  "error": "Service Unavailable",
+  "message": "Network error: Connection refused"
+}
+```
+
+**How It Works:**
+1. Harmony loads the machine token from secure storage (obtained via `harmony:authorize`)
+2. Reads the current TOML configuration file
+3. Extracts the gateway ID from the `[proxy].id` field
+4. Calls Runbeam Cloud API to store the configuration
+5. Returns success response with configuration size
+
+**Notes:**
+- Requires prior authorization via `runbeam harmony:authorize` command
+- Uses the machine token stored in secure storage
+- Sends the raw TOML configuration to Runbeam Cloud
+- The gateway ID is extracted from the configuration's `[proxy].id` field
+- Configuration is stored as a gateway-level resource in Runbeam Cloud
+- This enables configuration backup, versioning, and cloud-based management
+
 ## Security Considerations
 
 ### Default Disabled

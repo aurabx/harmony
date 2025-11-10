@@ -60,10 +60,10 @@ pub struct Config {
 }
 
 impl Config {
-    pub fn inject_management_service(&mut self) {
+    pub fn inject_management_service(&mut self) -> Result<(), ConfigError> {
         // Only inject if management is enabled
         if !self.management.enabled {
-            return;
+            return Ok(());
         }
 
         // Inject management endpoint if not already present
@@ -118,19 +118,42 @@ impl Config {
 
         // Inject management pipeline if not already present
         if !self.pipelines.contains_key("management") {
-            // Use specified network or fail if not provided
+            // Use specified network or create default management network
             let network = match &self.management.network {
                 Some(network_name) => {
                     if !self.network.contains_key(network_name) {
-                        panic!(
-                            "Management network '{}' not found in configuration",
-                            network_name
-                        );
+                        let available_networks: Vec<&String> = self.network.keys().collect();
+                        return Err(ConfigError::InvalidManagement { 
+                            reason: format!(
+                                "Management network '{}' not found in configuration. Available networks: {}",
+                                network_name,
+                                if available_networks.is_empty() {
+                                    "(none)".to_string()
+                                } else {
+                                    available_networks.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                                }
+                            )
+                        });
                     }
                     network_name.clone()
                 }
                 None => {
-                    panic!("Management API is enabled but no network is specified. Please set management.network in your configuration.");
+                    // Auto-generate default management network on localhost:9090
+                    tracing::info!("Management API enabled without network specified, creating default management network on 127.0.0.1:9090");
+                    
+                    let default_network = NetworkConfig {
+                        enable_wireguard: false,
+                        interface: "wg0".to_string(),
+                        tcp_config: crate::models::network::config::TcpConfig {
+                            bind_address: "127.0.0.1".to_string(),
+                            bind_port: 9090,
+                        },
+                    };
+                    
+                    self.network.insert("management".to_string(), default_network);
+                    self.management.network = Some("management".to_string());
+                    
+                    "management".to_string()
                 }
             };
 
@@ -155,6 +178,8 @@ impl Config {
                 },
             );
         }
+        
+        Ok(())
     }
 
     pub fn from_args(cli: Cli) -> Self {
@@ -189,7 +214,8 @@ impl Config {
         }
 
         // Inject management service if enabled
-        config.inject_management_service();
+        config.inject_management_service()
+            .expect("Failed to inject management service");
 
         // Initialize both registries
         config.initialize_service_registry();

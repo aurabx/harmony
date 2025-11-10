@@ -49,9 +49,15 @@ pub async fn start_cloud_polling(
                         }
                     }
                     Err(e) => {
-                        // Check if it's an authorization error
+                        // Check if it's an authorization error or missing token
                         if e.contains("401") || e.contains("403") || e.contains("Unauthorized") || e.contains("Forbidden") {
                             tracing::error!("Authorization failed: {}. Stopping cloud polling.", e);
+                            break;
+                        }
+                        
+                        // Check if machine token is missing (gateway not authorized)
+                        if e.contains("No machine token found") || e.contains("Failed to load machine token") {
+                            tracing::warn!("Machine token not found. Gateway needs to be authorized. Stopping cloud polling.");
                             break;
                         }
 
@@ -89,11 +95,26 @@ async fn poll_and_apply_changes(
     gateway_token: &str,
     _registry: &Arc<AdapterRegistry>,  // Kept for API compatibility but unused
 ) -> Result<(), String> {
+    // Extract gateway_id from the stored machine token
+    // The gateway_id is a ULID that was received during authorization
+    let proxy_id = globals::get_config()
+        .map(|config| config.proxy.id.clone())
+        .unwrap_or_else(|| "harmony".to_string());
+
+    let machine_token: MachineToken = load_token(&proxy_id, "auth")
+        .await
+        .map_err(|e| format!("Failed to load machine token: {}", e))?
+        .ok_or_else(|| "No machine token found. Gateway may not be authorized.".to_string())?;
+
+    let gateway_id = machine_token.gateway_id;
+
     // List pending changes
-    let changes = client
-        .list_config_changes(gateway_token)
+    let response = client
+        .list_changes_for_gateway(gateway_token, &gateway_id)
         .await
         .map_err(|e| format!("Failed to list config changes: {}", e))?;
+
+    let changes = response.data;
 
     if changes.is_empty() {
         tracing::debug!("No pending config changes");
@@ -107,18 +128,18 @@ async fn poll_and_apply_changes(
         tracing::info!(
             "Processing change: id={}, type={}, status={}, gateway_id={}, created_at={}",
             change.id,
-            change.change_type,
-            change.status,
+            change.resource_type,
+            change.status.as_deref().unwrap_or("unknown"),
             change.gateway_id,
             change.created_at
         );
 
         // Get detailed change content
         let detail = match client
-            .get_config_change(gateway_token, &change.id)
+            .get_change(gateway_token, &change.id)
             .await
         {
-            Ok(d) => d,
+            Ok(response) => response.data,
             Err(e) => {
                 tracing::error!(
                     "Failed to get config change {}: {}",
@@ -131,7 +152,7 @@ async fn poll_and_apply_changes(
 
         // Acknowledge receipt
         if let Err(e) = client
-            .acknowledge_config_change(gateway_token, &change.id)
+            .acknowledge_changes(gateway_token, vec![change.id.clone()])
             .await
         {
             tracing::warn!(
@@ -155,8 +176,13 @@ async fn poll_and_apply_changes(
         
         let transforms_dir = config_dir.join(transforms_path);
 
+        // Get the TOML config content - should always be present in detail view
+        let toml_config = detail.toml_config.as_ref().ok_or_else(|| {
+            format!("Config change {} is missing toml_config field", detail.id)
+        })?;
+
         // Extract and fetch transforms before writing config
-        match extract_transform_ids(&detail.toml_config) {
+        match extract_transform_ids(toml_config) {
             Ok(transform_ids) if !transform_ids.is_empty() => {
                 tracing::info!(
                     "Config change {} requires {} transform(s)",
@@ -181,10 +207,11 @@ async fn poll_and_apply_changes(
                     
                     // Report failure to cloud and skip config write
                     if let Err(report_err) = client
-                        .report_config_failed(
+                        .mark_change_failed(
                             gateway_token,
                             &detail.id,
-                            &format!("Transform download failed: {}", e),
+                            format!("Transform download failed: {}", e),
+                            None,
                         )
                         .await
                     {
@@ -213,7 +240,7 @@ async fn poll_and_apply_changes(
         }
 
         // Write config file (file watcher will detect and apply)
-        match write_cloud_config(&detail.id, &detail.toml_config).await {
+        match write_cloud_config(&detail.id, toml_config).await {
             Ok(()) => {
                 tracing::info!("✓ Wrote config change {} (file watcher will apply)", detail.id);
 
@@ -227,7 +254,7 @@ async fn poll_and_apply_changes(
                 
                 // Report success to cloud
                 if let Err(e) = client
-                    .report_config_applied(gateway_token, &detail.id)
+                    .mark_change_applied(gateway_token, &detail.id)
                     .await
                 {
                     tracing::warn!(
@@ -242,7 +269,7 @@ async fn poll_and_apply_changes(
 
                 // Report failure to cloud
                 if let Err(report_err) = client
-                    .report_config_failed(gateway_token, &detail.id, &e)
+                    .mark_change_failed(gateway_token, &detail.id, e.clone(), None)
                     .await
                 {
                     tracing::warn!(

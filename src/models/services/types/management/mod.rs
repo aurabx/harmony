@@ -20,6 +20,7 @@ pub mod info;
 pub mod pipelines;
 pub mod routes;
 pub mod token;
+pub mod update;
 
 #[derive(Debug, Deserialize)]
 pub struct ManagementEndpoint {}
@@ -83,6 +84,11 @@ impl ServiceType for ManagementEndpoint {
                 path: format!("/{}/token", base_path),
                 methods: vec![Method::POST],
                 description: Some("Save machine token from CLI".to_string()),
+            },
+            RouteConfig {
+                path: format!("/{}/update", base_path),
+                methods: vec![Method::POST],
+                description: Some("Upload current configuration to Runbeam Cloud".to_string()),
             },
         ]
     }
@@ -258,6 +264,37 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                             "message": message
                         });
                         (error_json, status)
+                    }
+                }
+            }
+            p if p == "update" || p == format!("{}/update", base_path) => {
+                // Handle configuration upload to Runbeam Cloud
+                // Check if Runbeam Cloud integration is enabled
+                let config = crate::globals::get_config();
+                let runbeam_enabled = config
+                    .as_ref()
+                    .map(|cfg| cfg.runbeam.enabled)
+                    .unwrap_or(false);
+                
+                if !runbeam_enabled {
+                    let error_json = serde_json::json!({
+                        "error": "Forbidden",
+                        "message": "Runbeam Cloud integration is disabled. Set runbeam.enabled=true in configuration."
+                    });
+                    (error_json, 403)
+                } else {
+                    match self::update::handle_update().await {
+                        Ok((value, status)) => (value, status),
+                        Err((status, message)) => {
+                            let error_json = serde_json::json!({
+                                "error": http::StatusCode::from_u16(status)
+                                    .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR)
+                                    .canonical_reason()
+                                    .unwrap_or("Error"),
+                                "message": message
+                            });
+                            (error_json, status)
+                        }
                     }
                 }
             }
