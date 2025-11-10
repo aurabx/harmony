@@ -2,7 +2,7 @@ use harmony::adapters::registry::AdapterRegistry;
 use harmony::config::config::Config;
 use harmony::config::Cli;
 use harmony::globals;
-use runbeam_sdk::{save_token, MachineToken};
+use runbeam_sdk::MachineToken;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -188,7 +188,7 @@ async fn test_update_endpoint_without_machine_token() {
     globals::set_config_path(config_path.to_string_lossy().to_string());
 
     // Create adapter registry
-    let registry = Arc::new(AdapterRegistry::new(Arc::new(config)));
+    let registry = Arc::new(AdapterRegistry::new());
     globals::set_adapter_registry(registry);
 
     // Give the server a moment to be ready
@@ -238,7 +238,7 @@ async fn test_update_endpoint_with_runbeam_disabled() {
     globals::set_config_path(config_path.to_string_lossy().to_string());
 
     // Create adapter registry
-    let registry = Arc::new(AdapterRegistry::new(Arc::new(config)));
+    let registry = Arc::new(AdapterRegistry::new());
     globals::set_adapter_registry(registry);
 
     sleep(Duration::from_millis(100)).await;
@@ -288,7 +288,7 @@ async fn test_update_endpoint_with_missing_proxy_id() {
             globals::set_config(Arc::new(config.clone()));
             globals::set_config_path(config_path.to_string_lossy().to_string());
 
-            let registry = Arc::new(AdapterRegistry::new(Arc::new(config)));
+            let registry = Arc::new(AdapterRegistry::new());
             globals::set_adapter_registry(registry);
 
             sleep(Duration::from_millis(100)).await;
