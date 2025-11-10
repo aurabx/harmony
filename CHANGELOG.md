@@ -1,6 +1,6 @@
 # Changelog
 
-## [0.5.0] - 2025-11-04
+## [0.5.0] - 2025-11-10
 
 ### Highlights
 - Hot configuration reload with zero-downtime updates for routes/middleware/backends
@@ -50,6 +50,14 @@
   - Config reload integration tests
   - Cloud poller integration tests
   - Adapter registry lifecycle tests
+
+- Auto-generated management network configuration
+  - Management network automatically created if enabled but not explicitly configured
+  - Simplifies setup for management API functionality
+- Enhanced cloud polling with transform auto-download
+  - Automatic download of referenced transform specifications before applying cloud configs
+  - Improved error handling and validation during config sync
+- Path filter middleware TOML serialization fixes
 
 ### Changed
 - Replaced fluvio-jolt dependency with harmony-jolt for transform middleware
