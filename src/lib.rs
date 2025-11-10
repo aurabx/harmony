@@ -138,13 +138,23 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
                     let cloud_shutdown = tokio_util::sync::CancellationToken::new();
                     crate::globals::set_cloud_polling_token(cloud_shutdown.clone());
 
-                    let client = runbeam_sdk::RunbeamClient::new(base_url);
+                    let initial_client = runbeam_sdk::RunbeamClient::new(base_url);
                     let registry_clone = registry.clone();
+                    let machine_token = token.machine_token.clone();
 
                     tokio::spawn(async move {
+                        // Discover actual API base URL before starting poller
+                        let client = match initial_client.discover_base_url(&machine_token).await {
+                            Ok(c) => c,
+                            Err(e) => {
+                                tracing::warn!("Base URL discovery failed (using configured URL): {}", e);
+                                initial_client
+                            }
+                        };
+
                         crate::models::services::types::management::cloud_poller::start_cloud_polling(
                             client,
-                            token.machine_token,
+                            machine_token,
                             poll_interval,
                             registry_clone,
                             cloud_shutdown,
