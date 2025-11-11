@@ -33,7 +33,142 @@ Status: under active development. For more information, visit https://harmonypro
 
 ## Quick start
 
+### Install pre-built binaries
+
+The fastest way to get started is with pre-built binaries for your platform. Download the latest release from [GitHub Releases](https://github.com/aurabx/harmony/releases/latest).
+
+**Supported platforms:**
+- Linux x86_64 (Ubuntu, Debian, Fedora, RHEL, etc.)
+- Linux ARM64 (ARM64 servers)
+- macOS Intel (x86_64)
+- macOS Apple Silicon (ARM64)
+- Windows x64
+
+#### Linux x86_64
+
+```bash
+# Download the latest release
+wget https://github.com/aurabx/harmony/releases/latest/download/harmony-x86_64-unknown-linux-gnu.tar.gz
+
+# Download and verify SHA256 checksum
+wget https://github.com/aurabx/harmony/releases/latest/download/harmony-x86_64-unknown-linux-gnu.sha256
+sha256sum -c harmony-x86_64-unknown-linux-gnu.sha256
+
+# Extract the archive
+tar xzf harmony-x86_64-unknown-linux-gnu.tar.gz
+
+# Make executable
+chmod +x harmony-proxy
+
+# Optional: Move to system path
+sudo mv harmony-proxy /usr/local/bin/
+```
+
+#### Linux ARM64
+
+```bash
+# Download the latest release
+wget https://github.com/aurabx/harmony/releases/latest/download/harmony-aarch64-unknown-linux-gnu.tar.gz
+
+# Download and verify SHA256 checksum
+wget https://github.com/aurabx/harmony/releases/latest/download/harmony-aarch64-unknown-linux-gnu.sha256
+sha256sum -c harmony-aarch64-unknown-linux-gnu.sha256
+
+# Extract the archive
+tar xzf harmony-aarch64-unknown-linux-gnu.tar.gz
+
+# Make executable
+chmod +x harmony-proxy
+
+# Optional: Move to system path
+sudo mv harmony-proxy /usr/local/bin/
+```
+
+#### macOS Intel (x86_64)
+
+```bash
+# Download the latest release
+curl -LO https://github.com/aurabx/harmony/releases/latest/download/harmony-x86_64-apple-darwin.tar.gz
+
+# Download and verify SHA256 checksum
+curl -LO https://github.com/aurabx/harmony/releases/latest/download/harmony-x86_64-apple-darwin.sha256
+shasum -a 256 -c harmony-x86_64-apple-darwin.sha256
+
+# Extract the archive
+tar xzf harmony-x86_64-apple-darwin.tar.gz
+
+# Remove quarantine attribute (required on macOS)
+xattr -d com.apple.quarantine harmony-proxy
+
+# Make executable (if needed)
+chmod +x harmony-proxy
+
+# Optional: Move to system path
+sudo mv harmony-proxy /usr/local/bin/
+```
+
+#### macOS Apple Silicon (ARM64)
+
+```bash
+# Download the latest release
+curl -LO https://github.com/aurabx/harmony/releases/latest/download/harmony-aarch64-apple-darwin.tar.gz
+
+# Download and verify SHA256 checksum
+curl -LO https://github.com/aurabx/harmony/releases/latest/download/harmony-aarch64-apple-darwin.sha256
+shasum -a 256 -c harmony-aarch64-apple-darwin.sha256
+
+# Extract the archive
+tar xzf harmony-aarch64-apple-darwin.tar.gz
+
+# Remove quarantine attribute (required on macOS)
+xattr -d com.apple.quarantine harmony-proxy
+
+# Make executable (if needed)
+chmod +x harmony-proxy
+
+# Optional: Move to system path
+sudo mv harmony-proxy /usr/local/bin/
+```
+
+#### Windows x64
+
+```powershell
+# Download the latest release (using PowerShell)
+Invoke-WebRequest -Uri "https://github.com/aurabx/harmony/releases/latest/download/harmony-x86_64-pc-windows-msvc.tar.gz" -OutFile "harmony-x86_64-pc-windows-msvc.tar.gz"
+
+# Download SHA256 checksum
+Invoke-WebRequest -Uri "https://github.com/aurabx/harmony/releases/latest/download/harmony-x86_64-pc-windows-msvc.sha256" -OutFile "harmony-x86_64-pc-windows-msvc.sha256"
+
+# Verify checksum
+Get-FileHash -Algorithm SHA256 harmony-x86_64-pc-windows-msvc.tar.gz
+# Compare the output with the contents of the .sha256 file
+
+# Extract the archive (tar is built into Windows 10+)
+tar xzf harmony-x86_64-pc-windows-msvc.tar.gz
+
+# Optional: Add to PATH
+# Move harmony-proxy.exe to a directory in your PATH, or add the current directory to PATH
+```
+
+#### Running the binary
+
+Once installed, run Harmony with a configuration file:
+
+```bash
+# If in current directory
+./harmony-proxy --config /path/to/config.toml
+
+# If installed to /usr/local/bin or in PATH
+harmony-proxy --config /path/to/config.toml
+```
+
+Note: To use the example configurations, you'll need to clone this repository or download them separately from the [examples directory](https://github.com/aurabx/harmony/tree/main/examples).
+
+---
+
 ### Local development
+
+For contributors who want to build from source:
 
 Prerequisites:
 - Rust (stable) via rustup
