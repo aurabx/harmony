@@ -140,7 +140,7 @@ impl Config {
                 None => {
                     // Auto-generate default management network on localhost:9090
                     tracing::info!("Management API enabled without network specified, creating default management network on 127.0.0.1:9090");
-                    
+
                     let default_network = NetworkConfig {
                         enable_wireguard: false,
                         interface: "wg0".to_string(),
@@ -149,10 +149,11 @@ impl Config {
                             bind_port: 9090,
                         },
                     };
-                    
-                    self.network.insert("management".to_string(), default_network);
+
+                    self.network
+                        .insert("management".to_string(), default_network);
                     self.management.network = Some("management".to_string());
-                    
+
                     "management".to_string()
                 }
             };
@@ -178,7 +179,7 @@ impl Config {
                 },
             );
         }
-        
+
         Ok(())
     }
 
@@ -202,11 +203,7 @@ impl Config {
             .parent()
             .expect("Failed to get config file directory");
         let transforms_path = base_dir.join(&config.proxy.transforms_path);
-        config.resolved_transforms_path = Some(
-            transforms_path
-                .to_string_lossy()
-                .to_string()
-        );
+        config.resolved_transforms_path = Some(transforms_path.to_string_lossy().to_string());
 
         // Attempt to load additional configs and merge them into the current config.
         if let Ok(additional_configs) = Self::load_additional_configs(&config, &cli.config_path) {
@@ -214,7 +211,8 @@ impl Config {
         }
 
         // Inject management service if enabled
-        config.inject_management_service()
+        config
+            .inject_management_service()
             .expect("Failed to inject management service");
 
         // Initialize both registries
@@ -313,7 +311,8 @@ impl Config {
     }
 
     fn validate_proxy(&self) -> Result<(), ConfigError> {
-        self.proxy.validate()
+        self.proxy
+            .validate()
             .map_err(|e| ConfigError::InvalidProxy {
                 name: self.proxy.id.clone(),
                 reason: e,
@@ -321,7 +320,8 @@ impl Config {
     }
 
     fn validate_logging(&self) -> Result<(), ConfigError> {
-        self.logging.validate()
+        self.logging
+            .validate()
             .map_err(|e| ConfigError::InvalidProxy {
                 name: "logging".to_string(),
                 reason: e,
@@ -329,7 +329,8 @@ impl Config {
     }
 
     fn validate_runbeam(&self) -> Result<(), ConfigError> {
-        self.runbeam.validate()
+        self.runbeam
+            .validate()
             .map_err(|e| ConfigError::InvalidProxy {
                 name: "runbeam".to_string(),
                 reason: e,

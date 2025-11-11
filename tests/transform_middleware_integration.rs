@@ -68,14 +68,14 @@ async fn test_transform_middleware_integration() {
 
     let config: Config = toml::from_str(&config_toml).unwrap();
     config.validate().unwrap();
-    
+
     let config_arc = Arc::new(config);
-    
+
     // Initialize globals (required for pipeline execution)
     use harmony::storage::create_storage_backend;
     harmony::globals::set_config(config_arc.clone());
-    let storage = create_storage_backend(&config_arc.storage)
-        .expect("Failed to create storage backend");
+    let storage =
+        create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
     let app = build_network_router(config_arc, "default").await;

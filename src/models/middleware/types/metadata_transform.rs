@@ -68,12 +68,15 @@ impl MetadataTransformMiddleware {
 
 impl MetadataTransformMiddleware {
     /// Convert JSON value to TargetDetails structure
-    fn json_to_target_details(&self, json: &Value) -> Result<crate::models::envelope::envelope::TargetDetails, Error> {
+    fn json_to_target_details(
+        &self,
+        json: &Value,
+    ) -> Result<crate::models::envelope::envelope::TargetDetails, Error> {
         use crate::models::envelope::envelope::TargetDetails;
-        
-        let obj = json.as_object().ok_or_else(|| {
-            Error::from("Transformed JSON must be an object for target_details")
-        })?;
+
+        let obj = json
+            .as_object()
+            .ok_or_else(|| Error::from("Transformed JSON must be an object for target_details"))?;
 
         // Extract fields with defaults
         let base_url = obj
@@ -81,13 +84,13 @@ impl MetadataTransformMiddleware {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        
+
         let method = obj
             .get("method")
             .and_then(|v| v.as_str())
             .unwrap_or("GET")
             .to_string();
-        
+
         let uri = obj
             .get("uri")
             .and_then(|v| v.as_str())
@@ -159,7 +162,7 @@ impl MetadataTransformMiddleware {
         if !new.uri.is_empty() {
             existing.uri = new.uri.clone();
         }
-        
+
         // Merge maps (new values override existing)
         existing.headers.extend(new.headers.clone());
         existing.cookies.extend(new.cookies.clone());
@@ -195,16 +198,21 @@ impl Middleware for MetadataTransformMiddleware {
                     Ok(transformed) => {
                         // Create or update target_details from transformed JSON
                         let target_details = self.json_to_target_details(&transformed)?;
-                        
+
                         // Initialize target_details if not present
                         if envelope.target_details.is_none() {
                             envelope.target_details = Some(target_details);
                         } else {
                             // Merge with existing target_details
-                            self.merge_target_details(envelope.target_details.as_mut().unwrap(), &target_details);
+                            self.merge_target_details(
+                                envelope.target_details.as_mut().unwrap(),
+                                &target_details,
+                            );
                         }
-                        
-                        tracing::debug!("Applied metadata transform to target_details on left side");
+
+                        tracing::debug!(
+                            "Applied metadata transform to target_details on left side"
+                        );
                     }
                     Err(e) => {
                         let error_msg = format!("Metadata transform failed on left side: {}", e);
@@ -212,7 +220,10 @@ impl Middleware for MetadataTransformMiddleware {
                             tracing::error!("{}", error_msg);
                             return Err(Error::from(error_msg));
                         } else {
-                            tracing::warn!("{}, continuing without target_details modification", error_msg);
+                            tracing::warn!(
+                                "{}, continuing without target_details modification",
+                                error_msg
+                            );
                         }
                     }
                 }

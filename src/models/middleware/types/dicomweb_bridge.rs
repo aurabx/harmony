@@ -114,7 +114,6 @@ impl DicomwebBridgeMiddleware {
     }
 
     fn process_item(includefield: Option<&Vec<String>>, item: &Value) -> Value {
-        
         match includefield {
             Some(_fields) => {
                 // If filtering is requested, work with the identifier as-is instead of
@@ -366,11 +365,7 @@ impl Middleware for DicomwebBridgeMiddleware {
             .metadata
             .insert("dicomweb_offset".to_string(), offset.to_string());
 
-        tracing::debug!(
-            "DICOMweb pagination: limit={}, offset={}",
-            limit,
-            offset
-        );
+        tracing::debug!("DICOMweb pagination: limit={}, offset={}", limit, offset);
 
         // Process all query parameters (except special ones like includefield/limit/offset)
         for (param_name, param_values) in qp {
@@ -634,13 +629,19 @@ impl Middleware for DicomwebBridgeMiddleware {
                 // For QIDO-RS (find) operations, pass limit to DIMSE backend
                 // Note: offset will be applied in right() since DIMSE doesn't support it natively
                 if op_name == "find" {
-                    obj.insert("max_results".to_string(), Value::Number((limit + offset).into()));
+                    obj.insert(
+                        "max_results".to_string(),
+                        Value::Number((limit + offset).into()),
+                    );
                 }
             } else {
                 let mut map = serde_json::Map::new();
                 map.insert("dimse_identifier".to_string(), Value::Object(ident));
                 if op_name == "find" {
-                    map.insert("max_results".to_string(), Value::Number((limit + offset).into()));
+                    map.insert(
+                        "max_results".to_string(),
+                        Value::Number((limit + offset).into()),
+                    );
                 }
                 nd = Value::Object(map);
             }
@@ -1534,12 +1535,18 @@ mod tests {
         let identifier = nd.get("dimse_identifier").unwrap().as_object().unwrap();
 
         // Verify StudyDate tag is present with date range
-        assert!(identifier.contains_key("00080020"), "StudyDate tag should be present");
+        assert!(
+            identifier.contains_key("00080020"),
+            "StudyDate tag should be present"
+        );
         let study_date = identifier.get("00080020").unwrap();
         let values = study_date.get("Value").and_then(|v| v.as_array());
         assert!(values.is_some(), "StudyDate should have Value array");
         let values = values.unwrap();
-        assert!(!values.is_empty(), "StudyDate Value array should not be empty");
+        assert!(
+            !values.is_empty(),
+            "StudyDate Value array should not be empty"
+        );
         assert_eq!(values[0].as_str(), Some("20240101-20240131"));
     }
 

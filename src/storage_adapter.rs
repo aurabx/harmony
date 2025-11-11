@@ -34,13 +34,9 @@ impl<'a> SdkStorage for StorageAdapter<'a> {
                 .await
                 .map(|_| ()) // Discard the PathBuf return value
                 .map_err(|e| match e {
-                    harmony_filesystem::StorageError::Io(io_err) => {
-                        SdkStorageError::Io(io_err)
-                    }
+                    harmony_filesystem::StorageError::Io(io_err) => SdkStorageError::Io(io_err),
                     harmony_filesystem::StorageError::Path(msg) => SdkStorageError::Path(msg),
-                    harmony_filesystem::StorageError::Config(msg) => {
-                        SdkStorageError::Config(msg)
-                    }
+                    harmony_filesystem::StorageError::Config(msg) => SdkStorageError::Config(msg),
                 })
         })
     }
@@ -52,18 +48,11 @@ impl<'a> SdkStorage for StorageAdapter<'a> {
         let path = path.to_string();
 
         Box::pin(async move {
-            self.inner
-                .read_file_str(&path)
-                .await
-                .map_err(|e| match e {
-                    harmony_filesystem::StorageError::Io(io_err) => {
-                        SdkStorageError::Io(io_err)
-                    }
-                    harmony_filesystem::StorageError::Path(msg) => SdkStorageError::Path(msg),
-                    harmony_filesystem::StorageError::Config(msg) => {
-                        SdkStorageError::Config(msg)
-                    }
-                })
+            self.inner.read_file_str(&path).await.map_err(|e| match e {
+                harmony_filesystem::StorageError::Io(io_err) => SdkStorageError::Io(io_err),
+                harmony_filesystem::StorageError::Path(msg) => SdkStorageError::Path(msg),
+                harmony_filesystem::StorageError::Config(msg) => SdkStorageError::Config(msg),
+            })
         })
     }
 

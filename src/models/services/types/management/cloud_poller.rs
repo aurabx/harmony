@@ -1,6 +1,6 @@
 use crate::adapters::registry::AdapterRegistry;
 use crate::globals;
-use runbeam_sdk::{MachineToken, RunbeamClient, load_token};
+use runbeam_sdk::{load_token, MachineToken, RunbeamClient};
 use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
@@ -54,7 +54,7 @@ pub async fn start_cloud_polling(
                             tracing::error!("Authorization failed: {}. Stopping cloud polling.", e);
                             break;
                         }
-                        
+
                         // Check if machine token is missing (gateway not authorized)
                         if e.contains("No machine token found") || e.contains("Failed to load machine token") {
                             tracing::warn!("Machine token not found. Gateway needs to be authorized. Stopping cloud polling.");
@@ -73,7 +73,7 @@ pub async fn start_cloud_polling(
                             let backoff = Duration::from_secs(2u64.pow(consecutive_errors.min(8)));
                             let backoff = backoff.min(max_backoff);
                             tracing::warn!("Backing off for {:?} before next poll", backoff);
-                            
+
                             tokio::select! {
                                 _ = shutdown.cancelled() => break,
                                 _ = sleep(backoff) => {}
@@ -93,7 +93,7 @@ pub async fn start_cloud_polling(
 async fn poll_and_apply_changes(
     client: &RunbeamClient,
     gateway_token: &str,
-    _registry: &Arc<AdapterRegistry>,  // Kept for API compatibility but unused
+    _registry: &Arc<AdapterRegistry>, // Kept for API compatibility but unused
 ) -> Result<(), String> {
     // Extract gateway_id from the stored machine token
     // The gateway_id is a ULID that was received during authorization
@@ -135,17 +135,10 @@ async fn poll_and_apply_changes(
         );
 
         // Get detailed change content
-        let detail = match client
-            .get_change(gateway_token, &change.id)
-            .await
-        {
+        let detail = match client.get_change(gateway_token, &change.id).await {
             Ok(response) => response.data,
             Err(e) => {
-                tracing::error!(
-                    "Failed to get config change {}: {}",
-                    change.id,
-                    e
-                );
+                tracing::error!("Failed to get config change {}: {}", change.id, e);
                 continue;
             }
         };
@@ -155,31 +148,28 @@ async fn poll_and_apply_changes(
             .acknowledge_changes(gateway_token, vec![change.id.clone()])
             .await
         {
-            tracing::warn!(
-                "Failed to acknowledge config change {}: {}",
-                change.id,
-                e
-            );
+            tracing::warn!("Failed to acknowledge config change {}: {}", change.id, e);
             // Continue anyway - we still want to try applying
         }
 
         // Determine transforms directory path
-        let config_path = globals::get_config_path()
-            .unwrap_or_else(|| "./config/config.toml".to_string());
+        let config_path =
+            globals::get_config_path().unwrap_or_else(|| "./config/config.toml".to_string());
         let config_dir = std::path::Path::new(&config_path)
             .parent()
             .unwrap_or_else(|| std::path::Path::new("."));
-        
+
         let transforms_path = globals::get_config()
             .map(|c| c.proxy.transforms_path.clone())
             .unwrap_or_else(|| "transforms".to_string());
-        
+
         let transforms_dir = config_dir.join(transforms_path);
 
         // Get the TOML config content - should always be present in detail view
-        let toml_config = detail.toml_config.as_ref().ok_or_else(|| {
-            format!("Config change {} is missing toml_config field", detail.id)
-        })?;
+        let toml_config = detail
+            .toml_config
+            .as_ref()
+            .ok_or_else(|| format!("Config change {} is missing toml_config field", detail.id))?;
 
         // Extract and fetch transforms before writing config
         match extract_transform_ids(toml_config) {
@@ -189,7 +179,7 @@ async fn poll_and_apply_changes(
                     detail.id,
                     transform_ids.len()
                 );
-                
+
                 // Fetch and write transforms
                 if let Err(e) = fetch_and_write_transforms(
                     client,
@@ -204,7 +194,7 @@ async fn poll_and_apply_changes(
                         detail.id,
                         e
                     );
-                    
+
                     // Report failure to cloud and skip config write
                     if let Err(report_err) = client
                         .mark_change_failed(
@@ -221,7 +211,7 @@ async fn poll_and_apply_changes(
                             report_err
                         );
                     }
-                    
+
                     // Skip to next change
                     continue;
                 }
@@ -242,7 +232,10 @@ async fn poll_and_apply_changes(
         // Write config file (file watcher will detect and apply)
         match write_cloud_config(&detail.id, toml_config).await {
             Ok(()) => {
-                tracing::info!("✓ Wrote config change {} (file watcher will apply)", detail.id);
+                tracing::info!(
+                    "✓ Wrote config change {} (file watcher will apply)",
+                    detail.id
+                );
 
                 // Note: We report success immediately after writing the file.
                 // The file watcher will detect and apply the change asynchronously.
@@ -251,17 +244,10 @@ async fn poll_and_apply_changes(
                 // 1. Config validation happens in the file watcher
                 // 2. If invalid, old config remains active (safe)
                 // 3. Admin can see file watcher errors in logs
-                
+
                 // Report success to cloud
-                if let Err(e) = client
-                    .mark_change_applied(gateway_token, &detail.id)
-                    .await
-                {
-                    tracing::warn!(
-                        "Failed to report success for {}: {}",
-                        detail.id,
-                        e
-                    );
+                if let Err(e) = client.mark_change_applied(gateway_token, &detail.id).await {
+                    tracing::warn!("Failed to report success for {}: {}", detail.id, e);
                 }
             }
             Err(e) => {
@@ -272,11 +258,7 @@ async fn poll_and_apply_changes(
                     .mark_change_failed(gateway_token, &detail.id, e.clone(), None)
                     .await
                 {
-                    tracing::warn!(
-                        "Failed to report error for {}: {}",
-                        detail.id,
-                        report_err
-                    );
+                    tracing::warn!("Failed to report error for {}: {}", detail.id, report_err);
                 }
             }
         }
@@ -286,22 +268,19 @@ async fn poll_and_apply_changes(
 }
 
 /// Write a config change from the cloud to disk
-/// 
+///
 /// The file watcher will detect the change and apply it automatically.
 /// This separation of concerns ensures:
 /// - Single source of truth for config reloading (file watcher)
 /// - No race conditions between cloud poller and file watcher
 /// - Consistent behavior for both manual edits and cloud changes
-async fn write_cloud_config(
-    change_id: &str,
-    config_content: &str,
-) -> Result<(), String> {
+async fn write_cloud_config(change_id: &str, config_content: &str) -> Result<(), String> {
     // Get the current config path (where file watcher is watching)
-    let target_path = globals::get_config_path()
-        .unwrap_or_else(|| "./config/config.toml".to_string());
-    
+    let target_path =
+        globals::get_config_path().unwrap_or_else(|| "./config/config.toml".to_string());
+
     tracing::info!("Writing cloud config to {}", target_path);
-    
+
     // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(&target_path).parent() {
         std::fs::create_dir_all(parent)
@@ -313,7 +292,7 @@ async fn write_cloud_config(
         .map_err(|e| format!("Failed to write config file: {}", e))?;
 
     tracing::info!("✓ Config written to disk, file watcher will detect and apply changes");
-    
+
     // Also save a backup copy for debugging/audit trail
     let backup_dir = "./tmp/cloud_configs";
     std::fs::create_dir_all(backup_dir).ok();
@@ -343,8 +322,8 @@ async fn write_cloud_config(
 /// * `Err(String)` - Error message if TOML parsing fails critically
 fn extract_transform_ids(toml_config: &str) -> Result<Vec<String>, String> {
     // Parse TOML configuration
-    let config: toml::Value = toml::from_str(toml_config)
-        .map_err(|e| format!("Failed to parse TOML config: {}", e))?;
+    let config: toml::Value =
+        toml::from_str(toml_config).map_err(|e| format!("Failed to parse TOML config: {}", e))?;
 
     let mut transform_ids = HashSet::new();
 
@@ -363,14 +342,11 @@ fn extract_transform_ids(toml_config: &str) -> Result<Vec<String>, String> {
                     {
                         // Extract transform ID from spec_path
                         // Handle both "id.json" and "path/to/id.json" formats
-                        let filename = spec_path
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(spec_path);
-                        
+                        let filename = spec_path.rsplit('/').next().unwrap_or(spec_path);
+
                         // Remove .json extension if present
                         let transform_id = filename.strip_suffix(".json").unwrap_or(filename);
-                        
+
                         if !transform_id.is_empty() {
                             transform_ids.insert(transform_id.to_string());
                             tracing::debug!("Found transform reference: {}", transform_id);
@@ -382,7 +358,7 @@ fn extract_transform_ids(toml_config: &str) -> Result<Vec<String>, String> {
     }
 
     let ids: Vec<String> = transform_ids.into_iter().collect();
-    
+
     if !ids.is_empty() {
         tracing::info!("Extracted {} unique transform ID(s) from config", ids.len());
     } else {
@@ -436,9 +412,7 @@ async fn fetch_and_write_transforms(
         let transform_response = client
             .get_transform(gateway_token, &transform_id)
             .await
-            .map_err(|e| {
-                format!("Failed to fetch transform {}: {}", transform_id, e)
-            })?;
+            .map_err(|e| format!("Failed to fetch transform {}: {}", transform_id, e))?;
 
         // Extract JOLT specification from response
         let jolt_spec = transform_response
@@ -456,7 +430,7 @@ async fn fetch_and_write_transforms(
         // Write transform to file
         let filename = format!("{}.json", transform_id);
         let file_path = transforms_dir.join(&filename);
-        
+
         std::fs::write(&file_path, jolt_spec)
             .map_err(|e| format!("Failed to write transform file {}: {}", filename, e))?;
 
@@ -494,4 +468,3 @@ async fn check_token_validity(gateway_token: &str) -> Result<(), String> {
 
     Ok(())
 }
-

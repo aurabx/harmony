@@ -10,7 +10,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 /// Protocol adapter trait
-/// 
+///
 /// Each protocol (HTTP, DIMSE, HL7, etc.) implements this trait to provide
 /// protocol-specific I/O handling while using the common PipelineExecutor
 /// for business logic.
@@ -20,14 +20,14 @@ pub trait ProtocolAdapter: Send + Sync {
     fn protocol(&self) -> Protocol;
 
     /// Create an adapter instance from network configuration
-    /// 
+    ///
     /// Each adapter is responsible for extracting what it needs from the network config.
     /// This keeps protocol-specific logic out of the registry.
-    /// 
+    ///
     /// # Arguments
     /// * `network_name` - Name of the network
     /// * `network_config` - Network configuration containing TCP bind settings, etc.
-    /// 
+    ///
     /// # Returns
     /// A boxed adapter instance ready to start
     fn from_network(
@@ -38,11 +38,11 @@ pub trait ProtocolAdapter: Send + Sync {
         Self: Sized;
 
     /// Start the adapter (listener, server, etc.)
-    /// 
+    ///
     /// # Arguments
     /// * `config` - Application configuration
     /// * `shutdown` - Cancellation token for graceful shutdown
-    /// 
+    ///
     /// # Returns
     /// JoinHandle for the adapter task
     async fn start(
@@ -108,7 +108,7 @@ mod tests {
         let adapter: Box<dyn ProtocolAdapter> = Box::new(TestAdapter {
             protocol: Protocol::Http,
         });
-        
+
         assert_eq!(adapter.protocol(), Protocol::Http);
         assert_eq!(adapter.summary(), "TestAdapter for Http");
     }
@@ -118,16 +118,16 @@ mod tests {
         let adapter = TestAdapter {
             protocol: Protocol::Dimse,
         };
-        
+
         let config = Arc::new(Config::default());
         let shutdown = CancellationToken::new();
-        
+
         // Start adapter
         let handle = adapter.start(config, shutdown.clone()).await.unwrap();
-        
+
         // Trigger shutdown
         shutdown.cancel();
-        
+
         // Wait for adapter to shut down
         let result = tokio::time::timeout(std::time::Duration::from_secs(1), handle).await;
         assert!(result.is_ok(), "Adapter should shut down gracefully");
@@ -141,21 +141,26 @@ mod tests {
         let dimse_adapter = TestAdapter {
             protocol: Protocol::Dimse,
         };
-        
+
         let config = Arc::new(Config::default());
         let shutdown = CancellationToken::new();
-        
+
         // Start both adapters with same shutdown token
-        let http_handle = http_adapter.start(config.clone(), shutdown.clone()).await.unwrap();
+        let http_handle = http_adapter
+            .start(config.clone(), shutdown.clone())
+            .await
+            .unwrap();
         let dimse_handle = dimse_adapter.start(config, shutdown.clone()).await.unwrap();
-        
+
         // Trigger shutdown for both
         shutdown.cancel();
-        
+
         // Both should shut down
-        let http_result = tokio::time::timeout(std::time::Duration::from_secs(1), http_handle).await;
-        let dimse_result = tokio::time::timeout(std::time::Duration::from_secs(1), dimse_handle).await;
-        
+        let http_result =
+            tokio::time::timeout(std::time::Duration::from_secs(1), http_handle).await;
+        let dimse_result =
+            tokio::time::timeout(std::time::Duration::from_secs(1), dimse_handle).await;
+
         assert!(http_result.is_ok(), "HTTP adapter should shut down");
         assert!(dimse_result.is_ok(), "DIMSE adapter should shut down");
     }
@@ -164,7 +169,7 @@ mod tests {
     fn test_protocol_adapter_is_send_sync() {
         fn assert_send<T: Send>() {}
         fn assert_sync<T: Sync>() {}
-        
+
         assert_send::<TestAdapter>();
         assert_sync::<TestAdapter>();
     }

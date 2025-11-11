@@ -17,7 +17,7 @@ use tokio_util::sync::CancellationToken;
 pub mod router;
 
 /// HTTP Protocol Adapter
-/// 
+///
 /// Wraps Axum HTTP server and provides protocol-specific I/O handling
 /// while using the common PipelineExecutor for business logic.
 pub struct HttpAdapter {
@@ -190,14 +190,19 @@ impl ProtocolAdapter for HttpAdapter {
         network_name: String,
         network_config: &crate::models::network::config::NetworkConfig,
     ) -> Box<dyn ProtocolAdapter> {
-        let bind_addr = format!("{}:{}", network_config.tcp_config.bind_address, network_config.tcp_config.bind_port)
-            .parse::<SocketAddr>()
-            .unwrap_or_else(|_| {
-                panic!(
-                    "Invalid TCP bind address or port for network '{}': {}:{}",
-                    network_name, network_config.tcp_config.bind_address, network_config.tcp_config.bind_port
-                )
-            });
+        let bind_addr = format!(
+            "{}:{}",
+            network_config.tcp_config.bind_address, network_config.tcp_config.bind_port
+        )
+        .parse::<SocketAddr>()
+        .unwrap_or_else(|_| {
+            panic!(
+                "Invalid TCP bind address or port for network '{}': {}:{}",
+                network_name,
+                network_config.tcp_config.bind_address,
+                network_config.tcp_config.bind_port
+            )
+        });
         Box::new(HttpAdapter::new(network_name, bind_addr))
     }
 

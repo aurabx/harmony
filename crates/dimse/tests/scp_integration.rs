@@ -2,9 +2,9 @@
 //!
 //! These tests verify the SCP can handle real DICOM associations and commands.
 
-use dimse::{DimseConfig, DimseScp};
 use dimse::scp::QueryProvider;
 use dimse::types::{DatasetStream, QueryLevel};
+use dimse::{DimseConfig, DimseScp};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::sync::Arc;
@@ -75,14 +75,12 @@ async fn test_scp_starts_and_stops() {
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
     let scp = DimseScp::new(config, provider);
-    
+
     let shutdown = CancellationToken::new();
     let shutdown_clone = shutdown.clone();
 
     // Start SCP in background
-    let handle = tokio::spawn(async move {
-        scp.run(shutdown_clone).await
-    });
+    let handle = tokio::spawn(async move { scp.run(shutdown_clone).await });
 
     // Give SCP time to start
     tokio::time::sleep(Duration::from_millis(100)).await;
@@ -132,21 +130,21 @@ async fn test_scp_accepts_c_echo() {
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
     let scp = DimseScp::new(config, provider);
-    
+
     let shutdown = CancellationToken::new();
     let shutdown_clone = shutdown.clone();
 
-    let handle = tokio::spawn(async move {
-        scp.run(shutdown_clone).await
-    });
+    let handle = tokio::spawn(async move { scp.run(shutdown_clone).await });
 
     // Wait for SCP to be ready
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Run echoscu
     let output = tokio::process::Command::new("echoscu")
-        .arg("--aetitle").arg("TEST_SCU")
-        .arg("--call").arg("ECHO_SCP")
+        .arg("--aetitle")
+        .arg("TEST_SCU")
+        .arg("--call")
+        .arg("ECHO_SCP")
         .arg("127.0.0.1")
         .arg(port.to_string())
         .output()
@@ -191,24 +189,25 @@ async fn test_scp_accepts_c_find() {
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
     let scp = DimseScp::new(config, provider);
-    
+
     let shutdown = CancellationToken::new();
     let shutdown_clone = shutdown.clone();
 
-    let handle = tokio::spawn(async move {
-        scp.run(shutdown_clone).await
-    });
+    let handle = tokio::spawn(async move { scp.run(shutdown_clone).await });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
     // Run findscu with a simple query
     let output = tokio::process::Command::new("findscu")
-        .arg("--aetitle").arg("TEST_SCU")
-        .arg("--call").arg("FIND_SCP")
+        .arg("--aetitle")
+        .arg("TEST_SCU")
+        .arg("--call")
+        .arg("FIND_SCP")
         .arg("-P")
         .arg("127.0.0.1")
         .arg(port.to_string())
-        .arg("-k").arg("0010,0020=*")
+        .arg("-k")
+        .arg("0010,0020=*")
         .output()
         .await
         .expect("Failed to run findscu");
@@ -216,7 +215,10 @@ async fn test_scp_accepts_c_find() {
     shutdown.cancel();
     let _ = timeout(Duration::from_secs(2), handle).await;
 
-    assert!(output.status.success(), "findscu should complete successfully");
+    assert!(
+        output.status.success(),
+        "findscu should complete successfully"
+    );
 }
 
 #[tokio::test]
@@ -242,7 +244,10 @@ async fn test_scp_config_validation() {
     };
 
     let result = config.validate();
-    assert!(result.is_err(), "Should reject AET longer than 16 characters");
+    assert!(
+        result.is_err(),
+        "Should reject AET longer than 16 characters"
+    );
 }
 
 #[tokio::test]
@@ -277,13 +282,11 @@ async fn test_scp_multiple_associations() {
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
     let scp = DimseScp::new(config, provider);
-    
+
     let shutdown = CancellationToken::new();
     let shutdown_clone = shutdown.clone();
 
-    let handle = tokio::spawn(async move {
-        scp.run(shutdown_clone).await
-    });
+    let handle = tokio::spawn(async move { scp.run(shutdown_clone).await });
 
     tokio::time::sleep(Duration::from_millis(200)).await;
 
@@ -293,8 +296,10 @@ async fn test_scp_multiple_associations() {
         let port = port;
         handles.push(tokio::spawn(async move {
             tokio::process::Command::new("echoscu")
-                .arg("--aetitle").arg("TEST_SCU")
-                .arg("--call").arg("MULTI_SCP")
+                .arg("--aetitle")
+                .arg("TEST_SCU")
+                .arg("--call")
+                .arg("MULTI_SCP")
                 .arg("127.0.0.1")
                 .arg(port.to_string())
                 .output()

@@ -125,55 +125,61 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
         };
 
         match token_result {
-                Ok(Some(token)) if token.is_valid() => {
-                    // Valid token found - start cloud polling
-                    let poll_interval = config.runbeam.poll_interval();
-                    let base_url = config.runbeam.effective_cloud_api_base_url();
+            Ok(Some(token)) if token.is_valid() => {
+                // Valid token found - start cloud polling
+                let poll_interval = config.runbeam.poll_interval();
+                let base_url = config.runbeam.effective_cloud_api_base_url();
 
-                    tracing::info!(
-                        "🌥️  Found valid stored token (gateway: {}), starting cloud polling",
-                        token.gateway_code
-                    );
+                tracing::info!(
+                    "🌥️  Found valid stored token (gateway: {}), starting cloud polling",
+                    token.gateway_code
+                );
 
-                    let cloud_shutdown = tokio_util::sync::CancellationToken::new();
-                    crate::globals::set_cloud_polling_token(cloud_shutdown.clone());
+                let cloud_shutdown = tokio_util::sync::CancellationToken::new();
+                crate::globals::set_cloud_polling_token(cloud_shutdown.clone());
 
-                    let initial_client = runbeam_sdk::RunbeamClient::new(base_url);
-                    let registry_clone = registry.clone();
-                    let machine_token = token.machine_token.clone();
+                let initial_client = runbeam_sdk::RunbeamClient::new(base_url);
+                let registry_clone = registry.clone();
+                let machine_token = token.machine_token.clone();
 
-                    tokio::spawn(async move {
-                        // Discover actual API base URL before starting poller
-                        let client = match initial_client.discover_base_url(&machine_token).await {
-                            Ok(c) => c,
-                            Err(e) => {
-                                tracing::warn!("Base URL discovery failed (using configured URL): {}", e);
-                                initial_client
-                            }
-                        };
+                tokio::spawn(async move {
+                    // Discover actual API base URL before starting poller
+                    let client = match initial_client.discover_base_url(&machine_token).await {
+                        Ok(c) => c,
+                        Err(e) => {
+                            tracing::warn!(
+                                "Base URL discovery failed (using configured URL): {}",
+                                e
+                            );
+                            initial_client
+                        }
+                    };
 
-                        crate::models::services::types::management::cloud_poller::start_cloud_polling(
-                            client,
-                            machine_token,
-                            poll_interval,
-                            registry_clone,
-                            cloud_shutdown,
-                        )
-                        .await;
-                    });
-                }
-                Ok(Some(token)) => {
-                    tracing::warn!(
+                    crate::models::services::types::management::cloud_poller::start_cloud_polling(
+                        client,
+                        machine_token,
+                        poll_interval,
+                        registry_clone,
+                        cloud_shutdown,
+                    )
+                    .await;
+                });
+            }
+            Ok(Some(token)) => {
+                tracing::warn!(
                         "Stored token for gateway '{}' has expired (expired at: {}). Waiting for re-authorization.",
                         token.gateway_code,
                         token.expires_at
                     );
-                }
-                Ok(None) => {
-                    tracing::info!("No stored token found. Gateway must be authorized via /admin/authorize endpoint.");
-                }
+            }
+            Ok(None) => {
+                tracing::info!("No stored token found. Gateway must be authorized via /admin/authorize endpoint.");
+            }
             Err(e) => {
-                tracing::warn!("Failed to load stored token: {}. Waiting for authorization.", e);
+                tracing::warn!(
+                    "Failed to load stored token: {}. Waiting for authorization.",
+                    e
+                );
             }
         }
     } else {

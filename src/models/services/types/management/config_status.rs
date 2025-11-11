@@ -30,8 +30,8 @@ pub async fn handle_config_status(
     registry: Arc<AdapterRegistry>,
 ) -> Result<serde_json::Value, (u16, String)> {
     // Get current config
-    let config = globals::get_config()
-        .ok_or_else(|| (500, "No config currently loaded".to_string()))?;
+    let config =
+        globals::get_config().ok_or_else(|| (500, "No config currently loaded".to_string()))?;
 
     // Get file modification time
     let config_last_modified = fs::metadata(&config_path)
@@ -73,6 +73,5 @@ pub async fn handle_config_status(
         log_level: config.logging.log_level.clone(),
     };
 
-    serde_json::to_value(response)
-        .map_err(|_| (500, "Failed to serialize response".to_string()))
+    serde_json::to_value(response).map_err(|_| (500, "Failed to serialize response".to_string()))
 }

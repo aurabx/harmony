@@ -2,10 +2,10 @@
 pub mod config;
 mod logging_config;
 mod proxy_config;
-mod runbeam_config;
 pub mod reload;
-pub mod watcher;
+mod runbeam_config;
 mod tests;
+pub mod watcher;
 
 /// Structure representing application startup arguments or metadata.
 #[derive(Debug)]

@@ -33,11 +33,11 @@ impl LoggingConfig {
                 self.log_level
             ));
         }
-        
+
         if self.log_to_file && self.log_file_path.trim().is_empty() {
             return Err("logging.log_file_path is required when log_to_file is true".to_string());
         }
-        
+
         Ok(())
     }
 }

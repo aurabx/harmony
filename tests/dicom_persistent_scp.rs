@@ -7,11 +7,9 @@ use serde_json::json;
 use std::collections::HashMap;
 
 // Helper function to create a test config with DICOM backends in a pipeline
-fn create_test_config_with_backends(
-    backends: Vec<(&str, &str, serde_json::Value)>,
-) -> Config {
+fn create_test_config_with_backends(backends: Vec<(&str, &str, serde_json::Value)>) -> Config {
     let mut config = Config::default();
-    
+
     // Create a test network
     let mut network = NetworkConfig::default();
     network.tcp_config = TcpConfig {
@@ -19,9 +17,9 @@ fn create_test_config_with_backends(
         bind_port: 8080,
     };
     config.network.insert("test_network".to_string(), network);
-    
+
     let mut backend_names = Vec::new();
-    
+
     // Add backends
     for (name, service, options) in backends {
         config.backends.insert(
@@ -40,7 +38,7 @@ fn create_test_config_with_backends(
         );
         backend_names.push(name.to_string());
     }
-    
+
     // Create a pipeline that uses these backends
     if !backend_names.is_empty() {
         config.pipelines.insert(
@@ -54,16 +52,14 @@ fn create_test_config_with_backends(
             },
         );
     }
-    
+
     config
 }
 
 // Helper function to create test config with DIMSE/dicom_scp endpoints
-fn create_test_config_with_endpoints(
-    endpoints: Vec<(&str, &str, serde_json::Value)>,
-) -> Config {
+fn create_test_config_with_endpoints(endpoints: Vec<(&str, &str, serde_json::Value)>) -> Config {
     let mut config = Config::default();
-    
+
     // Create a test network
     let mut network = NetworkConfig::default();
     network.tcp_config = TcpConfig {
@@ -71,9 +67,9 @@ fn create_test_config_with_endpoints(
         bind_port: 8080,
     };
     config.network.insert("test_network".to_string(), network);
-    
+
     let mut endpoint_names = Vec::new();
-    
+
     // Add endpoints
     for (name, service, options) in endpoints {
         config.endpoints.insert(
@@ -92,7 +88,7 @@ fn create_test_config_with_endpoints(
         );
         endpoint_names.push(name.to_string());
     }
-    
+
     // Create a pipeline that uses these endpoints
     if !endpoint_names.is_empty() {
         config.pipelines.insert(
@@ -106,19 +102,19 @@ fn create_test_config_with_endpoints(
             },
         );
     }
-    
+
     config
 }
 
 // Helper to count how many persistent DICOM SCPs should be started
 fn count_expected_persistent_scps(config: &Config, network_name: &str) -> usize {
     let mut count = 0;
-    
+
     for (_, pipeline_cfg) in &config.pipelines {
         if !pipeline_cfg.networks.contains(&network_name.to_string()) {
             continue;
         }
-        
+
         // Check endpoints for dimse/dicom_scp services
         for endpoint_name in &pipeline_cfg.endpoints {
             if let Some(endpoint) = config.endpoints.get(endpoint_name) {
@@ -127,7 +123,7 @@ fn count_expected_persistent_scps(config: &Config, network_name: &str) -> usize 
                 }
             }
         }
-        
+
         // Check backends for persistent SCPs
         for backend_name in &pipeline_cfg.backends {
             if let Some(backend) = config.backends.get(backend_name) {
@@ -137,10 +133,10 @@ fn count_expected_persistent_scps(config: &Config, network_name: &str) -> usize 
                             .get("persistent_store_scp")
                             .and_then(|v| v.as_bool())
                             .unwrap_or(false);
-                        let has_ports = options.contains_key("host") 
-                            && options.contains_key("port");
+                        let has_ports =
+                            options.contains_key("host") && options.contains_key("port");
                         let has_incoming = options.contains_key("incoming_store_port");
-                        
+
                         if (persistent || has_ports) && has_incoming {
                             count += 1;
                         }
@@ -149,7 +145,7 @@ fn count_expected_persistent_scps(config: &Config, network_name: &str) -> usize 
             }
         }
     }
-    
+
     count
 }
 
@@ -186,7 +182,10 @@ mod tests {
         )]);
 
         let count = count_expected_persistent_scps(&config, "test_network");
-        assert_eq!(count, 1, "Should detect 1 persistent SCP with minimal config");
+        assert_eq!(
+            count, 1,
+            "Should detect 1 persistent SCP with minimal config"
+        );
     }
 
     #[test]
@@ -201,7 +200,7 @@ mod tests {
                 }),
             ),
             (
-                "fhir_backend", 
+                "fhir_backend",
                 "fhir",
                 json!({
                     "persistent_store_scp": true,
@@ -226,7 +225,10 @@ mod tests {
         )]);
 
         let count = count_expected_persistent_scps(&config, "test_network");
-        assert_eq!(count, 0, "Backends with persistent_store_scp=false should be ignored");
+        assert_eq!(
+            count, 0,
+            "Backends with persistent_store_scp=false should be ignored"
+        );
     }
 
     #[test]
@@ -240,10 +242,13 @@ mod tests {
         )]);
 
         let count = count_expected_persistent_scps(&config, "test_network");
-        assert_eq!(count, 0, "Backends without persistent_store_scp flag should be ignored");
+        assert_eq!(
+            count, 0,
+            "Backends without persistent_store_scp flag should be ignored"
+        );
     }
 
-    #[test] 
+    #[test]
     fn test_missing_incoming_store_port_ignored() {
         let config = create_test_config_with_backends(vec![(
             "missing_port_pacs",
@@ -254,14 +259,17 @@ mod tests {
         )]);
 
         let count = count_expected_persistent_scps(&config, "test_network");
-        assert_eq!(count, 0, "Backends without incoming_store_port should be ignored");
+        assert_eq!(
+            count, 0,
+            "Backends without incoming_store_port should be ignored"
+        );
     }
 
     #[test]
     fn test_invalid_incoming_store_port_ignored() {
         let config = create_test_config_with_backends(vec![
             (
-                "invalid_port_zero", 
+                "invalid_port_zero",
                 "dicom",
                 json!({
                     "persistent_store_scp": true,
@@ -270,7 +278,7 @@ mod tests {
             ),
             (
                 "invalid_port_high",
-                "dicom", 
+                "dicom",
                 json!({
                     "persistent_store_scp": true,
                     "incoming_store_port": 99999
@@ -281,14 +289,17 @@ mod tests {
         let count = count_expected_persistent_scps(&config, "test_network");
         // Note: Port validation happens at runtime, not during discovery
         // These will be discovered but fail to start
-        assert_eq!(count, 2, "Invalid ports are discovered but will fail at startup");
+        assert_eq!(
+            count, 2,
+            "Invalid ports are discovered but will fail at startup"
+        );
     }
 
     #[test]
     fn test_custom_storage_dir() {
         let config = create_test_config_with_backends(vec![(
             "custom_storage_pacs",
-            "dicom", 
+            "dicom",
             json!({
                 "persistent_store_scp": true,
                 "incoming_store_port": 11112,
@@ -315,14 +326,17 @@ mod tests {
         )]);
 
         let count = count_expected_persistent_scps(&config, "test_network");
-        assert_eq!(count, 1, "Should detect SCP even with disabled feature flags");
+        assert_eq!(
+            count, 1,
+            "Should detect SCP even with disabled feature flags"
+        );
     }
 
     #[test]
     fn test_multiple_dicom_backends() {
         let config = create_test_config_with_backends(vec![
             (
-                "pacs1", 
+                "pacs1",
                 "dicom",
                 json!({
                     "persistent_store_scp": true,
@@ -333,7 +347,7 @@ mod tests {
                 "pacs2",
                 "dicom",
                 json!({
-                    "persistent_store_scp": true, 
+                    "persistent_store_scp": true,
                     "incoming_store_port": 11113
                 }),
             ),
@@ -348,7 +362,10 @@ mod tests {
         ]);
 
         let count = count_expected_persistent_scps(&config, "test_network");
-        assert_eq!(count, 2, "Should detect 2 persistent SCPs and ignore the disabled one");
+        assert_eq!(
+            count, 2,
+            "Should detect 2 persistent SCPs and ignore the disabled one"
+        );
     }
 
     #[test]
@@ -357,7 +374,7 @@ mod tests {
         let count = count_expected_persistent_scps(&config, "test_network");
         assert_eq!(count, 0, "Empty config should have no SCPs");
     }
-    
+
     #[test]
     fn test_dicom_scp_endpoint() {
         let config = create_test_config_with_endpoints(vec![(
@@ -373,7 +390,7 @@ mod tests {
         let count = count_expected_persistent_scps(&config, "test_network");
         assert_eq!(count, 1, "Should detect dicom_scp endpoint");
     }
-    
+
     #[test]
     fn test_dimse_endpoint_legacy() {
         let config = create_test_config_with_endpoints(vec![(
@@ -388,7 +405,7 @@ mod tests {
         let count = count_expected_persistent_scps(&config, "test_network");
         assert_eq!(count, 1, "Should detect legacy dimse endpoint");
     }
-    
+
     #[test]
     fn test_backend_with_host_port_detected() {
         // Test the legacy detection: backends with host+port but no persistent_store_scp flag
@@ -403,9 +420,12 @@ mod tests {
         )]);
 
         let count = count_expected_persistent_scps(&config, "test_network");
-        assert_eq!(count, 1, "Backend with host+port should be detected as persistent SCP");
+        assert_eq!(
+            count, 1,
+            "Backend with host+port should be detected as persistent SCP"
+        );
     }
-    
+
     #[test]
     fn test_mixed_endpoints_and_backends() {
         let mut config = create_test_config_with_endpoints(vec![(
@@ -413,7 +433,7 @@ mod tests {
             "dicom_scp",
             json!({ "port": 11112 }),
         )]);
-        
+
         // Add a backend to the same pipeline
         config.backends.insert(
             "pacs_backend".to_string(),
@@ -421,20 +441,19 @@ mod tests {
                 service: "dicom".to_string(),
                 options: Some({
                     let mut map = HashMap::new();
-                    map.insert(
-                        "persistent_store_scp".to_string(),
-                        json!(true),
-                    );
-                    map.insert(
-                        "incoming_store_port".to_string(),
-                        json!(11113),
-                    );
+                    map.insert("persistent_store_scp".to_string(), json!(true));
+                    map.insert("incoming_store_port".to_string(), json!(11113));
                     map
                 }),
             },
         );
-        config.pipelines.get_mut("test_pipeline").unwrap().backends.push("pacs_backend".to_string());
-        
+        config
+            .pipelines
+            .get_mut("test_pipeline")
+            .unwrap()
+            .backends
+            .push("pacs_backend".to_string());
+
         let count = count_expected_persistent_scps(&config, "test_network");
         assert_eq!(count, 2, "Should detect both endpoint and backend SCPs");
     }

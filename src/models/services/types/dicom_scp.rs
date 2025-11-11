@@ -11,7 +11,7 @@ use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 
 /// DICOM SCP (Service Class Provider) endpoint configuration
-/// 
+///
 /// This service handles incoming DICOM DIMSE requests (C-FIND, C-MOVE, C-GET, C-STORE)
 /// and routes them through the pipeline system.
 #[derive(Debug, Deserialize)]
@@ -201,7 +201,7 @@ impl ServiceHandler<Value> for DicomScpEndpoint {
         // SCP endpoint processes incoming DIMSE requests
         // The envelope has already been built by build_protocol_envelope
         // Here we can add additional validation or preprocessing if needed
-        
+
         // Validate operation type
         let operation = envelope
             .request_details

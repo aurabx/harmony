@@ -231,7 +231,10 @@ mod tests {
         };
 
         let after_left = middleware.left(request_envelope).await.unwrap();
-        assert_eq!(after_left.normalized_data.as_ref().unwrap()["mw_left"], json!(true));
+        assert_eq!(
+            after_left.normalized_data.as_ref().unwrap()["mw_left"],
+            json!(true)
+        );
 
         // Right pass
         let response_envelope = ResponseEnvelope {

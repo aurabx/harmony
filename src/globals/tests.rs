@@ -15,7 +15,10 @@ mod tests {
         assert!(retrieved.is_some());
 
         let retrieved_config = retrieved.unwrap();
-        assert_eq!(Arc::strong_count(&config) - 1, Arc::strong_count(&retrieved_config) - 1);
+        assert_eq!(
+            Arc::strong_count(&config) - 1,
+            Arc::strong_count(&retrieved_config) - 1
+        );
     }
 
     #[test]
@@ -31,7 +34,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_set_and_get_storage() {
-        let storage = Arc::new(FilesystemStorage::new("./tmp/test").unwrap()) as Arc<dyn StorageBackend>;
+        let storage =
+            Arc::new(FilesystemStorage::new("./tmp/test").unwrap()) as Arc<dyn StorageBackend>;
         set_storage(storage.clone());
 
         let retrieved = get_storage();
@@ -41,7 +45,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_reset_storage() {
-        let storage = Arc::new(FilesystemStorage::new("./tmp/test").unwrap()) as Arc<dyn StorageBackend>;
+        let storage =
+            Arc::new(FilesystemStorage::new("./tmp/test").unwrap()) as Arc<dyn StorageBackend>;
         set_storage(storage);
 
         // Verify it's set
@@ -71,7 +76,8 @@ mod tests {
     #[test]
     #[serial]
     fn test_storage_persistence_across_calls() {
-        let storage = Arc::new(FilesystemStorage::new("./tmp/test").unwrap()) as Arc<dyn StorageBackend>;
+        let storage =
+            Arc::new(FilesystemStorage::new("./tmp/test").unwrap()) as Arc<dyn StorageBackend>;
         set_storage(storage);
 
         // Get storage multiple times
@@ -100,10 +106,12 @@ mod tests {
     #[test]
     #[serial]
     fn test_overwrite_storage() {
-        let storage1 = Arc::new(FilesystemStorage::new("./tmp/test1").unwrap()) as Arc<dyn StorageBackend>;
+        let storage1 =
+            Arc::new(FilesystemStorage::new("./tmp/test1").unwrap()) as Arc<dyn StorageBackend>;
         set_storage(storage1);
 
-        let storage2 = Arc::new(FilesystemStorage::new("./tmp/test2").unwrap()) as Arc<dyn StorageBackend>;
+        let storage2 =
+            Arc::new(FilesystemStorage::new("./tmp/test2").unwrap()) as Arc<dyn StorageBackend>;
         set_storage(storage2);
 
         // Should have the new storage

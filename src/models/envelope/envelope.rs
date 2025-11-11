@@ -54,31 +54,33 @@ impl TargetDetails {
             metadata: request_details.metadata.clone(),
         }
     }
-    
+
     /// Constructs the full URL by combining base_url with uri and query_params
     pub fn full_url(&self) -> Result<String, crate::utils::Error> {
         let mut url = format!("{}{}", self.base_url, self.uri);
-        
+
         // Add query parameters if any exist
         if !self.query_params.is_empty() {
-            let params: Vec<String> = self.query_params
+            let params: Vec<String> = self
+                .query_params
                 .iter()
                 .flat_map(|(key, values)| {
                     values.iter().map(move |value| {
-                        format!("{}={}", 
-                            urlencoding::encode(key), 
+                        format!(
+                            "{}={}",
+                            urlencoding::encode(key),
                             urlencoding::encode(value)
                         )
                     })
                 })
                 .collect();
-            
+
             if !params.is_empty() {
                 url.push('?');
                 url.push_str(&params.join("&"));
             }
         }
-        
+
         Ok(url)
     }
 }
@@ -148,9 +150,9 @@ where
     }
 
     /// Creates a new RequestEnvelopeBuilder.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```ignore
     /// let envelope = RequestEnvelope::builder()
     ///     .method("GET")
@@ -164,14 +166,14 @@ where
 }
 
 /// Builder for constructing RequestEnvelope instances with sensible defaults.
-/// 
+///
 /// This builder simplifies creating RequestEnvelope instances by:
 /// - Providing default values for optional fields (empty HashMaps, None)
 /// - Automatically cloning request_details to backend_request_details
 /// - Auto-normalizing original_data to JSON when T implements Serialize
-/// 
+///
 /// # Examples
-/// 
+///
 /// ## Minimal usage
 /// ```ignore
 /// let envelope = RequestEnvelopeBuilder::new()
@@ -180,7 +182,7 @@ where
 ///     .original_data(vec![1, 2, 3])
 ///     .build()?;
 /// ```
-/// 
+///
 /// ## From existing RequestDetails
 /// ```ignore
 /// let request_details = RequestDetails { /* ... */ };
@@ -188,7 +190,7 @@ where
 ///     .original_data(serde_json::json!({"key": "value"}))
 ///     .build()?;
 /// ```
-/// 
+///
 /// ## With metadata and headers
 /// ```ignore
 /// let envelope = RequestEnvelopeBuilder::new()
@@ -253,7 +255,11 @@ impl<T> RequestEnvelopeBuilder<T> {
     }
 
     /// Creates a minimal envelope with only required fields.
-    pub fn with_minimal(method: impl Into<String>, uri: impl Into<String>, original_data: T) -> Self {
+    pub fn with_minimal(
+        method: impl Into<String>,
+        uri: impl Into<String>,
+        original_data: T,
+    ) -> Self {
         Self {
             method: Some(method.into()),
             uri: Some(uri.into()),
@@ -366,9 +372,9 @@ where
     T: Serialize,
 {
     /// Builds the RequestEnvelope, validating required fields and applying defaults.
-    /// 
+    ///
     /// # Errors
-    /// 
+    ///
     /// Returns an error if:
     /// - method is not set
     /// - uri is not set  
@@ -570,12 +576,12 @@ impl<T> RequestEnvelope<T> {
     }
 
     /// Sets the base URL for the backend target.
-    /// 
+    ///
     /// This allows middleware to override which backend the request is sent to.
     /// If target_details doesn't exist, it will be initialized from request_details.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```ignore
     /// envelope.set_target_base_url("https://api.example.com");
     /// ```
@@ -585,12 +591,12 @@ impl<T> RequestEnvelope<T> {
     }
 
     /// Sets the URI/path for the backend target.
-    /// 
+    ///
     /// This allows middleware to rewrite the request path before it reaches the backend.
     /// If target_details doesn't exist, it will be initialized from request_details.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```ignore
     /// envelope.set_target_uri("/v2/resource");
     /// ```
@@ -600,12 +606,12 @@ impl<T> RequestEnvelope<T> {
     }
 
     /// Sets or updates a header in the target_details.
-    /// 
+    ///
     /// This allows middleware to add or modify headers that will be sent to the backend.
     /// If target_details doesn't exist, it will be initialized from request_details.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```ignore
     /// envelope.set_target_header("Authorization", "Bearer token123");
     /// ```
@@ -615,12 +621,12 @@ impl<T> RequestEnvelope<T> {
     }
 
     /// Sets or updates a query parameter in the target_details.
-    /// 
+    ///
     /// This allows middleware to add or modify query parameters sent to the backend.
     /// If target_details doesn't exist, it will be initialized from request_details.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```ignore
     /// envelope.set_target_query_param("filter", vec!["active".to_string()]);
     /// ```
@@ -630,12 +636,12 @@ impl<T> RequestEnvelope<T> {
     }
 
     /// Sets or updates a metadata entry in the target_details.
-    /// 
+    ///
     /// This allows middleware to set backend-specific metadata, such as DIMSE operations.
     /// If target_details doesn't exist, it will be initialized from request_details.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```ignore
     /// envelope.set_target_metadata("dimse_op", "find");
     /// ```
@@ -645,12 +651,12 @@ impl<T> RequestEnvelope<T> {
     }
 
     /// Sets the HTTP method for the backend target.
-    /// 
+    ///
     /// This allows middleware to change the HTTP method used for the backend request.
     /// If target_details doesn't exist, it will be initialized from request_details.
-    /// 
+    ///
     /// # Example
-    /// 
+    ///
     /// ```ignore
     /// envelope.set_target_method("POST");
     /// ```
@@ -708,9 +714,15 @@ mod tests {
         envelope.set_target_header("Authorization", "Bearer token123");
 
         let target = envelope.target_details.as_ref().unwrap();
-        assert_eq!(target.headers.get("Authorization"), Some(&"Bearer token123".to_string()));
+        assert_eq!(
+            target.headers.get("Authorization"),
+            Some(&"Bearer token123".to_string())
+        );
         // Should also have original headers
-        assert_eq!(target.headers.get("content-type"), Some(&"application/json".to_string()));
+        assert_eq!(
+            target.headers.get("content-type"),
+            Some(&"application/json".to_string())
+        );
     }
 
     #[test]
@@ -719,9 +731,15 @@ mod tests {
         envelope.set_target_query_param("filter", vec!["active".to_string()]);
 
         let target = envelope.target_details.as_ref().unwrap();
-        assert_eq!(target.query_params.get("filter"), Some(&vec!["active".to_string()]));
+        assert_eq!(
+            target.query_params.get("filter"),
+            Some(&vec!["active".to_string()])
+        );
         // Should also have original query params
-        assert_eq!(target.query_params.get("key"), Some(&vec!["value".to_string()]));
+        assert_eq!(
+            target.query_params.get("key"),
+            Some(&vec!["value".to_string()])
+        );
     }
 
     #[test]
@@ -747,7 +765,7 @@ mod tests {
     #[test]
     fn test_chaining_multiple_setters() {
         let mut envelope = create_test_envelope();
-        
+
         envelope.set_target_base_url("https://backend.example.com");
         envelope.set_target_uri("/v2/api");
         envelope.set_target_method("POST");
@@ -765,11 +783,11 @@ mod tests {
     #[test]
     fn test_update_existing_target_details() {
         let mut envelope = create_test_envelope();
-        
+
         // Set initial values
         envelope.set_target_base_url("https://first.example.com");
         envelope.set_target_uri("/v1/api");
-        
+
         // Update values
         envelope.set_target_base_url("https://second.example.com");
         envelope.set_target_uri("/v2/api");

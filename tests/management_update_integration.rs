@@ -280,7 +280,7 @@ async fn test_update_endpoint_with_missing_proxy_id() {
     // Load config - this should actually fail during Config::from_args validation
     // but we test the update handler's validation as well
     let cli = Cli::new(config_path.to_string_lossy().to_string());
-    
+
     // Note: Config validation may catch this before we even get to the update handler
     // This test verifies the defense-in-depth approach
     match std::panic::catch_unwind(|| Config::from_args(cli)) {

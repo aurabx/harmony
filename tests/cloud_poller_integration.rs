@@ -51,11 +51,11 @@ network = "default"
 
     let config_path = dir.path().join("test-config.toml");
     fs::write(&config_path, config_content).expect("Failed to write test config");
-    
+
     // Create required directories
     fs::create_dir_all(dir.path().join("pipelines")).ok();
     fs::create_dir_all(dir.path().join("transforms")).ok();
-    
+
     config_path
 }
 
@@ -200,7 +200,10 @@ async fn test_load_and_validate_config_success() {
     // Verify basic config properties
     assert_eq!(config.proxy.id, "test-proxy");
     assert!(config.network.contains_key("default"));
-    assert_eq!(config.network.get("default").unwrap().tcp_config.bind_port, 8080);
+    assert_eq!(
+        config.network.get("default").unwrap().tcp_config.bind_port,
+        8080
+    );
 }
 
 #[tokio::test]
@@ -238,7 +241,9 @@ async fn test_cloud_config_diff_zero_downtime() {
     // Verify it's a zero-downtime change
     assert!(diff.has_changes());
     assert!(!diff.requires_adapter_restart());
-    assert!(diff.zero_downtime_changes.contains(&"middleware".to_string()));
+    assert!(diff
+        .zero_downtime_changes
+        .contains(&"middleware".to_string()));
 }
 
 #[tokio::test]
@@ -262,7 +267,9 @@ async fn test_cloud_config_diff_requires_restart() {
     // Verify it requires adapter restart
     assert!(diff.has_changes());
     assert!(diff.requires_adapter_restart());
-    assert!(diff.adapter_restarts_required.contains(&"default".to_string()));
+    assert!(diff
+        .adapter_restarts_required
+        .contains(&"default".to_string()));
 }
 
 #[tokio::test]
@@ -422,7 +429,7 @@ async fn test_tmp_directory_creation() {
 #[tokio::test]
 async fn test_config_change_field_structure() {
     use serde_json::json;
-    
+
     // Test that Change deserializes correctly from API response
     let json = json!({
         "id": "01k8vdq9wrcrezzbdpbjwsfwnz",
@@ -432,7 +439,7 @@ async fn test_config_change_field_structure() {
         "pipeline_id": null,
         "created_at": "2025-10-30T20:42:36.000000Z"
     });
-    
+
     let change: Change = serde_json::from_value(json).unwrap();
     assert_eq!(change.id, "01k8vdq9wrcrezzbdpbjwsfwnz");
     assert_eq!(change.status, Some("queued".to_string()));
@@ -445,7 +452,7 @@ async fn test_config_change_field_structure() {
 #[tokio::test]
 async fn test_config_change_detail_field_structure() {
     use serde_json::json;
-    
+
     // Test that Change deserializes with all fields (detail view)
     let json = json!({
         "id": "01k8vdq9wrcrezzbdpbjwsfwnz",
@@ -465,12 +472,16 @@ async fn test_config_change_detail_field_structure() {
         "error_message": null,
         "error_details": null
     });
-    
+
     let detail: Change = serde_json::from_value(json).unwrap();
     assert_eq!(detail.id, "01k8vdq9wrcrezzbdpbjwsfwnz");
     assert_eq!(detail.status, Some("queued".to_string()));
     assert_eq!(detail.resource_type, "gateway");
-    assert!(detail.toml_config.as_ref().unwrap().contains("gateway-aaace14a"));
+    assert!(detail
+        .toml_config
+        .as_ref()
+        .unwrap()
+        .contains("gateway-aaace14a"));
     assert!(detail.metadata.is_some());
     assert!(detail.acknowledged_at.is_none());
     assert!(detail.applied_at.is_none());
@@ -480,7 +491,7 @@ async fn test_config_change_detail_field_structure() {
 #[tokio::test]
 async fn test_config_change_with_error_fields() {
     use serde_json::json;
-    
+
     // Test that Change handles error fields correctly
     let json = json!({
         "id": "01k8abc123",
@@ -501,20 +512,26 @@ async fn test_config_change_with_error_fields() {
             "expected": "value"
         }
     });
-    
+
     let detail: Change = serde_json::from_value(json).unwrap();
     assert_eq!(detail.status, Some("failed".to_string()));
     assert!(detail.acknowledged_at.is_some());
     assert!(detail.applied_at.is_none());
-    assert_eq!(detail.failed_at, Some("2025-10-30T20:42:45.000000Z".to_string()));
-    assert_eq!(detail.error_message, Some("Invalid TOML syntax".to_string()));
+    assert_eq!(
+        detail.failed_at,
+        Some("2025-10-30T20:42:45.000000Z".to_string())
+    );
+    assert_eq!(
+        detail.error_message,
+        Some("Invalid TOML syntax".to_string())
+    );
     assert!(detail.error_details.is_some());
 }
 
 #[tokio::test]
 async fn test_pipeline_config_change() {
     use serde_json::json;
-    
+
     // Test that pipeline-type changes deserialize correctly
     let json = json!({
         "id": "01k8pipeline123",
@@ -524,7 +541,7 @@ async fn test_pipeline_config_change() {
         "pipeline_id": "01k8pipe001",
         "created_at": "2025-10-30T20:42:36.000000Z"
     });
-    
+
     let change: Change = serde_json::from_value(json).unwrap();
     assert_eq!(change.resource_type, "pipeline");
     assert_eq!(change.pipeline_id, Some("01k8pipe001".to_string()));
@@ -539,11 +556,11 @@ async fn test_changes_should_be_reversed() {
         ("change-2", "2025-10-30T20:44:00Z"),
         ("change-1", "2025-10-30T20:43:00Z"), // Oldest
     ];
-    
+
     // Simulate reversing for processing (oldest first)
     let mut reversed: Vec<_> = changes.iter().collect();
     reversed.reverse();
-    
+
     // Verify oldest comes first after reversal
     assert_eq!(reversed[0].0, "change-1");
     assert_eq!(reversed[1].0, "change-2");
@@ -553,7 +570,7 @@ async fn test_changes_should_be_reversed() {
 #[tokio::test]
 async fn test_toml_config_extraction() {
     use serde_json::json;
-    
+
     let toml_content = r#"[proxy]
 id = "test-gateway"
 log_level = "info"
@@ -566,7 +583,7 @@ enable_wireguard = false
 bind_address = "127.0.0.1"
 bind_port = 8080
 "#;
-    
+
     let json = json!({
         "id": "01k8test",
         "status": "queued",
@@ -582,15 +599,15 @@ bind_port = 8080
         "error_message": null,
         "error_details": null
     });
-    
+
     let detail: Change = serde_json::from_value(json).unwrap();
-    
+
     // Verify TOML content is preserved
     let toml_config = detail.toml_config.as_ref().unwrap();
     assert!(toml_config.contains("test-gateway"));
     assert!(toml_config.contains("bind_address"));
     assert!(toml_config.contains("127.0.0.1"));
-    
+
     // Verify it can be parsed as TOML
     let parsed: Result<toml::Value, _> = toml::from_str(toml_config);
     assert!(parsed.is_ok(), "TOML config should be valid");
@@ -599,7 +616,7 @@ bind_port = 8080
 #[tokio::test]
 async fn test_metadata_json_structure() {
     use serde_json::json;
-    
+
     let json = json!({
         "id": "01k8test",
         "status": "queued",
@@ -620,10 +637,10 @@ async fn test_metadata_json_structure() {
         "error_message": null,
         "error_details": null
     });
-    
+
     let detail: Change = serde_json::from_value(json).unwrap();
     assert!(detail.metadata.is_some());
-    
+
     let metadata = detail.metadata.unwrap();
     assert_eq!(metadata["gateway_name"], "my-gateway");
     assert_eq!(metadata["version"], "1.0");
@@ -633,7 +650,7 @@ async fn test_metadata_json_structure() {
 #[tokio::test]
 async fn test_change_lifecycle_timestamps() {
     use serde_json::json;
-    
+
     // Test a change that has been fully processed
     let json = json!({
         "id": "01k8complete",
@@ -650,15 +667,21 @@ async fn test_change_lifecycle_timestamps() {
         "error_message": null,
         "error_details": null
     });
-    
+
     let detail: Change = serde_json::from_value(json).unwrap();
-    
+
     // Verify all lifecycle timestamps
     assert_eq!(detail.created_at, "2025-10-30T20:42:36.000000Z");
-    assert_eq!(detail.acknowledged_at, Some("2025-10-30T20:42:40.000000Z".to_string()));
-    assert_eq!(detail.applied_at, Some("2025-10-30T20:42:45.000000Z".to_string()));
+    assert_eq!(
+        detail.acknowledged_at,
+        Some("2025-10-30T20:42:40.000000Z".to_string())
+    );
+    assert_eq!(
+        detail.applied_at,
+        Some("2025-10-30T20:42:45.000000Z".to_string())
+    );
     assert!(detail.failed_at.is_none());
-    
+
     // Verify status matches lifecycle
     assert_eq!(detail.status, Some("applied".to_string()));
 }
@@ -668,11 +691,11 @@ async fn test_cloud_config_file_path_generation() {
     // Test that cloud config file paths are generated correctly
     let change_id = "01k8vdq9wrcrezzbdpbjwsfwnz";
     let expected_path = format!("./tmp/cloud_config_{}.toml", change_id);
-    
+
     assert!(expected_path.contains("./tmp/cloud_config_"));
     assert!(expected_path.ends_with(".toml"));
     assert!(expected_path.contains(change_id));
-    
+
     // Verify it's a valid path
     let path = PathBuf::from(&expected_path);
     assert_eq!(path.extension().unwrap(), "toml");
@@ -681,7 +704,7 @@ async fn test_cloud_config_file_path_generation() {
 #[tokio::test]
 async fn test_empty_changes_list() {
     use serde_json::json;
-    
+
     // Test empty changes array
     let json = json!([]);
     let changes: Vec<Change> = serde_json::from_value(json).unwrap();
@@ -691,7 +714,7 @@ async fn test_empty_changes_list() {
 #[tokio::test]
 async fn test_multiple_changes_ordering() {
     use serde_json::json;
-    
+
     // Test multiple changes in response
     let json = json!([
         {
@@ -719,15 +742,15 @@ async fn test_multiple_changes_ordering() {
             "created_at": "2025-10-30T20:43:00.000000Z"
         }
     ]);
-    
+
     let mut changes: Vec<Change> = serde_json::from_value(json).unwrap();
     assert_eq!(changes.len(), 3);
-    
+
     // Verify API returns newest first
     assert_eq!(changes[0].id, "change-3");
     assert_eq!(changes[1].id, "change-2");
     assert_eq!(changes[2].id, "change-1");
-    
+
     // Reverse for processing (oldest first)
     changes.reverse();
     assert_eq!(changes[0].id, "change-1");

@@ -135,7 +135,7 @@ impl Middleware for JmixBuilderMiddleware {
             // Serve manifest
             if wants_manifest {
                 let manifest_path = package_dir.join("manifest.json");
-                
+
                 // Try to read manifest from file first, then from ZIP if not found
                 let manifest_json_opt = if manifest_path.exists() {
                     fs::read_to_string(&manifest_path)
@@ -229,7 +229,7 @@ impl Middleware for JmixBuilderMiddleware {
                 Some(id.to_string()),
                 Some(true),
             );
-            
+
             // Also store metadata in request_details for immediate response processing
             envelope
                 .request_details
@@ -293,7 +293,7 @@ impl Middleware for JmixBuilderMiddleware {
                 Some(id.to_string()),
                 Some(true),
             );
-            
+
             // Also store metadata in request_details for immediate response processing
             envelope
                 .request_details
@@ -616,7 +616,7 @@ mod tests {
     fn test_builds_jmix_envelope_from_dicom_result() {
         // Reset global storage to ensure clean state
         crate::globals::reset_storage();
-        
+
         // Create unique storage for this test
         let storage = create_test_storage();
         set_storage(storage.clone());
@@ -740,9 +740,7 @@ mod tests {
 
         let mw = JmixBuilderMiddleware::new();
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(async move {
-            mw.right(env).await
-        });
+        let result = rt.block_on(async move { mw.right(env).await });
 
         // Check if the middleware ran successfully
         match &result {
@@ -831,7 +829,7 @@ mod tests {
         assert!(archive.len() > 0, "Zip should contain files");
         assert!(has_manifest, "Zip should contain manifest.json");
         // Note: metadata.json and DICOM files might be optional depending on jmix-rs behavior
-        
+
         // Clean up: Remove the test-specific storage to avoid interference
         drop(storage);
     }

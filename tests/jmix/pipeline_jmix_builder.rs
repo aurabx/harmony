@@ -245,38 +245,41 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
     let zip_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    
+
     // If not OK, print the error response and exit
     if status != StatusCode::OK {
         let body_str = String::from_utf8_lossy(&zip_bytes);
         eprintln!("Error response (status {}): {}", status, body_str);
         assert_eq!(status, StatusCode::OK, "Expected OK status, got {}", status);
     }
-    
+
     // Verify we got a ZIP file
     if zip_bytes.is_empty() {
         eprintln!("Error: Empty response body with status {}", status);
         assert!(!zip_bytes.is_empty(), "Response body should not be empty");
     }
-    
+
     // Extract the JMIX ID from the ZIP's manifest.json
     use std::io::Cursor;
-    let mut archive = zip::ZipArchive::new(Cursor::new(&zip_bytes))
-        .expect("Valid ZIP archive");
-    
+    let mut archive = zip::ZipArchive::new(Cursor::new(&zip_bytes)).expect("Valid ZIP archive");
+
     let mut manifest_content = String::new();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).expect("ZIP entry");
         if file.name().ends_with("manifest.json") {
             use std::io::Read;
-            file.read_to_string(&mut manifest_content).expect("Read manifest");
+            file.read_to_string(&mut manifest_content)
+                .expect("Read manifest");
             break;
         }
     }
-    
-    assert!(!manifest_content.is_empty(), "manifest.json should exist in ZIP");
-    let manifest_json: serde_json::Value = serde_json::from_str(&manifest_content)
-        .expect("Valid manifest JSON");
+
+    assert!(
+        !manifest_content.is_empty(),
+        "manifest.json should exist in ZIP"
+    );
+    let manifest_json: serde_json::Value =
+        serde_json::from_str(&manifest_content).expect("Valid manifest JSON");
     let id = manifest_json
         .get("id")
         .and_then(|v| v.as_str())

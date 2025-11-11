@@ -6,9 +6,9 @@ use tempfile::TempDir;
 // This duplicates the logic from cloud_poller.rs for testing purposes
 fn extract_transform_ids_test(toml_config: &str) -> Result<Vec<String>, String> {
     use std::collections::HashSet;
-    
-    let config: toml::Value = toml::from_str(toml_config)
-        .map_err(|e| format!("Failed to parse TOML config: {}", e))?;
+
+    let config: toml::Value =
+        toml::from_str(toml_config).map_err(|e| format!("Failed to parse TOML config: {}", e))?;
 
     let mut transform_ids = HashSet::new();
 
@@ -21,13 +21,10 @@ fn extract_transform_ids_test(toml_config: &str) -> Result<Vec<String>, String> 
                         .and_then(|opts| opts.get("spec_path"))
                         .and_then(|v| v.as_str())
                     {
-                        let filename = spec_path
-                            .rsplit('/')
-                            .next()
-                            .unwrap_or(spec_path);
-                        
+                        let filename = spec_path.rsplit('/').next().unwrap_or(spec_path);
+
                         let transform_id = filename.strip_suffix(".json").unwrap_or(filename);
-                        
+
                         if !transform_id.is_empty() {
                             transform_ids.insert(transform_id.to_string());
                         }
@@ -87,7 +84,7 @@ bind_port = 8080
 
     let result = extract_transform_ids_test(config);
     assert!(result.is_ok());
-    
+
     let ids = result.unwrap();
     assert_eq!(ids.len(), 1);
     assert!(ids.contains(&"01k81xczrw551e1qj9rgrf0319".to_string()));
@@ -128,7 +125,7 @@ bind_port = 8080
 
     let result = extract_transform_ids_test(config);
     assert!(result.is_ok());
-    
+
     let ids = result.unwrap();
     assert_eq!(ids.len(), 2);
     assert!(ids.contains(&"01k81xczrw551e1qj9rgrf0319".to_string()));
@@ -151,7 +148,7 @@ spec_path = "subfolder/01k81xczrw551e1qj9rgrf0319.json"
 
     let result = extract_transform_ids_test(config);
     assert!(result.is_ok());
-    
+
     let ids = result.unwrap();
     assert_eq!(ids.len(), 1);
     assert!(ids.contains(&"01k81xczrw551e1qj9rgrf0319".to_string()));
@@ -173,7 +170,7 @@ spec_path = "01k81xczrw551e1qj9rgrf0319"
 
     let result = extract_transform_ids_test(config);
     assert!(result.is_ok());
-    
+
     let ids = result.unwrap();
     assert_eq!(ids.len(), 1);
     assert!(ids.contains(&"01k81xczrw551e1qj9rgrf0319".to_string()));
@@ -201,7 +198,7 @@ spec_path = "01k81xczrw551e1qj9rgrf0319.json"
 
     let result = extract_transform_ids_test(config);
     assert!(result.is_ok());
-    
+
     // Should deduplicate - same transform used twice
     let ids = result.unwrap();
     assert_eq!(ids.len(), 1);
@@ -251,7 +248,7 @@ apply = "right"
 
     let result = extract_transform_ids_test(config);
     assert!(result.is_ok());
-    
+
     let ids = result.unwrap();
     assert_eq!(ids.len(), 2);
     assert!(ids.contains(&"patient_to_fhir".to_string()));
@@ -262,10 +259,10 @@ apply = "right"
 async fn test_transform_file_write_and_read() {
     let temp_dir = TempDir::new().unwrap();
     let transforms_dir = temp_dir.path().join("transforms");
-    
+
     // Create transforms directory
     fs::create_dir_all(&transforms_dir).expect("Failed to create transforms dir");
-    
+
     // Write a mock JOLT spec
     let transform_id = "01k81xczrw551e1qj9rgrf0319";
     let jolt_spec = r#"[
@@ -277,15 +274,15 @@ async fn test_transform_file_write_and_read() {
     }
   }
 ]"#;
-    
+
     let transform_path = transforms_dir.join(format!("{}.json", transform_id));
     fs::write(&transform_path, jolt_spec).expect("Failed to write transform");
-    
+
     // Verify file exists and content matches
     assert!(transform_path.exists());
     let content = fs::read_to_string(&transform_path).expect("Failed to read transform");
     assert_eq!(content, jolt_spec);
-    
+
     // Verify it's valid JSON
     let parsed: Result<serde_json::Value, _> = serde_json::from_str(&content);
     assert!(parsed.is_ok(), "Transform spec should be valid JSON");
@@ -295,24 +292,24 @@ async fn test_transform_file_write_and_read() {
 async fn test_transform_file_overwrite() {
     let temp_dir = TempDir::new().unwrap();
     let transforms_dir = temp_dir.path().join("transforms");
-    
+
     fs::create_dir_all(&transforms_dir).expect("Failed to create transforms dir");
-    
+
     let transform_id = "01k81xczrw551e1qj9rgrf0319";
     let transform_path = transforms_dir.join(format!("{}.json", transform_id));
-    
+
     // Write initial version
     let old_spec = r#"[{"operation": "shift"}]"#;
     fs::write(&transform_path, old_spec).expect("Failed to write initial transform");
-    
+
     // Verify initial content
     let content = fs::read_to_string(&transform_path).expect("Failed to read transform");
     assert_eq!(content, old_spec);
-    
+
     // Overwrite with new version
     let new_spec = r#"[{"operation": "default"}]"#;
     fs::write(&transform_path, new_spec).expect("Failed to overwrite transform");
-    
+
     // Verify new content replaced old
     let content = fs::read_to_string(&transform_path).expect("Failed to read transform");
     assert_eq!(content, new_spec);
@@ -323,14 +320,14 @@ async fn test_transform_file_overwrite() {
 async fn test_transforms_directory_creation() {
     let temp_dir = TempDir::new().unwrap();
     let transforms_dir = temp_dir.path().join("transforms");
-    
+
     // Verify directory doesn't exist initially
     assert!(!transforms_dir.exists());
-    
+
     // Create directory
     let result = fs::create_dir_all(&transforms_dir);
     assert!(result.is_ok());
-    
+
     // Verify directory was created
     assert!(transforms_dir.exists());
     assert!(transforms_dir.is_dir());
@@ -340,15 +337,15 @@ async fn test_transforms_directory_creation() {
 async fn test_nested_transforms_directory() {
     let temp_dir = TempDir::new().unwrap();
     let nested_dir = temp_dir.path().join("config").join("transforms");
-    
+
     // Create nested directory structure
     let result = fs::create_dir_all(&nested_dir);
     assert!(result.is_ok());
-    
+
     // Verify both levels exist
     assert!(temp_dir.path().join("config").exists());
     assert!(nested_dir.exists());
-    
+
     // Write transform to nested directory
     let transform_path = nested_dir.join("test_transform.json");
     fs::write(&transform_path, "{}").expect("Failed to write transform");
@@ -359,16 +356,19 @@ async fn test_nested_transforms_directory() {
 async fn test_transform_filename_generation() {
     // Test various transform ID formats
     let test_cases = vec![
-        ("01k81xczrw551e1qj9rgrf0319", "01k81xczrw551e1qj9rgrf0319.json"),
+        (
+            "01k81xczrw551e1qj9rgrf0319",
+            "01k81xczrw551e1qj9rgrf0319.json",
+        ),
         ("patient_to_fhir", "patient_to_fhir.json"),
         ("simple-transform", "simple-transform.json"),
         ("transform_123", "transform_123.json"),
     ];
-    
+
     for (transform_id, expected_filename) in test_cases {
         let filename = format!("{}.json", transform_id);
         assert_eq!(filename, expected_filename);
-        
+
         // Verify it creates a valid path
         let path = PathBuf::from(&filename);
         assert_eq!(path.extension().unwrap(), "json");
@@ -379,27 +379,30 @@ async fn test_transform_filename_generation() {
 async fn test_multiple_transform_writes() {
     let temp_dir = TempDir::new().unwrap();
     let transforms_dir = temp_dir.path().join("transforms");
-    
+
     fs::create_dir_all(&transforms_dir).expect("Failed to create transforms dir");
-    
+
     // Write multiple transforms
     let transforms = vec![
         ("01k81xczrw551e1qj9rgrf0319", r#"[{"operation": "shift"}]"#),
-        ("01k81xgtn1hnbkfseyd82nar0m", r#"[{"operation": "default"}]"#),
+        (
+            "01k81xgtn1hnbkfseyd82nar0m",
+            r#"[{"operation": "default"}]"#,
+        ),
         ("patient_to_fhir", r#"[{"operation": "remove"}]"#),
     ];
-    
+
     for (id, spec) in &transforms {
         let path = transforms_dir.join(format!("{}.json", id));
         fs::write(&path, spec).expect("Failed to write transform");
     }
-    
+
     // Verify all files exist
     for (id, _) in &transforms {
         let path = transforms_dir.join(format!("{}.json", id));
         assert!(path.exists(), "Transform {} should exist", id);
     }
-    
+
     // Verify directory contains exactly 3 files
     let entries: Vec<_> = fs::read_dir(&transforms_dir)
         .expect("Failed to read dir")
@@ -455,8 +458,11 @@ network = "default"
 
     // Verify it parses as valid TOML
     let parsed: Result<toml::Value, _> = toml::from_str(config);
-    assert!(parsed.is_ok(), "Config with transforms should be valid TOML");
-    
+    assert!(
+        parsed.is_ok(),
+        "Config with transforms should be valid TOML"
+    );
+
     // Verify transform extraction works
     let ids = extract_transform_ids_test(config).unwrap();
     assert_eq!(ids.len(), 1);
@@ -466,7 +472,7 @@ network = "default"
 #[test]
 fn test_config_change_with_transforms_structure() {
     use serde_json::json;
-    
+
     // Test a Change with transform middleware
     let config_toml = r#"[proxy]
 id = "gateway-123"
@@ -486,7 +492,7 @@ enable_wireguard = false
 bind_address = "127.0.0.1"
 bind_port = 8080
 "#;
-    
+
     let json = json!({
         "id": "01k8change123",
         "status": "queued",
@@ -505,15 +511,15 @@ bind_port = 8080
         "error_message": null,
         "error_details": null
     });
-    
+
     use runbeam_sdk::runbeam_api::resources::Change;
     let detail: Change = serde_json::from_value(json).unwrap();
-    
+
     // Verify structure
     assert_eq!(detail.id, "01k8change123");
     let toml_config = detail.toml_config.as_ref().unwrap();
     assert!(toml_config.contains("patient_transform"));
-    
+
     // Verify transform extraction from TOML
     let ids = extract_transform_ids_test(toml_config).unwrap();
     assert_eq!(ids.len(), 1);
@@ -525,17 +531,17 @@ async fn test_transform_path_resolution() {
     let temp_dir = TempDir::new().unwrap();
     let config_dir = temp_dir.path().join("config");
     fs::create_dir_all(&config_dir).expect("Failed to create config dir");
-    
+
     // Test relative path resolution
     let transforms_path = "transforms";
     let resolved = config_dir.join(transforms_path);
-    
+
     assert_eq!(
         resolved,
         config_dir.join("transforms"),
         "Relative path should resolve to config dir"
     );
-    
+
     // Create the resolved directory
     fs::create_dir_all(&resolved).expect("Failed to create transforms dir");
     assert!(resolved.exists());
@@ -547,13 +553,16 @@ fn test_transform_id_extraction_edge_cases() {
     // Test edge cases for transform ID extraction
     let test_cases = vec![
         ("transform.json", "transform"),
-        ("01k81xczrw551e1qj9rgrf0319.json", "01k81xczrw551e1qj9rgrf0319"),
+        (
+            "01k81xczrw551e1qj9rgrf0319.json",
+            "01k81xczrw551e1qj9rgrf0319",
+        ),
         ("path/to/transform.json", "transform"),
         ("multiple/nested/path/transform.json", "transform"),
-        ("transform", "transform"), // No extension
+        ("transform", "transform"),                // No extension
         ("transform.spec.json", "transform.spec"), // Multiple dots
     ];
-    
+
     for (input, expected_id) in test_cases {
         let filename = input.rsplit('/').next().unwrap_or(input);
         let id = filename.strip_suffix(".json").unwrap_or(filename);
@@ -564,13 +573,20 @@ fn test_transform_id_extraction_edge_cases() {
 #[tokio::test]
 async fn test_error_handling_write_failure() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Try to write to a location that doesn't exist and we don't create
-    let invalid_path = temp_dir.path().join("nonexistent").join("transforms").join("test.json");
-    
+    let invalid_path = temp_dir
+        .path()
+        .join("nonexistent")
+        .join("transforms")
+        .join("test.json");
+
     // This should fail because parent directory doesn't exist
     let result = fs::write(&invalid_path, "{}");
-    assert!(result.is_err(), "Write should fail for non-existent parent directory");
+    assert!(
+        result.is_err(),
+        "Write should fail for non-existent parent directory"
+    );
 }
 
 #[tokio::test]
@@ -594,7 +610,7 @@ async fn test_transform_spec_json_validity() {
   }
 ]"#,
     ];
-    
+
     for spec in valid_specs {
         let parsed: Result<serde_json::Value, _> = serde_json::from_str(spec);
         assert!(parsed.is_ok(), "JOLT spec should be valid JSON: {}", spec);
@@ -635,7 +651,7 @@ spec_path = "transform2.json"
 "#;
 
     let ids = extract_transform_ids_test(config).unwrap();
-    
+
     // Should only extract transform middleware, not others
     assert_eq!(ids.len(), 2);
     assert!(ids.contains(&"transform1".to_string()));

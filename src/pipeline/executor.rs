@@ -41,14 +41,14 @@ impl From<&str> for PipelineError {
 }
 
 /// Protocol-agnostic pipeline executor
-/// 
+///
 /// This is the single source of truth for all request processing,
 /// regardless of protocol (HTTP, DIMSE, HL7, etc.)
 pub struct PipelineExecutor;
 
 impl PipelineExecutor {
     /// Execute a request through the complete pipeline
-    /// 
+    ///
     /// # Flow
     /// 1. Endpoint service preprocessing
     /// 2. Incoming middleware chain (left)
@@ -56,13 +56,13 @@ impl PipelineExecutor {
     /// 4. Outgoing middleware chain (right)
     /// 5. Endpoint service post-processing (protocol-aware)
     /// 6. Return ResponseEnvelope
-    /// 
+    ///
     /// # Arguments
     /// * `envelope` - The request envelope to process
     /// * `pipeline` - Pipeline configuration (endpoints, backends, middleware)
     /// * `config` - Full application configuration
     /// * `ctx` - Protocol context for protocol-specific metadata
-    /// 
+    ///
     /// # Returns
     /// ResponseEnvelope on success, PipelineError on failure
     #[tracing::instrument(skip(envelope, pipeline, config, ctx), fields(
@@ -108,16 +108,13 @@ impl PipelineExecutor {
             .first()
             .ok_or_else(|| PipelineError::ConfigError("No endpoints in pipeline".to_string()))?;
 
-        let endpoint = config
-            .endpoints
-            .get(endpoint_name)
-            .ok_or_else(|| {
-                PipelineError::ConfigError(format!("Endpoint '{}' not found", endpoint_name))
-            })?;
+        let endpoint = config.endpoints.get(endpoint_name).ok_or_else(|| {
+            PipelineError::ConfigError(format!("Endpoint '{}' not found", endpoint_name))
+        })?;
 
-        let service = endpoint
-            .resolve_service()
-            .map_err(|e| PipelineError::ServiceError(format!("Failed to resolve service: {}", e)))?;
+        let service = endpoint.resolve_service().map_err(|e| {
+            PipelineError::ServiceError(format!("Failed to resolve service: {}", e))
+        })?;
 
         let empty_options = HashMap::new();
         let options = endpoint.options.as_ref().unwrap_or(&empty_options);
@@ -144,7 +141,7 @@ impl PipelineExecutor {
         let json_value = normalized_data.unwrap_or_else(|| {
             serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
         });
-        
+
         let json_envelope = RequestEnvelope::builder()
             .method(envelope.request_details.method.clone())
             .uri(envelope.request_details.uri.clone())
@@ -164,10 +161,12 @@ impl PipelineExecutor {
         // Build middleware instances
         let middleware_instances =
             build_middleware_instances_for_pipeline(&pipeline.middleware, config).map_err(
-                |err| PipelineError::MiddlewareError(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    err,
-                ))),
+                |err| {
+                    PipelineError::MiddlewareError(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        err,
+                    )))
+                },
             )?;
 
         let middleware_chain = MiddlewareChain::new(middleware_instances);
@@ -218,13 +217,13 @@ impl PipelineExecutor {
             tracing::info!("Skipping backends - building response from request envelope");
             // When backends are skipped, build response directly from the request envelope
             // Middleware/endpoint should have prepared normalized_data with the response
-            
+
             let body = if let Some(ref normalized) = envelope.normalized_data {
                 serde_json::to_vec(normalized).unwrap_or_default()
             } else {
                 Vec::new()
             };
-            
+
             let mut response = ResponseEnvelope::from_backend(
                 envelope.request_details.clone(),
                 200,
@@ -232,10 +231,10 @@ impl PipelineExecutor {
                 body,
                 None,
             );
-            
+
             // Preserve normalized_data for outgoing middleware
             response.normalized_data = envelope.normalized_data;
-            
+
             return Ok(response);
         }
 
@@ -306,10 +305,12 @@ impl PipelineExecutor {
         // Build middleware instances
         let middleware_instances =
             build_middleware_instances_for_pipeline(&pipeline.middleware, config).map_err(
-                |err| PipelineError::MiddlewareError(Box::new(std::io::Error::new(
-                    std::io::ErrorKind::InvalidInput,
-                    err,
-                ))),
+                |err| {
+                    PipelineError::MiddlewareError(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidInput,
+                        err,
+                    )))
+                },
             )?;
 
         let middleware_chain = MiddlewareChain::new(middleware_instances);
@@ -346,16 +347,13 @@ impl PipelineExecutor {
             .first()
             .ok_or_else(|| PipelineError::ConfigError("No endpoints in pipeline".to_string()))?;
 
-        let endpoint = config
-            .endpoints
-            .get(endpoint_name)
-            .ok_or_else(|| {
-                PipelineError::ConfigError(format!("Endpoint '{}' not found", endpoint_name))
-            })?;
+        let endpoint = config.endpoints.get(endpoint_name).ok_or_else(|| {
+            PipelineError::ConfigError(format!("Endpoint '{}' not found", endpoint_name))
+        })?;
 
-        let service = endpoint
-            .resolve_service()
-            .map_err(|e| PipelineError::ServiceError(format!("Failed to resolve service: {}", e)))?;
+        let service = endpoint.resolve_service().map_err(|e| {
+            PipelineError::ServiceError(format!("Failed to resolve service: {}", e))
+        })?;
 
         let empty_options = HashMap::new();
         let options = endpoint.options.as_ref().unwrap_or(&empty_options);

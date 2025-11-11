@@ -7,13 +7,13 @@ use std::collections::HashSet;
 pub struct ConfigDiff {
     /// Changes that can be applied with zero downtime (atomic config swap)
     pub zero_downtime_changes: Vec<String>,
-    
+
     /// Networks that need adapter restart
     pub adapter_restarts_required: Vec<String>,
-    
+
     /// New networks to add
     pub networks_to_add: Vec<String>,
-    
+
     /// Networks to remove
     pub networks_to_remove: Vec<String>,
 }
@@ -124,7 +124,7 @@ mod tests {
     fn test_no_changes() {
         let config = Config::default();
         let diff = compute_diff(&config, &config);
-        
+
         assert!(!diff.has_changes());
         assert!(!diff.requires_adapter_restart());
     }
@@ -133,61 +133,63 @@ mod tests {
     fn test_middleware_change_only() {
         let old_config = Config::default();
         let mut new_config = Config::default();
-        
+
         // Add middleware to new config
         new_config.middleware.insert(
             "test".to_string(),
             crate::models::middleware::instance::MiddlewareInstance {
                 middleware_type: "test".to_string(),
                 options: Default::default(),
-            }
+            },
         );
-        
+
         let diff = compute_diff(&old_config, &new_config);
-        
+
         assert!(diff.has_changes());
         assert!(!diff.requires_adapter_restart());
-        assert!(diff.zero_downtime_changes.contains(&"middleware".to_string()));
+        assert!(diff
+            .zero_downtime_changes
+            .contains(&"middleware".to_string()));
     }
 
     #[test]
     fn test_network_port_change() {
         let mut old_config = Config::default();
         let mut new_config = Config::default();
-        
+
         // Add same network to both, but with different ports
         let mut old_net = crate::models::network::config::NetworkConfig::default();
         old_net.tcp_config.bind_port = 8080;
         old_config.network.insert("default".to_string(), old_net);
-        
+
         let mut new_net = crate::models::network::config::NetworkConfig::default();
         new_net.tcp_config.bind_port = 8081;
         new_config.network.insert("default".to_string(), new_net);
-        
+
         let diff = compute_diff(&old_config, &new_config);
-        
+
         assert!(diff.has_changes());
         assert!(diff.requires_adapter_restart());
-        assert!(diff.adapter_restarts_required.contains(&"default".to_string()));
+        assert!(diff
+            .adapter_restarts_required
+            .contains(&"default".to_string()));
     }
 
     #[test]
     fn test_network_add_remove() {
         let mut old_config = Config::default();
         let mut new_config = Config::default();
-        
-        old_config.network.insert(
-            "old_network".to_string(),
-            Default::default()
-        );
-        
-        new_config.network.insert(
-            "new_network".to_string(),
-            Default::default()
-        );
-        
+
+        old_config
+            .network
+            .insert("old_network".to_string(), Default::default());
+
+        new_config
+            .network
+            .insert("new_network".to_string(), Default::default());
+
         let diff = compute_diff(&old_config, &new_config);
-        
+
         assert!(diff.has_changes());
         assert!(diff.requires_adapter_restart());
         assert!(diff.networks_to_add.contains(&"new_network".to_string()));

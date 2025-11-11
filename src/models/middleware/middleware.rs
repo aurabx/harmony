@@ -101,7 +101,10 @@ fn create_builtin_middleware_type(
             crate::models::middleware::types::dicomweb_bridge::DicomwebBridgeMiddleware::new(),
         )),
         "transform" => {
-            let config = crate::models::middleware::types::transform::parse_config(options, transforms_path)?;
+            let config = crate::models::middleware::types::transform::parse_config(
+                options,
+                transforms_path,
+            )?;
             Ok(Box::new(JoltTransformMiddleware::new(config)?))
         }
         "path_filter" => {
@@ -109,8 +112,10 @@ fn create_builtin_middleware_type(
             Ok(Box::new(PathFilterMiddleware::new(config)?))
         }
         "metadata_transform" => {
-            let config =
-                crate::models::middleware::types::metadata_transform::parse_config(options, transforms_path)?;
+            let config = crate::models::middleware::types::metadata_transform::parse_config(
+                options,
+                transforms_path,
+            )?;
             Ok(Box::new(MetadataTransformMiddleware::new(config)?))
         }
         _ => Err(format!(
@@ -131,9 +136,11 @@ pub fn build_middleware_instances_for_pipeline(
 
     for name in names {
         if let Some(middleware_instance) = config.middleware.get(name) {
-            let middleware = middleware_instance.resolve_middleware(transforms_path).map_err(|err| {
-                format!("Failed to resolve middleware instance '{}': {}", name, err)
-            })?;
+            let middleware = middleware_instance
+                .resolve_middleware(transforms_path)
+                .map_err(|err| {
+                    format!("Failed to resolve middleware instance '{}': {}", name, err)
+                })?;
             instances.push(middleware);
         } else {
             // Fallback: if the name itself corresponds to a built-in middleware type,

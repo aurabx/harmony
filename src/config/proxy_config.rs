@@ -35,14 +35,14 @@ impl ProxyConfig {
         if self.id.trim().is_empty() {
             return Err("proxy.id cannot be empty".to_string());
         }
-        
+
         if self.jwks_cache_duration_hours < 1 || self.jwks_cache_duration_hours > 168 {
             return Err(format!(
                 "proxy.jwks_cache_duration_hours must be between 1 and 168, got {}",
                 self.jwks_cache_duration_hours
             ));
         }
-        
+
         Ok(())
     }
 }

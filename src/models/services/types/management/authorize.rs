@@ -1,10 +1,13 @@
-use runbeam_sdk::{extract_bearer_token, validate_jwt_token, save_token, save_token_with_key, MachineToken, RunbeamClient, ApiError, RunbeamError};
+use crate::adapters::registry::AdapterRegistry;
+use runbeam_sdk::{
+    extract_bearer_token, save_token, save_token_with_key, validate_jwt_token, ApiError,
+    MachineToken, RunbeamClient, RunbeamError,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::Duration;
-use crate::adapters::registry::AdapterRegistry;
 
 /// Request body for gateway authorization
 #[derive(Debug, Deserialize)]
@@ -114,24 +117,25 @@ pub async fn handle_authorize(
             user_token,
             &request.gateway_code,
             request.machine_public_key.clone(),
-            request.metadata.as_ref().map(|m| m.keys().cloned().collect()),
+            request
+                .metadata
+                .as_ref()
+                .map(|m| m.keys().cloned().collect()),
         )
         .await
         .map_err(|e| {
             tracing::error!("Runbeam Cloud authorization failed: {}", e);
-            
+
             // Map error to appropriate HTTP status code
             let status_code = match &e {
                 RunbeamError::JwtValidation(_) => 401,
-                RunbeamError::Api(api_err) => {
-                    match api_err {
-                        ApiError::Http { status, .. } => *status,
-                        _ => 500,
-                    }
-                }
+                RunbeamError::Api(api_err) => match api_err {
+                    ApiError::Http { status, .. } => *status,
+                    _ => 500,
+                },
                 _ => 500,
             };
-            
+
             (status_code, format!("Authorization failed: {}", e))
         })?;
 
@@ -235,7 +239,10 @@ mod tests {
         assert_eq!(request.gateway_code, "test-gateway-123");
         assert_eq!(request.machine_public_key.as_deref(), Some("pubkey123"));
         assert!(request.metadata.is_some());
-        assert_eq!(request.encryption_key.as_deref(), Some("QUdFLVNFQ1JFVC1LRVktMTIzNDU2Nzg5MA=="));
+        assert_eq!(
+            request.encryption_key.as_deref(),
+            Some("QUdFLVNFQ1JFVC1LRVktMTIzNDU2Nzg5MA==")
+        );
     }
 
     #[test]
@@ -287,7 +294,7 @@ fn start_cloud_polling_task(
 
     // Create a new cancellation token for this polling session
     let shutdown = tokio_util::sync::CancellationToken::new();
-    
+
     // Store the cancellation token globally so it can be cancelled later
     crate::globals::set_cloud_polling_token(shutdown.clone());
 

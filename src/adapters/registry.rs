@@ -29,13 +29,10 @@ impl AdapterRegistry {
     }
 
     /// Determine which protocols are required for a given network based on configured services
-    /// 
+    ///
     /// Returns a HashSet of protocols that need adapters for this network.
     /// Scans all pipelines that reference the network and maps their endpoint services to protocols.
-    fn determine_required_protocols(
-        network_name: &str,
-        config: &Config,
-    ) -> HashSet<Protocol> {
+    fn determine_required_protocols(network_name: &str, config: &Config) -> HashSet<Protocol> {
         let mut required_protocols = HashSet::new();
         let mut found_pipelines = Vec::new();
 
@@ -91,10 +88,7 @@ impl AdapterRegistry {
         }
 
         if found_pipelines.is_empty() {
-            tracing::warn!(
-                "Network '{}' has no pipelines configured",
-                network_name
-            );
+            tracing::warn!("Network '{}' has no pipelines configured", network_name);
         }
 
         if required_protocols.is_empty() && !found_pipelines.is_empty() {
@@ -108,11 +102,7 @@ impl AdapterRegistry {
     }
 
     /// Start all adapters for a network
-    pub async fn start_network(
-        &self,
-        network_name: String,
-        config: Arc<Config>,
-    ) -> Result<()> {
+    pub async fn start_network(&self, network_name: String, config: Arc<Config>) -> Result<()> {
         let network = config
             .network
             .get(&network_name)
@@ -167,14 +157,11 @@ impl AdapterRegistry {
 
         // Start each adapter
         for adapter in adapters_to_start {
-            match adapter
-                .start(config.clone(), shutdown.clone())
-                .await
-            {
+            match adapter.start(config.clone(), shutdown.clone()).await {
                 Ok(task_handle) => {
                     let summary = adapter.summary();
                     tracing::info!("🚀 Started {} for network '{}'", summary, network_name);
-                    
+
                     handles.push(AdapterHandle {
                         network_name: network_name.clone(),
                         adapter_summary: summary,
@@ -203,19 +190,23 @@ impl AdapterRegistry {
     /// Stop all adapters for a network
     pub async fn stop_network(&self, network_name: &str) -> Result<()> {
         let mut adapters = self.adapters.write().await;
-        
+
         if let Some(handles) = adapters.remove(network_name) {
             tracing::info!("⏳ Stopping adapters for network '{}'", network_name);
-            
+
             // Trigger shutdown for all adapters
             for handle in &handles {
                 handle.shutdown_token.cancel();
             }
-            
+
             // Wait for all to complete
             for handle in handles {
                 let _ = handle.task_handle.await;
-                tracing::info!("✓ Stopped {} for network '{}'", handle.adapter_summary, network_name);
+                tracing::info!(
+                    "✓ Stopped {} for network '{}'",
+                    handle.adapter_summary,
+                    network_name
+                );
             }
         }
 
@@ -223,11 +214,7 @@ impl AdapterRegistry {
     }
 
     /// Restart adapters for a network (stop + start)
-    pub async fn restart_network(
-        &self,
-        network_name: String,
-        config: Arc<Config>,
-    ) -> Result<()> {
+    pub async fn restart_network(&self, network_name: String, config: Arc<Config>) -> Result<()> {
         self.stop_network(&network_name).await?;
         self.start_network(network_name, config).await?;
         Ok(())

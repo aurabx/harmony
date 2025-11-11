@@ -183,13 +183,13 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                 // Handle gateway authorization
                 // First check if Runbeam Cloud integration is enabled
                 let config = crate::globals::get_config();
-                
+
                 // Check if runbeam is enabled
                 let runbeam_enabled = config
                     .as_ref()
                     .map(|cfg| cfg.runbeam.enabled)
                     .unwrap_or(false);
-                
+
                 if !runbeam_enabled {
                     let error_json = serde_json::json!({
                         "error": "Forbidden",
@@ -197,7 +197,11 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                     });
                     (error_json, 403)
                 } else {
-                    let auth_header = envelope.request_details.headers.get("authorization").map(|s| s.as_str());
+                    let auth_header = envelope
+                        .request_details
+                        .headers
+                        .get("authorization")
+                        .map(|s| s.as_str());
 
                     // Get configuration parameters from global config
                     let jwks_cache_duration = config
@@ -224,7 +228,9 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                         registry,
                         poll_interval,
                         api_base_url,
-                    ).await {
+                    )
+                    .await
+                    {
                         Ok(value) => (value, 201),
                         Err((status, message)) => {
                             let error_json = serde_json::json!({
@@ -275,7 +281,7 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                     .as_ref()
                     .map(|cfg| cfg.runbeam.enabled)
                     .unwrap_or(false);
-                
+
                 if !runbeam_enabled {
                     let error_json = serde_json::json!({
                         "error": "Forbidden",

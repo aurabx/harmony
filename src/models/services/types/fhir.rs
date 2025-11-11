@@ -79,13 +79,13 @@ impl ServiceHandler<Value> for FhirEndpoint {
         options: &HashMap<String, Value>,
     ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
         use crate::models::envelope::envelope::TargetDetails;
-        
+
         // Extract base_url from backend options
         let base_url = options
             .get("base_url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::from("FHIR backend requires 'base_url' in options"))?;
-        
+
         // Check if middleware has already set target_details
         let target_details = if let Some(existing_target) = envelope.target_details.take() {
             // Middleware has set target_details - use it
@@ -106,41 +106,44 @@ impl ServiceHandler<Value> for FhirEndpoint {
                 .get("path")
                 .map(|p| format!("/{}", p))
                 .unwrap_or_else(|| envelope.request_details.uri.clone());
-            
+
             // Create TargetDetails from request_details with base_url
             let mut target = TargetDetails::from_request_details(
                 base_url.to_string(),
-                &envelope.request_details
+                &envelope.request_details,
             );
-            
+
             // Override URI with the stripped path
             target.uri = path;
-            
+
             // Ensure FHIR-specific content type is set if not present
-            target.headers
+            target
+                .headers
                 .entry("accept".to_string())
                 .or_insert_with(|| "application/fhir+json".to_string());
-            
+
             target
         };
-        
+
         tracing::debug!(
-            "FHIR backend targeting: {} {}", 
-            target_details.method, 
-            target_details.full_url().unwrap_or_else(|_| "<invalid-url>".to_string())
+            "FHIR backend targeting: {} {}",
+            target_details.method,
+            target_details
+                .full_url()
+                .unwrap_or_else(|_| "<invalid-url>".to_string())
         );
-        
+
         // Store target_details in envelope for future use (Targets model, etc.)
         envelope.target_details = Some(target_details.clone());
-        
+
         // Make the actual HTTP request to the FHIR server
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| Error::from(format!("Failed to create HTTP client: {}", e)))?;
-        
+
         let full_url = target_details.full_url()?;
-        
+
         // Build the request
         let mut request_builder = match target_details.method.as_str() {
             "GET" => client.get(&full_url),
@@ -153,28 +156,28 @@ impl ServiceHandler<Value> for FhirEndpoint {
                 return Err(Error::from(format!("Unsupported HTTP method: {}", method)));
             }
         };
-        
+
         // Add headers from target_details
         for (key, value) in &target_details.headers {
             request_builder = request_builder.header(key, value);
         }
-        
+
         // Add request body if present
         if !envelope.original_data.is_empty() {
             request_builder = request_builder.body(envelope.original_data.clone());
         }
-        
+
         tracing::debug!("Sending FHIR request to: {}", full_url);
-        
+
         // Execute the request
         let response = request_builder
             .send()
             .await
             .map_err(|e| Error::from(format!("FHIR request failed: {}", e)))?;
-        
+
         let status = response.status().as_u16();
         tracing::debug!("FHIR backend response status: {}", status);
-        
+
         // Extract response headers
         let mut response_headers = HashMap::new();
         for (key, value) in response.headers() {
@@ -182,21 +185,24 @@ impl ServiceHandler<Value> for FhirEndpoint {
                 response_headers.insert(key.to_string(), value_str.to_string());
             }
         }
-        
+
         // Ensure FHIR content type is set in response
         response_headers
             .entry("content-type".to_string())
             .or_insert_with(|| "application/fhir+json".to_string());
-        
+
         // Get response body
         let body_bytes = response
             .bytes()
             .await
             .map_err(|e| Error::from(format!("Failed to read FHIR response body: {}", e)))?
             .to_vec();
-        
-        tracing::debug!("FHIR backend response body size: {} bytes", body_bytes.len());
-        
+
+        tracing::debug!(
+            "FHIR backend response body size: {} bytes",
+            body_bytes.len()
+        );
+
         let mut response_envelope = ResponseEnvelope::from_backend(
             envelope.request_details.clone(),
             status,
@@ -204,16 +210,24 @@ impl ServiceHandler<Value> for FhirEndpoint {
             body_bytes,
             None,
         );
-        
+
         // Try to parse response as JSON if content-type indicates FHIR or JSON
-        if let Some(content_type) = response_envelope.response_details.headers.get("content-type") {
-            if content_type.contains("application/fhir+json") || content_type.contains("application/json") {
-                if let Ok(json_value) = serde_json::from_slice::<serde_json::Value>(&response_envelope.original_data) {
+        if let Some(content_type) = response_envelope
+            .response_details
+            .headers
+            .get("content-type")
+        {
+            if content_type.contains("application/fhir+json")
+                || content_type.contains("application/json")
+            {
+                if let Ok(json_value) =
+                    serde_json::from_slice::<serde_json::Value>(&response_envelope.original_data)
+                {
                     response_envelope.normalized_data = Some(json_value);
                 }
             }
         }
-        
+
         Ok(response_envelope)
     }
 
@@ -232,7 +246,7 @@ impl ServiceHandler<Value> for FhirEndpoint {
             .response_details
             .metadata
             .insert("service".to_string(), "fhir".to_string());
-        
+
         // Ensure FHIR content-type is present for HTTP
         if ctx.protocol == crate::models::protocol::Protocol::Http {
             envelope

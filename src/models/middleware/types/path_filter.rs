@@ -57,10 +57,13 @@ impl PathFilterMiddleware {
         for rule in &config.rules {
             let mut router = Router::new();
             let pattern = rule.pattern();
-            
-            tracing::trace!("Loading path filter rule: {:?} {}", 
-                if rule.is_allow() { "allow" } else { "deny" }, pattern);
-            
+
+            tracing::trace!(
+                "Loading path filter rule: {:?} {}",
+                if rule.is_allow() { "allow" } else { "deny" },
+                pattern
+            );
+
             if let Err(e) = router.insert(pattern, ()) {
                 return Err(format!(
                     "Failed to insert path filter rule '{}': {}",
@@ -182,38 +185,55 @@ pub fn parse_config(options: &HashMap<String, Value>) -> Result<PathFilterConfig
     let mut rules = Vec::new();
 
     for (idx, rule_value) in rules_array.iter().enumerate() {
-        let rule_obj = rule_value.as_object()
-            .ok_or_else(|| format!("Rule at index {} must be an object with 'allow' or 'deny' key", idx))?;
+        let rule_obj = rule_value.as_object().ok_or_else(|| {
+            format!(
+                "Rule at index {} must be an object with 'allow' or 'deny' key",
+                idx
+            )
+        })?;
 
         // Check for "allow" key
         if let Some(allow_val) = rule_obj.get("allow") {
-            let pattern = allow_val.as_str()
+            let pattern = allow_val
+                .as_str()
                 .ok_or_else(|| format!("Rule at index {}: 'allow' value must be a string", idx))?;
-            
+
             if pattern.trim().is_empty() {
-                return Err(format!("Rule at index {}: 'allow' pattern cannot be empty", idx));
+                return Err(format!(
+                    "Rule at index {}: 'allow' pattern cannot be empty",
+                    idx
+                ));
             }
 
             // Check that "deny" is not also present
             if rule_obj.contains_key("deny") {
-                return Err(format!("Rule at index {}: cannot have both 'allow' and 'deny' keys", idx));
+                return Err(format!(
+                    "Rule at index {}: cannot have both 'allow' and 'deny' keys",
+                    idx
+                ));
             }
 
             rules.push(PathFilterRule::Allow(pattern.to_string()));
         }
         // Check for "deny" key
         else if let Some(deny_val) = rule_obj.get("deny") {
-            let pattern = deny_val.as_str()
+            let pattern = deny_val
+                .as_str()
                 .ok_or_else(|| format!("Rule at index {}: 'deny' value must be a string", idx))?;
-            
+
             if pattern.trim().is_empty() {
-                return Err(format!("Rule at index {}: 'deny' pattern cannot be empty", idx));
+                return Err(format!(
+                    "Rule at index {}: 'deny' pattern cannot be empty",
+                    idx
+                ));
             }
 
             rules.push(PathFilterRule::Deny(pattern.to_string()));
-        }
-        else {
-            return Err(format!("Rule at index {}: must have either 'allow' or 'deny' key", idx));
+        } else {
+            return Err(format!(
+                "Rule at index {}: must have either 'allow' or 'deny' key",
+                idx
+            ));
         }
     }
 
@@ -322,9 +342,7 @@ mod tests {
     #[tokio::test]
     async fn test_empty_path_becomes_root() {
         let config = PathFilterConfig {
-            rules: vec![
-                PathFilterRule::Allow("/".to_string()),
-            ],
+            rules: vec![PathFilterRule::Allow("/".to_string())],
         };
         let middleware = PathFilterMiddleware::new(config).unwrap();
 
@@ -407,14 +425,13 @@ mod tests {
     #[test]
     fn test_parse_config_neither_allow_nor_deny() {
         let mut options = HashMap::new();
-        options.insert(
-            "rules".to_string(),
-            serde_json::json!([{ "foo": "/test" }]),
-        );
+        options.insert("rules".to_string(), serde_json::json!([{ "foo": "/test" }]));
 
         let result = parse_config(&options);
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("must have either 'allow' or 'deny' key"));
+        assert!(result
+            .unwrap_err()
+            .contains("must have either 'allow' or 'deny' key"));
     }
 
     // New tests for deny rules and first-match-wins behavior
@@ -439,7 +456,12 @@ mod tests {
         );
 
         // Should set 404 response
-        let response = result.normalized_data.as_ref().unwrap().get("response").unwrap();
+        let response = result
+            .normalized_data
+            .as_ref()
+            .unwrap()
+            .get("response")
+            .unwrap();
         assert_eq!(response.get("status").unwrap().as_u64().unwrap(), 404);
     }
 
@@ -456,7 +478,10 @@ mod tests {
         // First allow rule should match
         let envelope = create_test_envelope("api/public/data");
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
 
         // Second deny rule should match
         let envelope = create_test_envelope("api/private/data");
@@ -488,7 +513,10 @@ mod tests {
         // Second allow rule should match
         let envelope = create_test_envelope("api/data");
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
     }
 
     #[tokio::test]
@@ -504,7 +532,10 @@ mod tests {
         // Allowed path should pass
         let envelope = create_test_envelope("health");
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
 
         // Unmatched path should be denied (implicit deny)
         let envelope = create_test_envelope("api/private");
@@ -529,11 +560,17 @@ mod tests {
         // Allowed paths should pass
         let envelope = create_test_envelope("health");
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
 
         let envelope = create_test_envelope("api/public/test");
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
 
         // Other paths should be denied by catch-all
         let envelope = create_test_envelope("api/private");
@@ -565,7 +602,10 @@ mod tests {
         // Other paths should be allowed
         let envelope = create_test_envelope("api/data");
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
     }
 
     #[tokio::test]
@@ -581,7 +621,10 @@ mod tests {
         // Parameter pattern should match and allow
         let envelope = create_test_envelope("users/123");
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
 
         // Deny with parameter pattern
         let config = PathFilterConfig {

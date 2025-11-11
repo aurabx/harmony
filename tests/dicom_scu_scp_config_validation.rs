@@ -47,9 +47,12 @@ fn test_dicom_scu_backend_validation_success() {
         [services.dicom_scu]
         module = ""
     "#;
-    
+
     let result = load_config_from_str(toml);
-    assert!(result.is_ok(), "Valid dicom_scu backend config should pass validation");
+    assert!(
+        result.is_ok(),
+        "Valid dicom_scu backend config should pass validation"
+    );
 }
 
 #[test]
@@ -94,10 +97,13 @@ fn test_dicom_scu_missing_remote_aet() {
         [services.dicom_scu]
         module = ""
     "#;
-    
+
     let result = load_config_from_str(toml);
     // Config loads successfully; validation happens at backend invocation time
-    assert!(result.is_ok(), "Config should load; backend validation happens at runtime");
+    assert!(
+        result.is_ok(),
+        "Config should load; backend validation happens at runtime"
+    );
 }
 
 #[test]
@@ -142,10 +148,13 @@ fn test_dicom_scu_missing_host() {
         [services.dicom_scu]
         module = ""
     "#;
-    
+
     let result = load_config_from_str(toml);
     // Config loads successfully; validation happens at backend invocation time
-    assert!(result.is_ok(), "Config should load; backend validation happens at runtime");
+    assert!(
+        result.is_ok(),
+        "Config should load; backend validation happens at runtime"
+    );
 }
 
 #[test]
@@ -182,9 +191,12 @@ fn test_dicom_scp_endpoint_validation_success() {
         [services.dicom_scp]
         module = ""
     "#;
-    
+
     let result = load_config_from_str(toml);
-    assert!(result.is_ok(), "Valid dicom_scp endpoint config should pass validation");
+    assert!(
+        result.is_ok(),
+        "Valid dicom_scp endpoint config should pass validation"
+    );
 }
 
 #[test]
@@ -218,9 +230,12 @@ fn test_dicom_scp_invalid_aet_empty() {
         [services.dicom_scp]
         module = ""
     "#;
-    
+
     let result = load_config_from_str(toml);
-    assert!(result.is_err(), "dicom_scp with empty AET should fail validation");
+    assert!(
+        result.is_err(),
+        "dicom_scp with empty AET should fail validation"
+    );
 }
 
 #[test]
@@ -254,9 +269,12 @@ fn test_dicom_scp_invalid_aet_too_long() {
         [services.dicom_scp]
         module = ""
     "#;
-    
+
     let result = load_config_from_str(toml);
-    assert!(result.is_err(), "dicom_scp with AET > 16 chars should fail validation");
+    assert!(
+        result.is_err(),
+        "dicom_scp with AET > 16 chars should fail validation"
+    );
 }
 
 #[test]
@@ -294,11 +312,13 @@ fn test_dicom_scp_no_operations_enabled() {
         [services.dicom_scp]
         module = ""
     "#;
-    
-    let result = load_config_from_str(toml);
-    assert!(result.is_err(), "dicom_scp with no operations enabled should fail validation");
-}
 
+    let result = load_config_from_str(toml);
+    assert!(
+        result.is_err(),
+        "dicom_scp with no operations enabled should fail validation"
+    );
+}
 
 #[test]
 fn test_dicom_scp_with_c_get_enabled() {
@@ -333,9 +353,12 @@ fn test_dicom_scp_with_c_get_enabled() {
         [services.dicom_scp]
         module = ""
     "#;
-    
+
     let result = load_config_from_str(toml);
-    assert!(result.is_ok(), "dicom_scp with C-GET enabled should pass validation");
+    assert!(
+        result.is_ok(),
+        "dicom_scp with C-GET enabled should pass validation"
+    );
 }
 
 #[test]
@@ -384,9 +407,12 @@ fn test_complete_scp_to_scu_bridge() {
         [services.dicom_scu]
         module = ""
     "#;
-    
+
     let result = load_config_from_str(toml);
-    assert!(result.is_ok(), "Complete SCP-to-SCU bridge configuration should be valid");
+    assert!(
+        result.is_ok(),
+        "Complete SCP-to-SCU bridge configuration should be valid"
+    );
 }
 
 // Note: Tests for runtime service separation (dicom_scu as endpoint, dicom_scp as backend)

@@ -290,11 +290,17 @@ async fn test_http_backend_forwards_headers() {
     let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
 
     assert_eq!(json["body"]["test"], "data");
-    
+
     // Check headers were forwarded
     let headers = json["headers"].as_object().expect("headers object");
-    assert_eq!(headers.get("x-custom-header").and_then(|v| v.as_str()), Some("test-value"));
-    assert_eq!(headers.get("authorization").and_then(|v| v.as_str()), Some("Bearer token123"));
+    assert_eq!(
+        headers.get("x-custom-header").and_then(|v| v.as_str()),
+        Some("test-value")
+    );
+    assert_eq!(
+        headers.get("authorization").and_then(|v| v.as_str()),
+        Some("Bearer token123")
+    );
 }
 
 #[tokio::test]
@@ -320,10 +326,21 @@ async fn test_http_backend_query_params() {
         .expect("read response body");
     let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
 
-    let query_params = json["query_params"].as_object().expect("query_params object");
-    assert_eq!(query_params.get("foo").and_then(|v| v.as_str()), Some("bar"));
-    assert_eq!(query_params.get("baz").and_then(|v| v.as_str()), Some("qux"));
-    assert_eq!(query_params.get("name").and_then(|v| v.as_str()), Some("test"));
+    let query_params = json["query_params"]
+        .as_object()
+        .expect("query_params object");
+    assert_eq!(
+        query_params.get("foo").and_then(|v| v.as_str()),
+        Some("bar")
+    );
+    assert_eq!(
+        query_params.get("baz").and_then(|v| v.as_str()),
+        Some("qux")
+    );
+    assert_eq!(
+        query_params.get("name").and_then(|v| v.as_str()),
+        Some("test")
+    );
 }
 
 #[tokio::test]
@@ -393,7 +410,7 @@ async fn test_http_backend_empty_body() {
         .expect("router handled request");
 
     assert_eq!(response.status(), StatusCode::OK);
-    
+
     // Should still get valid JSON response
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
@@ -425,7 +442,7 @@ async fn test_http_backend_json_content_type() {
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok());
-    
+
     assert!(content_type.is_some());
     assert!(content_type.unwrap().contains("application/json"));
 }

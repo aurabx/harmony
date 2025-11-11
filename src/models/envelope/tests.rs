@@ -343,7 +343,10 @@ fn test_builder_chaining() {
 
     assert_eq!(envelope.request_details.method, "POST");
     assert_eq!(envelope.request_details.uri, "/api/test");
-    assert!(envelope.request_details.headers.contains_key("Content-Type"));
+    assert!(envelope
+        .request_details
+        .headers
+        .contains_key("Content-Type"));
     assert!(envelope.request_details.cookies.contains_key("session"));
     assert!(envelope.request_details.query_params.contains_key("id"));
     assert!(envelope.request_details.metadata.contains_key("request_id"));

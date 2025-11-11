@@ -517,7 +517,7 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
             .response_details
             .metadata
             .insert("service".to_string(), "dicomweb".to_string());
-        
+
         // Ensure DICOMweb content-type for HTTP
         if ctx.protocol == crate::models::protocol::Protocol::Http {
             envelope

@@ -19,7 +19,7 @@ use tracing::warn;
 use uuid::Uuid;
 
 /// DICOM SCU (Service Class User) backend configuration
-/// 
+///
 /// This service handles outgoing DICOM DIMSE requests (C-ECHO, C-FIND, C-MOVE, C-GET)
 /// to remote PACS systems.
 #[derive(Debug, Deserialize)]
@@ -104,7 +104,7 @@ impl ServiceType for DicomScuBackend {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         // DicomScuBackend is always a backend - validate remote connection parameters
         self.create_remote_node(options)?;
-        
+
         // Validate dimse_retrieve_mode option if provided
         if let Some(retrieve_mode) = options.get("dimse_retrieve_mode") {
             if let Some(mode_str) = retrieve_mode.as_str() {
@@ -341,19 +341,13 @@ impl DicomScuBackend {
         // 4. Check if path is a valid DIMSE operation name (for direct HTTP->DICOM calls)
         // 5. Default to "get" for data retrieval
         let valid_ops = ["echo", "find", "get", "move", "store"];
-        
+
         let op = envelope
             .target_details
             .as_ref()
             .and_then(|td| td.metadata.get("dimse_op"))
             .cloned()
-            .or_else(|| {
-                envelope
-                    .request_details
-                    .metadata
-                    .get("dimse_op")
-                    .cloned()
-            })
+            .or_else(|| envelope.request_details.metadata.get("dimse_op").cloned())
             .or_else(|| {
                 // Only use dimse_retrieve_mode for retrieval operations
                 // This allows backend configuration to override default "get" with "move"
@@ -369,7 +363,7 @@ impl DicomScuBackend {
                     .metadata
                     .get("path")
                     .map(|s| s.trim_start_matches('/').to_lowercase())?;
-                
+
                 if valid_ops.contains(&path.as_str()) {
                     Some(path)
                 } else {

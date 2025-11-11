@@ -2,14 +2,10 @@ use serde::{Deserialize, Serialize};
 use std::sync::Arc;
 
 // Re-export filesystem types
-pub use harmony_filesystem::{
-    FilesystemStorage, StorageBackend, StorageError, StorageResult,
-};
+pub use harmony_filesystem::{FilesystemStorage, StorageBackend, StorageError, StorageResult};
 
 // Re-export database types
-pub use harmony_database::{
-    DatabaseBackend, DatabaseManager, DatabaseOperation, DatabaseStats,
-};
+pub use harmony_database::{DatabaseBackend, DatabaseManager, DatabaseOperation, DatabaseStats};
 
 /// Configuration for storage backend
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]

@@ -6,7 +6,7 @@ use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
 /// Test harness for DICOM SCP integration tests
-/// 
+///
 /// This struct manages the lifecycle of a DIMSE adapter and its SCP listeners
 /// for testing purposes.
 pub struct ScpTestHarness {
@@ -31,14 +31,12 @@ impl ScpTestHarness {
     pub async fn start(&mut self) -> anyhow::Result<()> {
         // Initialize tracing if RUST_LOG is set
         if std::env::var("RUST_LOG").is_ok() {
-            let _ = tracing_subscriber::fmt()
-                .with_test_writer()
-                .try_init();
+            let _ = tracing_subscriber::fmt().with_test_writer().try_init();
         }
 
         // Initialize globals (storage, config)
         harmony::globals::set_config(self.config.clone());
-        
+
         let storage = harmony::storage::create_storage_backend(&self.config.storage)?;
         harmony::globals::set_storage(storage);
 
@@ -80,14 +78,22 @@ impl ScpTestHarness {
                             for attempt in 0..50 {
                                 match tokio::net::TcpStream::connect(("127.0.0.1", port)).await {
                                     Ok(_) => {
-                                        eprintln!("✓ SCP port {} ready after {} attempts", port, attempt + 1);
+                                        eprintln!(
+                                            "✓ SCP port {} ready after {} attempts",
+                                            port,
+                                            attempt + 1
+                                        );
                                         break;
                                     }
                                     Err(e) if attempt == 49 => {
-                                        eprintln!("⚠ SCP port {} not ready after 50 attempts: {}", port, e);
+                                        eprintln!(
+                                            "⚠ SCP port {} not ready after 50 attempts: {}",
+                                            port, e
+                                        );
                                     }
                                     Err(_) => {
-                                        tokio::time::sleep(tokio::time::Duration::from_millis(100)).await;
+                                        tokio::time::sleep(tokio::time::Duration::from_millis(100))
+                                            .await;
                                     }
                                 }
                             }

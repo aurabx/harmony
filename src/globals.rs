@@ -8,10 +8,13 @@ use tokio_util::sync::CancellationToken;
 
 /// Global configuration using ArcSwap for lock-free reads
 static CONFIG: Lazy<ArcSwap<Option<Config>>> = Lazy::new(|| ArcSwap::from_pointee(None));
-static STORAGE_CELL: Lazy<RwLock<Option<Arc<dyn StorageBackend>>>> = Lazy::new(|| RwLock::new(None));
-static ADAPTER_REGISTRY: Lazy<RwLock<Option<Arc<AdapterRegistry>>>> = Lazy::new(|| RwLock::new(None));
+static STORAGE_CELL: Lazy<RwLock<Option<Arc<dyn StorageBackend>>>> =
+    Lazy::new(|| RwLock::new(None));
+static ADAPTER_REGISTRY: Lazy<RwLock<Option<Arc<AdapterRegistry>>>> =
+    Lazy::new(|| RwLock::new(None));
 static CONFIG_PATH: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(None));
-static CLOUD_POLLING_TOKEN: Lazy<RwLock<Option<CancellationToken>>> = Lazy::new(|| RwLock::new(None));
+static CLOUD_POLLING_TOKEN: Lazy<RwLock<Option<CancellationToken>>> =
+    Lazy::new(|| RwLock::new(None));
 
 /// Set the global configuration (initial setup or reload)
 pub fn set_config(config: Arc<Config>) {

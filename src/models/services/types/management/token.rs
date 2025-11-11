@@ -40,9 +40,7 @@ pub struct TokenResponse {
 /// 2. API returns machine token
 /// 3. CLI POSTs machine token to this endpoint
 /// 4. Harmony-proxy saves token to local storage
-pub async fn handle_token_post(
-    body: &[u8],
-) -> Result<JsonValue, (u16, String)> {
+pub async fn handle_token_post(body: &[u8]) -> Result<JsonValue, (u16, String)> {
     tracing::info!("Processing token save request from CLI");
 
     // Parse request body

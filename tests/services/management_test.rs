@@ -18,7 +18,8 @@ async fn test_management_service_enabled() {
     config.management.network = Some("default".to_string());
 
     // Load the configuration - this should inject the management service
-    config.inject_management_service()
+    config
+        .inject_management_service()
         .expect("Failed to inject management service");
 
     // Verify endpoint was created
@@ -80,7 +81,8 @@ async fn test_management_service_disabled() {
     config.management.enabled = false;
 
     // Load the configuration - this should not inject the management service
-    config.inject_management_service()
+    config
+        .inject_management_service()
         .expect("Failed to inject management service");
 
     // Verify no endpoint was created
@@ -100,7 +102,8 @@ async fn test_management_service_auto_generate_network() {
     config.management.network = None; // No network specified
 
     // Inject management service - this should auto-generate a default network
-    config.inject_management_service()
+    config
+        .inject_management_service()
         .expect("Failed to inject management service");
 
     // Verify management network was auto-generated

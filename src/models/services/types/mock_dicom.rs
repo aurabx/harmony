@@ -687,7 +687,7 @@ impl MockDicomEndpoint {
                 "error": format!("Failed to create mock directory: {}", e)
             });
         }
-        
+
         // Create a minimal mock DICOM file
         let mock_file = mock_dir.join("instance1.dcm");
         if let Err(e) = std::fs::write(&mock_file, b"MOCK DICOM FILE DATA") {
@@ -698,8 +698,11 @@ impl MockDicomEndpoint {
                 "error": format!("Failed to create mock file: {}", e)
             });
         }
-        
-        debug!("[MOCK DICOM] Created mock DICOM file at: {}", mock_file.display());
+
+        debug!(
+            "[MOCK DICOM] Created mock DICOM file at: {}",
+            mock_file.display()
+        );
 
         // Check if this is a frame request
         if path.contains("/frames/") {

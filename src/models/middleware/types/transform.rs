@@ -107,10 +107,7 @@ impl Middleware for JoltTransformMiddleware {
                 Ok(transformed) => {
                     // If context was injected, extract the "data" field
                     let result_data = if self.inject_context {
-                        transformed
-                            .get("data")
-                            .cloned()
-                            .unwrap_or(transformed)
+                        transformed.get("data").cloned().unwrap_or(transformed)
                     } else {
                         transformed
                     };
@@ -180,10 +177,7 @@ impl Middleware for JoltTransformMiddleware {
                 Ok(transformed) => {
                     // If context was injected, extract the "data" field
                     let result_data = if self.inject_context {
-                        transformed
-                            .get("data")
-                            .cloned()
-                            .unwrap_or(transformed)
+                        transformed.get("data").cloned().unwrap_or(transformed)
                     } else {
                         transformed
                     };
@@ -258,7 +252,9 @@ pub fn parse_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::envelope::envelope::{RequestDetails, RequestEnvelopeBuilder, ResponseDetails, ResponseEnvelope};
+    use crate::models::envelope::envelope::{
+        RequestDetails, RequestEnvelopeBuilder, ResponseDetails, ResponseEnvelope,
+    };
     use serde_json::json;
     use std::fs;
     use tempfile::NamedTempFile;
@@ -435,12 +431,12 @@ mod tests {
     #[tokio::test]
     async fn test_middleware_with_real_fhir_to_dicom_params_left() {
         use crate::models::envelope::envelope::TargetDetails;
-        
+
         // Build envelope with target_details.metadata for context injection
         let mut target_metadata = HashMap::new();
         target_metadata.insert("PatientID".to_string(), "PID156695".to_string());
         target_metadata.insert("StudyInstanceUID".to_string(), "1.2.3.4.5".to_string());
-        
+
         let target_details = TargetDetails {
             base_url: "http://backend.example.com".to_string(),
             method: "GET".to_string(),
@@ -450,7 +446,7 @@ mod tests {
             query_params: HashMap::new(),
             metadata: target_metadata,
         };
-        
+
         let mut env = RequestEnvelopeBuilder::new()
             .method("GET")
             .uri("/fhir/ImagingStudy?patient=PID156695")
@@ -463,7 +459,7 @@ mod tests {
             })))
             .build()
             .unwrap();
-        
+
         // Set target_details manually
         env.target_details = Some(target_details);
 

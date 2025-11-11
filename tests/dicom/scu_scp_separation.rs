@@ -276,7 +276,7 @@ async fn test_dicom_scp_endpoint_cfind() {
     );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    
+
     // Start the DIMSE adapter with test harness
     let mut harness = ScpTestHarness::new(cfg, "default");
     harness.start().await.expect("Failed to start test harness");
@@ -300,9 +300,12 @@ async fn test_dicom_scp_endpoint_cfind() {
     let status = echoscu.status().await.expect("run echoscu");
     // echoscu returns 0 on success
     assert!(status.success(), "echoscu should complete successfully");
-    
+
     // Cleanup
-    harness.shutdown().await.expect("Failed to shutdown harness");
+    harness
+        .shutdown()
+        .await
+        .expect("Failed to shutdown harness");
 }
 
 /// Test 3: Configuration validation - dicom_scu cannot be used as endpoint
@@ -540,7 +543,7 @@ async fn test_pipeline_scp_receives_external_find() {
     );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    
+
     // Start the DIMSE adapter with test harness
     let mut harness = ScpTestHarness::new(cfg, "default");
     harness.start().await.expect("Failed to start test harness");
@@ -584,9 +587,12 @@ async fn test_pipeline_scp_receives_external_find() {
 
     let status = findscu.status().await.expect("run findscu");
     assert!(status.success(), "C-FIND should complete successfully");
-    
+
     // Cleanup
-    harness.shutdown().await.expect("Failed to shutdown harness");
+    harness
+        .shutdown()
+        .await
+        .expect("Failed to shutdown harness");
 }
 
 /// Test 7: Full pipeline - HTTP -> SCU backend -> external PACS

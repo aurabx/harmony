@@ -128,7 +128,7 @@ impl PipelineQueryProvider {
         let response = PipelineExecutor::execute(envelope, pipeline, &config, &ctx)
             .await
             .map_err(|e| DimseError::operation_failed(format!("Pipeline failed: {}", e)))?;
-        
+
         Ok(response)
     }
 }
@@ -164,7 +164,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
         let response_envelope = self.run("C-FIND", body, meta).await?;
-        
+
         // TODO(Phase 3C): Map ResponseEnvelope to C-FIND datasets
         // - Extract normalized_data from response
         // - Convert JSON results to DICOM datasets
@@ -176,7 +176,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             response_envelope.response_details.status,
             response_envelope.original_data.len()
         );
-        
+
         Ok(vec![])
     }
 
@@ -206,7 +206,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
         let response_envelope = self.run("C-MOVE", body, meta).await?;
-        
+
         // TODO(Phase 3C): Map ResponseEnvelope to C-MOVE progress
         // - Parse response for move progress (remaining/completed sub-ops)
         // - Stream Pending responses with counters
@@ -218,7 +218,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             response_envelope.response_details.status,
             response_envelope.original_data.len()
         );
-        
+
         Ok(vec![])
     }
 
@@ -248,7 +248,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
         let response_envelope = self.run("C-GET", body, meta).await?;
-        
+
         // TODO(Phase 3C): Map ResponseEnvelope to C-GET datasets
         // - Extract normalized_data from response
         // - Convert JSON results to DICOM datasets
@@ -260,7 +260,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             response_envelope.response_details.status,
             response_envelope.original_data.len()
         );
-        
+
         Ok(vec![])
     }
 
@@ -285,7 +285,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             "operation": "store",
             "dir": target_dir.to_string_lossy(),
         });
-        
+
         // TODO(Phase 3C): Use ResponseEnvelope to determine C-STORE status
         // - Check response_envelope.response_details.status
         // - Map 2xx → DIMSE Success (0x0000)

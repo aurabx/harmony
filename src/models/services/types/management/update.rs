@@ -59,10 +59,7 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
     // Get config file path from globals
     let config_path = crate::globals::get_config_path().ok_or_else(|| {
         tracing::error!("Configuration path not available");
-        (
-            500,
-            "Configuration file path not accessible".to_string(),
-        )
+        (500, "Configuration file path not accessible".to_string())
     })?;
 
     tracing::info!("Reading configuration from: {}", config_path);
@@ -70,10 +67,7 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
     // Read TOML config file
     let toml_content = std::fs::read_to_string(&config_path).map_err(|e| {
         tracing::error!("Failed to read configuration file: {}", e);
-        (
-            500,
-            format!("Failed to read configuration file: {}", e),
-        )
+        (500, format!("Failed to read configuration file: {}", e))
     })?;
 
     let config_size = toml_content.len();
@@ -141,16 +135,14 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
 
             // Map SDK errors to appropriate HTTP status codes
             let (status_code, message) = match e {
-                runbeam_sdk::RunbeamError::Api(api_err) => {
-                    match api_err {
-                        runbeam_sdk::ApiError::Http { status, message } => {
-                            (status, format!("API error: {}", message))
-                        }
-                        runbeam_sdk::ApiError::Parse(msg) => (500, format!("Parse error: {}", msg)),
-                        runbeam_sdk::ApiError::Request(msg) => (503, format!("Network error: {}", msg)),
-                        runbeam_sdk::ApiError::Network(msg) => (503, format!("Network error: {}", msg)),
+                runbeam_sdk::RunbeamError::Api(api_err) => match api_err {
+                    runbeam_sdk::ApiError::Http { status, message } => {
+                        (status, format!("API error: {}", message))
                     }
-                }
+                    runbeam_sdk::ApiError::Parse(msg) => (500, format!("Parse error: {}", msg)),
+                    runbeam_sdk::ApiError::Request(msg) => (503, format!("Network error: {}", msg)),
+                    runbeam_sdk::ApiError::Network(msg) => (503, format!("Network error: {}", msg)),
+                },
                 runbeam_sdk::RunbeamError::Storage(msg) => (500, format!("Storage error: {}", msg)),
                 _ => (500, format!("Unexpected error: {}", e)),
             };
@@ -188,10 +180,7 @@ mod tests {
 
         let response: UpdateResponse = serde_json::from_str(json).unwrap();
         assert_eq!(response.success, true);
-        assert_eq!(
-            response.message,
-            "Configuration uploaded successfully"
-        );
+        assert_eq!(response.message, "Configuration uploaded successfully");
         assert_eq!(response.config_size, 5678);
     }
 }

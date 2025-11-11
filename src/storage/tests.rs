@@ -19,7 +19,7 @@ mod tests {
         let config = StorageConfig::default();
         let serialized = serde_json::to_string(&config).unwrap();
         let deserialized: StorageConfig = serde_json::from_str(&serialized).unwrap();
-        
+
         assert_eq!(config.backend, deserialized.backend);
         assert_eq!(
             config.options.get("path").unwrap().as_str().unwrap(),
@@ -65,7 +65,7 @@ mod tests {
 
         let result = create_storage_backend(&config);
         assert!(result.is_err());
-        
+
         if let Err(StorageError::Config(msg)) = result {
             assert!(msg.contains("Unknown storage backend"));
             assert!(msg.contains("unknown"));
@@ -81,10 +81,7 @@ mod tests {
             "path".to_string(),
             serde_json::Value::String("/custom/path".to_string()),
         );
-        options.insert(
-            "create_dirs".to_string(),
-            serde_json::Value::Bool(true),
-        );
+        options.insert("create_dirs".to_string(), serde_json::Value::Bool(true));
 
         let config = StorageConfig {
             backend: "filesystem".to_string(),
@@ -97,7 +94,12 @@ mod tests {
             "/custom/path"
         );
         assert_eq!(
-            config.options.get("create_dirs").unwrap().as_bool().unwrap(),
+            config
+                .options
+                .get("create_dirs")
+                .unwrap()
+                .as_bool()
+                .unwrap(),
             true
         );
     }

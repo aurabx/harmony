@@ -53,7 +53,6 @@ impl ServiceType for JmixEndpoint {
             }
         }
 
-
         Ok(())
     }
 
@@ -562,11 +561,15 @@ impl ServiceHandler<Value> for JmixEndpoint {
             .response_details
             .metadata
             .insert("service".to_string(), "jmix".to_string());
-        
+
         // For HTTP protocol, ensure JMIX content-type if applicable
         if ctx.protocol == crate::models::protocol::Protocol::Http {
             // Only set if not already a zip file
-            if !envelope.response_details.headers.contains_key("content-type") {
+            if !envelope
+                .response_details
+                .headers
+                .contains_key("content-type")
+            {
                 envelope
                     .response_details
                     .headers

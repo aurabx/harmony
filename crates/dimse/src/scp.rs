@@ -201,14 +201,14 @@ impl DimseScp {
             .promiscuous(true);
 
         // Establish the association
-        let mut association = scp_options
-            .establish_async(stream)
-            .await
-            .map_err(|e| DimseError::association(format!("Failed to establish association: {}", e)))?;
+        let mut association = scp_options.establish_async(stream).await.map_err(|e| {
+            DimseError::association(format!("Failed to establish association: {}", e))
+        })?;
 
         info!(
             "Association established with {} (calling AET: {})",
-            peer_addr, association.client_ae_title()
+            peer_addr,
+            association.client_ae_title()
         );
 
         // Buffer for accumulating identifier data across multiple PDUs
@@ -220,7 +220,15 @@ impl DimseScp {
             match association.receive().await {
                 Ok(Pdu::PData { data }) => {
                     // Handle P-DATA PDU containing DIMSE commands
-                    if let Err(e) = self.handle_pdata(&mut association, data, &mut pending_command, &mut accumulated_identifier).await {
+                    if let Err(e) = self
+                        .handle_pdata(
+                            &mut association,
+                            data,
+                            &mut pending_command,
+                            &mut accumulated_identifier,
+                        )
+                        .await
+                    {
                         error!("Error handling P-DATA: {}", e);
                         // Send abort and break
                         let _ = association.abort().await;
@@ -230,10 +238,9 @@ impl DimseScp {
                 Ok(Pdu::ReleaseRQ) => {
                     // Association release requested by SCU
                     info!("Association release requested by {}", peer_addr);
-                    association
-                        .send(&Pdu::ReleaseRP)
-                        .await
-                        .map_err(|e| DimseError::network(format!("Failed to send release: {}", e)))?;
+                    association.send(&Pdu::ReleaseRP).await.map_err(|e| {
+                        DimseError::network(format!("Failed to send release: {}", e))
+                    })?;
                     break;
                 }
                 Ok(Pdu::AbortRQ { source }) => {
@@ -271,7 +278,7 @@ impl DimseScp {
         let mut command_data = Vec::new();
         let mut identifier_data = Vec::new();
         let mut presentation_context_id = 1u8; // Default to 1
-        
+
         for pdata_value in pdata {
             presentation_context_id = pdata_value.presentation_context_id;
             match pdata_value.value_type {
@@ -288,14 +295,28 @@ impl DimseScp {
         if command_data.is_empty() {
             // This is a data-only PDU - accumulate it for pending command
             if !identifier_data.is_empty() {
-                debug!("Received data-only P-DATA ({} bytes), accumulating", identifier_data.len());
+                debug!(
+                    "Received data-only P-DATA ({} bytes), accumulating",
+                    identifier_data.len()
+                );
                 accumulated_identifier.extend_from_slice(&identifier_data);
-                
+
                 // Check if we have a pending command to dispatch
                 if let Some((command_field, message_id)) = *pending_command {
                     // Dispatch the command with accumulated data
-                    debug!("Dispatching pending command 0x{:04X} with {} bytes of data", command_field, accumulated_identifier.len());
-                    self.dispatch_command(association, command_field, message_id, accumulated_identifier.clone(), presentation_context_id).await?;
+                    debug!(
+                        "Dispatching pending command 0x{:04X} with {} bytes of data",
+                        command_field,
+                        accumulated_identifier.len()
+                    );
+                    self.dispatch_command(
+                        association,
+                        command_field,
+                        message_id,
+                        accumulated_identifier.clone(),
+                        presentation_context_id,
+                    )
+                    .await?;
                     *pending_command = None;
                     accumulated_identifier.clear();
                 }
@@ -307,14 +328,20 @@ impl DimseScp {
         let ts = TransferSyntaxRegistry
             .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
             .ok_or_else(|| DimseError::parse("Implicit VR Little Endian TS not found"))?;
-        
+
         let cursor = std::io::Cursor::new(&command_data);
         let command_obj = InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
             cursor,
             ts,
             SpecificCharacterSet::default(),
         )
-        .map_err(|e| DimseError::parse(format!("Failed to parse command dataset ({} bytes): {}", command_data.len(), e)))?;
+        .map_err(|e| {
+            DimseError::parse(format!(
+                "Failed to parse command dataset ({} bytes): {}",
+                command_data.len(),
+                e
+            ))
+        })?;
 
         // Extract command field to determine operation type
         let command_field = command_obj
@@ -330,7 +357,10 @@ impl DimseScp {
             .uint16()
             .map_err(|e| DimseError::parse(format!("Invalid message ID: {}", e)))?;
 
-        debug!("Received DIMSE command: 0x{:04X}, message ID: {}", command_field, message_id);
+        debug!(
+            "Received DIMSE command: 0x{:04X}, message ID: {}",
+            command_field, message_id
+        );
 
         // Check if this command expects a dataset
         let expects_dataset = command_obj
@@ -342,8 +372,19 @@ impl DimseScp {
 
         // If we have identifier data in this PDU, use it immediately
         if !identifier_data.is_empty() {
-            debug!("Command has {} bytes of identifier data in same PDU", identifier_data.len());
-            return self.dispatch_command(association, command_field, message_id, identifier_data, presentation_context_id).await;
+            debug!(
+                "Command has {} bytes of identifier data in same PDU",
+                identifier_data.len()
+            );
+            return self
+                .dispatch_command(
+                    association,
+                    command_field,
+                    message_id,
+                    identifier_data,
+                    presentation_context_id,
+                )
+                .await;
         }
 
         // If command expects dataset but we don't have it yet, buffer the command
@@ -354,7 +395,14 @@ impl DimseScp {
         }
 
         // No dataset expected, dispatch immediately
-        self.dispatch_command(association, command_field, message_id, Vec::new(), presentation_context_id).await
+        self.dispatch_command(
+            association,
+            command_field,
+            message_id,
+            Vec::new(),
+            presentation_context_id,
+        )
+        .await
     }
 
     /// Dispatch a DIMSE command to the appropriate handler
@@ -370,19 +418,38 @@ impl DimseScp {
         match command_field {
             0x0030 => {
                 // C-ECHO-RQ
-                self.handle_c_echo(association, message_id, presentation_context_id).await
+                self.handle_c_echo(association, message_id, presentation_context_id)
+                    .await
             }
             0x0020 => {
                 // C-FIND-RQ
-                self.handle_c_find(association, message_id, identifier_data, presentation_context_id).await
+                self.handle_c_find(
+                    association,
+                    message_id,
+                    identifier_data,
+                    presentation_context_id,
+                )
+                .await
             }
             0x0021 => {
                 // C-MOVE-RQ
-                self.handle_c_move(association, message_id, identifier_data, presentation_context_id).await
+                self.handle_c_move(
+                    association,
+                    message_id,
+                    identifier_data,
+                    presentation_context_id,
+                )
+                .await
             }
             0x0010 => {
                 // C-GET-RQ
-                self.handle_c_get(association, message_id, identifier_data, presentation_context_id).await
+                self.handle_c_get(
+                    association,
+                    message_id,
+                    identifier_data,
+                    presentation_context_id,
+                )
+                .await
             }
             0x0001 => {
                 // C-STORE-RQ
@@ -414,35 +481,35 @@ impl DimseScp {
 
         // Build C-ECHO-RSP command dataset
         let mut response = InMemDicomObject::new_empty();
-        
+
         // Command Field (0000,0100) = 0x8030 (C-ECHO-RSP)
         response.put(DataElement::new(
             tags::COMMAND_FIELD,
             VR::US,
             PrimitiveValue::from(0x8030u16),
         ));
-        
+
         // Message ID Being Responded To (0000,0120)
         response.put(DataElement::new(
             tags::MESSAGE_ID_BEING_RESPONDED_TO,
             VR::US,
             PrimitiveValue::from(message_id),
         ));
-        
+
         // Command Data Set Type (0000,0800) = 0x0101 (no dataset)
         response.put(DataElement::new(
             tags::COMMAND_DATA_SET_TYPE,
             VR::US,
             PrimitiveValue::from(0x0101u16),
         ));
-        
+
         // Status (0000,0900) = 0x0000 (Success)
         response.put(DataElement::new(
             tags::STATUS,
             VR::US,
             PrimitiveValue::from(0x0000u16),
         ));
-        
+
         // Affected SOP Class UID (0000,0002) = Verification SOP Class
         response.put(DataElement::new(
             tags::AFFECTED_SOP_CLASS_UID,
@@ -454,11 +521,15 @@ impl DimseScp {
         let mut response_bytes = Vec::new();
         let ts = TransferSyntaxRegistry
             .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
-            .ok_or_else(|| DimseError::operation_failed("Implicit VR Little Endian TS not found"))?;
-        
+            .ok_or_else(|| {
+                DimseError::operation_failed("Implicit VR Little Endian TS not found")
+            })?;
+
         response
             .write_dataset_with_ts(&mut response_bytes, ts)
-            .map_err(|e| DimseError::operation_failed(format!("Failed to encode response: {}", e)))?;
+            .map_err(|e| {
+                DimseError::operation_failed(format!("Failed to encode response: {}", e))
+            })?;
 
         // Send as P-DATA PDU
         let pdata_value = dicom_ul::pdu::PDataValue {
@@ -491,7 +562,11 @@ impl DimseScp {
             return Err(DimseError::operation_failed("C-FIND not enabled"));
         }
 
-        debug!("Handling C-FIND request (message ID: {}, identifier size: {} bytes)", message_id, identifier_data.len());
+        debug!(
+            "Handling C-FIND request (message ID: {}, identifier size: {} bytes)",
+            message_id,
+            identifier_data.len()
+        );
 
         // Check if we have identifier data
         if identifier_data.is_empty() {
@@ -502,7 +577,8 @@ impl DimseScp {
                 message_id,
                 0xC000, // Failure
                 None,
-            ).await?;
+            )
+            .await?;
             return Ok(());
         }
 
@@ -512,8 +588,13 @@ impl DimseScp {
             .iter()
             .find(|pc| pc.id == presentation_context_id)
             .and_then(|pc| TransferSyntaxRegistry.get(&pc.transfer_syntax))
-            .ok_or_else(|| DimseError::parse(format!("Transfer syntax not found for presentation context {}", presentation_context_id)))?;
-        
+            .ok_or_else(|| {
+                DimseError::parse(format!(
+                    "Transfer syntax not found for presentation context {}",
+                    presentation_context_id
+                ))
+            })?;
+
         let cursor = std::io::Cursor::new(&identifier_data);
         let identifier = InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
             cursor,
@@ -529,13 +610,14 @@ impl DimseScp {
             .and_then(|e| e.to_str().ok())
             .map(|s| s.to_string())
             .unwrap_or_else(|| "STUDY".to_string());
-        
-        let query_level = query_level_str.parse::<QueryLevel>()
+
+        let query_level = query_level_str
+            .parse::<QueryLevel>()
             .unwrap_or(QueryLevel::Study);
 
         // Extract query parameters from the identifier
         let mut parameters = std::collections::HashMap::new();
-        
+
         // Common DICOM query tags
         let query_tags = vec![
             ("PatientID", "00100020"),
@@ -559,7 +641,10 @@ impl DimseScp {
             }
         }
 
-        debug!("C-FIND query: level={}, params={:?}", query_level, parameters);
+        debug!(
+            "C-FIND query: level={}, params={:?}",
+            query_level, parameters
+        );
 
         // Query the provider
         match self.query_provider.find(query_level, &parameters, 0).await {
@@ -573,7 +658,8 @@ impl DimseScp {
                         message_id,
                         0xFF00, // Pending
                         Some(dataset),
-                    ).await?;
+                    )
+                    .await?;
                 }
 
                 // Send final success response (status 0x0000)
@@ -582,7 +668,8 @@ impl DimseScp {
                     message_id,
                     0x0000, // Success
                     None,
-                ).await?;
+                )
+                .await?;
 
                 info!("C-FIND completed with {} results", datasets.len());
                 Ok(())
@@ -595,7 +682,8 @@ impl DimseScp {
                     message_id,
                     0xC000, // Failure
                     None,
-                ).await?;
+                )
+                .await?;
                 Ok(())
             }
         }
@@ -611,21 +699,21 @@ impl DimseScp {
     ) -> Result<()> {
         // Build C-FIND-RSP command dataset
         let mut response = InMemDicomObject::new_empty();
-        
+
         // Command Field (0000,0100) = 0x8020 (C-FIND-RSP)
         response.put(DataElement::new(
             tags::COMMAND_FIELD,
             VR::US,
             PrimitiveValue::from(0x8020u16),
         ));
-        
+
         // Message ID Being Responded To (0000,0120)
         response.put(DataElement::new(
             tags::MESSAGE_ID_BEING_RESPONDED_TO,
             VR::US,
             PrimitiveValue::from(message_id),
         ));
-        
+
         // Command Data Set Type (0000,0800)
         let has_dataset = dataset.is_some();
         response.put(DataElement::new(
@@ -633,14 +721,14 @@ impl DimseScp {
             VR::US,
             PrimitiveValue::from(if has_dataset { 0x0000u16 } else { 0x0101u16 }),
         ));
-        
+
         // Status (0000,0900)
         response.put(DataElement::new(
             tags::STATUS,
             VR::US,
             PrimitiveValue::from(status),
         ));
-        
+
         // Affected SOP Class UID (0000,0002) = Study Root Query/Retrieve - FIND
         response.put(DataElement::new(
             tags::AFFECTED_SOP_CLASS_UID,
@@ -651,12 +739,16 @@ impl DimseScp {
         // Encode command response
         let ts = TransferSyntaxRegistry
             .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
-            .ok_or_else(|| DimseError::operation_failed("Implicit VR Little Endian TS not found"))?;
-        
+            .ok_or_else(|| {
+                DimseError::operation_failed("Implicit VR Little Endian TS not found")
+            })?;
+
         let mut response_bytes = Vec::new();
         response
             .write_dataset_with_ts(&mut response_bytes, ts)
-            .map_err(|e| DimseError::operation_failed(format!("Failed to encode response: {}", e)))?;
+            .map_err(|e| {
+                DimseError::operation_failed(format!("Failed to encode response: {}", e))
+            })?;
 
         let command_pdata = dicom_ul::pdu::PDataValue {
             presentation_context_id: 1,
@@ -669,12 +761,14 @@ impl DimseScp {
         if let Some(ds) = dataset {
             // Convert the dataset to a DICOM object
             let dicom_obj = ds.to_object().await?;
-            
+
             // Encode the identifier dataset
             let mut identifier_bytes = Vec::new();
             dicom_obj
                 .write_dataset_with_ts(&mut identifier_bytes, ts)
-                .map_err(|e| DimseError::operation_failed(format!("Failed to encode identifier: {}", e)))?;
+                .map_err(|e| {
+                    DimseError::operation_failed(format!("Failed to encode identifier: {}", e))
+                })?;
 
             let data_pdata = dicom_ul::pdu::PDataValue {
                 presentation_context_id: 1,
@@ -688,14 +782,18 @@ impl DimseScp {
                     data: vec![command_pdata, data_pdata],
                 })
                 .await
-                .map_err(|e| DimseError::network(format!("Failed to send C-FIND response: {}", e)))?;
+                .map_err(|e| {
+                    DimseError::network(format!("Failed to send C-FIND response: {}", e))
+                })?;
         } else {
             association
                 .send(&Pdu::PData {
                     data: vec![command_pdata],
                 })
                 .await
-                .map_err(|e| DimseError::network(format!("Failed to send C-FIND response: {}", e)))?;
+                .map_err(|e| {
+                    DimseError::network(format!("Failed to send C-FIND response: {}", e))
+                })?;
         }
 
         Ok(())
@@ -713,7 +811,11 @@ impl DimseScp {
             return Err(DimseError::operation_failed("C-MOVE not enabled"));
         }
 
-        debug!("Handling C-MOVE request (message ID: {}, identifier size: {} bytes)", message_id, identifier_data.len());
+        debug!(
+            "Handling C-MOVE request (message ID: {}, identifier size: {} bytes)",
+            message_id,
+            identifier_data.len()
+        );
         warn!("C-MOVE operation not fully implemented - returning 'Unable to perform sub-operations' status");
 
         // Parse identifier to log query info
@@ -721,12 +823,14 @@ impl DimseScp {
             let ts = TransferSyntaxRegistry
                 .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
                 .ok_or_else(|| DimseError::parse("Implicit VR Little Endian TS not found"))?;
-            
-            if let Ok(identifier) = InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
-                std::io::Cursor::new(&identifier_data),
-                ts,
-                SpecificCharacterSet::default(),
-            ) {
+
+            if let Ok(identifier) =
+                InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
+                    std::io::Cursor::new(&identifier_data),
+                    ts,
+                    SpecificCharacterSet::default(),
+                )
+            {
                 // Try to extract move destination
                 if let Ok(dest) = identifier.element_by_name("MoveDestination") {
                     if let Ok(dest_aet) = dest.to_str() {
@@ -748,7 +852,8 @@ impl DimseScp {
                 failed: 0,
                 warning: 0,
             },
-        ).await?;
+        )
+        .await?;
 
         info!("C-MOVE request handled with 'not implemented' status");
         Ok(())
@@ -763,35 +868,35 @@ impl DimseScp {
         counts: SubOperationCounts,
     ) -> Result<()> {
         let mut response = InMemDicomObject::new_empty();
-        
+
         // Command Field (0000,0100) = 0x8021 (C-MOVE-RSP)
         response.put(DataElement::new(
             tags::COMMAND_FIELD,
             VR::US,
             PrimitiveValue::from(0x8021u16),
         ));
-        
+
         // Message ID Being Responded To (0000,0120)
         response.put(DataElement::new(
             tags::MESSAGE_ID_BEING_RESPONDED_TO,
             VR::US,
             PrimitiveValue::from(message_id),
         ));
-        
+
         // Command Data Set Type (0000,0800) = 0x0101 (no dataset)
         response.put(DataElement::new(
             tags::COMMAND_DATA_SET_TYPE,
             VR::US,
             PrimitiveValue::from(0x0101u16),
         ));
-        
+
         // Status (0000,0900)
         response.put(DataElement::new(
             tags::STATUS,
             VR::US,
             PrimitiveValue::from(status),
         ));
-        
+
         // Affected SOP Class UID (0000,0002) = Study Root Query/Retrieve - MOVE
         response.put(DataElement::new(
             tags::AFFECTED_SOP_CLASS_UID,
@@ -806,21 +911,21 @@ impl DimseScp {
             VR::US,
             PrimitiveValue::from(counts.remaining),
         ));
-        
+
         // Number of Completed Sub-operations (0000,1021)
         response.put(DataElement::new(
             tags::NUMBER_OF_COMPLETED_SUBOPERATIONS,
             VR::US,
             PrimitiveValue::from(counts.completed),
         ));
-        
+
         // Number of Failed Sub-operations (0000,1022)
         response.put(DataElement::new(
             tags::NUMBER_OF_FAILED_SUBOPERATIONS,
             VR::US,
             PrimitiveValue::from(counts.failed),
         ));
-        
+
         // Number of Warning Sub-operations (0000,1023)
         response.put(DataElement::new(
             tags::NUMBER_OF_WARNING_SUBOPERATIONS,
@@ -831,12 +936,16 @@ impl DimseScp {
         // Encode and send
         let ts = TransferSyntaxRegistry
             .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
-            .ok_or_else(|| DimseError::operation_failed("Implicit VR Little Endian TS not found"))?;
-        
+            .ok_or_else(|| {
+                DimseError::operation_failed("Implicit VR Little Endian TS not found")
+            })?;
+
         let mut response_bytes = Vec::new();
         response
             .write_dataset_with_ts(&mut response_bytes, ts)
-            .map_err(|e| DimseError::operation_failed(format!("Failed to encode C-MOVE response: {}", e)))?;
+            .map_err(|e| {
+                DimseError::operation_failed(format!("Failed to encode C-MOVE response: {}", e))
+            })?;
 
         let pdata = dicom_ul::pdu::PDataValue {
             presentation_context_id: 1,
@@ -846,9 +955,7 @@ impl DimseScp {
         };
 
         association
-            .send(&Pdu::PData {
-                data: vec![pdata],
-            })
+            .send(&Pdu::PData { data: vec![pdata] })
             .await
             .map_err(|e| DimseError::network(format!("Failed to send C-MOVE response: {}", e)))?;
 
@@ -867,7 +974,11 @@ impl DimseScp {
             return Err(DimseError::operation_failed("C-GET not enabled"));
         }
 
-        debug!("Handling C-GET request (message ID: {}, identifier size: {} bytes)", message_id, identifier_data.len());
+        debug!(
+            "Handling C-GET request (message ID: {}, identifier size: {} bytes)",
+            message_id,
+            identifier_data.len()
+        );
         warn!("C-GET operation not fully implemented - returning 'Unable to perform sub-operations' status");
 
         // Send failure response with "Unable to perform sub-operations" status
@@ -882,7 +993,8 @@ impl DimseScp {
                 failed: 0,
                 warning: 0,
             },
-        ).await?;
+        )
+        .await?;
 
         info!("C-GET request handled with 'not implemented' status");
         Ok(())
@@ -897,35 +1009,35 @@ impl DimseScp {
         counts: SubOperationCounts,
     ) -> Result<()> {
         let mut response = InMemDicomObject::new_empty();
-        
+
         // Command Field (0000,0100) = 0x8010 (C-GET-RSP)
         response.put(DataElement::new(
             tags::COMMAND_FIELD,
             VR::US,
             PrimitiveValue::from(0x8010u16),
         ));
-        
+
         // Message ID Being Responded To (0000,0120)
         response.put(DataElement::new(
             tags::MESSAGE_ID_BEING_RESPONDED_TO,
             VR::US,
             PrimitiveValue::from(message_id),
         ));
-        
+
         // Command Data Set Type (0000,0800) = 0x0101 (no dataset)
         response.put(DataElement::new(
             tags::COMMAND_DATA_SET_TYPE,
             VR::US,
             PrimitiveValue::from(0x0101u16),
         ));
-        
+
         // Status (0000,0900)
         response.put(DataElement::new(
             tags::STATUS,
             VR::US,
             PrimitiveValue::from(status),
         ));
-        
+
         // Affected SOP Class UID (0000,0002) = Study Root Query/Retrieve - GET
         response.put(DataElement::new(
             tags::AFFECTED_SOP_CLASS_UID,
@@ -940,21 +1052,21 @@ impl DimseScp {
             VR::US,
             PrimitiveValue::from(counts.remaining),
         ));
-        
+
         // Number of Completed Sub-operations (0000,1021)
         response.put(DataElement::new(
             tags::NUMBER_OF_COMPLETED_SUBOPERATIONS,
             VR::US,
             PrimitiveValue::from(counts.completed),
         ));
-        
+
         // Number of Failed Sub-operations (0000,1022)
         response.put(DataElement::new(
             tags::NUMBER_OF_FAILED_SUBOPERATIONS,
             VR::US,
             PrimitiveValue::from(counts.failed),
         ));
-        
+
         // Number of Warning Sub-operations (0000,1023)
         response.put(DataElement::new(
             tags::NUMBER_OF_WARNING_SUBOPERATIONS,
@@ -965,12 +1077,16 @@ impl DimseScp {
         // Encode and send
         let ts = TransferSyntaxRegistry
             .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
-            .ok_or_else(|| DimseError::operation_failed("Implicit VR Little Endian TS not found"))?;
-        
+            .ok_or_else(|| {
+                DimseError::operation_failed("Implicit VR Little Endian TS not found")
+            })?;
+
         let mut response_bytes = Vec::new();
         response
             .write_dataset_with_ts(&mut response_bytes, ts)
-            .map_err(|e| DimseError::operation_failed(format!("Failed to encode C-GET response: {}", e)))?;
+            .map_err(|e| {
+                DimseError::operation_failed(format!("Failed to encode C-GET response: {}", e))
+            })?;
 
         let pdata = dicom_ul::pdu::PDataValue {
             presentation_context_id: 1,
@@ -980,9 +1096,7 @@ impl DimseScp {
         };
 
         association
-            .send(&Pdu::PData {
-                data: vec![pdata],
-            })
+            .send(&Pdu::PData { data: vec![pdata] })
             .await
             .map_err(|e| DimseError::network(format!("Failed to send C-GET response: {}", e)))?;
 
@@ -1101,10 +1215,7 @@ impl DimseScp {
             }
 
             DimseRequestPayload::Get(ref query) => {
-                debug!(
-                    "Processing C-GET request: level={}",
-                    query.query_level
-                );
+                debug!("Processing C-GET request: level={}", query.query_level);
 
                 if !self.config.enable_get {
                     let response =
@@ -1127,7 +1238,7 @@ impl DimseScp {
                             let is_final = i == datasets.len() - 1;
                             let remaining = total - (i as u32) - 1;
                             let completed = (i as u32) + 1;
-                            
+
                             let response = DimseResponse::get_response(
                                 request_id,
                                 Some(dataset.clone()),
@@ -1147,9 +1258,8 @@ impl DimseScp {
 
                         // Send final empty response if no datasets found
                         if datasets.is_empty() {
-                            let response = DimseResponse::get_response(
-                                request_id, None, 0, 0, 0, 0, true
-                            );
+                            let response =
+                                DimseResponse::get_response(request_id, None, 0, 0, 0, 0, true);
                             self.send_response(request, response, router).await?;
                         }
                     }

@@ -396,7 +396,7 @@ async fn test_fhir_backend_content_type_preserved() {
         .headers()
         .get("content-type")
         .and_then(|v| v.to_str().ok());
-    
+
     assert!(content_type.is_some());
     assert!(content_type.unwrap().contains("application/fhir+json"));
 
@@ -457,10 +457,10 @@ async fn test_fhir_backend_normalizes_json() {
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read response body");
-    
+
     // Verify response is valid JSON that can be parsed
     let json: serde_json::Value = serde_json::from_slice(&body).expect("json should parse");
-    
+
     // Verify FHIR resource structure
     assert!(json.is_object());
     assert!(json.get("resourceType").is_some());

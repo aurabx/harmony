@@ -22,7 +22,7 @@ fn default_interface() -> String {
 }
 
 /// TCP network bind configuration
-/// 
+///
 /// Can be configured as either `[network.name.tcp_config]` or `[network.name.http]` in TOML.
 /// These are TCP network settings used by all protocol adapters, not just HTTP.
 #[derive(Debug, Deserialize, Clone, PartialEq)]

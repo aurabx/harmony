@@ -1,6 +1,6 @@
 use super::config::Config;
-use super::Cli;
 use super::reload::{compute_diff, ConfigDiff};
+use super::Cli;
 use crate::adapters::registry::AdapterRegistry;
 use crate::globals;
 use anyhow::Result;
@@ -19,10 +19,7 @@ pub struct ConfigWatcher {
 }
 
 impl ConfigWatcher {
-    pub fn new(
-        config_path: String,
-        registry: Arc<AdapterRegistry>,
-    ) -> Self {
+    pub fn new(config_path: String, registry: Arc<AdapterRegistry>) -> Self {
         Self {
             config_path,
             registry,
@@ -33,7 +30,7 @@ impl ConfigWatcher {
     /// Start watching the config file for changes
     pub async fn start(self) -> Result<()> {
         let (tx, mut rx) = mpsc::channel(100);
-        
+
         let config_path = self.config_path.clone();
         let config_path_clone = config_path.clone();
 
@@ -47,16 +44,16 @@ impl ConfigWatcher {
         })?;
 
         watcher.watch(Path::new(&config_path), RecursiveMode::NonRecursive)?;
-        
+
         tracing::info!("📡 Watching config file for changes: {}", config_path_clone);
 
         // Debounce and handle reload
         let mut last_reload = tokio::time::Instant::now();
-        
+
         while rx.recv().await.is_some() {
             // Debounce: wait for stable file state
             sleep(self.debounce_duration).await;
-            
+
             // Avoid reloading too frequently
             if last_reload.elapsed() < Duration::from_secs(1) {
                 continue;
@@ -67,12 +64,18 @@ impl ConfigWatcher {
                     if diff.has_changes() {
                         tracing::info!("✓ Config reloaded successfully");
                         if diff.requires_adapter_restart() {
-                            tracing::info!("  Networks restarted: {:?}", diff.adapter_restarts_required);
+                            tracing::info!(
+                                "  Networks restarted: {:?}",
+                                diff.adapter_restarts_required
+                            );
                             tracing::info!("  Networks added: {:?}", diff.networks_to_add);
                             tracing::info!("  Networks removed: {:?}", diff.networks_to_remove);
                         }
                         if !diff.zero_downtime_changes.is_empty() {
-                            tracing::info!("  Zero-downtime changes: {:?}", diff.zero_downtime_changes);
+                            tracing::info!(
+                                "  Zero-downtime changes: {:?}",
+                                diff.zero_downtime_changes
+                            );
                         }
                     }
                     last_reload = tokio::time::Instant::now();
@@ -91,14 +94,14 @@ impl ConfigWatcher {
         // Load new config
         let cli = Cli::new(self.config_path.clone());
         let new_config = Config::from_args(cli);
-        
+
         // Get current config
-        let old_config = globals::get_config()
-            .ok_or_else(|| anyhow::anyhow!("No config currently loaded"))?;
-        
+        let old_config =
+            globals::get_config().ok_or_else(|| anyhow::anyhow!("No config currently loaded"))?;
+
         // Compute diff
         let diff = compute_diff(&old_config, &new_config);
-        
+
         if !diff.has_changes() {
             return Ok(diff);
         }
@@ -141,11 +144,8 @@ mod tests {
     #[tokio::test]
     async fn test_watcher_creation() {
         let registry = Arc::new(AdapterRegistry::new());
-        let watcher = ConfigWatcher::new(
-            "test-config.toml".to_string(),
-            registry,
-        );
-        
+        let watcher = ConfigWatcher::new("test-config.toml".to_string(), registry);
+
         assert_eq!(watcher.config_path, "test-config.toml");
         assert_eq!(watcher.debounce_duration, Duration::from_millis(200));
     }
@@ -153,11 +153,8 @@ mod tests {
     #[tokio::test]
     async fn test_watcher_debounce_duration() {
         let registry = Arc::new(AdapterRegistry::new());
-        let watcher = ConfigWatcher::new(
-            "config.toml".to_string(),
-            registry,
-        );
-        
+        let watcher = ConfigWatcher::new("config.toml".to_string(), registry);
+
         // Verify default debounce duration is 200ms
         assert_eq!(watcher.debounce_duration, Duration::from_millis(200));
     }
@@ -167,7 +164,7 @@ mod tests {
         // Verify debounce duration is exactly 200ms as specified
         let registry = Arc::new(AdapterRegistry::new());
         let watcher = ConfigWatcher::new("test.toml".to_string(), registry);
-        
+
         assert_eq!(watcher.debounce_duration.as_millis(), 200);
     }
 

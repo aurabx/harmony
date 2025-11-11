@@ -16,19 +16,36 @@ use std::sync::Arc;
 pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Router {
     let mut app = Router::new();
     let mut route_registry: HashSet<(Method, String)> = HashSet::new();
-    
-    tracing::info!("🔧 Building router for network '{}' with {} pipelines", network_name, config.pipelines.len());
+
+    tracing::info!(
+        "🔧 Building router for network '{}' with {} pipelines",
+        network_name,
+        config.pipelines.len()
+    );
     for (name, pipeline) in &config.pipelines {
-        tracing::debug!("Pipeline '{}': networks={:?}, endpoints={:?}", name, pipeline.networks, pipeline.endpoints);
+        tracing::debug!(
+            "Pipeline '{}': networks={:?}, endpoints={:?}",
+            name,
+            pipeline.networks,
+            pipeline.endpoints
+        );
     }
 
     for (pipeline_name, pipeline) in &config.pipelines {
         if !pipeline.networks.contains(&network_name.to_string()) {
-            tracing::debug!("Skipping pipeline '{}' - not on network '{}'", pipeline_name, network_name);
+            tracing::debug!(
+                "Skipping pipeline '{}' - not on network '{}'",
+                pipeline_name,
+                network_name
+            );
             continue;
         }
-        
-        tracing::info!("Processing pipeline '{}' for network '{}'", pipeline_name, network_name);
+
+        tracing::info!(
+            "Processing pipeline '{}' for network '{}'",
+            pipeline_name,
+            network_name
+        );
 
         // Collect routes for this pipeline
         let mut planned: Vec<(String, crate::router::route_config::RouteConfig)> = Vec::new();
@@ -37,7 +54,11 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
         for endpoint_name in &pipeline.endpoints {
             tracing::debug!("Looking for endpoint '{}'", endpoint_name);
             if let Some(endpoint) = config.endpoints.get(endpoint_name) {
-                tracing::debug!("Found endpoint '{}' with service '{}'", endpoint_name, endpoint.service);
+                tracing::debug!(
+                    "Found endpoint '{}' with service '{}'",
+                    endpoint_name,
+                    endpoint.service
+                );
                 let service = match endpoint.resolve_service() {
                     Ok(service) => service,
                     Err(err) => {
@@ -57,7 +78,11 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
                 // HTTP router no longer launches DIMSE listeners
 
                 let route_configs = service.build_router(&opts_map);
-                tracing::debug!("Service '{}' generated {} route configs", endpoint.service, route_configs.len());
+                tracing::debug!(
+                    "Service '{}' generated {} route configs",
+                    endpoint.service,
+                    route_configs.len()
+                );
                 for route_config in &route_configs {
                     tracing::debug!("Route: {} {:?}", route_config.path, route_config.methods);
                 }
@@ -184,7 +209,10 @@ async fn handle_request(
 
     // 2. Build envelope via service
     let envelope = service
-        .build_protocol_envelope(ctx.clone(), endpoint.options.as_ref().unwrap_or(&HashMap::new()))
+        .build_protocol_envelope(
+            ctx.clone(),
+            endpoint.options.as_ref().unwrap_or(&HashMap::new()),
+        )
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
@@ -315,13 +343,19 @@ mod tests {
     fn test_pipeline_error_display() {
         // Test error message formatting
         let backend_error = PipelineError::BackendError("Connection refused".to_string());
-        assert_eq!(backend_error.to_string(), "Backend error: Connection refused");
+        assert_eq!(
+            backend_error.to_string(),
+            "Backend error: Connection refused"
+        );
 
         let config_error = PipelineError::ConfigError("Missing pipeline".to_string());
         assert_eq!(config_error.to_string(), "Config error: Missing pipeline");
 
         let service_error = PipelineError::ServiceError("Service unavailable".to_string());
-        assert_eq!(service_error.to_string(), "Service error: Service unavailable");
+        assert_eq!(
+            service_error.to_string(),
+            "Service error: Service unavailable"
+        );
     }
 
     #[test]
