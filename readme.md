@@ -7,6 +7,9 @@
     <a href="https://github.com/aurabx/harmony/actions/workflows/rust.yml">
       <img alt="Rust CI" src="https://github.com/aurabx/harmony/actions/workflows/rust.yml/badge.svg" />
     </a>
+    <a href="https://github.com/aurabx/harmony/actions/workflows/build.yml">
+      <img alt="Builds" src="https://github.com/aurabx/harmony/actions/workflows/build.yml/badge.svg" />
+    </a>
   </p>
 </div>
 
