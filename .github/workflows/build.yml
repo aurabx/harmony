@@ -1,5 +1,5 @@
 # .github/workflows/release.yml
-name: Release Harmony
+name: Releases
 
 on:
   push:
