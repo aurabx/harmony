@@ -12,6 +12,7 @@ Harmony is a proxy/gateway that handles, transforms and proxies data between sys
 
 **Key Features:**
 - Multi-protocol support: HTTP passthrough, FHIR, JMIX, DICOM, DICOMweb (QIDO-RS/WADO-RS endpoints)
+- Multi-content-type: Automatic parsing of JSON, XML, CSV, form data, multipart, and binary content
 - Hot configuration reload: zero-downtime updates for routes/middleware/backends, selective adapter restart for network changes
 - Configurable routing with groups, endpoints, backends, and middleware
 - JWT and basic authentication
@@ -19,6 +20,7 @@ Harmony is a proxy/gateway that handles, transforms and proxies data between sys
 - AES-256-GCM encryption with ephemeral keys
 - Envelope-based data exchange format
 - Management API for monitoring and administration
+- Security: XXE prevention, CSV formula injection mitigation, configurable size limits
 
 ## Prerequisites
 
@@ -67,6 +69,7 @@ cargo clippy --all-targets -- -D warnings
 ### Documentation
 - [docs/getting-started.md](docs/getting-started.md) - Build, run, and local conventions
 - [docs/configuration.md](docs/configuration.md) - Top-level and pipeline configuration
+- [docs/content-types.md](docs/content-types.md) - **Multi-content-type support**: JSON, XML, CSV, form data, multipart, binary
 - [docs/middleware.md](docs/middleware.md) - Authentication (JWT, Basic) and transforms
 - [docs/testing.md](docs/testing.md) - Testing strategy and commands
 - [docs/security.md](docs/security.md) - Security guidance and best practices

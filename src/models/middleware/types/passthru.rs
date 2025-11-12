@@ -66,6 +66,7 @@ mod tests {
             query_params: HashMap::new(),
             cache_status: None,
             metadata: HashMap::new(),
+            content_metadata: None,
         }
     }
 

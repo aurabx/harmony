@@ -155,8 +155,125 @@ impl ServiceType for HttpEndpoint {
             .unwrap_or("")
             .to_string();
 
-        // Try to parse payload as JSON for normalized_data
-        let normalized_data = serde_json::from_slice(&ctx.payload).ok();
+        // Content-type-aware parsing
+        use crate::adapters::http::content_type::*;
+        use crate::models::envelope::envelope::{ContentMetadata, ParseStatus};
+
+        let content_type_header = headers_map
+            .get("content-type")
+            .or_else(|| headers_map.get("Content-Type"))
+            .cloned()
+            .unwrap_or_else(|| "application/json".to_string());
+
+        let (normalized_data, content_metadata) = if ctx.payload.is_empty() {
+            // Empty payload - no parsing needed
+            (
+                None,
+                Some(ContentMetadata {
+                    content_type: content_type_header,
+                    charset: None,
+                    format: "empty".to_string(),
+                    parse_status: ParseStatus::NotAttempted,
+                    original_size: 0,
+                    checksum: None,
+                }),
+            )
+        } else {
+            // Parse content-type header
+            let ct = parse_content_type(&content_type_header).unwrap_or_else(|_| ContentType {
+                media_type: "application/octet-stream".to_string(),
+                charset: None,
+                boundary: None,
+            });
+
+            let original_size = ctx.payload.len();
+
+            // Route to appropriate parser based on content type
+            let (parsed_data, format, status, checksum) = match ct.media_type.as_str() {
+                // JSON types
+                "application/json" | "application/fhir+json" | "application/dicom+json" => {
+                    match serde_json::from_slice(&ctx.payload) {
+                        Ok(json) => (Some(json), "json".to_string(), ParseStatus::Success, None),
+                        Err(e) => {
+                            tracing::warn!("Failed to parse JSON: {}", e);
+                            (None, "json".to_string(), ParseStatus::Failed, None)
+                        }
+                    }
+                }
+
+                // XML types
+                "application/xml" | "text/xml" | "application/soap+xml" => {
+                    match parse_xml(&ctx.payload) {
+                        Ok(json) => (Some(json), "xml".to_string(), ParseStatus::Success, None),
+                        Err(e) => {
+                            tracing::warn!("Failed to parse XML: {}", e);
+                            (None, "xml".to_string(), ParseStatus::Failed, None)
+                        }
+                    }
+                }
+
+                // CSV
+                "text/csv" => match parse_csv(&ctx.payload) {
+                    Ok(json) => (Some(json), "csv".to_string(), ParseStatus::Success, None),
+                    Err(e) => {
+                        tracing::warn!("Failed to parse CSV: {}", e);
+                        (None, "csv".to_string(), ParseStatus::Failed, None)
+                    }
+                },
+
+                // Form URL-encoded
+                "application/x-www-form-urlencoded" => match parse_form_urlencoded(&ctx.payload) {
+                    Ok(json) => (Some(json), "form".to_string(), ParseStatus::Success, None),
+                    Err(e) => {
+                        tracing::warn!("Failed to parse form data: {}", e);
+                        (None, "form".to_string(), ParseStatus::Failed, None)
+                    }
+                },
+
+                // Multipart form data (async parsing)
+                "multipart/form-data" => match parse_multipart(&ctx.payload, ct.boundary).await {
+                    Ok(json) => (
+                        Some(json),
+                        "multipart".to_string(),
+                        ParseStatus::Success,
+                        None,
+                    ),
+                    Err(e) => {
+                        tracing::warn!("Failed to parse multipart data: {}", e);
+                        (None, "multipart".to_string(), ParseStatus::Failed, None)
+                    }
+                },
+
+                // Binary content
+                media_type if is_binary_content(media_type) => {
+                    let checksum = calculate_checksum(&ctx.payload);
+                    let metadata = create_binary_metadata(media_type, &ctx.payload);
+                    (
+                        Some(metadata),
+                        "binary".to_string(),
+                        ParseStatus::Success,
+                        Some(checksum),
+                    )
+                }
+
+                // Unknown/unsupported - try JSON as fallback
+                _ => match serde_json::from_slice(&ctx.payload) {
+                    Ok(json) => (Some(json), "json".to_string(), ParseStatus::Success, None),
+                    Err(_) => (None, "unknown".to_string(), ParseStatus::Unsupported, None),
+                },
+            };
+
+            let metadata = ContentMetadata {
+                content_type: content_type_header,
+                charset: ct.charset,
+                format,
+                parse_status: status,
+                original_size,
+                checksum,
+            };
+
+            (parsed_data, Some(metadata))
+        };
 
         RequestEnvelope::builder()
             .method(method)
@@ -166,6 +283,7 @@ impl ServiceType for HttpEndpoint {
             .query_params(query_params)
             .cache_status(cache_status)
             .metadata(metadata)
+            .content_metadata(content_metadata)
             .target_details(None)
             .original_data(ctx.payload)
             .normalized_data(normalized_data)

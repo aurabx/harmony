@@ -14,6 +14,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+pub mod content_type;
 pub mod router;
 
 /// HTTP Protocol Adapter

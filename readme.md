@@ -19,12 +19,14 @@ Harmony Proxy is a production-ready, extensible data mesh proxy/gateway for hete
 
 Highlights:
 - Multi-protocol: HTTP/JSON passthrough, FHIR, DICOM/DICOMweb (QIDO-RS/WADO-RS), JMIX
+- Multi-content-type: Automatic parsing of JSON, XML, CSV, form data, multipart, and binary content
 - Configurable pipelines: endpoints + ordered middleware + services/backends
 - Hot configuration reload: zero-downtime updates for most config changes
 - Authentication: JWT (recommend RS256 in production), optional Basic
 - Transformations: JSON transforms (JOLT), DICOM↔DICOMweb bridging, JMIX packaging
 - Runbeam Cloud Integration: Gateway authorization for autonomous API access with 30-day machine tokens
 - Secure Token Storage: Automatic selection of OS keyring or encrypted filesystem (no configuration needed)
+- Security: XXE prevention, CSV formula injection mitigation, configurable size limits
 - Operationally sound: structured logging, local ./tmp storage convention
 
 Status: under active development. For more information, visit https://harmonyproxy.com.
@@ -296,6 +298,7 @@ See [docs/configuration.md](docs/configuration.md), [docs/endpoints.md](docs/end
 - Docs index: [docs/README.md](docs/README.md)
 - Getting started: [docs/getting-started.md](docs/getting-started.md)
 - Configuration: [docs/configuration.md](docs/configuration.md)
+- Content types: [docs/content-types.md](docs/content-types.md) (JSON, XML, CSV, multipart, binary)
 - Endpoints: [docs/endpoints.md](docs/endpoints.md)
 - Middleware: [docs/middleware.md](docs/middleware.md)
 - Backends: [docs/backends.md](docs/backends.md)

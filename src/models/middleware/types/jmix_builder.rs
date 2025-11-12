@@ -647,6 +647,7 @@ mod tests {
             query_params: Default::default(),
             cache_status: None,
             metadata: Default::default(),
+            content_metadata: None,
         };
 
         let env = ResponseEnvelope {
@@ -724,6 +725,7 @@ mod tests {
             query_params: Default::default(),
             cache_status: None,
             metadata: Default::default(),
+            content_metadata: None,
         };
 
         let env = ResponseEnvelope {

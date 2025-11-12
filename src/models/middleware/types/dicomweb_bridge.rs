@@ -1231,6 +1231,7 @@ mod tests {
             cookies: HashMap::new(),
             query_params: HashMap::new(),
             cache_status: None,
+            content_metadata: None,
             metadata,
         };
 
@@ -1464,6 +1465,7 @@ mod tests {
             cookies: HashMap::new(),
             query_params: HashMap::new(),
             cache_status: None,
+            content_metadata: None,
             metadata,
         };
 
