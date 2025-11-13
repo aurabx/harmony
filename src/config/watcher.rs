@@ -103,9 +103,21 @@ impl ConfigWatcher {
 
     /// Reload configuration and apply changes
     async fn reload_config(&self) -> Result<ConfigDiff> {
-        // Load new config
+        // Load new config - catch panics from validation
         let cli = Cli::new(self.config_path.clone());
-        let new_config = Config::from_args(cli);
+        let new_config = match std::panic::catch_unwind(|| Config::from_args(cli)) {
+            Ok(config) => config,
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else {
+                    "Unknown validation error".to_string()
+                };
+                return Err(anyhow::anyhow!("Config validation failed: {}", msg));
+            }
+        };
 
         // Get current config
         let old_config =

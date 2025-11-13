@@ -448,7 +448,11 @@ async fn test_file_watcher_detects_changes() {
 
     // Create registry and start watcher
     let registry = Arc::new(AdapterRegistry::new());
-    let watcher = ConfigWatcher::new(config_path.to_string_lossy().to_string(), registry.clone());
+    let watcher = ConfigWatcher::new(
+        config_path.to_string_lossy().to_string(),
+        None, // No pipelines directory in this test
+        registry.clone(),
+    );
 
     // Spawn watcher in background
     let watcher_handle = tokio::spawn(async move { watcher.start().await });
@@ -489,7 +493,11 @@ async fn test_cloud_poller_writes_file_watcher_applies() {
 
     // Create registry and start file watcher
     let registry = Arc::new(AdapterRegistry::new());
-    let watcher = ConfigWatcher::new(config_path.to_string_lossy().to_string(), registry.clone());
+    let watcher = ConfigWatcher::new(
+        config_path.to_string_lossy().to_string(),
+        None, // No pipelines directory in this test
+        registry.clone(),
+    );
 
     // Spawn watcher in background
     let watcher_handle = tokio::spawn(async move { watcher.start().await });
