@@ -755,7 +755,7 @@ impl MockDicomEndpoint {
             .as_ref()
             .and_then(|nd| nd.get("path").and_then(|p| p.as_str()))
             .map(|s| s.to_string())
-            .or_else(|| envelope.request_details.metadata.get("path").cloned())
+            .or_else(|| Some(crate::models::services::path_utils::extract_path(envelope)))
             .unwrap_or_default();
 
         let op = envelope

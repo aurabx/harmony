@@ -133,9 +133,12 @@ impl ServiceType for HttpEndpoint {
             .map(|s| s.to_string());
 
         let mut metadata: Map<String, String> = Map::new();
-        // pass through HTTP-derived meta (path, full_path) from ctx.meta
+        // pass through HTTP-derived meta (path, path_with_query, full_path) from ctx.meta
         if let Some(path) = ctx.meta.get("path") {
             metadata.insert("path".into(), path.clone());
+        }
+        if let Some(path_query) = ctx.meta.get("path_with_query") {
+            metadata.insert("path_with_query".into(), path_query.clone());
         }
         if let Some(full) = ctx.meta.get("full_path") {
             metadata.insert("full_path".into(), full.clone());
@@ -331,14 +334,8 @@ impl ServiceHandler<Value> for HttpEndpoint {
             target
         } else {
             // No target_details set by middleware - create from request_details
-            // Use the path from metadata (without endpoint prefix) if available,
-            // otherwise fall back to the full URI
-            let path = envelope
-                .request_details
-                .metadata
-                .get("path")
-                .map(|p| format!("/{}", p))
-                .unwrap_or_else(|| envelope.request_details.uri.clone());
+            // Use helper to extract path WITHOUT query string
+            let path = crate::models::services::path_utils::extract_path(&envelope);
 
             // Create TargetDetails from request_details with base_url
             let mut target = TargetDetails::from_request_details(
@@ -346,8 +343,10 @@ impl ServiceHandler<Value> for HttpEndpoint {
                 &envelope.request_details,
             );
 
-            // Override URI with the stripped path
+            // Override URI with the stripped path (without query string)
+            // Query parameters are preserved in target.query_params from request_details
             target.uri = path;
+            
             target
         };
 

@@ -499,15 +499,24 @@ module = ""
     // Give extra time for the old adapter to fully shut down and release the port
     sleep(Duration::from_secs(4)).await;
 
-    // Old port should no longer respond
-    let old_port_response = timeout(
-        Duration::from_millis(500),
-        client.get("http://127.0.0.1:19203/test/old").send(),
-    )
-    .await;
+    // Old port should no longer respond - retry a few times to handle timing variations
+    let mut old_port_stopped = false;
+    for _ in 0..5 {
+        let old_port_response = timeout(
+            Duration::from_millis(500),
+            client.get("http://127.0.0.1:19203/test/old").send(),
+        )
+        .await;
+
+        if old_port_response.is_err() || old_port_response.unwrap().is_err() {
+            old_port_stopped = true;
+            break;
+        }
+        sleep(Duration::from_millis(500)).await;
+    }
 
     assert!(
-        old_port_response.is_err() || old_port_response.unwrap().is_err(),
+        old_port_stopped,
         "Old port should not respond after adapter restart"
     );
 

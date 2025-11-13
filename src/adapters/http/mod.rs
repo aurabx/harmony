@@ -51,6 +51,8 @@ impl HttpAdapter {
             .path_and_query()
             .map(|pq| pq.as_str().to_string())
             .unwrap_or_else(|| path_only.clone());
+        
+        // Strip prefix from path
         let mut subpath = path_only
             .strip_prefix(path_prefix)
             .unwrap_or("")
@@ -58,6 +60,12 @@ impl HttpAdapter {
         if subpath.starts_with('/') {
             subpath = subpath.trim_start_matches('/').to_string();
         }
+        
+        // Also create subpath with query string (stripped prefix but includes query)
+        let subpath_with_query = full_path_with_query
+            .strip_prefix(path_prefix)
+            .unwrap_or(&full_path_with_query)
+            .to_string();
 
         // Headers
         let headers_obj: serde_json::Value = {
@@ -128,6 +136,7 @@ impl HttpAdapter {
         let mut meta_map = HashMap::new();
         meta_map.insert("protocol".to_string(), "http".to_string());
         meta_map.insert("path".to_string(), subpath);
+        meta_map.insert("path_with_query".to_string(), subpath_with_query);
         meta_map.insert("full_path".to_string(), full_path_with_query);
 
         // attrs object

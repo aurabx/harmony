@@ -98,14 +98,8 @@ impl ServiceHandler<Value> for FhirEndpoint {
             target
         } else {
             // No target_details set by middleware - create from request_details
-            // Use the path from metadata (without endpoint prefix) if available,
-            // otherwise fall back to the full URI
-            let path = envelope
-                .request_details
-                .metadata
-                .get("path")
-                .map(|p| format!("/{}", p))
-                .unwrap_or_else(|| envelope.request_details.uri.clone());
+            // Use helper to extract path WITHOUT query string
+            let path = crate::models::services::path_utils::extract_path(&envelope);
 
             // Create TargetDetails from request_details with base_url
             let mut target = TargetDetails::from_request_details(
@@ -113,7 +107,8 @@ impl ServiceHandler<Value> for FhirEndpoint {
                 &envelope.request_details,
             );
 
-            // Override URI with the stripped path
+            // Override URI with the stripped path (without query string)
+            // Query parameters are preserved in target.query_params from request_details
             target.uri = path;
 
             // Ensure FHIR-specific content type is set if not present
