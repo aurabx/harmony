@@ -59,8 +59,11 @@ matchit = "0.8"
 anyhow = "1.0.100"
 tokio-util = "0.7.16"
 chrono = { version = "0.4", features = ["serde"] }
+chrono-tz = "0.10"
 notify = { version = "6.1", default-features = false, features = ["macos_fsevent"] }
 arc-swap = "1.7"
+ipnetwork = "0.20"
+regex = "1.10"
 
 # Multi-content-type parsing support
 quick-xml = { version = "0.31", features = ["serialize"] }

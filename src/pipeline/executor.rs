@@ -218,15 +218,36 @@ impl PipelineExecutor {
             // When backends are skipped, build response directly from the request envelope
             // Middleware/endpoint should have prepared normalized_data with the response
 
-            let body = if let Some(ref normalized) = envelope.normalized_data {
-                serde_json::to_vec(normalized).unwrap_or_default()
+            // Try to extract status code from normalized_data.response.status
+            let (status_code, body) = if let Some(ref normalized) = envelope.normalized_data {
+                let status = normalized
+                    .get("response")
+                    .and_then(|r| r.get("status"))
+                    .and_then(|s| s.as_u64())
+                    .map(|s| s as u16)
+                    .unwrap_or(200);
+                
+                // Try to extract body from normalized_data.response.body
+                let body = normalized
+                    .get("response")
+                    .and_then(|r| r.get("body"))
+                    .map(|b| {
+                        if b.is_string() {
+                            b.as_str().unwrap_or("").as_bytes().to_vec()
+                        } else {
+                            serde_json::to_vec(b).unwrap_or_default()
+                        }
+                    })
+                    .unwrap_or_else(|| serde_json::to_vec(normalized).unwrap_or_default());
+                
+                (status, body)
             } else {
-                Vec::new()
+                (200, Vec::new())
             };
 
             let mut response = ResponseEnvelope::from_backend(
                 envelope.request_details.clone(),
-                200,
+                status_code,
                 HashMap::new(),
                 body,
                 None,

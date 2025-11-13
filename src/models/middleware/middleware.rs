@@ -118,6 +118,12 @@ fn create_builtin_middleware_type(
             )?;
             Ok(Box::new(MetadataTransformMiddleware::new(config)?))
         }
+        "policies" => {
+            let config = crate::models::middleware::types::policies::parse_config(options)?;
+            Ok(Box::new(
+                crate::models::middleware::types::policies::PoliciesMiddleware::new(config)?,
+            ))
+        }
         _ => Err(format!(
             "Unsupported built-in middleware type: {}",
             middleware_type

@@ -519,7 +519,7 @@ impl Config {
                 match name.as_str() {
                     "jwtauth" | "basic_auth" | "connect" | "passthru" | "json_extractor"
                     | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "transform"
-                    | "metadata_transform" | "path_filter" => {}
+                    | "metadata_transform" | "path_filter" | "policies" => {}
                     _ => {
                         return Err(ConfigError::InvalidMiddleware {
                             name: name.clone(),

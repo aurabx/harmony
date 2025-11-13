@@ -9,4 +9,5 @@ pub mod jwtauth;
 pub mod metadata_transform;
 pub mod passthru;
 pub mod path_filter;
+pub mod policies;
 pub mod transform;

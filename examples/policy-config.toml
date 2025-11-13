@@ -1,0 +1,208 @@
+# Harmony Policy Middleware Example Configuration
+#
+# This file demonstrates how to use the policies middleware to implement
+# access control, rate limiting, and other request filtering logic.
+#
+# Evaluation Logic:
+# - A request is ACCEPTED only if:
+#   1. At least ONE allow rule matches (across all policies/rules)
+#   2. AND zero deny rules match
+# - All enabled rules are evaluated (not first-match-wins)
+# - Weight determines evaluation order (higher weight = evaluated first)
+# - If no allow rules match: implicit deny (403 Forbidden)
+
+[proxy]
+id = "harmony-with-policies"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+
+[logging]
+log_level = "debug"
+
+# ============================================================================
+# NETWORK CONFIGURATION
+# ============================================================================
+
+[network.default]
+enable_wireguard = false
+interface = "eth0"
+
+[network.default.http]
+bind_address = "0.0.0.0"
+bind_port = 8080
+
+# ============================================================================
+# PIPELINE CONFIGURATION
+# ============================================================================
+
+[pipelines.secure_api]
+description = "Secure API with policy-based access control"
+networks = ["default"]
+endpoints = ["http_api"]
+backends = ["api_backend"]
+middleware = ["ip_access_control", "api_rate_limiter"]
+
+# ============================================================================
+# ENDPOINTS
+# ============================================================================
+
+[endpoints.http_api]
+service = "http"
+
+[endpoints.http_api.options]
+path = "/api"
+
+# ============================================================================
+# BACKENDS
+# ============================================================================
+
+[backends.api_backend]
+service = "http"
+
+[backends.api_backend.options]
+base_url = "http://localhost:3000"
+
+# ============================================================================
+# MIDDLEWARE - IP ACCESS CONTROL
+# ============================================================================
+
+[middleware.ip_access_control]
+type = "policies"
+
+# Policy 1: Allow internal networks, deny known bad actors
+[[middleware.ip_access_control.options.policies]]
+id = "internal_access"
+name = "Internal Network Access Control"
+enabled = true
+
+# Rule 1: Allow requests from internal networks (highest priority)
+[[middleware.ip_access_control.options.policies.rules]]
+id = "allow_internal"
+name = "Allow Internal Networks"
+type = "ip_allow"
+weight = 100
+enabled = true
+
+[middleware.ip_access_control.options.policies.rules.options]
+ip_addresses = [
+    "10.0.0.0/8",       # Private network - Class A
+    "172.16.0.0/12",    # Private network - Class B
+    "192.168.0.0/16",   # Private network - Class C
+    "127.0.0.1/32"      # Localhost
+]
+
+# Rule 2: Deny known malicious IPs (medium priority)
+[[middleware.ip_access_control.options.policies.rules]]
+id = "deny_blocklist"
+name = "Block Known Bad IPs"
+type = "ip_deny"
+weight = 90
+enabled = true
+
+[middleware.ip_access_control.options.policies.rules.options]
+ip_addresses = [
+    "203.0.113.0/24",   # TEST-NET-3 (example blocklist range)
+    "198.51.100.0/24"   # TEST-NET-2 (example blocklist range)
+]
+
+# Rule 3: Explicit deny-all as fallback (lowest priority)
+# This ensures any IP not explicitly allowed is denied
+# Note this is not strictly necessary, as unless an Allow rule is triggered, the default is Deny
+[[middleware.ip_access_control.options.policies.rules]]
+id = "default_deny"
+name = "Default Deny All"
+type = "deny_all"
+weight = 0
+enabled = false  # Disabled since we rely on implicit deny
+
+# ============================================================================
+# MIDDLEWARE - RATE LIMITING
+# ============================================================================
+
+[middleware.api_rate_limiter]
+type = "policies"
+
+# Policy 2: Rate limit API requests per client IP
+[[middleware.api_rate_limiter.options.policies]]
+id = "api_rate_limits"
+name = "API Rate Limiting"
+enabled = true
+
+# Rule 1: Allow all requests (required for rate limit to work)
+# Rate limit acts as a deny rule when exceeded
+[[middleware.api_rate_limiter.options.policies.rules]]
+id = "allow_all"
+name = "Allow All Requests"
+type = "allow_all"
+weight = 100
+enabled = true
+
+# Rule 2: Rate limit - 100 requests per minute per IP
+[[middleware.api_rate_limiter.options.policies.rules]]
+id = "rate_limit_100"
+name = "Rate Limit 100/minute"
+type = "rate_limit"
+weight = 50
+enabled = true
+
+[middleware.api_rate_limiter.options.policies.rules.options]
+max_requests = 100
+window_seconds = 60
+
+# ============================================================================
+# MIDDLEWARE TYPE REGISTRATIONS
+# ============================================================================
+
+[middleware_types.policies]
+module = ""  # Built-in middleware type
+
+# ============================================================================
+# EXAMPLE SCENARIOS
+# ============================================================================
+
+# Scenario 1: Internal IP with moderate usage
+# - Request from 192.168.1.100
+# - Makes 50 requests/minute
+# Result: ✅ ALLOWED (internal IP + under rate limit)
+
+# Scenario 2: Internal IP exceeding rate limit
+# - Request from 10.0.0.50
+# - Makes 150 requests/minute
+# Result: ❌ DENIED after 100 requests (rate limit exceeded, acts as deny)
+
+# Scenario 3: Blocked IP
+# - Request from 203.0.113.45
+# Result: ❌ DENIED (on blocklist, deny rule matches)
+
+# Scenario 4: External IP
+# - Request from 8.8.8.8 (Google DNS)
+# Result: ❌ DENIED (not in allow list, implicit deny)
+
+# Scenario 5: Internal IP on blocklist
+# - Request from 192.168.1.100 (internal) but also on deny list
+# Result: ❌ DENIED (has both allow + deny = deny wins)
+
+# ============================================================================
+# NOTES
+# ============================================================================
+
+# Weight Guidelines:
+# -1000 to -100: Critical overrides (emergency blocks)
+# -99 to -1:     High priority rules (specific allows/denies)
+# 0:             Default priority (most rules)
+# 1 to 99:       Lower priority (catch-all rules)
+# 100 to 1000:   Fallback rules (default deny-all)
+
+# Best Practices:
+# 1. Always have at least one allow rule (or use allow_all)
+# 2. Use deny rules sparingly and specifically
+# 3. Higher weight = evaluated first (but all rules still evaluated)
+# 4. Test policies in development before production deployment
+# 5. Monitor logs for policy violations
+# 6. Use descriptive IDs and names for rules
+
+# Security Considerations:
+# - IP-based rules can be bypassed by VPNs/proxies
+# - Rate limits are per-IP (consider authenticated user limits too)
+# - Combine policies with other security measures (JWT, TLS, etc.)
+# - Regularly review and update blocklists
