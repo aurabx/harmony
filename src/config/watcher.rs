@@ -14,25 +14,28 @@ use tokio::time::sleep;
 /// Config file watcher with debouncing
 pub struct ConfigWatcher {
     config_path: String,
+    pipelines_path: Option<String>,
     registry: Arc<AdapterRegistry>,
     debounce_duration: Duration,
 }
 
 impl ConfigWatcher {
-    pub fn new(config_path: String, registry: Arc<AdapterRegistry>) -> Self {
+    pub fn new(config_path: String, pipelines_path: Option<String>, registry: Arc<AdapterRegistry>) -> Self {
         Self {
             config_path,
+            pipelines_path,
             registry,
             debounce_duration: Duration::from_millis(200),
         }
     }
 
-    /// Start watching the config file for changes
+    /// Start watching the config file and pipelines directory for changes
     pub async fn start(self) -> Result<()> {
         let (tx, mut rx) = mpsc::channel(100);
 
         let config_path = self.config_path.clone();
         let config_path_clone = config_path.clone();
+        let pipelines_path = self.pipelines_path.clone();
 
         // Start file watcher
         let mut watcher = notify::recommended_watcher(move |res: Result<Event, notify::Error>| {
@@ -43,9 +46,18 @@ impl ConfigWatcher {
             }
         })?;
 
+        // Watch main config file
         watcher.watch(Path::new(&config_path), RecursiveMode::NonRecursive)?;
-
         tracing::info!("📡 Watching config file for changes: {}", config_path_clone);
+
+        // Watch pipelines directory if provided
+        if let Some(ref path) = pipelines_path {
+            let pipelines_dir = Path::new(path);
+            if pipelines_dir.exists() {
+                watcher.watch(pipelines_dir, RecursiveMode::Recursive)?;
+                tracing::info!("📡 Watching pipelines directory for changes: {}", path);
+            }
+        }
 
         // Debounce and handle reload
         let mut last_reload = tokio::time::Instant::now();
@@ -144,16 +156,21 @@ mod tests {
     #[tokio::test]
     async fn test_watcher_creation() {
         let registry = Arc::new(AdapterRegistry::new());
-        let watcher = ConfigWatcher::new("test-config.toml".to_string(), registry);
+        let watcher = ConfigWatcher::new(
+            "test-config.toml".to_string(),
+            Some("pipelines".to_string()),
+            registry,
+        );
 
         assert_eq!(watcher.config_path, "test-config.toml");
+        assert_eq!(watcher.pipelines_path, Some("pipelines".to_string()));
         assert_eq!(watcher.debounce_duration, Duration::from_millis(200));
     }
 
     #[tokio::test]
     async fn test_watcher_debounce_duration() {
         let registry = Arc::new(AdapterRegistry::new());
-        let watcher = ConfigWatcher::new("config.toml".to_string(), registry);
+        let watcher = ConfigWatcher::new("config.toml".to_string(), None, registry);
 
         // Verify default debounce duration is 200ms
         assert_eq!(watcher.debounce_duration, Duration::from_millis(200));
@@ -163,7 +180,7 @@ mod tests {
     fn test_watcher_has_correct_debounce() {
         // Verify debounce duration is exactly 200ms as specified
         let registry = Arc::new(AdapterRegistry::new());
-        let watcher = ConfigWatcher::new("test.toml".to_string(), registry);
+        let watcher = ConfigWatcher::new("test.toml".to_string(), None, registry);
 
         assert_eq!(watcher.debounce_duration.as_millis(), 200);
     }

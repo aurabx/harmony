@@ -15,6 +15,7 @@ use crate::config::config::Config;
 use crate::config::watcher::ConfigWatcher;
 use crate::storage::create_storage_backend;
 use runbeam_sdk::load_token;
+use std::path::Path;
 use std::sync::Arc;
 use tracing_subscriber::{self, prelude::*};
 
@@ -37,6 +38,7 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
     crate::globals::set_storage(storage);
 
     // Initialise logging
+    // Use try_init to allow multiple initializations in test environments
     if config.logging.log_to_file {
         let file_appender = tracing_subscriber::fmt::layer()
             .with_file(true)
@@ -47,16 +49,15 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
             .with_file(true)
             .with_line_number(true);
 
-        tracing_subscriber::registry()
+        let _ = tracing_subscriber::registry()
             .with(file_appender)
             .with(stdout_appender)
-            .try_init()
-            .expect("Failed to initialise logging");
+            .try_init();
     } else {
-        tracing_subscriber::fmt()
+        let _ = tracing_subscriber::fmt()
             .with_file(true)
             .with_line_number(true)
-            .init();
+            .try_init();
     }
 
     tracing::info!("🔧 Starting Harmony '{}'", config.proxy.id);
@@ -80,7 +81,18 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
     // Start config watcher if config path provided
     let watcher_shutdown = tokio_util::sync::CancellationToken::new();
     if let Some(path) = config_path {
-        let watcher = ConfigWatcher::new(path, registry.clone());
+        // Resolve pipelines directory path relative to config file
+        let config_dir = Path::new(&path)
+            .parent()
+            .expect("Failed to get config file directory");
+        let pipelines_dir = config_dir.join(&config.proxy.pipelines_path);
+        let pipelines_path = if pipelines_dir.exists() {
+            Some(pipelines_dir.to_string_lossy().to_string())
+        } else {
+            None
+        };
+
+        let watcher = ConfigWatcher::new(path, pipelines_path, registry.clone());
         let shutdown_clone = watcher_shutdown.clone();
         tokio::spawn(async move {
             tokio::select! {
