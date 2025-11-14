@@ -29,7 +29,5 @@ pub struct MiddlewareInstanceConfig {
     #[serde(default)]
     pub jwt_auth: Option<crate::models::middleware::types::jwtauth::JwtAuthConfig>,
     #[serde(default)]
-    pub auth_sidecar: Option<crate::models::middleware::types::auth::AuthSidecarConfig>,
-    #[serde(default)]
     pub aurabox_connect: Option<crate::models::middleware::types::connect::AuraboxConnectConfig>,
 }
