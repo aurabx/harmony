@@ -1,5 +1,5 @@
 # FHIR Passthrough Example Configuration
-# Demonstrates FHIR endpoint with basic authentication and JSON extraction
+# Demonstrates FHIR endpoint proxying to a real FHIR server with basic authentication
 
 [proxy]
 id = "harmony-fhir"
@@ -38,6 +38,9 @@ path = "./tmp"
 module = ""
 
 [services.echo]
+module = ""
+
+[services.fhir]
 module = ""
 
 # Middleware types

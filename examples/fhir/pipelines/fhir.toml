@@ -7,16 +7,12 @@ networks = ["http_net"]
 endpoints = ["fhir_test"]
 middleware = [
     "basic_auth",
-    "json_extractor",
 ]
 backends = ["fhir_backend"]
 
 # ------------------------
 # Middleware
 #-------------------------
-
-[middleware.passthru]
-type = "passthru"
 
 [middleware.basic_auth]
 type = "basic_auth"
@@ -32,14 +28,14 @@ type = "json_extractor"
 # Endpoints
 #-------------------------
 [endpoints.fhir_test]
-service = "http"
+service = "fhir"
 [endpoints.fhir_test.options]
-path_prefix = "/test"
+path_prefix = "/fhir"
 
 # ------------------------
 # Backends
 #-------------------------
 [backends.fhir_backend]
-service = "echo"
+service = "fhir"
 [backends.fhir_backend.options]
-path_prefix = "/fhir-back"
+base_url = "https://server.fire.ly/r4"
