@@ -100,6 +100,7 @@ impl ServiceHandler<Value> for FhirEndpoint {
             // No target_details set by middleware - create from request_details
             // Use helper to extract path WITHOUT query string
             let path = crate::models::services::path_utils::extract_path(&envelope);
+            tracing::debug!("Extracted path from envelope: '{}'", path);
 
             // Create TargetDetails from request_details with base_url
             let mut target = TargetDetails::from_request_details(
@@ -152,10 +153,26 @@ impl ServiceHandler<Value> for FhirEndpoint {
             }
         };
 
-        // Add headers from target_details
+        // Add headers from target_details, but drop hop-by-hop and Host headers
         for (key, value) in &target_details.headers {
+            let k = key.to_ascii_lowercase();
+            if matches!(
+                k.as_str(),
+                "host"
+                    | "connection"
+                    | "keep-alive"
+                    | "proxy-connection"
+                    | "transfer-encoding"
+                    | "upgrade"
+                    | "content-length"
+            ) {
+                continue; // let reqwest set correct values from URL/body
+            }
             request_builder = request_builder.header(key, value);
         }
+
+        // Ensure Accept is set to FHIR JSON (server is fine with this)
+        request_builder = request_builder.header("Accept", "application/fhir+json");
 
         // Add request body if present
         if !envelope.original_data.is_empty() {
@@ -265,8 +282,16 @@ impl ServiceHandler<Value> for FhirEndpoint {
 
         let mut builder = Response::builder().status(status);
 
-        // Add headers from response_details
+        // Add headers from response_details, but skip hop-by-hop headers
+        // including content-length (let hyper set it from actual body)
         for (k, v) in &envelope.response_details.headers {
+            let key_lower = k.to_ascii_lowercase();
+            if matches!(
+                key_lower.as_str(),
+                "content-length" | "transfer-encoding" | "connection" | "keep-alive"
+            ) {
+                continue;
+            }
             builder = builder.header(k.as_str(), v.as_str());
         }
 

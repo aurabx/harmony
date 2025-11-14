@@ -52,14 +52,11 @@ impl HttpAdapter {
             .map(|pq| pq.as_str().to_string())
             .unwrap_or_else(|| path_only.clone());
         
-        // Strip prefix from path
-        let mut subpath = path_only
+        // Strip prefix from path, preserving leading slash
+        let subpath = path_only
             .strip_prefix(path_prefix)
-            .unwrap_or("")
+            .unwrap_or(&path_only)
             .to_string();
-        if subpath.starts_with('/') {
-            subpath = subpath.trim_start_matches('/').to_string();
-        }
         
         // Also create subpath with query string (stripped prefix but includes query)
         let subpath_with_query = full_path_with_query
