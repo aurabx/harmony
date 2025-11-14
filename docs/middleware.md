@@ -315,3 +315,67 @@ type = "dicomweb_bridge"
 
 This middleware enables DICOMweb endpoints to communicate with traditional DICOM PACS systems via DIMSE protocols.
 
+## Policies
+
+The policies middleware provides comprehensive policy-based access control, rate limiting, and request filtering through a flexible rule system. It supports 13 different rule types including IP filtering, path matching, geographic restrictions, rate limiting, time-based access, HTTP method filtering, User-Agent matching, Content-Type filtering, and query parameter validation.
+
+**For complete documentation on policies and rules, see [policies-middleware.md](policies-middleware.md)**.
+
+### Quick Example
+
+```toml
+[middleware.api_security]
+type = "policies"
+
+[[middleware.api_security.options.policies]]
+id = "api_access_control"
+name = "API Access Control"
+enabled = true
+
+# Allow only GET and POST methods
+[[middleware.api_security.options.policies.rules]]
+type = "method"
+weight = 100
+enabled = true
+[middleware.api_security.options.policies.rules.options]
+mode = "allow"
+methods = ["GET", "POST"]
+
+# Block bots and crawlers
+[[middleware.api_security.options.policies.rules]]
+type = "user_agent"
+weight = 90
+enabled = true
+[middleware.api_security.options.policies.rules.options]
+mode = "deny"
+patterns = [
+    { label = "Bots", pattern = "/bot|crawler|spider/i" }
+]
+
+# Require API key parameter
+[[middleware.api_security.options.policies.rules]]
+type = "query_parameter"
+weight = 95
+enabled = true
+[middleware.api_security.options.policies.rules.options]
+mode = "allow"
+parameters = [
+    { name = "api_key", match_type = "exists" }
+]
+```
+
+**Available Rule Types**:
+- IP Allow/Deny - Allowlist/blocklist by IP/CIDR
+- Path - URL path filtering
+- Header - HTTP header matching
+- Geographic - Country-based filtering
+- Rate Limit - Request throttling
+- Time Based - Business hours/maintenance windows
+- HTTP Method - Filter by GET/POST/etc.
+- User Agent - Regex pattern matching
+- Content Type - MIME type filtering
+- Query Parameter - Parameter validation
+- Allow All / Deny All - Control rules
+
+See [policies-middleware.md](policies-middleware.md) for detailed documentation on all rule types, evaluation logic, configuration examples, and troubleshooting.
+

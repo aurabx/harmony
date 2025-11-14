@@ -322,6 +322,10 @@ impl PoliciesMiddleware {
             "geo" => self.evaluate_geo_rule(rule, envelope),
             "header" => self.evaluate_header_rule(rule, envelope),
             "time_based" => self.evaluate_time_based_rule(rule),
+            "method" => self.evaluate_method_rule(rule, envelope),
+            "user_agent" => self.evaluate_user_agent_rule(rule, envelope),
+            "content_type" => self.evaluate_content_type_rule(rule, envelope),
+            "query_parameter" => self.evaluate_query_parameter_rule(rule, envelope),
             _ => {
                 tracing::warn!(
                     "Unknown rule type '{}' - treating as no match",
@@ -867,6 +871,387 @@ impl PoliciesMiddleware {
             RuleEvaluation::Allow
         } else {
             RuleEvaluation::Deny
+        }
+    }
+    /// Evaluate HTTP method rule
+    fn evaluate_method_rule(
+        &self,
+        rule: &Rule,
+        envelope: &RequestEnvelope<serde_json::Value>,
+    ) -> RuleEvaluation {
+        let mode = rule
+            .options
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("deny");
+
+        let methods = match rule.options.get("methods").and_then(|v| v.as_array()) {
+            Some(m) => m,
+            None => return RuleEvaluation::NoMatch,
+        };
+
+        if methods.is_empty() {
+            return RuleEvaluation::NoMatch;
+        }
+
+        // Extract HTTP method from request
+        let request_method = envelope
+            .request_details
+            .method
+            .to_uppercase();
+
+        // Check if method matches any in the list (case-insensitive)
+        let matches = methods.iter().any(|m| {
+            m.as_str()
+                .map(|s| s.to_uppercase() == request_method)
+                .unwrap_or(false)
+        });
+
+        tracing::debug!(
+            "Method rule evaluation: method={}, matches={}, mode={}",
+            request_method,
+            matches,
+            mode
+        );
+
+        if matches {
+            match mode {
+                "allow" => RuleEvaluation::Allow,
+                "deny" => RuleEvaluation::Deny,
+                _ => RuleEvaluation::NoMatch,
+            }
+        } else {
+            RuleEvaluation::NoMatch
+        }
+    }
+
+    /// Evaluate User-Agent rule with regex pattern matching
+    fn evaluate_user_agent_rule(
+        &self,
+        rule: &Rule,
+        envelope: &RequestEnvelope<serde_json::Value>,
+    ) -> RuleEvaluation {
+        let mode = rule
+            .options
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("deny");
+
+        let patterns = match rule.options.get("patterns").and_then(|v| v.as_array()) {
+            Some(p) => p,
+            None => return RuleEvaluation::NoMatch,
+        };
+
+        if patterns.is_empty() {
+            return RuleEvaluation::NoMatch;
+        }
+
+        // Extract User-Agent header
+        let user_agent = envelope
+            .request_details
+            .headers
+            .get("user-agent")
+            .cloned();
+
+        let user_agent = match user_agent {
+            Some(ua) => ua,
+            None => {
+                tracing::debug!("No user-agent header found in request");
+                return RuleEvaluation::NoMatch;
+            }
+        };
+
+        // Check if any pattern matches
+        let mut any_match = false;
+        for pattern_config in patterns {
+            let pattern_obj = match pattern_config.as_object() {
+                Some(obj) => obj,
+                None => continue,
+            };
+
+            let pattern_str = match pattern_obj.get("pattern").and_then(|v| v.as_str()) {
+                Some(p) => p,
+                None => continue,
+            };
+
+            // Parse pattern (format: /pattern/flags or just pattern)
+            let (pattern, flags) = if pattern_str.starts_with('/') && pattern_str.rfind('/').map(|i| i > 0).unwrap_or(false) {
+                let last_slash = pattern_str.rfind('/').unwrap();
+                (&pattern_str[1..last_slash], &pattern_str[last_slash + 1..])
+            } else {
+                (pattern_str, "")
+            };
+
+            // Build regex with flags
+            let regex_str = if flags.contains('i') {
+                format!("(?i){}", pattern)
+            } else {
+                pattern.to_string()
+            };
+
+            match Regex::new(&regex_str) {
+                Ok(re) => {
+                    if re.is_match(&user_agent) {
+                        tracing::debug!(
+                            "User-agent pattern matched: pattern='{}', user-agent='{}'",
+                            pattern_obj.get("label").and_then(|v| v.as_str()).unwrap_or(pattern),
+                            user_agent
+                        );
+                        any_match = true;
+                        break;
+                    }
+                }
+                Err(e) => {
+                    tracing::warn!(
+                        "Invalid regex pattern '{}': {} - skipping pattern",
+                        pattern,
+                        e
+                    );
+                    continue;
+                }
+            }
+        }
+
+        tracing::debug!(
+            "User-agent rule evaluation: any_match={}, mode={}",
+            any_match,
+            mode
+        );
+
+        if any_match {
+            match mode {
+                "allow" => RuleEvaluation::Allow,
+                "deny" => RuleEvaluation::Deny,
+                _ => RuleEvaluation::NoMatch,
+            }
+        } else {
+            RuleEvaluation::NoMatch
+        }
+    }
+
+    /// Evaluate Content-Type rule with wildcard support
+    fn evaluate_content_type_rule(
+        &self,
+        rule: &Rule,
+        envelope: &RequestEnvelope<serde_json::Value>,
+    ) -> RuleEvaluation {
+        let mode = rule
+            .options
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("deny");
+
+        let content_types = match rule.options.get("content_types").and_then(|v| v.as_array()) {
+            Some(ct) => ct,
+            None => return RuleEvaluation::NoMatch,
+        };
+
+        if content_types.is_empty() {
+            return RuleEvaluation::NoMatch;
+        }
+
+        // Extract Content-Type header
+        let content_type = envelope
+            .request_details
+            .headers
+            .get("content-type")
+            .cloned();
+
+        let content_type = match content_type {
+            Some(ct) => ct,
+            None => {
+                tracing::debug!("No content-type header found in request");
+                return RuleEvaluation::NoMatch;
+            }
+        };
+
+        // Strip charset and parameters from Content-Type
+        let base_content_type = content_type
+            .split(';')
+            .next()
+            .unwrap_or(&content_type)
+            .trim();
+
+        // Check if any configured content type matches
+        let mut exact_match = false;
+        let mut wildcard_match = false;
+
+        for ct_config in content_types {
+            let ct_str = match ct_config.as_str() {
+                Some(s) => s,
+                None => continue,
+            };
+
+            // Exact match
+            if ct_str == base_content_type {
+                exact_match = true;
+                break;
+            }
+
+            // Wildcard match (e.g., "application/*")
+            if ct_str.ends_with("/*") {
+                let prefix = &ct_str[..ct_str.len() - 2];
+                if base_content_type.starts_with(prefix) && base_content_type.chars().nth(prefix.len()) == Some('/') {
+                    wildcard_match = true;
+                }
+            }
+            // Catch-all wildcard
+            else if ct_str == "*/*" {
+                wildcard_match = true;
+            }
+        }
+
+        let matches = exact_match || wildcard_match;
+
+        tracing::debug!(
+            "Content-type rule evaluation: content_type={}, matches={}, mode={}",
+            base_content_type,
+            matches,
+            mode
+        );
+
+        if matches {
+            match mode {
+                "allow" => RuleEvaluation::Allow,
+                "deny" => RuleEvaluation::Deny,
+                _ => RuleEvaluation::NoMatch,
+            }
+        } else {
+            RuleEvaluation::NoMatch
+        }
+    }
+
+    /// Evaluate Query Parameter rule with multiple match types
+    fn evaluate_query_parameter_rule(
+        &self,
+        rule: &Rule,
+        envelope: &RequestEnvelope<serde_json::Value>,
+    ) -> RuleEvaluation {
+        let mode = rule
+            .options
+            .get("mode")
+            .and_then(|v| v.as_str())
+            .unwrap_or("deny");
+
+        let parameters = match rule.options.get("parameters").and_then(|v| v.as_array()) {
+            Some(p) => p,
+            None => return RuleEvaluation::NoMatch,
+        };
+
+        if parameters.is_empty() {
+            return RuleEvaluation::NoMatch;
+        }
+
+        // Extract query parameters from metadata
+        // Query parameters may be stored as "query_params" or individual "param_<name>" entries
+        let query_params = envelope
+            .request_details
+            .metadata
+            .get("query_params")
+            .cloned()
+            .unwrap_or_else(|| String::new());
+
+        // Parse query parameters manually or from metadata
+        let mut param_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        for (key, value) in &envelope.request_details.metadata {
+            if key.starts_with("param_") {
+                let param_name = key[6..].to_string();
+                param_map.insert(param_name, value.clone());
+            }
+        }
+
+        // Also parse from query_params string if present (format: key1=value1&key2=value2)
+        if !query_params.is_empty() {
+            for pair in query_params.split('&') {
+                if let Some((key, value)) = pair.split_once('=') {
+                    param_map.insert(
+                        key.to_string(),
+                        value.to_string(),
+                    );
+                }
+            }
+        }
+
+        // Evaluate all parameters with AND logic
+        let mut all_match = true;
+
+        for param_config in parameters {
+            let param_obj = match param_config.as_object() {
+                Some(obj) => obj,
+                None => continue,
+            };
+
+            let param_name = match param_obj.get("name").and_then(|v| v.as_str()) {
+                Some(n) => n,
+                None => continue,
+            };
+
+            let match_type = param_obj
+                .get("match_type")
+                .and_then(|v| v.as_str())
+                .unwrap_or("exact");
+
+            let expected_value = param_obj
+                .get("value")
+                .and_then(|v| v.as_str())
+                .unwrap_or("");
+
+            let actual_value = param_map.get(param_name);
+
+            // Evaluate match based on match_type
+            let param_matches = match match_type {
+                "exists" => actual_value.is_some(),
+                "exact" => actual_value.map(|v| v == expected_value).unwrap_or(false),
+                "contains" => actual_value
+                    .map(|v| v.contains(expected_value))
+                    .unwrap_or(false),
+                "regex" => {
+                    match actual_value {
+                        Some(v) => {
+                            match Regex::new(expected_value) {
+                                Ok(re) => re.is_match(v),
+                                Err(e) => {
+                                    tracing::warn!(
+                                        "Invalid regex pattern '{}' for parameter '{}': {}",
+                                        expected_value,
+                                        param_name,
+                                        e
+                                    );
+                                    false
+                                }
+                            }
+                        }
+                        None => false,
+                    }
+                }
+                _ => false,
+            };
+
+            if !param_matches {
+                tracing::debug!(
+                    "Query parameter rule: parameter '{}' match_type='{}' did not match",
+                    param_name,
+                    match_type
+                );
+                all_match = false;
+                break; // Short-circuit: AND logic, first failure means overall failure
+            }
+        }
+
+        tracing::debug!(
+            "Query parameter rule evaluation: all_match={}, mode={}",
+            all_match,
+            mode
+        );
+
+        if all_match {
+            match mode {
+                "allow" => RuleEvaluation::Allow,
+                "deny" => RuleEvaluation::Deny,
+                _ => RuleEvaluation::NoMatch,
+            }
+        } else {
+            RuleEvaluation::NoMatch
         }
     }
 }
@@ -1913,6 +2298,720 @@ mod tests {
         
         // Should allow (deny_all is disabled)
         assert!(!result.request_details.metadata.contains_key("skip_backends"));
+    }
+
+    // ============================================
+    // Method Rule Tests
+    // ============================================
+
+    #[tokio::test]
+    async fn test_method_rule_allow_mode() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![Rule {
+                    id: None,
+                    name: None,
+                    rule_type: "method".to_string(),
+                    weight: 100,
+                    enabled: true,
+                    options: {
+                        let mut opts = HashMap::new();
+                        opts.insert(
+                            "methods".to_string(),
+                            serde_json::json!(["GET", "POST"]),
+                        );
+                        opts.insert("mode".to_string(), serde_json::json!("allow"));
+                        opts
+                    },
+                }],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test GET - should allow
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        
+        // Test POST - should allow
+        let envelope = RequestEnvelope::builder()
+            .method("POST")
+            .uri("/test")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        
+        // Test DELETE - should deny (implicit deny, no allow matched)
+        let envelope = RequestEnvelope::builder()
+            .method("DELETE")
+            .uri("/test")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_method_rule_deny_mode() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![
+                    Rule {
+                        id: None,
+                        name: None,
+                        rule_type: "allow_all".to_string(),
+                        weight: 100,
+                        enabled: true,
+                        options: HashMap::new(),
+                    },
+                    Rule {
+                        id: None,
+                        name: None,
+                        rule_type: "method".to_string(),
+                        weight: 90,
+                        enabled: true,
+                        options: {
+                            let mut opts = HashMap::new();
+                            opts.insert(
+                                "methods".to_string(),
+                                serde_json::json!(["DELETE"]),
+                            );
+                            opts.insert("mode".to_string(), serde_json::json!("deny"));
+                            opts
+                        },
+                    },
+                ],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test GET - should allow (not in deny list)
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        
+        // Test DELETE - should deny
+        let envelope = RequestEnvelope::builder()
+            .method("DELETE")
+            .uri("/test")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_method_rule_case_insensitive() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![Rule {
+                    id: None,
+                    name: None,
+                    rule_type: "method".to_string(),
+                    weight: 100,
+                    enabled: true,
+                    options: {
+                        let mut opts = HashMap::new();
+                        opts.insert(
+                            "methods".to_string(),
+                            serde_json::json!(["get", "post"]), // lowercase
+                        );
+                        opts.insert("mode".to_string(), serde_json::json!("allow"));
+                        opts
+                    },
+                }],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test with uppercase method
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+    }
+
+    // ============================================
+    // User-Agent Rule Tests
+    // ============================================
+
+    #[tokio::test]
+    async fn test_user_agent_rule_deny_bots() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![
+                    Rule {
+                        id: None,
+                        name: None,
+                        rule_type: "allow_all".to_string(),
+                        weight: 100,
+                        enabled: true,
+                        options: HashMap::new(),
+                    },
+                    Rule {
+                        id: None,
+                        name: None,
+                        rule_type: "user_agent".to_string(),
+                        weight: 90,
+                        enabled: true,
+                        options: {
+                            let mut opts = HashMap::new();
+                            opts.insert(
+                                "patterns".to_string(),
+                                serde_json::json!([
+                                    {
+                                        "label": "Common Bots",
+                                        "pattern": "/bot|crawler|spider/i"
+                                    },
+                                    {
+                                        "label": "Google Bot",
+                                        "pattern": "/googlebot/i"
+                                    }
+                                ]),
+                            );
+                            opts.insert("mode".to_string(), serde_json::json!("deny"));
+                            opts
+                        },
+                    },
+                ],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test bot User-Agent - should deny
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .header("user-agent", "Mozilla/5.0 (compatible; Googlebot/2.1")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string()),
+            "Bot user-agent should be denied"
+        );
+        
+        // Test regular User-Agent - should allow
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .header("user-agent", "Mozilla/5.0 (Windows NT 10.0; Win64; x64)")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+    }
+
+    #[tokio::test]
+    async fn test_user_agent_rule_missing_header() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![Rule {
+                    id: None,
+                    name: None,
+                    rule_type: "user_agent".to_string(),
+                    weight: 100,
+                    enabled: true,
+                    options: {
+                        let mut opts = HashMap::new();
+                        opts.insert(
+                            "patterns".to_string(),
+                            serde_json::json!([{"label": "Bot", "pattern": "/bot/i"}]),
+                        );
+                        opts.insert("mode".to_string(), serde_json::json!("deny"));
+                        opts
+                    },
+                }],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test without User-Agent header - should not match (implicit deny)
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string()),
+            "Missing user-agent should result in implicit deny"
+        );
+    }
+
+    // ============================================
+    // Content-Type Rule Tests
+    // ============================================
+
+    #[tokio::test]
+    async fn test_content_type_rule_exact_match() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![Rule {
+                    id: None,
+                    name: None,
+                    rule_type: "content_type".to_string(),
+                    weight: 100,
+                    enabled: true,
+                    options: {
+                        let mut opts = HashMap::new();
+                        opts.insert(
+                            "content_types".to_string(),
+                            serde_json::json!([
+                                "application/json",
+                                "application/x-www-form-urlencoded"
+                            ]),
+                        );
+                        opts.insert("mode".to_string(), serde_json::json!("allow"));
+                        opts
+                    },
+                }],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test matching content type
+        let envelope = RequestEnvelope::builder()
+            .method("POST")
+            .uri("/test")
+            .header("content-type", "application/json")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+    }
+
+    #[tokio::test]
+    async fn test_content_type_rule_wildcard() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![Rule {
+                    id: None,
+                    name: None,
+                    rule_type: "content_type".to_string(),
+                    weight: 100,
+                    enabled: true,
+                    options: {
+                        let mut opts = HashMap::new();
+                        opts.insert(
+                            "content_types".to_string(),
+                            serde_json::json!(["application/*"]),
+                        );
+                        opts.insert("mode".to_string(), serde_json::json!("allow"));
+                        opts
+                    },
+                }],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test wildcard match for application/json
+        let envelope = RequestEnvelope::builder()
+            .method("POST")
+            .uri("/test")
+            .header("content-type", "application/json")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        
+        // Test wildcard match for application/xml
+        let envelope = RequestEnvelope::builder()
+            .method("POST")
+            .uri("/test")
+            .header("content-type", "application/xml")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        
+        // Test non-matching content type
+        let envelope = RequestEnvelope::builder()
+            .method("POST")
+            .uri("/test")
+            .header("content-type", "text/html")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_content_type_rule_charset_handling() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![Rule {
+                    id: None,
+                    name: None,
+                    rule_type: "content_type".to_string(),
+                    weight: 100,
+                    enabled: true,
+                    options: {
+                        let mut opts = HashMap::new();
+                        opts.insert(
+                            "content_types".to_string(),
+                            serde_json::json!(["application/json"]),
+                        );
+                        opts.insert("mode".to_string(), serde_json::json!("allow"));
+                        opts
+                    },
+                }],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test with charset parameter
+        let envelope = RequestEnvelope::builder()
+            .method("POST")
+            .uri("/test")
+            .header("content-type", "application/json; charset=utf-8")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(
+            !result.request_details.metadata.contains_key("skip_backends"),
+            "Content-Type with charset should still match"
+        );
+    }
+
+    // ============================================
+    // Query Parameter Rule Tests
+    // ============================================
+
+    #[tokio::test]
+    async fn test_query_parameter_rule_exists() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![Rule {
+                    id: None,
+                    name: None,
+                    rule_type: "query_parameter".to_string(),
+                    weight: 100,
+                    enabled: true,
+                    options: {
+                        let mut opts = HashMap::new();
+                        opts.insert(
+                            "parameters".to_string(),
+                            serde_json::json!([
+                                {
+                                    "name": "api_key",
+                                    "match_type": "exists",
+                                    "value": ""
+                                }
+                            ]),
+                        );
+                        opts.insert("mode".to_string(), serde_json::json!("allow"));
+                        opts
+                    },
+                }],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test with parameter present
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .metadata_entry("param_api_key", "abc123")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        
+        // Test without parameter
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_parameter_rule_exact_match() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![Rule {
+                    id: None,
+                    name: None,
+                    rule_type: "query_parameter".to_string(),
+                    weight: 100,
+                    enabled: true,
+                    options: {
+                        let mut opts = HashMap::new();
+                        opts.insert(
+                            "parameters".to_string(),
+                            serde_json::json!([
+                                {
+                                    "name": "version",
+                                    "match_type": "exact",
+                                    "value": "v2"
+                                }
+                            ]),
+                        );
+                        opts.insert("mode".to_string(), serde_json::json!("allow"));
+                        opts
+                    },
+                }],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test exact match
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .metadata_entry("param_version", "v2")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        
+        // Test non-matching value
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .metadata_entry("param_version", "v1")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_parameter_rule_regex() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![Rule {
+                    id: None,
+                    name: None,
+                    rule_type: "query_parameter".to_string(),
+                    weight: 100,
+                    enabled: true,
+                    options: {
+                        let mut opts = HashMap::new();
+                        opts.insert(
+                            "parameters".to_string(),
+                            serde_json::json!([
+                                {
+                                    "name": "id",
+                                    "match_type": "regex",
+                                    "value": "^[0-9]+$"
+                                }
+                            ]),
+                        );
+                        opts.insert("mode".to_string(), serde_json::json!("allow"));
+                        opts
+                    },
+                }],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test matching regex
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .metadata_entry("param_id", "42")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        
+        // Test non-matching regex
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .metadata_entry("param_id", "abc")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_query_parameter_rule_multiple_and_logic() {
+        let config = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("test".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![Rule {
+                    id: None,
+                    name: None,
+                    rule_type: "query_parameter".to_string(),
+                    weight: 100,
+                    enabled: true,
+                    options: {
+                        let mut opts = HashMap::new();
+                        opts.insert(
+                            "parameters".to_string(),
+                            serde_json::json!([
+                                {
+                                    "name": "api_key",
+                                    "match_type": "exists",
+                                    "value": ""
+                                },
+                                {
+                                    "name": "action",
+                                    "match_type": "exact",
+                                    "value": "query"
+                                }
+                            ]),
+                        );
+                        opts.insert("mode".to_string(), serde_json::json!("allow"));
+                        opts
+                    },
+                }],
+            }],
+        };
+
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+        
+        // Test both parameters match
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .metadata_entry("param_api_key", "abc123")
+            .metadata_entry("param_action", "query")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        
+        // Test first parameter missing
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .metadata_entry("param_action", "query")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+        let result = middleware.left(envelope).await.unwrap();
+        assert_eq!(
+            result.request_details.metadata.get("skip_backends"),
+            Some(&"true".to_string())
+        );
     }
 
     #[tokio::test]
