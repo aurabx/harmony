@@ -99,7 +99,7 @@ service = "jmix"
 path_prefix = "/data"
 ```
 
-See [jmix-dev-testing.md](../dev/jmix-dev-testing.md) for development testing.
+See [jmix-dev-testing.md](../dev/testing/jmix-dev-testing.md) for development testing.
 
 ### DICOMweb
 
