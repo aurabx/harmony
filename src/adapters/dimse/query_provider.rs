@@ -146,6 +146,96 @@ impl PipelineQueryProvider {
         Ok(response_envelope)
     }
 
+    /// Execute a DIMSE operation through the pipeline with streaming support
+    ///
+    /// Similar to `run()` but uses `execute_streaming()` for backends that support it.
+    /// Returns a stream of datasets that can be processed progressively.
+    async fn run_streaming(
+        &self,
+        op: &str,
+        body: serde_json::Value,
+        mut meta: HashMap<String, String>,
+    ) -> DimseResult<Vec<DatasetStream>> {
+        use futures_util::StreamExt;
+
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
+
+        // Resolve endpoint service and options
+        let endpoint = config.endpoints.get(&self.endpoint).ok_or_else(|| {
+            DimseError::operation_failed(format!("Unknown endpoint '{}'", self.endpoint))
+        })?;
+        let service = endpoint
+            .resolve_service()
+            .map_err(|e| DimseError::operation_failed(format!("Resolve service failed: {}", e)))?;
+        let options_owned: HashMap<String, serde_json::Value> =
+            endpoint.options.clone().unwrap_or_default();
+        let options = &options_owned;
+
+        // Build ProtocolCtx for DIMSE
+        meta.insert("protocol".into(), "dimse".into());
+        meta.insert("operation".into(), op.to_string());
+        let ctx = ProtocolCtx {
+            protocol: Protocol::Dimse,
+            payload: serde_json::to_vec(&body).unwrap_or_default(),
+            meta,
+            attrs: serde_json::json!({}),
+        };
+
+        // Let the service build the request envelope
+        let request_envelope = service
+            .build_protocol_envelope(ctx.clone(), options)
+            .await
+            .map_err(|e| DimseError::operation_failed(format!("Envelope build failed: {}", e)))?;
+
+        // Get pipeline configuration
+        let pipeline_cfg = config.pipelines.get(&self.pipeline).ok_or_else(|| {
+            DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
+        })?;
+
+        tracing::info!("Executing streaming pipeline for DIMSE operation: {}", op);
+
+        // Execute streaming pipeline
+        let mut response_stream =
+            PipelineExecutor::execute_streaming(request_envelope, pipeline_cfg, &config, &ctx)
+                .await
+                .map_err(|e| {
+                    DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
+                })?;
+
+        // Collect datasets from stream
+        let mut all_datasets = Vec::new();
+        let mut instance_count = 0u64;
+
+        while let Some(result) = response_stream.next().await {
+            match result {
+                Ok(response_envelope) => {
+                    instance_count += 1;
+                    tracing::debug!("Processing streamed instance #{}", instance_count);
+
+                    // Convert this envelope to datasets
+                    let datasets = self.response_to_datasets(response_envelope).await?;
+                    all_datasets.extend(datasets);
+                }
+                Err(e) => {
+                    tracing::error!("Stream error on instance #{}: {}", instance_count, e);
+                    return Err(DimseError::operation_failed(format!(
+                        "Stream failed after {} instances: {}",
+                        instance_count, e
+                    )));
+                }
+            }
+        }
+
+        tracing::info!(
+            "Streaming pipeline completed: {} instances, {} total datasets",
+            instance_count,
+            all_datasets.len()
+        );
+
+        Ok(all_datasets)
+    }
+
     /// Convert ResponseEnvelope to Vec<DatasetStream>
     ///
     /// Parses the response data and converts it to DICOM datasets.
@@ -266,10 +356,20 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let response_envelope = self.run("C-FIND", body, meta).await?;
+        // Check if pipeline supports streaming
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
+        let pipeline_cfg = config.pipelines.get(&self.pipeline).ok_or_else(|| {
+            DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
+        })?;
 
-        // Convert response envelope to datasets
-        self.response_to_datasets(response_envelope).await
+        if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
+            tracing::info!("Using streaming pipeline for C-FIND");
+            self.run_streaming("C-FIND", body, meta).await
+        } else {
+            let response_envelope = self.run("C-FIND", body, meta).await?;
+            self.response_to_datasets(response_envelope).await
+        }
     }
 
     async fn locate(
@@ -328,10 +428,20 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let response_envelope = self.run("C-GET", body, meta).await?;
+        // Check if pipeline supports streaming
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
+        let pipeline_cfg = config.pipelines.get(&self.pipeline).ok_or_else(|| {
+            DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
+        })?;
 
-        // Convert response envelope to datasets
-        self.response_to_datasets(response_envelope).await
+        if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
+            tracing::info!("Using streaming pipeline for C-GET");
+            self.run_streaming("C-GET", body, meta).await
+        } else {
+            let response_envelope = self.run("C-GET", body, meta).await?;
+            self.response_to_datasets(response_envelope).await
+        }
     }
 
     async fn store(&self, dataset: DatasetStream) -> DimseResult<()> {

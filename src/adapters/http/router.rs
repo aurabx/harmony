@@ -199,6 +199,11 @@ async fn handle_request(
         .get(&pipeline_name)
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
+    // Check if this is a streaming pipeline
+    if PipelineExecutor::is_streaming_pipeline(pipeline, &config) {
+        return handle_streaming_request(req, config, endpoint_name, pipeline_name).await;
+    }
+
     // 1. Convert HTTP Request → ProtocolCtx
     let ctx = HttpAdapter::http_request_to_protocol_ctx(
         req,
@@ -216,7 +221,7 @@ async fn handle_request(
         .await
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
-    // 3. Execute pipeline (NEW: using PipelineExecutor!)
+    // 3. Execute pipeline (using standard PipelineExecutor)
     let response_envelope = PipelineExecutor::execute(envelope, pipeline, &config, &ctx)
         .await
         .map_err(|err| {
@@ -234,6 +239,133 @@ async fn handle_request(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
     Ok(response)
+}
+
+/// Handle HTTP streaming request using PipelineExecutor::execute_streaming
+async fn handle_streaming_request(
+    req: &mut Request,
+    config: Arc<Config>,
+    endpoint_name: String,
+    pipeline_name: String,
+) -> Result<Response<Body>, StatusCode> {
+    use futures_util::StreamExt;
+
+    tracing::info!("Handling streaming request for pipeline: {}", pipeline_name);
+
+    // Look up the endpoint and pipeline from config
+    let endpoint = config
+        .endpoints
+        .get(&endpoint_name)
+        .ok_or(StatusCode::NOT_FOUND)?;
+
+    let service = endpoint
+        .resolve_service()
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    let pipeline = config
+        .pipelines
+        .get(&pipeline_name)
+        .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
+
+    // 1. Convert HTTP Request → ProtocolCtx
+    let ctx = HttpAdapter::http_request_to_protocol_ctx(
+        req,
+        endpoint.options.as_ref().unwrap_or(&HashMap::new()),
+    )
+    .await
+    .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // 2. Build envelope via service
+    let envelope = service
+        .build_protocol_envelope(
+            ctx.clone(),
+            endpoint.options.as_ref().unwrap_or(&HashMap::new()),
+        )
+        .await
+        .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // 3. Execute streaming pipeline
+    let response_stream = PipelineExecutor::execute_streaming(envelope, pipeline, &config, &ctx)
+        .await
+        .map_err(|err| {
+            tracing::error!("Streaming pipeline execution failed: {}", err);
+            map_pipeline_error_to_status(&err)
+        })?;
+
+    // 4. Check if endpoint is http_streaming - if so, use its streaming response builder
+    if endpoint.service.to_lowercase() == "http_streaming" {
+        // Use http_streaming endpoint to convert stream to HTTP response
+        use crate::models::services::types::http_streaming::{HttpStreamingEndpoint, StreamFormat};
+        
+        let streaming_endpoint = HttpStreamingEndpoint {
+            default_format: None,
+            buffer_size: None,
+            enable_compression: None,
+        };
+
+        // Determine format from options or Accept header
+        let empty_options = HashMap::new();
+        let options = endpoint.options.as_ref().unwrap_or(&empty_options);
+        let format = if let Some(format_value) = options.get("format") {
+            StreamFormat::from_config(format_value.as_str().unwrap_or("ndjson"))
+        } else {
+            // Check Accept header
+            let accept = req.headers()
+                .get("accept")
+                .and_then(|h| h.to_str().ok())
+                .unwrap_or("");
+            
+            if accept.contains("text/event-stream") {
+                StreamFormat::Sse
+            } else if accept.contains("application/x-ndjson") {
+                StreamFormat::Ndjson
+            } else if accept.contains("multipart/x-mixed-replace") {
+                StreamFormat::Multipart
+            } else {
+                StreamFormat::Ndjson // Default
+            }
+        };
+
+        let request_headers = HashMap::new(); // TODO: Extract from req if needed
+        let response = streaming_endpoint
+            .build_streaming_response(response_stream, format, &request_headers)
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        Ok(response)
+    } else {
+        // For non-streaming endpoints, collect all responses and return as JSON array
+        tracing::warn!(
+            "Streaming pipeline with non-streaming endpoint '{}' - collecting results",
+            endpoint.service
+        );
+
+        let results: Vec<_> = response_stream.collect().await;
+        let mut response_envelopes = Vec::new();
+        
+        for result in results {
+            match result {
+                Ok(envelope) => response_envelopes.push(envelope),
+                Err(e) => {
+                    tracing::error!("Stream error: {}", e);
+                    return Err(StatusCode::INTERNAL_SERVER_ERROR);
+                }
+            }
+        }
+
+        // Convert to JSON array
+        let json_array: Vec<serde_json::Value> = response_envelopes
+            .iter()
+            .filter_map(|env| env.normalized_data.clone())
+            .collect();
+
+        let response = Response::builder()
+            .status(StatusCode::OK)
+            .header("content-type", "application/json")
+            .body(Body::from(serde_json::to_vec(&json_array).unwrap_or_default()))
+            .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+
+        Ok(response)
+    }
 }
 
 /// Map pipeline errors to HTTP status codes

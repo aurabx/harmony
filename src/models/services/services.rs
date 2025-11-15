@@ -69,6 +69,21 @@ fn create_builtin_service(
         "http" => Ok(Box::new(
             crate::models::services::types::http::HttpEndpoint {},
         )),
+        "http_streaming" => Ok(Box::new(
+            crate::models::services::types::http_streaming::HttpStreamingEndpoint {
+                default_format: None,
+                buffer_size: None,
+                enable_compression: None,
+            },
+        )),
+        "http_streaming_backend" => Ok(Box::new(
+            crate::models::services::types::http_streaming_backend::HttpStreamingBackend {
+                base_url: None,
+                format: None,
+                chunk_timeout_secs: None,
+                max_chunk_size: None,
+            },
+        )),
         "jmix" => Ok(Box::new(
             crate::models::services::types::jmix::JmixEndpoint {},
         )),
@@ -78,6 +93,15 @@ fn create_builtin_service(
         // Backward compatibility: "dicom" maps to "dicom_scu"
         "dicom" | "dicom_scu" => Ok(Box::new(
             crate::models::services::types::dicom::DicomScuBackend {
+                local_aet: None,
+                aet: None,
+                host: None,
+                port: None,
+                use_tls: None,
+            },
+        )),
+        "dicom_scu_streaming" => Ok(Box::new(
+            crate::models::services::types::dicom_scu_streaming::DicomScuStreamingBackend {
                 local_aet: None,
                 aet: None,
                 host: None,
