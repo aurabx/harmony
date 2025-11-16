@@ -1,14 +1,13 @@
 //! End-to-end tests for hot reload functionality.
 //!
-//! **Note:** These tests bind to actual network ports and should be run sequentially
-//! to avoid port conflicts and timing issues:
-//! ```bash
-//! cargo test --test e2e_run_with_reload -- --test-threads=1
-//! ```
+//! **Note:** These tests bind to actual network ports and use `#[serial]` to run
+//! sequentially, avoiding port conflicts and timing issues. The `serial_test` crate
+//! automatically ensures tests run one at a time.
 
 use harmony::config::config::Config;
 use harmony::config::Cli;
 use reqwest;
+use serial_test::serial;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
@@ -164,6 +163,7 @@ module = ""
 }
 
 #[tokio::test]
+#[serial]
 async fn test_run_with_reload_full_lifecycle() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_full_test_config(&temp_dir, 19200);
@@ -240,11 +240,14 @@ async fn test_run_with_reload_full_lifecycle() {
     // process exit or until the registry.stop_all() is called (which requires ctrl-c).
     // For now, we just abort the task to clean up the test.
     server_handle.abort();
+    // Give time for ports to be fully released by the OS
+    sleep(Duration::from_secs(2)).await;
 
     println!("✓ Full run_with_reload lifecycle test passed!");
 }
 
 #[tokio::test]
+#[serial]
 async fn test_run_with_reload_multiple_networks() {
     let temp_dir = TempDir::new().unwrap();
     
@@ -402,12 +405,14 @@ module = ""
 
     // Cleanup
     server_handle.abort();
-    sleep(Duration::from_millis(500)).await;
+    // Give time for ports to be fully released by the OS
+    sleep(Duration::from_secs(2)).await;
 
     println!("✓ Multiple networks test passed!");
 }
 
 #[tokio::test]
+#[serial]
 async fn test_run_with_reload_adapter_restart() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_full_test_config(&temp_dir, 19203);
@@ -534,12 +539,14 @@ module = ""
 
     // Cleanup
     server_handle.abort();
-    sleep(Duration::from_millis(500)).await;
+    // Give extra time for ports to be fully released by the OS
+    sleep(Duration::from_secs(2)).await;
 
     println!("✓ Adapter restart test passed!");
 }
 
 #[tokio::test]
+#[serial]
 async fn test_run_with_reload_invalid_config_rejected() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_full_test_config(&temp_dir, 19205);
@@ -595,7 +602,8 @@ interface = "lo0"
 
     // Cleanup
     server_handle.abort();
-    sleep(Duration::from_millis(500)).await;
+    // Give time for ports to be fully released by the OS
+    sleep(Duration::from_secs(2)).await;
 
     println!("✓ Invalid config rejection test passed!");
 }

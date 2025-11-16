@@ -15,7 +15,7 @@ fn find_samples_root() -> Option<PathBuf> {
     let candidates = [
         PathBuf::from("./samples/study_1"),
         PathBuf::from("./samples/dicom/study_1"),
-        PathBuf::from("./dev/samples/study_1"),
+        PathBuf::from("../../samples/dicom/samples/study_1"),
         PathBuf::from("../../dev/samples/study_1"),
     ];
     candidates.into_iter().find(|p| p.exists())
