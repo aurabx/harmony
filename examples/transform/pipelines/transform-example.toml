@@ -5,10 +5,11 @@
 # Pipeline with Transform
 #-------------------------
 [pipelines.transform_demo]
-description = "Demonstrates JOLT transform middleware"
+description = "JOLT transform middleware with security policies for transformation endpoint"
 networks = ["http_net"]
 endpoints = ["http_endpoint"]
 middleware = [
+    "transform_security",
     "json_extractor",
     "patient_transform",
 ]
@@ -17,6 +18,83 @@ backends = ["echo_backend"]
 # ------------------------
 # Middleware
 #-------------------------
+
+# Transformation Endpoint Security Policies
+# Production-grade access control for data transformation API (POST-only, JSON input)
+[middleware.transform_security]
+type = "policies"
+
+# Policy: Transform endpoint security
+[[middleware.transform_security.options.policies]]
+id = "transform_security"
+name = "Transform Endpoint Security"
+enabled = true
+
+# Rule 1: IP allowlist - internal networks only
+# Transform endpoints may process sensitive data - restrict to trusted networks
+[[middleware.transform_security.options.policies.rules]]
+id = "internal_networks"
+name = "Allow Internal Networks Only"
+type = "ip_allow"
+weight = 90
+enabled = true
+
+[middleware.transform_security.options.policies.rule_internal_networks.options]
+ip_addresses = [
+    "10.0.0.0/8",       # Private network - Class A
+    "172.16.0.0/12",    # Private network - Class B
+    "192.168.0.0/16",   # Private network - Class C
+    "127.0.0.1/32"      # Localhost
+]
+
+# Rule 2: Rate limiting
+# Moderate limits for transformation operations
+[[middleware.transform_security.options.policies.rules]]
+id = "rate_limit"
+name = "Rate Limit 50/minute"
+type = "rate_limit"
+weight = 50
+enabled = true
+
+[middleware.transform_security.options.policies.rule_rate_limit.options]
+max_requests = 50
+window_seconds = 60
+
+# Rule 3: HTTP method restrictions - POST only
+# Transformation endpoint is write-only (submit data for transformation)
+# GET requests don't make sense for a transformation API
+[[middleware.transform_security.options.policies.rules]]
+id = "method_filter"
+name = "Allow POST Only (Transformation Endpoint)"
+type = "method"
+weight = 85
+enabled = true
+
+[middleware.transform_security.options.policies.rule_method_filter.options]
+mode = "allow"
+methods = ["POST"]
+
+# Rule 4: Content-Type restrictions - JSON only
+# JOLT transformations require JSON input
+[[middleware.transform_security.options.policies.rules]]
+id = "content_type_filter"
+name = "Allow JSON Only"
+type = "content_type"
+weight = 80
+enabled = true
+
+[middleware.transform_security.options.policies.rule_content_type_filter.options]
+mode = "allow"
+content_types = ["application/json"]
+
+# Transform endpoint security rationale:
+# - POST-only API (submit data for transformation, not retrieval)
+# - JSON-only content type (required for JOLT transformations)
+# - IP allowlisting restricts access to trusted networks
+# - Rate limiting prevents abuse of transformation resources
+# - Transformation specs are configured server-side (spec_path)
+# - Client submits data, receives transformed result
+
 [middleware.json_extractor]
 type = "json_extractor"
 

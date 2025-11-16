@@ -3,10 +3,11 @@
 # Demonstrates HTTP passthrough to external service
 #-------------------------
 [pipelines.http_proxy]
-description = "HTTP proxy to external backend service"
+description = "HTTP proxy to external backend service with comprehensive access control"
 networks = ["http_net"]
 endpoints = ["proxy_endpoint"]
 middleware = [
+    "access_control",
     "passthru",
 ]
 backends = ["external_api"]
@@ -14,6 +15,84 @@ backends = ["external_api"]
 # ------------------------
 # Middleware
 #-------------------------
+
+# Access Control Policies
+# Production-grade security for HTTP proxy with path filtering and rate limiting
+[middleware.access_control]
+type = "policies"
+
+# Policy: Comprehensive access control
+[[middleware.access_control.options.policies]]
+id = "http_proxy_security"
+name = "HTTP Proxy Security"
+enabled = true
+
+# Rule 1: IP allowlist - internal networks only
+# Restricts access to private networks for security
+[[middleware.access_control.options.policies.rules]]
+id = "internal_networks"
+name = "Allow Internal Networks Only"
+type = "ip_allow"
+weight = 90
+enabled = true
+
+[middleware.access_control.options.policies.rule_internal_networks.options]
+ip_addresses = [
+    "10.0.0.0/8",       # Private network - Class A
+    "172.16.0.0/12",    # Private network - Class B
+    "192.168.0.0/16",   # Private network - Class C
+    "127.0.0.1/32"      # Localhost
+]
+
+# Rule 2: Path filtering - deny sensitive paths
+# Block access to administrative and internal endpoints
+# Note: Deny rules have higher priority than the base allow rule
+[[middleware.access_control.options.policies.rules]]
+id = "deny_admin_paths"
+name = "Block Admin Paths"
+type = "path"
+weight = 95
+enabled = true
+
+[middleware.access_control.options.policies.rule_deny_admin_paths.options]
+paths = [
+    "/admin/{*path}",
+    "/internal/{*path}",
+]
+mode = "deny"
+
+# Rule 3: Rate limiting - prevent abuse
+# Limits each IP to 100 requests per minute
+[[middleware.access_control.options.policies.rules]]
+id = "rate_limit"
+name = "Rate Limit 100/minute"
+type = "rate_limit"
+weight = 50
+enabled = true
+
+[middleware.access_control.options.policies.rule_rate_limit.options]
+max_requests = 100
+window_seconds = 60
+
+# Rule 4: HTTP method restrictions
+# Allow common HTTP methods for REST APIs
+[[middleware.access_control.options.policies.rules]]
+id = "method_filter"
+name = "Allow Standard HTTP Methods"
+type = "method"
+weight = 80
+enabled = true
+
+[middleware.access_control.options.policies.rule_method_filter.options]
+mode = "allow"
+methods = ["GET", "POST", "PUT", "DELETE"]
+
+# Path filtering strategy:
+# - Specific deny rules (weight 95) are evaluated before base allow (weight 100)
+# - Requests to /admin/* or /internal/* are blocked (403 Forbidden)
+# - All other paths are allowed through to the backend
+# - This implements a "deny by exception" security model
+
 [middleware.passthru]
 type = "passthru"
 

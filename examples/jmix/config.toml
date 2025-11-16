@@ -37,3 +37,6 @@ module = ""
 # Middleware types
 [middleware_types.jmix_builder]
 module = ""
+
+[middleware_types.policies]
+module = ""

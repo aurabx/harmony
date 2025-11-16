@@ -41,3 +41,6 @@ module = ""
 
 [middleware_types.transform]
 module = ""
+
+[middleware_types.policies]
+module = ""

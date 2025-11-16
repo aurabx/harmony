@@ -53,3 +53,6 @@ module=""
 
 [middleware_types.dicomweb]
 module=""
+
+[middleware_types.policies]
+module=""

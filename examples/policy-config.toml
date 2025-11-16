@@ -83,7 +83,7 @@ type = "ip_allow"
 weight = 100
 enabled = true
 
-[middleware.ip_access_control.options.policies.rules.options]
+[middleware.ip_access_control.options.policies.rule_allow_internal.options]
 ip_addresses = [
     "10.0.0.0/8",       # Private network - Class A
     "172.16.0.0/12",    # Private network - Class B
@@ -99,7 +99,7 @@ type = "ip_deny"
 weight = 90
 enabled = true
 
-[middleware.ip_access_control.options.policies.rules.options]
+[middleware.ip_access_control.options.policies.rule_deny_blocklist.options]
 ip_addresses = [
     "203.0.113.0/24",   # TEST-NET-3 (example blocklist range)
     "198.51.100.0/24"   # TEST-NET-2 (example blocklist range)
@@ -145,7 +145,7 @@ type = "rate_limit"
 weight = 50
 enabled = true
 
-[middleware.api_rate_limiter.options.policies.rules.options]
+[middleware.api_rate_limiter.options.policies.rule_allow_all.options]
 max_requests = 100
 window_seconds = 60
 

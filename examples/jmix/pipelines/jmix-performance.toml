@@ -3,11 +3,12 @@
 # This example shows how to configure default skip flags in the config file
 #-------------------------
 [pipelines.jmix_performance]
-description = "High-performance JMIX API with default skip flags for large datasets"
+description = "High-performance JMIX API with security policies for package downloads"
 networks = ["http_net"]
 endpoints = ["jmix_api_performance"]
 middleware = [
     "jmix_builder",
+    "package_security",
 ]
 backends = ["dicom_pacs"]
 
@@ -20,6 +21,71 @@ type = "jmix_builder"
 # Performance optimization flags configured on the middleware
 skip_hashing = true   # Skip SHA256 hashing by default for faster processing
 skip_listing = false  # Still include file listings by default for inventory
+
+# Package Download Security Policies
+# Production-grade access control for JMIX package distribution (read-only API)
+[middleware.package_security]
+type = "policies"
+
+# Policy: JMIX package download security
+[[middleware.package_security.options.policies]]
+id = "jmix_security"
+name = "JMIX Package Security"
+enabled = true
+
+# Rule 1: IP allowlist - internal networks only
+# JMIX packages contain medical imaging data - restrict to trusted networks
+[[middleware.package_security.options.policies.rules]]
+id = "internal_networks"
+name = "Allow Internal Networks Only"
+type = "ip_allow"
+weight = 90
+enabled = true
+
+[middleware.package_security.options.policies.rule_internal_networks.options]
+ip_addresses = [
+    "10.0.0.0/8",       # Private network - Class A
+    "172.16.0.0/12",    # Private network - Class B
+    "192.168.0.0/16",   # Private network - Class C
+    "127.0.0.1/32"      # Localhost
+]
+
+# Rule 2: Rate limiting - conservative for package downloads
+# Lower limit since JMIX packages can be large (imaging studies with metadata)
+[[middleware.package_security.options.policies.rules]]
+id = "rate_limit"
+name = "Rate Limit 30/minute (Package Downloads)"
+type = "rate_limit"
+weight = 50
+enabled = true
+
+[middleware.package_security.options.policies.rule_rate_limit.options]
+max_requests = 30
+window_seconds = 60
+
+# Rule 3: HTTP method restrictions - GET only
+# JMIX API is read-only (query and download packages)
+# No POST/PUT/DELETE operations are supported
+[[middleware.package_security.options.policies.rules]]
+id = "method_filter"
+name = "Allow GET Only (Read-Only API)"
+type = "method"
+weight = 85
+enabled = true
+
+[middleware.package_security.options.policies.rule_method_filter.options]
+mode = "allow"
+methods = ["GET"]
+
+# JMIX API security rationale:
+# - Read-only API (GET only) - no modifications to packages
+# - Lower rate limits (30/min) for large package downloads
+# - IP allowlisting restricts access to trusted networks
+# - Typical access patterns:
+#   * GET /jmix/api/jmix?studyInstanceUid=... (query for packages)
+#   * GET /jmix/api/jmix/{id} (download package ZIP)
+#   * GET /jmix/api/jmix/{id}/manifest (fetch manifest)
+# - All package access should be logged for audit trails
 
 # ------------------------
 # JMIX HTTP endpoint

@@ -2,10 +2,11 @@
 # Basic echo-only pipeline (conflict-free)
 #-------------------------
 [pipelines.echo_basic]
-description = "Basic echo endpoint for quick start"
+description = "Basic echo endpoint with public access and rate limiting"
 networks = ["http_net"]
 endpoints = ["echo_endpoint"]
 middleware = [
+    "security_policies",
     "passthru",
 ]
 backends = ["echo_backend"]
@@ -13,6 +14,60 @@ backends = ["echo_backend"]
 # ------------------------
 # Middleware
 #-------------------------
+
+# Security Policies
+# Production-grade access control for public echo endpoint
+# This example shows PUBLIC access with rate limiting for testing/demo purposes
+[middleware.security_policies]
+type = "policies"
+
+# Policy: Public echo endpoint security
+[[middleware.security_policies.options.policies]]
+id = "echo_security"
+name = "Echo Endpoint Security (Public)"
+enabled = true
+
+# Rule 1: Allow all IPs (public access)
+# Echo endpoint is publicly accessible for testing and demos
+[[middleware.security_policies.options.policies.rules]]
+id = "allow_public"
+name = "Allow Public Access"
+type = "ip_allow"
+weight = 90
+enabled = true
+
+[middleware.security_policies.options.policies.rule_allow_public.options]
+ip_addresses = [
+    "0.0.0.0/0",  # Allow all IPv4 addresses
+]
+
+# Rule 2: Rate limiting - prevent abuse
+# Public endpoints need rate limiting to prevent DoS attacks
+# Limits each IP to 100 requests per minute
+[[middleware.security_policies.options.policies.rules]]
+id = "rate_limit"
+name = "Rate Limit 100/minute"
+type = "rate_limit"
+weight = 50
+enabled = true
+
+[middleware.security_policies.options.policies.rule_rate_limit.options]
+max_requests = 100
+window_seconds = 60
+
+# Rule 3: HTTP method restrictions
+# Echo endpoints typically only need GET and POST
+[[middleware.security_policies.options.policies.rules]]
+id = "method_filter"
+name = "Allow GET and POST Only"
+type = "method"
+weight = 80
+enabled = true
+
+[middleware.security_policies.options.policies.rule_method_filter.options]
+mode = "allow"
+methods = ["GET", "POST"]
+
 [middleware.passthru]
 type = "passthru"
 

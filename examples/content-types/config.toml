@@ -37,31 +37,13 @@ interface = "wg0"
 bind_address = "127.0.0.1"
 bind_port = 8080
 
-# Example pipeline supporting multiple content types
-[pipelines.multi_content]
-description = "Handles JSON, XML, CSV, form data, multipart, and binary content"
-networks = ["default"]
-endpoints = ["content_handler"]
-backends = ["echo_backend"]
-middleware = []
-
-# HTTP endpoint that accepts all content types
-[endpoints.content_handler]
-service = "http"
-
-[endpoints.content_handler.options]
-path_prefix = "/api"
-
-# Echo backend for testing
-[backends.echo_backend]
-service = "http"
-
-[backends.echo_backend.options]
-base_url = "https://httpbin.org"
-
 # Service registrations
 [services.http]
 module = ""
 
 [services.management]
+module = ""
+
+# Middleware type registrations
+[middleware_types.policies]
 module = ""

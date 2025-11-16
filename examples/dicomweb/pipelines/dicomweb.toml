@@ -2,11 +2,12 @@
 # DICOMweb endpoint example
 #-------------------------
 [pipelines.dicomweb_demo]
-description = "DICOMweb QIDO-RS and WADO-RS endpoint bridging to DIMSE via middleware"
+description = "DICOMweb QIDO-RS and WADO-RS endpoint with medical imaging security policies"
 networks = ["default"]
 endpoints = ["dicomweb_endpoint"]
 middleware = [
     "dicomweb_bridge",
+    "imaging_security",
 ]
 backends = ["dicom_pacs"]
 
@@ -30,10 +31,93 @@ port = 4242
 local_aet = "HARMONY_SCU"
 
 # ------------------------
-# Middleware Types
+# Middleware
 #-------------------------
 [middleware.dicomweb_bridge]
 type = "dicomweb_bridge"
+
+# Medical Imaging Security Policies
+# Production-grade access control for DICOMweb endpoints handling large imaging payloads
+[middleware.imaging_security]
+type = "policies"
+
+# Policy: Medical imaging API security
+[[middleware.imaging_security.options.policies]]
+id = "dicomweb_security"
+name = "DICOMweb Imaging Security"
+enabled = true
+
+# Rule 1: IP allowlist - internal medical network only
+# Restrict access to medical imaging to trusted networks
+[[middleware.imaging_security.options.policies.rules]]
+id = "medical_networks"
+name = "Allow Medical Networks Only"
+type = "ip_allow"
+weight = 90
+enabled = true
+
+[middleware.imaging_security.options.policies.rule_medical_networks.options]
+ip_addresses = [
+    "10.0.0.0/8",       # Private network - Class A (hospital PACS)
+    "172.16.0.0/12",    # Private network - Class B (imaging centers)
+    "192.168.0.0/16",   # Private network - Class C (radiology departments)
+    "127.0.0.1/32"      # Localhost (development/testing)
+]
+
+# Rule 2: Path filtering - allow DICOMweb standard paths
+# Restricts access to valid DICOMweb QIDO-RS and WADO-RS endpoints
+[[middleware.imaging_security.options.policies.rules]]
+id = "dicomweb_paths"
+name = "Allow DICOMweb Standard Paths"
+type = "path"
+weight = 85
+enabled = true
+
+[middleware.imaging_security.options.policies.rule_dicomweb_paths.options]
+paths = [
+    "/studies/{*path}",     # DICOMweb studies endpoint
+    "/series/{*path}",      # DICOMweb series endpoint (if used)
+    "/instances/{*path}",   # DICOMweb instances endpoint (if used)
+]
+mode = "allow"
+
+# Rule 3: Rate limiting - conservative for large payloads
+# Lower rate limit due to large medical imaging file sizes
+# Medical images can be 100MB+ per study, so we limit request frequency
+[[middleware.imaging_security.options.policies.rules]]
+id = "rate_limit"
+name = "Rate Limit 20/minute (Large Payloads)"
+type = "rate_limit"
+weight = 50
+enabled = true
+
+[middleware.imaging_security.options.policies.rule_rate_limit.options]
+max_requests = 20
+window_seconds = 60
+
+# Rule 4: HTTP method restrictions
+# DICOMweb primarily uses GET (QIDO-RS queries, WADO-RS retrieval) and POST (STOW-RS storage)
+[[middleware.imaging_security.options.policies.rules]]
+id = "method_filter"
+name = "Allow DICOMweb Methods"
+type = "method"
+weight = 80
+enabled = true
+
+[middleware.imaging_security.options.policies.rule_method_filter.options]
+mode = "allow"
+methods = ["GET", "POST"]
+
+# Medical imaging security rationale:
+# - Lower rate limits (20/min) accommodate large payload sizes (DICOM images)
+# - IP allowlisting ensures access only from trusted medical networks
+# - Path filtering restricts to DICOMweb standard endpoints
+# - Method restrictions align with DICOMweb protocol (GET for queries/retrieval, POST for storage)
+# - All imaging access should be logged for compliance and audit trails
+
+# ------------------------
+# Middleware Type Registrations
+#-------------------------
 
 [middleware_types.dicomweb_bridge]
 module = ""

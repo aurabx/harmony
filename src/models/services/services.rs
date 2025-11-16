@@ -53,7 +53,8 @@ pub fn resolve_service(
                 }
             }
         } else {
-            Err(format!("Unknown service type: {}", service_type))
+            // Service not in registry - try built-in services as fallback
+            create_builtin_service(service_type)
         }
     } else {
         // Fallback to hardcoded types if registry isn't initialized

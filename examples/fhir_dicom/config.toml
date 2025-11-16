@@ -79,6 +79,9 @@ module=""
 [services.echo]
 module=""
 
+[services.management]
+module=""
+
 [middleware_types.transform]
 module=""
 
