@@ -23,7 +23,7 @@ harmony-database = { path = "crates/database" }
 #jmix-rs = { path = "../jmix/jmix-rust" }
 jmix-rs = "0.3"
 #runbeam-sdk = { path = "../runbeam-sdk" }
-runbeam-sdk = "0.5.0"
+runbeam-sdk = "0.6"
 
 dicom-object = "0.9"
 dicom-pixeldata = { version = "0.9", features = ["image", "rle", "jpeg"] }

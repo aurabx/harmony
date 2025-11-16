@@ -1855,6 +1855,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "harmony-dsl"
+version = "1.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "485166f54452ea64c6f3ac52d415b0270795e3189f020c420b49bb16f2e908d9"
+
+[[package]]
 name = "harmony-filesystem"
 version = "0.1.0"
 dependencies = [
@@ -3976,23 +3982,27 @@ dependencies = [
 
 [[package]]
 name = "runbeam-sdk"
-version = "0.5.0"
+version = "0.6.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "647096ff22782ab2f2ba1a87d2092c221b71577441eb48b890063890c7170d5c"
+checksum = "3cb1ccafe48416c3c3f8021dc7924fe21a94637f64f5dcd069613a53f0efc0dd"
 dependencies = [
  "age",
  "base64 0.22.1",
  "chrono",
  "dirs",
+ "harmony-dsl",
  "jsonwebtoken",
  "keyring",
  "once_cell",
  "rand 0.8.5",
+ "regex",
  "reqwest",
  "secrecy",
  "serde",
  "serde_json",
+ "thiserror 1.0.69",
  "tokio",
+ "toml 0.8.22",
  "tracing",
  "url",
 ]
