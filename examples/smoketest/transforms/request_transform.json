@@ -1,0 +1,22 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "name": "data.user.fullName",
+      "id": "data.user.userId",
+      "*": "data.original.&"
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "data": {
+        "metadata": {
+          "transformedAt": "2024-01-01T00:00:00Z",
+          "transformType": "request",
+          "pipeline": "smoketest"
+        }
+      }
+    }
+  }
+]

@@ -1,0 +1,3 @@
+# Temporary files generated during testing
+tmp/
+*.log

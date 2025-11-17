@@ -1,0 +1,25 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "data": {
+        "user": "result.transformedData.user",
+        "metadata": "result.requestMetadata",
+        "original": "result.originalInput"
+      },
+      "*": "result.passthrough.&"
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "result": {
+        "responseMetadata": {
+          "transformedAt": "2024-01-01T00:00:00Z",
+          "transformType": "response",
+          "status": "success"
+        }
+      }
+    }
+  }
+]
