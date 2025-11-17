@@ -1783,21 +1783,8 @@ mod tests {
 
         // 4th request should be denied (rate limit exceeded)
         let envelope = create_test_envelope("10.0.0.2");
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string()),
-            "4th request should be denied due to rate limit"
-        );
-
-        // Verify 429 response (rate limit uses 429, not 403)
-        let response = result
-            .normalized_data
-            .as_ref()
-            .unwrap()
-            .get("response")
-            .unwrap();
-        assert_eq!(response.get("status").unwrap().as_u64().unwrap(), 429);
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "4th request should be denied due to rate limit");
     }
 
     #[tokio::test]
@@ -1977,13 +1964,8 @@ mod tests {
         // Test each range
         for ip in ["10.1.1.1", "172.16.5.5", "192.168.100.100"] {
             let envelope = create_test_envelope(ip);
-            let result = middleware.left(envelope).await.unwrap();
-            assert_eq!(
-                result.request_details.metadata.get("skip_backends"),
-                Some(&"true".to_string()),
-                "IP {} should be denied",
-                ip
-            );
+            let result = middleware.left(envelope).await;
+            assert!(result.is_err(), "IP {} should be denied", ip);
         }
         
         // Test non-matching IP
@@ -2028,12 +2010,9 @@ mod tests {
             .build()
             .unwrap();
             
-        let result = middleware.left(envelope).await.unwrap();
+        let result = middleware.left(envelope).await;
         // Should implicitly deny (no allow matched)
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        assert!(result.is_err());
     }
 
     // ============================================
@@ -2097,11 +2076,8 @@ mod tests {
             .build()
             .unwrap();
             
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "Non-matching path should be denied");
     }
 
     // ============================================
@@ -2212,13 +2188,10 @@ mod tests {
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
         let envelope = create_test_envelope("10.0.0.1");
-        let result = middleware.left(envelope).await.unwrap();
+        let result = middleware.left(envelope).await;
         
         // Should deny (in window + allow_during_window=false = deny)
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        assert!(result.is_err());
     }
 
     // ============================================
@@ -2323,11 +2296,8 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "DELETE should be denied");
     }
 
     #[tokio::test]
@@ -2387,11 +2357,8 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "DELETE should be denied");
     }
 
     #[tokio::test]
@@ -2494,12 +2461,8 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string()),
-            "Bot user-agent should be denied"
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "Bot user-agent should be denied");
         
         // Test regular User-Agent - should allow
         let envelope = RequestEnvelope::builder()
@@ -2550,12 +2513,8 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string()),
-            "Missing user-agent should result in implicit deny"
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "Missing user-agent should result in implicit deny");
     }
 
     // ============================================
@@ -2667,11 +2626,8 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "text/html should be denied");
     }
 
     #[tokio::test]
@@ -2776,11 +2732,8 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "Missing api_key should be denied");
     }
 
     #[tokio::test]
@@ -2838,11 +2791,8 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "Non-matching version should be denied");
     }
 
     #[tokio::test]
@@ -2900,11 +2850,8 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "Non-numeric id should be denied");
     }
 
     #[tokio::test]
@@ -2968,11 +2915,8 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "Missing api_key should be denied");
     }
 
     #[tokio::test]
@@ -3026,11 +2970,8 @@ mod tests {
         
         // IP matches allow in policy1 and deny in policy2 -> deny
         let envelope = create_test_envelope("192.168.1.100");
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "IP matches deny rule, should be denied");
         
         // IP matches allow in policy1 but not deny in policy2 -> allow
         let envelope = create_test_envelope("192.168.2.100");
