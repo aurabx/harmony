@@ -13,57 +13,58 @@ middleware = ["content_security"]
 # Middleware
 #-------------------------
 
-# Security Policies
+# Security Policies (References policies by ID)
 # Production-grade access control for public content-type demonstration API
 # This example shows PUBLIC access with rate limiting and content-type validation
 [middleware.content_security]
 type = "policies"
 
-# Policy: Public API security
-[[middleware.content_security.options.policies]]
+[middleware.content_security.options]
+policies = ["content_type_security"]
+
+# ------------------------
+# Policies
+#-------------------------
+[policies.content_type_security]
 id = "content_type_security"
 name = "Content Type Security (Public API)"
 enabled = true
+rules = ["allow_public", "rate_limit", "content_type_filter", "method_filter"]
 
-# Rule 1: Allow all IPs (public access)
-# This API is publicly accessible - no IP restrictions
-[[middleware.content_security.options.policies.rules]]
+# ------------------------
+# Rules
+#-------------------------
+[rules.allow_public]
 id = "allow_public"
 name = "Allow Public Access"
 type = "ip_allow"
 weight = 100
 enabled = true
 
-[middleware.content_security.options.policies.rule_allow_public.options]
+[rules.allow_public.options]
 ip_addresses = [
     "0.0.0.0/0",  # Allow all IPv4 addresses
 ]
 
-# Rule 2: Rate limiting - prevent abuse
-# Public APIs need rate limiting to prevent DoS attacks
-[[middleware.content_security.options.policies.rules]]
+[rules.rate_limit]
 id = "rate_limit"
 name = "Rate Limit 200/minute"
 type = "rate_limit"
 weight = 50
 enabled = true
 
-[middleware.content_security.options.policies.rule_rate_limit.options]
+[rules.rate_limit.options]
 max_requests = 200
 window_seconds = 60
 
-# Rule 3: Content-Type restrictions
-# Only allow the content types that this example demonstrates
-# Allowed: JSON, XML, CSV, form data, multipart
-# Denied: Application binaries, executables, etc.
-[[middleware.content_security.options.policies.rules]]
+[rules.content_type_filter]
 id = "content_type_filter"
 name = "Allow Supported Content Types"
 type = "content_type"
 weight = 80
 enabled = true
 
-[middleware.content_security.options.policies.rule_content_type_filter.options]
+[rules.content_type_filter.options]
 mode = "allow"
 content_types = [
     "application/json",                  # JSON data
@@ -75,16 +76,14 @@ content_types = [
     "text/plain",                        # Plain text
 ]
 
-# Rule 4: HTTP method restrictions
-# Content endpoints typically need GET (retrieve) and POST (submit)
-[[middleware.content_security.options.policies.rules]]
+[rules.method_filter]
 id = "method_filter"
 name = "Allow GET and POST Only"
 type = "method"
 weight = 85
 enabled = true
 
-[middleware.content_security.options.policies.rule_method_filter.options]
+[rules.method_filter.options]
 mode = "allow"
 methods = ["GET", "POST"]
 

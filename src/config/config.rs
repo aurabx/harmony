@@ -22,7 +22,7 @@ use std::path::Path;
 
 static DEFAULT_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(HashMap::new);
 
-/// Policy definition at top level (v1.7.0+)
+/// Policy definition at top level
 #[derive(Debug, Deserialize, Clone)]
 pub struct PolicyDefinition {
     pub id: String,
@@ -33,7 +33,7 @@ pub struct PolicyDefinition {
     pub rules: Vec<String>, // Rule IDs
 }
 
-/// Rule definition at top level (v1.7.0+)
+/// Rule definition at top level
 #[derive(Debug, Deserialize, Clone)]
 pub struct RuleDefinition {
     pub id: String,
@@ -88,10 +88,10 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub transforms: (),
-    /// Top-level policy definitions (v1.7.0+)
+    /// Top-level policy definitions
     #[serde(default)]
     pub policies: HashMap<String, PolicyDefinition>,
-    /// Top-level rule definitions (v1.7.0+)
+    /// Top-level rule definitions
     #[serde(default)]
     pub rules: HashMap<String, RuleDefinition>,
     /// Resolved absolute path to transforms directory (not serialized)
@@ -329,7 +329,7 @@ impl Config {
             base.middleware_types.extend(config.middleware_types);
             // Merge services if provided
             base.services.extend(config.services);
-            // Merge policies and rules (v1.7.0+)
+            // Merge policies and rules
             base.policies.extend(config.policies);
             base.rules.extend(config.rules);
         }

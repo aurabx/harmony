@@ -22,27 +22,34 @@ type = "jmix_builder"
 skip_hashing = true   # Skip SHA256 hashing by default for faster processing
 skip_listing = false  # Still include file listings by default for inventory
 
-# Package Download Security Policies
+# Package Download Security Policies (References policies by ID)
 # Production-grade access control for JMIX package distribution (read-only API)
 [middleware.package_security]
 type = "policies"
 
-# Policy: JMIX package download security
-[[middleware.package_security.options.policies]]
+[middleware.package_security.options]
+policies = ["jmix_security"]
+
+# ------------------------
+# Policies
+#-------------------------
+[policies.jmix_security]
 id = "jmix_security"
 name = "JMIX Package Security"
 enabled = true
+rules = ["internal_networks", "rate_limit", "method_filter"]
 
-# Rule 1: IP allowlist - internal networks only
-# JMIX packages contain medical imaging data - restrict to trusted networks
-[[middleware.package_security.options.policies.rules]]
+# ------------------------
+# Rules
+#-------------------------
+[rules.internal_networks]
 id = "internal_networks"
 name = "Allow Internal Networks Only"
 type = "ip_allow"
 weight = 90
 enabled = true
 
-[middleware.package_security.options.policies.rule_internal_networks.options]
+[rules.internal_networks.options]
 ip_addresses = [
     "10.0.0.0/8",       # Private network - Class A
     "172.16.0.0/12",    # Private network - Class B
@@ -50,30 +57,25 @@ ip_addresses = [
     "127.0.0.1/32"      # Localhost
 ]
 
-# Rule 2: Rate limiting - conservative for package downloads
-# Lower limit since JMIX packages can be large (imaging studies with metadata)
-[[middleware.package_security.options.policies.rules]]
+[rules.rate_limit]
 id = "rate_limit"
 name = "Rate Limit 30/minute (Package Downloads)"
 type = "rate_limit"
 weight = 50
 enabled = true
 
-[middleware.package_security.options.policies.rule_rate_limit.options]
+[rules.rate_limit.options]
 max_requests = 30
 window_seconds = 60
 
-# Rule 3: HTTP method restrictions - GET only
-# JMIX API is read-only (query and download packages)
-# No POST/PUT/DELETE operations are supported
-[[middleware.package_security.options.policies.rules]]
+[rules.method_filter]
 id = "method_filter"
 name = "Allow GET Only (Read-Only API)"
 type = "method"
 weight = 85
 enabled = true
 
-[middleware.package_security.options.policies.rule_method_filter.options]
+[rules.method_filter.options]
 mode = "allow"
 methods = ["GET"]
 

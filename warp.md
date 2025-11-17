@@ -291,7 +291,7 @@ See docs/middleware.md for complete documentation.
 
 **Important Notes:**
 - Rule order matters - more specific patterns should come before broader patterns
-- No backward compatibility with old string-based format (schema v1.1.0)
+- No backward compatibility with old string-based format
 - Use `{*name}` syntax for catch-all wildcards (matchit requirement)
 
 ## Configuration Structure
@@ -346,14 +346,7 @@ When enabled, the gateway will:
 
 ### Logging Configuration
 
-**Note**: Log level has been moved from `[proxy]` to `[logging]` section (schema v1.2.0+):
-
-```toml
-# OLD (schema v1.1.0 and earlier)
-[proxy]
-log_level = "debug"  # Deprecated
-
-# NEW (schema v1.2.0+) 
+```
 [logging]
 log_level = "debug"  # Moved here
 log_to_file = true

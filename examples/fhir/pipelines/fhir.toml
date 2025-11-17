@@ -22,111 +22,13 @@ token_path = "./tmp/test_token"
 username = "test_user"
 password = "test_password"
 
-# Healthcare Security Policies
+# Healthcare Security Policies (References policies by ID)
 # Production-grade access control aligned with HIPAA and healthcare compliance requirements
 [middleware.healthcare_policies]
 type = "policies"
 
-# Policy: Healthcare API security and compliance
-[[middleware.healthcare_policies.options.policies]]
-id = "fhir_security"
-name = "FHIR Healthcare Security"
-enabled = true
-
-# Rule 1: IP allowlist - healthcare internal networks only
-# Strict network access control for PHI (Protected Health Information)
-[[middleware.healthcare_policies.options.policies.rules]]
-id = "healthcare_networks"
-name = "Allow Healthcare Networks Only"
-type = "ip_allow"
-weight = 95
-enabled = true
-
-[middleware.healthcare_policies.options.policies.rule_healthcare_networks.options]
-ip_addresses = [
-    "10.0.0.0/8",       # Private network - Class A (hospital internal)
-    "172.16.0.0/12",    # Private network - Class B (clinic networks)
-    "192.168.0.0/16",   # Private network - Class C (office networks)
-    "127.0.0.1/32"      # Localhost (development/testing)
-]
-
-# Rule 2: Path filtering - allow only FHIR resource paths
-# Restricts access to valid FHIR resource endpoints
-[[middleware.healthcare_policies.options.policies.rules]]
-id = "fhir_resource_paths"
-name = "Allow FHIR Resource Paths Only"
-type = "path"
-weight = 90
-enabled = true
-
-[middleware.healthcare_policies.options.policies.rule_fhir_resource_paths.options]
-paths = [
-    "/Patient/{*path}",           # Patient demographics
-    "/Observation/{*path}",       # Clinical observations
-    "/ImagingStudy/{*path}",      # Imaging studies
-    "/DiagnosticReport/{*path}",  # Diagnostic reports
-    "/Practitioner/{*path}",      # Healthcare providers
-    "/Organization/{*path}",      # Healthcare organizations
-    "/Encounter/{*path}",         # Patient encounters
-    "/Condition/{*path}",         # Patient conditions
-    "/Medication/{*path}",        # Medication resources
-    "/AllergyIntolerance/{*path}",# Allergy information
-]
-mode = "allow"
-
-# Rule 3: Rate limiting - stricter for healthcare
-# Lower rate limits to prevent abuse of sensitive health data
-[[middleware.healthcare_policies.options.policies.rules]]
-id = "rate_limit"
-name = "Rate Limit 50/minute (Healthcare)"
-type = "rate_limit"
-weight = 50
-enabled = true
-
-[middleware.healthcare_policies.options.policies.rule_rate_limit.options]
-max_requests = 50
-window_seconds = 60
-
-# Rule 4: HTTP method restrictions
-# Allow full CRUD operations for FHIR resources
-[[middleware.healthcare_policies.options.policies.rules]]
-id = "method_filter"
-name = "Allow FHIR CRUD Methods"
-type = "method"
-weight = 85
-enabled = true
-
-[middleware.healthcare_policies.options.policies.rule_method_filter.options]
-mode = "allow"
-methods = ["GET", "POST", "PUT", "DELETE"]
-
-# Rule 5: Time-based access - business hours only
-# Restricts API access to business hours for compliance monitoring
-# Outside hours may require additional authorization or audit trails
-[[middleware.healthcare_policies.options.policies.rules]]
-id = "business_hours"
-name = "Business Hours Access Only"
-type = "time_based"
-weight = 80
-enabled = true
-
-[middleware.healthcare_policies.options.policies.rule_business_hours.options]
-allow_during_window = true
-timezone = "America/New_York"
-start_time = "09:00"
-end_time = "17:00"
-days_of_week = ["monday", "tuesday", "wednesday", "thursday", "friday"]
-
-# Healthcare compliance notes:
-# - Basic authentication provides initial credential verification
-# - IP allowlisting ensures access only from trusted healthcare networks
-# - Path filtering restricts access to approved FHIR resource types
-# - Rate limiting prevents bulk data extraction attacks
-# - Business hours restriction provides audit trail boundaries
-# - All access should be logged for HIPAA compliance audits
-
-[middleware.json_extractor]
-type = "json_extractor"
+[middleware.healthcare_policies.options]
+policies = ["fhir_security"]
 
 # ------------------------
 # Endpoints
@@ -143,3 +45,91 @@ path_prefix = "/fhir"
 service = "fhir"
 [backends.fhir_backend.options]
 base_url = "https://server.fire.ly/r4"
+
+# Top-level policies
+[policies.fhir_security]
+id = "fhir_security"
+name = "FHIR Healthcare Security"
+enabled = true
+rules = [
+    "healthcare_networks",
+    "fhir_resource_paths",
+    "rate_limit",
+    "method_filter",
+    "business_hours"
+]
+
+# Top-level rules
+[rules.healthcare_networks]
+id = "healthcare_networks"
+name = "Allow Healthcare Networks Only"
+type = "ip_allow"
+weight = 95
+enabled = true
+
+[rules.healthcare_networks.options]
+ip_addresses = [
+    "10.0.0.0/8",       # Private network - Class A (hospital internal)
+    "172.16.0.0/12",    # Private network - Class B (clinic networks)
+    "192.168.0.0/16",   # Private network - Class C (office networks)
+    "127.0.0.1/32"      # Localhost (development/testing)
+]
+
+[rules.fhir_resource_paths]
+id = "fhir_resource_paths"
+name = "Allow FHIR Resource Paths Only"
+type = "path"
+weight = 90
+enabled = true
+
+[rules.fhir_resource_paths.options]
+paths = [
+    "/Patient/{*path}",           # Patient demographics
+    "/Observation/{*path}",       # Clinical observations
+    "/ImagingStudy/{*path}",      # Imaging studies
+    "/DiagnosticReport/{*path}",  # Diagnostic reports
+    "/Practitioner/{*path}",      # Healthcare providers
+    "/Organization/{*path}",      # Healthcare organizations
+    "/Encounter/{*path}",         # Patient encounters
+    "/Condition/{*path}",         # Patient conditions
+    "/Medication/{*path}",        # Medication resources
+    "/AllergyIntolerance/{*path}",# Allergy information
+]
+mode = "allow"
+
+[rules.rate_limit]
+id = "rate_limit"
+name = "Rate Limit 50/minute (Healthcare)"
+type = "rate_limit"
+weight = 50
+enabled = true
+
+[rules.rate_limit.options]
+max_requests = 50
+window_seconds = 60
+
+[rules.method_filter]
+id = "method_filter"
+name = "Allow FHIR CRUD Methods"
+type = "method"
+weight = 85
+enabled = true
+
+[rules.method_filter.options]
+mode = "allow"
+methods = ["GET", "POST", "PUT", "DELETE"]
+
+[rules.business_hours]
+id = "business_hours"
+name = "Business Hours Access Only"
+type = "time_based"
+weight = 80
+enabled = false  # Disabled for demo - enable in production
+
+[rules.business_hours.options]
+allow_during_window = true
+timezone = "America/New_York"
+start_time = "09:00"
+end_time = "17:00"
+days_of_week = ["monday", "tuesday", "wednesday", "thursday", "friday"]
+

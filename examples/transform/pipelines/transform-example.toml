@@ -19,27 +19,34 @@ backends = ["echo_backend"]
 # Middleware
 #-------------------------
 
-# Transformation Endpoint Security Policies
+# Transformation Endpoint Security Policies (References policies by ID)
 # Production-grade access control for data transformation API (POST-only, JSON input)
 [middleware.transform_security]
 type = "policies"
 
-# Policy: Transform endpoint security
-[[middleware.transform_security.options.policies]]
+[middleware.transform_security.options]
+policies = ["transform_security"]
+
+# ------------------------
+# Policies
+#-------------------------
+[policies.transform_security]
 id = "transform_security"
 name = "Transform Endpoint Security"
 enabled = true
+rules = ["internal_networks", "rate_limit", "method_filter", "content_type_filter"]
 
-# Rule 1: IP allowlist - internal networks only
-# Transform endpoints may process sensitive data - restrict to trusted networks
-[[middleware.transform_security.options.policies.rules]]
+# ------------------------
+# Rules
+#-------------------------
+[rules.internal_networks]
 id = "internal_networks"
 name = "Allow Internal Networks Only"
 type = "ip_allow"
 weight = 90
 enabled = true
 
-[middleware.transform_security.options.policies.rule_internal_networks.options]
+[rules.internal_networks.options]
 ip_addresses = [
     "10.0.0.0/8",       # Private network - Class A
     "172.16.0.0/12",    # Private network - Class B
@@ -47,43 +54,36 @@ ip_addresses = [
     "127.0.0.1/32"      # Localhost
 ]
 
-# Rule 2: Rate limiting
-# Moderate limits for transformation operations
-[[middleware.transform_security.options.policies.rules]]
+[rules.rate_limit]
 id = "rate_limit"
 name = "Rate Limit 50/minute"
 type = "rate_limit"
 weight = 50
 enabled = true
 
-[middleware.transform_security.options.policies.rule_rate_limit.options]
+[rules.rate_limit.options]
 max_requests = 50
 window_seconds = 60
 
-# Rule 3: HTTP method restrictions - POST only
-# Transformation endpoint is write-only (submit data for transformation)
-# GET requests don't make sense for a transformation API
-[[middleware.transform_security.options.policies.rules]]
+[rules.method_filter]
 id = "method_filter"
 name = "Allow POST Only (Transformation Endpoint)"
 type = "method"
 weight = 85
 enabled = true
 
-[middleware.transform_security.options.policies.rule_method_filter.options]
+[rules.method_filter.options]
 mode = "allow"
 methods = ["POST"]
 
-# Rule 4: Content-Type restrictions - JSON only
-# JOLT transformations require JSON input
-[[middleware.transform_security.options.policies.rules]]
+[rules.content_type_filter]
 id = "content_type_filter"
 name = "Allow JSON Only"
 type = "content_type"
 weight = 80
 enabled = true
 
-[middleware.transform_security.options.policies.rule_content_type_filter.options]
+[rules.content_type_filter.options]
 mode = "allow"
 content_types = ["application/json"]
 

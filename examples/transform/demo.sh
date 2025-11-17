@@ -84,7 +84,10 @@ echo -e "${GREEN}✓ Harmony started (PID: $HARMONY_PID)${NC}"
 # Wait for Harmony to be ready
 echo -e "${YELLOW}Waiting for Harmony to be ready...${NC}"
 for i in {1..30}; do
-    if curl -s http://127.0.0.1:$HARMONY_PORT/transform > /dev/null 2>&1; then
+    # Use POST with JSON since GET is not allowed by policy
+    if curl -s -X POST http://127.0.0.1:$HARMONY_PORT/transform \
+        -H "Content-Type: application/json" \
+        -d '{}' > /dev/null 2>&1; then
         echo -e "${GREEN}✓ Harmony is ready${NC}"
         break
     fi

@@ -80,7 +80,7 @@ echo -e "${GREEN}✓ Harmony started (PID: $HARMONY_PID)${NC}"
 # Wait for Harmony to be ready
 echo -e "${YELLOW}Waiting for Harmony to be ready...${NC}"
 for i in {1..30}; do
-    if curl -s http://127.0.0.1:$HARMONY_PORT/test > /dev/null 2>&1; then
+    if curl -s http://127.0.0.1:$HARMONY_PORT/fhir/Patient > /dev/null 2>&1; then
         echo -e "${GREEN}✓ Harmony is ready${NC}"
         break
     fi
@@ -98,8 +98,8 @@ echo ""
 
 # Test 1: Unauthenticated request (should fail)
 echo -e "${YELLOW}Test 1: Unauthenticated request (expected to fail)${NC}"
-echo "  Command: curl -s -w '%{http_code}' http://127.0.0.1:$HARMONY_PORT/test"
-HTTP_CODE=$(curl -s -w "%{http_code}" -o /dev/null http://127.0.0.1:$HARMONY_PORT/test)
+echo "  Command: curl -s -w '%{http_code}' http://127.0.0.1:$HARMONY_PORT/fhir/Patient"
+HTTP_CODE=$(curl -s -w "%{http_code}" -o /dev/null http://127.0.0.1:$HARMONY_PORT/fhir/Patient)
 
 if [ "$HTTP_CODE" = "401" ]; then
     echo -e "${GREEN}  ✓ Request correctly rejected with 401 Unauthorized${NC}"
@@ -112,8 +112,8 @@ echo ""
 
 # Test 2: Authenticated GET request
 echo -e "${YELLOW}Test 2: Authenticated GET request${NC}"
-echo "  Command: curl -u $USERNAME:$PASSWORD http://127.0.0.1:$HARMONY_PORT/test"
-RESPONSE=$(curl -s -w "\n%{http_code}" -u "$USERNAME:$PASSWORD" http://127.0.0.1:$HARMONY_PORT/test)
+echo "  Command: curl -u $USERNAME:$PASSWORD http://127.0.0.1:$HARMONY_PORT/fhir/Patient"
+RESPONSE=$(curl -s -w "\n%{http_code}" -u "$USERNAME:$PASSWORD" http://127.0.0.1:$HARMONY_PORT/fhir/Patient)
 HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
 BODY=$(echo "$RESPONSE" | sed '$d')
 
@@ -141,13 +141,13 @@ FHIR_PATIENT='{
   }]
 }'
 echo "  Command: curl -u $USERNAME:**** -X POST -H 'Content-Type: application/json'"
-RESPONSE=$(curl -s -w "\n%{http_code}" -u "$USERNAME:$PASSWORD" -X POST http://127.0.0.1:$HARMONY_PORT/test \
+RESPONSE=$(curl -s -w "\n%{http_code}" -u "$USERNAME:$PASSWORD" -X POST http://127.0.0.1:$HARMONY_PORT/fhir/Patient \
     -H "Content-Type: application/json" \
     -d "$FHIR_PATIENT")
 HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
 BODY=$(echo "$RESPONSE" | sed '$d')
 
-if [ "$HTTP_CODE" = "200" ]; then
+if [ "$HTTP_CODE" = "200" ] || [ "$HTTP_CODE" = "201" ]; then
     echo -e "${GREEN}  ✓ POST FHIR Patient successful (HTTP $HTTP_CODE)${NC}"
     echo "  Response contains patient data: $BODY" | head -c 100
     echo "..."
@@ -159,7 +159,7 @@ echo ""
 # Test 4: Wrong credentials
 echo -e "${YELLOW}Test 4: Request with wrong credentials (expected to fail)${NC}"
 echo "  Command: curl -u wrong_user:wrong_pass"
-HTTP_CODE=$(curl -s -w "%{http_code}" -o /dev/null -u "wrong_user:wrong_pass" http://127.0.0.1:$HARMONY_PORT/test)
+HTTP_CODE=$(curl -s -w "%{http_code}" -o /dev/null -u "wrong_user:wrong_pass" http://127.0.0.1:$HARMONY_PORT/fhir/Patient)
 
 if [ "$HTTP_CODE" = "401" ]; then
     echo -e "${GREEN}  ✓ Wrong credentials correctly rejected with 401 Unauthorized${NC}"

@@ -3,6 +3,8 @@
 # This file demonstrates how to use the policies middleware to implement
 # access control, rate limiting, and other request filtering logic.
 #
+# Policies and rules are now top-level tables for full reusability
+#
 # Evaluation Logic:
 # - A request is ACCEPTED only if:
 #   1. At least ONE allow rule matches (across all policies/rules)
@@ -63,27 +65,53 @@ service = "http"
 base_url = "http://localhost:3000"
 
 # ============================================================================
-# MIDDLEWARE - IP ACCESS CONTROL
+# MIDDLEWARE - IP ACCESS CONTROL (References policies by ID)
 # ============================================================================
 
 [middleware.ip_access_control]
 type = "policies"
 
-# Policy 1: Allow internal networks, deny known bad actors
-[[middleware.ip_access_control.options.policies]]
+[middleware.ip_access_control.options]
+policies = ["internal_access"]
+
+# ============================================================================
+# MIDDLEWARE - RATE LIMITING (References policies by ID)
+# ============================================================================
+
+[middleware.api_rate_limiter]
+type = "policies"
+
+[middleware.api_rate_limiter.options]
+policies = ["api_rate_limits"]
+
+# ============================================================================
+# TOP-LEVEL POLICIES (New structure)
+# ============================================================================
+
+[policies.internal_access]
 id = "internal_access"
 name = "Internal Network Access Control"
 enabled = true
+rules = ["allow_internal", "deny_blocklist"]
 
-# Rule 1: Allow requests from internal networks (highest priority)
-[[middleware.ip_access_control.options.policies.rules]]
+[policies.api_rate_limits]
+id = "api_rate_limits"
+name = "API Rate Limiting"
+enabled = true
+rules = ["allow_all", "rate_limit_100"]
+
+# ============================================================================
+# TOP-LEVEL RULES (New structure)
+# ============================================================================
+
+[rules.allow_internal]
 id = "allow_internal"
 name = "Allow Internal Networks"
 type = "ip_allow"
 weight = 100
 enabled = true
 
-[middleware.ip_access_control.options.policies.rule_allow_internal.options]
+[rules.allow_internal.options]
 ip_addresses = [
     "10.0.0.0/8",       # Private network - Class A
     "172.16.0.0/12",    # Private network - Class B
@@ -91,61 +119,37 @@ ip_addresses = [
     "127.0.0.1/32"      # Localhost
 ]
 
-# Rule 2: Deny known malicious IPs (medium priority)
-[[middleware.ip_access_control.options.policies.rules]]
+[rules.deny_blocklist]
 id = "deny_blocklist"
 name = "Block Known Bad IPs"
 type = "ip_deny"
 weight = 90
 enabled = true
 
-[middleware.ip_access_control.options.policies.rule_deny_blocklist.options]
+[rules.deny_blocklist.options]
 ip_addresses = [
     "203.0.113.0/24",   # TEST-NET-3 (example blocklist range)
     "198.51.100.0/24"   # TEST-NET-2 (example blocklist range)
 ]
 
-# Rule 3: Explicit deny-all as fallback (lowest priority)
-# This ensures any IP not explicitly allowed is denied
-# Note this is not strictly necessary, as unless an Allow rule is triggered, the default is Deny
-[[middleware.ip_access_control.options.policies.rules]]
-id = "default_deny"
-name = "Default Deny All"
-type = "deny_all"
-weight = 0
-enabled = false  # Disabled since we rely on implicit deny
-
-# ============================================================================
-# MIDDLEWARE - RATE LIMITING
-# ============================================================================
-
-[middleware.api_rate_limiter]
-type = "policies"
-
-# Policy 2: Rate limit API requests per client IP
-[[middleware.api_rate_limiter.options.policies]]
-id = "api_rate_limits"
-name = "API Rate Limiting"
-enabled = true
-
-# Rule 1: Allow all requests (required for rate limit to work)
-# Rate limit acts as a deny rule when exceeded
-[[middleware.api_rate_limiter.options.policies.rules]]
+[rules.allow_all]
 id = "allow_all"
 name = "Allow All Requests"
 type = "allow_all"
 weight = 100
 enabled = true
 
-# Rule 2: Rate limit - 100 requests per minute per IP
-[[middleware.api_rate_limiter.options.policies.rules]]
+[rules.allow_all.options]
+# No options needed for allow_all rule
+
+[rules.rate_limit_100]
 id = "rate_limit_100"
 name = "Rate Limit 100/minute"
 type = "rate_limit"
 weight = 50
 enabled = true
 
-[middleware.api_rate_limiter.options.policies.rule_allow_all.options]
+[rules.rate_limit_100.options]
 max_requests = 100
 window_seconds = 60
 
