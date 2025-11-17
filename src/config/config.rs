@@ -22,6 +22,40 @@ use std::path::Path;
 
 static DEFAULT_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(HashMap::new);
 
+/// Policy definition at top level (v1.7.0+)
+#[derive(Debug, Deserialize, Clone)]
+pub struct PolicyDefinition {
+    pub id: String,
+    pub name: Option<String>,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub rules: Vec<String>, // Rule IDs
+}
+
+/// Rule definition at top level (v1.7.0+)
+#[derive(Debug, Deserialize, Clone)]
+pub struct RuleDefinition {
+    pub id: String,
+    pub name: Option<String>,
+    #[serde(rename = "type")]
+    pub rule_type: String,
+    #[serde(default = "default_weight")]
+    pub weight: i64,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub options: HashMap<String, serde_json::Value>,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+fn default_weight() -> i64 {
+    0
+}
+
 #[derive(Debug, Deserialize, Default, Clone)]
 pub struct Config {
     #[serde(default)]
@@ -54,6 +88,12 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub transforms: (),
+    /// Top-level policy definitions (v1.7.0+)
+    #[serde(default)]
+    pub policies: HashMap<String, PolicyDefinition>,
+    /// Top-level rule definitions (v1.7.0+)
+    #[serde(default)]
+    pub rules: HashMap<String, RuleDefinition>,
     /// Resolved absolute path to transforms directory (not serialized)
     #[serde(skip)]
     pub resolved_transforms_path: Option<String>,
@@ -289,6 +329,9 @@ impl Config {
             base.middleware_types.extend(config.middleware_types);
             // Merge services if provided
             base.services.extend(config.services);
+            // Merge policies and rules (v1.7.0+)
+            base.policies.extend(config.policies);
+            base.rules.extend(config.rules);
         }
         base
     }

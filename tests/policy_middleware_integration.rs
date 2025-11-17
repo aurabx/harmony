@@ -44,14 +44,21 @@ async fn test_policy_allow_rule_accepts() {
         [middleware.policy_allow]
         type = "policies"
         
-        [[middleware.policy_allow.options.policies]]
+        [middleware.policy_allow.options]
+        policies = ["allow_policy"]
+        
+        [policies.allow_policy]
         id = "allow_policy"
         enabled = true
+        rules = ["allow_all_rule"]
         
-        [[middleware.policy_allow.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        type = "allow_all"
         weight = 100
         enabled = true
+        
+        [rules.allow_all_rule.options]
 
         [middleware_types.policies]
         module = ""
@@ -131,14 +138,21 @@ async fn test_policy_deny_rule_blocks() {
         [middleware.policy_deny]
         type = "policies"
         
-        [[middleware.policy_deny.options.policies]]
+        [middleware.policy_deny.options]
+        policies = ["deny_policy"]
+        
+        [policies.deny_policy]
         id = "deny_policy"
         enabled = true
+        rules = ["deny_all_rule"]
         
-        [[middleware.policy_deny.options.policies.rules]]
-        rule_type = "deny_all"
+        [rules.deny_all_rule]
+        id = "deny_all_rule"
+        type = "deny_all"
         weight = 100
         enabled = true
+        
+        [rules.deny_all_rule.options]
 
         [middleware_types.policies]
         module = ""
@@ -218,19 +232,29 @@ async fn test_policy_allow_plus_deny_blocks() {
         [middleware.policy_mixed]
         type = "policies"
         
-        [[middleware.policy_mixed.options.policies]]
+        [middleware.policy_mixed.options]
+        policies = ["mixed_policy"]
+        
+        [policies.mixed_policy]
         id = "mixed_policy"
         enabled = true
+        rules = ["allow_all_rule", "deny_all_rule"]
         
-        [[middleware.policy_mixed.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        type = "allow_all"
         weight = 100
         enabled = true
         
-        [[middleware.policy_mixed.options.policies.rules]]
-        rule_type = "deny_all"
+        [rules.allow_all_rule.options]
+        
+        [rules.deny_all_rule]
+        id = "deny_all_rule"
+        type = "deny_all"
         weight = 50
         enabled = true
+        
+        [rules.deny_all_rule.options]
 
         [middleware_types.policies]
         module = ""
@@ -310,15 +334,21 @@ async fn test_policy_ip_allow_matches() {
         [middleware.policy_ip]
         type = "policies"
         
-        [[middleware.policy_ip.options.policies]]
+        [middleware.policy_ip.options]
+        policies = ["ip_policy"]
+        
+        [policies.ip_policy]
         id = "ip_policy"
         enabled = true
+        rules = ["ip_allow_rule"]
         
-        [[middleware.policy_ip.options.policies.rules]]
-        rule_type = "ip_allow"
+        [rules.ip_allow_rule]
+        id = "ip_allow_rule"
+        type = "ip_allow"
         weight = 100
         enabled = true
-        [middleware.policy_ip.options.policies.rules.options]
+        
+        [rules.ip_allow_rule.options]
         ip_addresses = ["127.0.0.0/8"]
 
         [middleware_types.policies]
@@ -402,20 +432,29 @@ async fn test_policy_rate_limit_enforcement() {
         [middleware.policy_rate]
         type = "policies"
         
-        [[middleware.policy_rate.options.policies]]
+        [middleware.policy_rate.options]
+        policies = ["rate_policy"]
+        
+        [policies.rate_policy]
         id = "rate_policy"
         enabled = true
+        rules = ["allow_all_rule", "rate_limit_rule"]
         
-        [[middleware.policy_rate.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        type = "allow_all"
         weight = 100
         enabled = true
         
-        [[middleware.policy_rate.options.policies.rules]]
-        rule_type = "rate_limit"
+        [rules.allow_all_rule.options]
+        
+        [rules.rate_limit_rule]
+        id = "rate_limit_rule"
+        type = "rate_limit"
         weight = 90
         enabled = true
-        [middleware.policy_rate.options.policies.rules.options]
+        
+        [rules.rate_limit_rule.options]
         max_requests = 2
         window_seconds = 5
 
@@ -533,15 +572,21 @@ async fn test_policy_path_allow() {
         [middleware.policy_path]
         type = "policies"
         
-        [[middleware.policy_path.options.policies]]
+        [middleware.policy_path.options]
+        policies = ["path_policy"]
+        
+        [policies.path_policy]
         id = "path_policy"
         enabled = true
+        rules = ["path_allow_rule"]
         
-        [[middleware.policy_path.options.policies.rules]]
-        rule_type = "path"
+        [rules.path_allow_rule]
+        id = "path_allow_rule"
+        type = "path"
         weight = 100
         enabled = true
-        [middleware.policy_path.options.policies.rules.options]
+        
+        [rules.path_allow_rule.options]
         paths = ["/test/allowed/{*path}"]
         mode = "allow"
         use_wildcards = true
@@ -644,23 +689,34 @@ async fn test_policy_disabled_skipped() {
         [middleware.policy_disabled]
         type = "policies"
         
-        [[middleware.policy_disabled.options.policies]]
+        [middleware.policy_disabled.options]
+        policies = ["disabled_deny_policy", "active_allow_policy"]
+        
+        [policies.disabled_deny_policy]
         id = "disabled_deny_policy"
         enabled = false
+        rules = ["deny_all_rule"]
         
-        [[middleware.policy_disabled.options.policies.rules]]
-        rule_type = "deny_all"
-        weight = 100
-        enabled = true
-        
-        [[middleware.policy_disabled.options.policies]]
+        [policies.active_allow_policy]
         id = "active_allow_policy"
         enabled = true
+        rules = ["allow_all_rule"]
         
-        [[middleware.policy_disabled.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.deny_all_rule]
+        id = "deny_all_rule"
+        type = "deny_all"
         weight = 100
         enabled = true
+        
+        [rules.deny_all_rule.options]
+        
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        type = "allow_all"
+        weight = 100
+        enabled = true
+        
+        [rules.allow_all_rule.options]
 
         [middleware_types.policies]
         module = ""
@@ -740,19 +796,29 @@ async fn test_policy_weight_ordering() {
         [middleware.policy_weight]
         type = "policies"
         
-        [[middleware.policy_weight.options.policies]]
+        [middleware.policy_weight.options]
+        policies = ["weight_policy"]
+        
+        [policies.weight_policy]
         id = "weight_policy"
         enabled = true
+        rules = ["allow_all_rule", "deny_all_rule"]
         
-        [[middleware.policy_weight.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        type = "allow_all"
         weight = 50
         enabled = true
         
-        [[middleware.policy_weight.options.policies.rules]]
-        rule_type = "deny_all"
+        [rules.allow_all_rule.options]
+        
+        [rules.deny_all_rule]
+        id = "deny_all_rule"
+        type = "deny_all"
         weight = 100
         enabled = true
+        
+        [rules.deny_all_rule.options]
 
         [middleware_types.policies]
         module = ""

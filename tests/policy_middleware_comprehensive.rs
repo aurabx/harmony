@@ -102,13 +102,19 @@ async fn test_policy_allow_all() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["allow_all_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        name = "Allow All"
+        type = "allow_all"
         weight = 100
         enabled = true
 
@@ -175,13 +181,19 @@ async fn test_policy_deny_all() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["deny_all_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "deny_all"
+        [rules.deny_all_rule]
+        id = "deny_all_rule"
+        name = "Deny All"
+        type = "deny_all"
         weight = 100
         enabled = true
 
@@ -255,16 +267,22 @@ async fn test_policy_ip_allow() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["ip_allow_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "ip_allow"
+        [rules.ip_allow_rule]
+        id = "ip_allow_rule"
+        name = "IP Allow"
+        type = "ip_allow"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.ip_allow_rule.options]
         ip_addresses = ["192.168.1.0/24", "10.0.0.0/8"]
 
         [middleware_types.policies]
@@ -331,23 +349,31 @@ async fn test_policy_ip_deny() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["allow_all_rule", "ip_deny_rule"]
         
         # Allow all first
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        name = "Allow All"
+        type = "allow_all"
         weight = 100
         enabled = true
         
         # Then deny specific IPs
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "ip_deny"
+        [rules.ip_deny_rule]
+        id = "ip_deny_rule"
+        name = "IP Deny"
+        type = "ip_deny"
         weight = 90
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.ip_deny_rule.options]
         ip_addresses = ["203.0.113.0/24"]
 
         [middleware_types.policies]
@@ -422,16 +448,22 @@ async fn test_policy_path_allow_matches() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["path_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "path"
+        [rules.path_rule]
+        id = "path_rule"
+        name = "Path Allow"
+        type = "path"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.path_rule.options]
         paths = ["/test/public/{*path}", "/test/health"]
         mode = "allow"
 
@@ -500,16 +532,22 @@ async fn test_policy_path_allow_no_match() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["path_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "path"
+        [rules.path_rule]
+        id = "path_rule"
+        name = "Path Allow"
+        type = "path"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.path_rule.options]
         paths = ["/test/public/{*path}"]
         mode = "allow"
 
@@ -577,23 +615,31 @@ async fn test_policy_path_deny_blocks() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["allow_all_rule", "path_deny_rule"]
         
         # Allow all first
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        name = "Allow All"
+        type = "allow_all"
         weight = 100
         enabled = true
         
         # Then deny specific paths
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "path"
+        [rules.path_deny_rule]
+        id = "path_deny_rule"
+        name = "Path Deny"
+        type = "path"
         weight = 90
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.path_deny_rule.options]
         paths = ["/test/admin/{*path}"]
         mode = "deny"
 
@@ -667,16 +713,22 @@ async fn test_policy_method_allow_get() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["method_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "method"
+        [rules.method_rule]
+        id = "method_rule"
+        name = "Method Allow"
+        type = "method"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.method_rule.options]
         methods = ["GET", "HEAD"]
         mode = "allow"
 
@@ -744,16 +796,22 @@ async fn test_policy_method_deny_post() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["method_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "method"
+        [rules.method_rule]
+        id = "method_rule"
+        name = "Method Allow"
+        type = "method"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.method_rule.options]
         methods = ["GET"]
         mode = "allow"
 
@@ -830,16 +888,22 @@ async fn test_policy_header_exact_match() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["header_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "header"
+        [rules.header_rule]
+        id = "header_rule"
+        name = "Header Exact"
+        type = "header"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.header_rule.options]
         mode = "allow"
         headers = [
             { name = "x-api-key", value = "secret123", match_type = "exact" }
@@ -911,16 +975,22 @@ async fn test_policy_header_no_match() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["header_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "header"
+        [rules.header_rule]
+        id = "header_rule"
+        name = "Header No Match"
+        type = "header"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.header_rule.options]
         mode = "allow"
         headers = [
             { name = "x-api-key", value = "secret123", match_type = "exact" }
@@ -990,16 +1060,22 @@ async fn test_policy_header_contains_match() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["header_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "header"
+        [rules.header_rule]
+        id = "header_rule"
+        name = "Header Contains"
+        type = "header"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.header_rule.options]
         mode = "allow"
         headers = [
             { name = "authorization", value = "Bearer", match_type = "contains" }
@@ -1075,16 +1151,22 @@ async fn test_policy_content_type_exact() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["content_type_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "content_type"
+        [rules.content_type_rule]
+        id = "content_type_rule"
+        name = "Content Type"
+        type = "content_type"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.content_type_rule.options]
         mode = "allow"
         content_types = ["application/json"]
 
@@ -1153,16 +1235,22 @@ async fn test_policy_content_type_wildcard() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["content_type_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "content_type"
+        [rules.content_type_rule]
+        id = "content_type_rule"
+        name = "Content Type Wildcard"
+        type = "content_type"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.content_type_rule.options]
         mode = "allow"
         content_types = ["application/*"]
 
@@ -1235,16 +1323,22 @@ async fn test_policy_query_param_exists() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["query_param_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "query_parameter"
+        [rules.query_param_rule]
+        id = "query_param_rule"
+        name = "Query Parameter"
+        type = "query_parameter"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.query_param_rule.options]
         mode = "allow"
         parameters = [
             { name = "api_key", match_type = "exists" }
@@ -1321,16 +1415,22 @@ async fn test_policy_user_agent_regex_allow() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["user_agent_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "user_agent"
+        [rules.user_agent_rule]
+        id = "user_agent_rule"
+        name = "User Agent Allow"
+        type = "user_agent"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.user_agent_rule.options]
         mode = "allow"
         patterns = [
             { pattern = "/Mozilla.*/i", label = "Mozilla browsers" }
@@ -1401,23 +1501,31 @@ async fn test_policy_user_agent_regex_deny() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["allow_all_rule", "user_agent_deny_rule"]
         
         # Allow all first
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        name = "Allow All"
+        type = "allow_all"
         weight = 100
         enabled = true
         
         # Then deny bots
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "user_agent"
+        [rules.user_agent_deny_rule]
+        id = "user_agent_deny_rule"
+        name = "User Agent Deny"
+        type = "user_agent"
         weight = 90
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.user_agent_deny_rule.options]
         mode = "deny"
         patterns = [
             { pattern = "/.*[Bb]ot.*/", label = "Bots" }
@@ -1492,16 +1600,22 @@ async fn test_policy_time_based_always_allow() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["time_based_rule"]
         
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "time_based"
+        [rules.time_based_rule]
+        id = "time_based_rule"
+        name = "Time Based"
+        type = "time_based"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.time_based_rule.options]
         allow_during_window = true
         timezone = "UTC"
         # No time restrictions - always in window
@@ -1577,23 +1691,31 @@ async fn test_policy_rate_limit_config_loads() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["allow_all_rule", "rate_limit_rule"]
         
         # Allow all first
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        name = "Allow All"
+        type = "allow_all"
         weight = 100
         enabled = true
         
         # Then apply rate limit
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "rate_limit"
+        [rules.rate_limit_rule]
+        id = "rate_limit_rule"
+        name = "Rate Limit"
+        type = "rate_limit"
         weight = 50
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.rate_limit_rule.options]
         max_requests = 2
         window_seconds = 60
 
@@ -1665,26 +1787,34 @@ async fn test_policy_multiple_rules_evaluation_order() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["path_rule", "method_rule"]
         
         # Higher weight - evaluated first
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "path"
+        [rules.path_rule]
+        id = "path_rule"
+        name = "Path Allow"
+        type = "path"
         weight = 100
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.path_rule.options]
         paths = ["/test/public/{*path}"]
         mode = "allow"
         
         # Lower weight - evaluated second
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "method"
+        [rules.method_rule]
+        id = "method_rule"
+        name = "Method Allow"
+        type = "method"
         weight = 50
         enabled = true
-        [middleware.policy.options.policies.rules.options]
+        [rules.method_rule.options]
         methods = ["GET"]
         mode = "allow"
 
@@ -1752,20 +1882,28 @@ async fn test_policy_disabled_rule_ignored() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["deny_all_rule", "allow_all_rule"]
         
         # Disabled deny rule - should be ignored
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "deny_all"
+        [rules.deny_all_rule]
+        id = "deny_all_rule"
+        name = "Deny All"
+        type = "deny_all"
         weight = 100
         enabled = false
         
         # Enabled allow rule
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        name = "Allow All"
+        type = "allow_all"
         weight = 50
         enabled = true
 
@@ -1833,20 +1971,28 @@ async fn test_policy_allow_plus_deny_equals_deny() {
 
         [middleware.policy]
         type = "policies"
+        [middleware.policy.options]
+        policies = ["test_policy"]
         
-        [[middleware.policy.options.policies]]
+        [policies.test_policy]
         id = "test_policy"
+        name = "Test Policy"
         enabled = true
+        rules = ["allow_all_rule", "deny_all_rule"]
         
         # Allow rule
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "allow_all"
+        [rules.allow_all_rule]
+        id = "allow_all_rule"
+        name = "Allow All"
+        type = "allow_all"
         weight = 100
         enabled = true
         
         # Deny rule - takes precedence
-        [[middleware.policy.options.policies.rules]]
-        rule_type = "deny_all"
+        [rules.deny_all_rule]
+        id = "deny_all_rule"
+        name = "Deny All"
+        type = "deny_all"
         weight = 50
         enabled = true
 

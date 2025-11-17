@@ -33,13 +33,23 @@ pub fn resolve_middleware_type(
     options: &HashMap<String, Value>,
     transforms_path: Option<&str>,
 ) -> Result<Box<dyn Middleware>, String> {
+    resolve_middleware_type_with_config(middleware_type, options, transforms_path, None)
+}
+
+/// Resolves a middleware type with full Config context (for policies middleware)
+pub fn resolve_middleware_type_with_config(
+    middleware_type: &str,
+    options: &HashMap<String, Value>,
+    transforms_path: Option<&str>,
+    config: Option<&crate::config::config::Config>,
+) -> Result<Box<dyn Middleware>, String> {
     // Check the registry first
     if let Some(registry) = MIDDLEWARE_REGISTRY.get() {
         if let Some(module) = registry.get(middleware_type) {
             match module.as_str() {
                 "" => {
                     // Default built-in modules
-                    create_builtin_middleware_type(middleware_type, options, transforms_path)
+                    create_builtin_middleware_type_with_config(middleware_type, options, transforms_path, config)
                 }
                 module_path => {
                     // Custom module loading would go here
@@ -51,22 +61,23 @@ pub fn resolve_middleware_type(
             }
         } else {
             // Registry is present but does not include this middleware. Attempt built-in fallback.
-            match create_builtin_middleware_type(middleware_type, options, transforms_path) {
+            match create_builtin_middleware_type_with_config(middleware_type, options, transforms_path, config) {
                 Ok(mw) => Ok(mw),
                 Err(_) => Err(format!("Unknown middleware type: {}", middleware_type)),
             }
         }
     } else {
         // Fallback to hardcoded types if registry isn't initialized
-        create_builtin_middleware_type(middleware_type, options, transforms_path)
+        create_builtin_middleware_type_with_config(middleware_type, options, transforms_path, config)
     }
 }
 
-/// Creates built-in middleware instances
-fn create_builtin_middleware_type(
+/// Creates built-in middleware instances with Config context
+fn create_builtin_middleware_type_with_config(
     middleware_type: &str,
     options: &HashMap<String, Value>,
     transforms_path: Option<&str>,
+    config: Option<&crate::config::config::Config>,
 ) -> Result<Box<dyn Middleware>, String> {
     use crate::models::middleware::types::auth::AuthSidecarMiddleware;
     use crate::models::middleware::types::connect::AuraboxConnectMiddleware;
@@ -119,7 +130,12 @@ fn create_builtin_middleware_type(
             Ok(Box::new(MetadataTransformMiddleware::new(config)?))
         }
         "policies" => {
-            let config = crate::models::middleware::types::policies::parse_config(options)?;
+            let cfg = config.ok_or("Policies middleware requires Config context")?;
+            let config = crate::models::middleware::types::policies::parse_config(
+                options,
+                &cfg.policies,
+                &cfg.rules,
+            )?;
             Ok(Box::new(
                 crate::models::middleware::types::policies::PoliciesMiddleware::new(config)?,
             ))
@@ -142,18 +158,23 @@ pub fn build_middleware_instances_for_pipeline(
 
     for name in names {
         if let Some(middleware_instance) = config.middleware.get(name) {
-            let middleware = middleware_instance
-                .resolve_middleware(transforms_path)
-                .map_err(|err| {
-                    format!("Failed to resolve middleware instance '{}': {}", name, err)
-                })?;
+            // Use new method that passes Config context for policies middleware
+            let middleware = resolve_middleware_type_with_config(
+                &middleware_instance.middleware_type,
+                &middleware_instance.options,
+                transforms_path,
+                Some(config),
+            )
+            .map_err(|err| {
+                format!("Failed to resolve middleware instance '{}': {}", name, err)
+            })?;
             instances.push(middleware);
         } else {
             // Fallback: if the name itself corresponds to a built-in middleware type,
             // allow referencing it directly without an instance block.
             // This supports conveniences like using "json_extractor" without an options table.
             let empty_opts: HashMap<String, Value> = HashMap::new();
-            match resolve_middleware_type(name, &empty_opts, transforms_path) {
+            match resolve_middleware_type_with_config(name, &empty_opts, transforms_path, Some(config)) {
                 Ok(mw) => instances.push(mw),
                 Err(_) => {
                     return Err(format!("Unknown middleware instance '{}'", name));

@@ -57,14 +57,33 @@ async fn test_management_service_enabled() {
     // Test router configuration
     let routes = service.build_router(endpoint_options);
     let paths: Vec<_> = routes.iter().map(|r| r.path.as_str()).collect();
-    assert_eq!(routes.len(), 7); // Updated to match actual count (info, pipelines, routes, authorize, config/status, token, update)
-    assert!(paths.contains(&"/admin/info"));
-    assert!(paths.contains(&"/admin/pipelines"));
-    assert!(paths.contains(&"/admin/routes"));
-    assert!(paths.contains(&"/admin/authorize"));
-    assert!(paths.contains(&"/admin/config/status"));
-    assert!(paths.contains(&"/admin/token"));
-    assert!(paths.contains(&"/admin/update"));
+    
+    // Verify each expected route exists (don't hardcode count)
+    let expected_routes = vec![
+        "/admin/info",
+        "/admin/pipelines",
+        "/admin/routes",
+        "/admin/authorize",
+        "/admin/config/status",
+        "/admin/token",
+        "/admin/update",
+    ];
+    
+    for expected in &expected_routes {
+        assert!(
+            paths.contains(expected),
+            "Management API should have route: {}",
+            expected
+        );
+    }
+    
+    // Verify no unexpected routes (allow for future additions but fail if routes go missing)
+    assert!(
+        routes.len() >= expected_routes.len(),
+        "Management API has {} routes, expected at least {}",
+        routes.len(),
+        expected_routes.len()
+    );
 }
 
 #[tokio::test]

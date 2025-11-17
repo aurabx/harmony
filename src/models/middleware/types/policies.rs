@@ -1365,7 +1365,11 @@ impl Middleware for PoliciesMiddleware {
 }
 
 /// Parse configuration from HashMap for middleware registry
-pub fn parse_config(options: &HashMap<String, Value>) -> Result<PoliciesConfig, String> {
+pub fn parse_config(
+    options: &HashMap<String, Value>,
+    all_policies: &std::collections::HashMap<String, crate::config::config::PolicyDefinition>,
+    all_rules: &std::collections::HashMap<String, crate::config::config::RuleDefinition>,
+) -> Result<PoliciesConfig, String> {
     let policies_array = options
         .get("policies")
         .and_then(|v| v.as_array())
@@ -1375,82 +1379,43 @@ pub fn parse_config(options: &HashMap<String, Value>) -> Result<PoliciesConfig, 
         return Err("Policies array cannot be empty".to_string());
     }
 
+    // v1.7.0: policies array contains string IDs only
     let mut policies = Vec::new();
 
-    for (idx, policy_value) in policies_array.iter().enumerate() {
-        let policy_obj = policy_value.as_object().ok_or_else(|| {
-            format!("Policy at index {} must be an object", idx)
-        })?;
-
-        let id = policy_obj.get("id").and_then(|v| v.as_str()).map(String::from);
-        let name = policy_obj.get("name").and_then(|v| v.as_str()).map(String::from);
-        let enabled = policy_obj
-            .get("enabled")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(true);
-
-        let rules_array = policy_obj
-            .get("rules")
-            .and_then(|v| v.as_array())
-            .ok_or_else(|| {
-                format!("Policy at index {} missing required 'rules' array", idx)
-            })?;
-
+    for policy_id_value in policies_array {
+        let policy_id = policy_id_value.as_str()
+            .ok_or("All entries in 'policies' must be string IDs")?;
+        
+        let pdef = all_policies.get(policy_id)
+            .ok_or_else(|| format!("Unknown policy id '{}'", policy_id))?;
+        
+        if !pdef.enabled {
+            continue;
+        }
+        
         let mut rules = Vec::new();
-
-        for (rule_idx, rule_value) in rules_array.iter().enumerate() {
-            let rule_obj = rule_value.as_object().ok_or_else(|| {
-                format!("Rule at index {} in policy {} must be an object", rule_idx, idx)
-            })?;
-
-            let rule_id = rule_obj.get("id").and_then(|v| v.as_str()).map(String::from);
-            let rule_name = rule_obj.get("name").and_then(|v| v.as_str()).map(String::from);
-            let rule_type = rule_obj
-                .get("rule_type")
-                .or_else(|| rule_obj.get("type"))  // Support both for compatibility
-                .and_then(|v| v.as_str())
-                .ok_or_else(|| {
-                    format!(
-                        "Rule at index {} in policy {} missing required 'rule_type' field",
-                        rule_idx, idx
-                    )
-                })?
-                .to_string();
-
-            let weight = rule_obj
-                .get("weight")
-                .and_then(|v| v.as_i64())
-                .unwrap_or(0);
-
-            let rule_enabled = rule_obj
-                .get("enabled")
-                .and_then(|v| v.as_bool())
-                .unwrap_or(true);
-
-            let options = rule_obj
-                .get("options")
-                .and_then(|v| v.as_object())
-                .map(|obj| {
-                    obj.iter()
-                        .map(|(k, v)| (k.clone(), v.clone()))
-                        .collect::<HashMap<String, Value>>()
-                })
-                .unwrap_or_default();
-
+        for rule_id in &pdef.rules {
+            let rdef = all_rules.get(rule_id)
+                .ok_or_else(|| format!("Unknown rule id '{}' referenced by policy '{}'", rule_id, pdef.id))?;
+            
+            if !rdef.enabled {
+                continue;
+            }
+            
             rules.push(Rule {
-                id: rule_id,
-                name: rule_name,
-                rule_type,
-                weight,
-                enabled: rule_enabled,
-                options,
+                id: Some(rdef.id.clone()),
+                name: rdef.name.clone(),
+                rule_type: rdef.rule_type.clone(),
+                weight: rdef.weight,
+                enabled: rdef.enabled,
+                options: rdef.options.clone(),
             });
         }
-
+        
         policies.push(Policy {
-            id,
-            name,
-            enabled,
+            id: Some(pdef.id.clone()),
+            name: pdef.name.clone(),
+            enabled: pdef.enabled,
             rules,
         });
     }
@@ -1677,31 +1642,41 @@ mod tests {
 
     #[test]
     fn test_parse_config_valid() {
+        // Create all_policies HashMap with v1.7.0 structure
+        let mut all_policies = HashMap::new();
+        all_policies.insert(
+            "policy1".to_string(),
+            crate::config::config::PolicyDefinition {
+                id: "policy1".to_string(),
+                name: Some("Test Policy".to_string()),
+                enabled: true,
+                rules: vec!["rule1".to_string()],
+            },
+        );
+
+        // Create all_rules HashMap with v1.7.0 structure
+        let mut all_rules = HashMap::new();
+        let mut rule1_options = HashMap::new();
+        rule1_options.insert("ip_addresses".to_string(), serde_json::json!(["192.168.1.0/24"]));
+        all_rules.insert(
+            "rule1".to_string(),
+            crate::config::config::RuleDefinition {
+                id: "rule1".to_string(),
+                name: Some("Allow Internal".to_string()),
+                rule_type: "ip_allow".to_string(),
+                weight: 100,
+                enabled: true,
+                options: rule1_options,
+            },
+        );
+
         let mut options = HashMap::new();
         options.insert(
             "policies".to_string(),
-            serde_json::json!([
-                {
-                    "id": "policy1",
-                    "name": "Test Policy",
-                    "enabled": true,
-                    "rules": [
-                        {
-                            "id": "rule1",
-                            "name": "Allow Internal",
-                            "type": "ip_allow",
-                            "weight": 100,
-                            "enabled": true,
-                            "options": {
-                                "ip_addresses": ["192.168.1.0/24"]
-                            }
-                        }
-                    ]
-                }
-            ]),
+            serde_json::json!(["policy1"]),
         );
 
-        let config = parse_config(&options).unwrap();
+        let config = parse_config(&options, &all_policies, &all_rules).unwrap();
         assert_eq!(config.policies.len(), 1);
         assert_eq!(config.policies[0].rules.len(), 1);
         assert_eq!(config.policies[0].rules[0].rule_type, "ip_allow");
@@ -1709,17 +1684,21 @@ mod tests {
 
     #[test]
     fn test_parse_config_missing_policies() {
+        let all_policies = HashMap::new();
+        let all_rules = HashMap::new();
         let options = HashMap::new();
-        let result = parse_config(&options);
+        let result = parse_config(&options, &all_policies, &all_rules);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing required 'policies'"));
     }
 
     #[test]
     fn test_parse_config_empty_policies() {
+        let all_policies = HashMap::new();
+        let all_rules = HashMap::new();
         let mut options = HashMap::new();
         options.insert("policies".to_string(), serde_json::json!([]));
-        let result = parse_config(&options);
+        let result = parse_config(&options, &all_policies, &all_rules);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("cannot be empty"));
     }
