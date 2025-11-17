@@ -133,8 +133,8 @@ Each rule must be an object with either:
 
 **First-match-wins**: Rules are processed in order from first to last. The first matching rule determines the outcome:
 - **Allow rule matches**: Request continues to backend
-- **Deny rule matches**: Returns 404, sets `skip_backends=true`
-- **No rule matches**: Implicit deny (returns 404)
+- **Deny rule matches**: Middleware returns a `PathDenied` error; the HTTP adapter maps this to HTTP 404 Not Found and stops processing
+- **No rule matches**: Implicit deny (middleware returns `PathDenied`, which the HTTP adapter maps to 404)
 
 ### Pattern Syntax
 
@@ -190,7 +190,7 @@ rules = [
 - Only applies to incoming requests (left side of middleware chain)
 - Path matching uses the subpath after the endpoint's `path_prefix`
 - Trailing slashes are normalized (e.g., "/ImagingStudy/" matches "/ImagingStudy")
-- On denial: returns HTTP 404 status with empty body and sets `skip_backends=true` to avoid backend calls
+- On denial: the middleware returns `PathDenied`; the HTTP adapter maps this to HTTP 404 with an empty body and does not invoke backends
 - Empty path becomes "/" (root)
 
 ### Troubleshooting

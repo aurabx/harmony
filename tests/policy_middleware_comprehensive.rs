@@ -839,7 +839,8 @@ async fn test_policy_method_deny_post() {
         .await
         .unwrap();
 
-    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    // Method rule violations should surface as HTTP 405 Method Not Allowed via MethodDenied
+    assert_eq!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
 }
 
 // ============================================

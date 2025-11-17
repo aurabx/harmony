@@ -267,7 +267,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_non_matching_returns_404_and_skips_backends() {
+    async fn test_non_matching_returns_path_denied_error() {
         let config = PathFilterConfig {
             rules: vec![
                 PathFilterRule::Allow("/ImagingStudy".to_string()),
@@ -277,23 +277,15 @@ mod tests {
         let middleware = PathFilterMiddleware::new(config).unwrap();
 
         let envelope = create_test_envelope("ImagingStudy/series");
-        let result = middleware.left(envelope).await.unwrap();
+        let result = middleware.left(envelope).await;
 
-        // Should set skip_backends
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
-
-        // Should set 404 response
-        let response = result
-            .normalized_data
-            .as_ref()
-            .unwrap()
-            .get("response")
-            .unwrap();
-        assert_eq!(response.get("status").unwrap().as_u64().unwrap(), 404);
-        assert_eq!(response.get("body").unwrap().as_str().unwrap(), "");
+        // Should return a PathDenied error for the normalized path
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let path_err = err
+            .downcast::<PathDenied>()
+            .expect("expected PathDenied error");
+        assert_eq!(path_err.0, "/ImagingStudy/series");
     }
 
     #[tokio::test]
@@ -425,22 +417,15 @@ mod tests {
         let middleware = PathFilterMiddleware::new(config).unwrap();
 
         let envelope = create_test_envelope("admin");
-        let result = middleware.left(envelope).await.unwrap();
+        let result = middleware.left(envelope).await;
 
-        // Should set skip_backends
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
-
-        // Should set 404 response
-        let response = result
-            .normalized_data
-            .as_ref()
-            .unwrap()
-            .get("response")
-            .unwrap();
-        assert_eq!(response.get("status").unwrap().as_u64().unwrap(), 404);
+        // Should return a PathDenied error for the normalized path
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let path_err = err
+            .downcast::<PathDenied>()
+            .expect("expected PathDenied error");
+        assert_eq!(path_err.0, "/admin");
     }
 
     #[tokio::test]
@@ -461,13 +446,15 @@ mod tests {
             .metadata
             .contains_key("skip_backends"));
 
-        // Second deny rule should match
+        // Second deny rule should match and return PathDenied
         let envelope = create_test_envelope("api/private/data");
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let path_err = err
+            .downcast::<PathDenied>()
+            .expect("expected PathDenied error");
+        assert_eq!(path_err.0, "/api/private/data");
     }
 
     #[tokio::test]
@@ -480,13 +467,15 @@ mod tests {
         };
         let middleware = PathFilterMiddleware::new(config).unwrap();
 
-        // First deny rule should match
+        // First deny rule should match and return PathDenied
         let envelope = create_test_envelope("admin/users");
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let path_err = err
+            .downcast::<PathDenied>()
+            .expect("expected PathDenied error");
+        assert_eq!(path_err.0, "/admin/users");
 
         // Second allow rule should match
         let envelope = create_test_envelope("api/data");
@@ -515,13 +504,15 @@ mod tests {
             .metadata
             .contains_key("skip_backends"));
 
-        // Unmatched path should be denied (implicit deny)
+        // Unmatched path should be denied (implicit deny via PathDenied)
         let envelope = create_test_envelope("api/private");
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let path_err = err
+            .downcast::<PathDenied>()
+            .expect("expected PathDenied error");
+        assert_eq!(path_err.0, "/api/private");
     }
 
     #[tokio::test]
@@ -550,13 +541,15 @@ mod tests {
             .metadata
             .contains_key("skip_backends"));
 
-        // Other paths should be denied by catch-all
+        // Other paths should be denied by catch-all via PathDenied
         let envelope = create_test_envelope("api/private");
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let path_err = err
+            .downcast::<PathDenied>()
+            .expect("expected PathDenied error");
+        assert_eq!(path_err.0, "/api/private");
     }
 
     #[tokio::test]
@@ -569,13 +562,15 @@ mod tests {
         };
         let middleware = PathFilterMiddleware::new(config).unwrap();
 
-        // Internal paths should be denied
+        // Internal paths should be denied via PathDenied
         let envelope = create_test_envelope("internal/admin");
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let path_err = err
+            .downcast::<PathDenied>()
+            .expect("expected PathDenied error");
+        assert_eq!(path_err.0, "/internal/admin");
 
         // Other paths should be allowed
         let envelope = create_test_envelope("api/data");
@@ -614,10 +609,12 @@ mod tests {
         let middleware = PathFilterMiddleware::new(config).unwrap();
 
         let envelope = create_test_envelope("admin/users");
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err());
+        let err = result.unwrap_err();
+        let path_err = err
+            .downcast::<PathDenied>()
+            .expect("expected PathDenied error");
+        assert_eq!(path_err.0, "/admin/users");
     }
 }

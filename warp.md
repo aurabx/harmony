@@ -278,8 +278,8 @@ rules = [
 - Rules are processed in order from first to last
 - First matching rule determines outcome (allow or deny)
 - Allow rule: request continues to backend
-- Deny rule: returns 404, sets skip_backends=true
-- No match: implicit deny (404)
+- Deny rule: middleware returns `PathDenied`; the HTTP adapter maps this to HTTP 404 and stops processing
+- No match: implicit deny (middleware returns `PathDenied`, mapped to 404)
 
 **Pattern Syntax:**
 - Exact paths: `/users`
