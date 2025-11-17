@@ -1,5 +1,44 @@
 # Changelog
 
+## [0.6.0] - 2025-11-17
+
+### Highlights
+- Binary name standardized to `harmony` for a consistent CLI and deployment experience
+- New policy-based middleware for fine-grained request handling and authorization
+- Additional data type handling in core pipeline processing (AURA-2195)
+- New smoketest example to validate end‑to‑end configuration quickly
+
+### Breaking Changes
+- Binary name is now `harmony` (previously some docs referred to `harmony-proxy`); update any custom scripts or automation accordingly
+
+### Added
+- Policy-based middleware with new policy types and examples
+- Additional content/data type support in the pipeline (AURA-2195)
+- New `smoketest` example configuration to exercise key paths
+- Internal crate versions bumped to 0.6.0 (`dimse`, `dicom_json_tool`, `harmony_transform`) for consistency with the main `harmony` crate
+
+### Changed
+- Standardized documentation examples to use the `harmony` binary name
+- Clarified install and Docker usage instructions around the `harmony` binary
+- Updated examples to reflect current policy and pipeline behavior
+- Renamed release build workflow for clearer CI semantics
+
+### Fixed
+- Hot reload now correctly watches and applies updates to pipelines
+- Fixed config watching failures for pipeline updates
+- Query/path parameter handling no longer strips parameters from paths
+- Hop-by-hop headers are no longer proxied to backends
+- Policy configuration and return types aligned with the new middleware
+- Minor path and build warnings, plus various test and example fixes
+
+### Documentation
+- Updated README and docs to reference `harmony` as the primary binary name
+- Added/expanded policy and installation documentation
+
+### Dependencies
+- Internal crates updated to version 0.6.0 (no external dependency version changes)
+- runbeam-sdk dependency refreshed to the latest compatible 0.6.x
+
 ## [0.5.0] - 2025-11-10
 
 ### Highlights
@@ -216,6 +255,7 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.6.0]: https://github.com/aurabx/harmony/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/aurabx/harmony/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/aurabx/harmony/compare/0.3.4...0.4.0
 [0.3.2]: https://github.com/aurabx/harmony/compare/0.3.1...0.3.2

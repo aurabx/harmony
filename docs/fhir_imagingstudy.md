@@ -254,10 +254,10 @@ middleware = [
 
 ### Manual Testing
 
-Start harmony-proxy with your configuration:
+Start harmony with your configuration:
 
 ```bash
-./harmony-proxy --config examples/config/pipelines/fhir_imagingstudy.toml
+./harmony --config examples/config/pipelines/fhir_imagingstudy.toml
 ```
 
 Test the endpoint:

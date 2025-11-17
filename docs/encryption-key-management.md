@@ -12,7 +12,7 @@ Machine tokens issued by Runbeam Cloud are sensitive credentials that grant auto
 
 1. **runbeam-sdk** - Core library with encrypted storage backends
 2. **runbeam-cli** - User-facing CLI that can manage keys for Harmony instances
-3. **harmony-proxy** - Gateway that uses SDK storage for machine tokens
+3. **harmony** - Gateway that uses SDK storage for machine tokens
 
 ### Storage Backends (runbeam-sdk)
 
@@ -99,7 +99,7 @@ ENV RUNBEAM_ENCRYPTION_KEY=QUdFLVNFQ1JFVC1LRVktMTIzNDU2Nzg5MA==
 # Or via docker-compose.yml
 services:
   harmony:
-    image: harmony-proxy:latest
+    image: harmony:latest
     environment:
       - RUNBEAM_ENCRYPTION_KEY=${RUNBEAM_ENCRYPTION_KEY}
 ```
@@ -118,7 +118,7 @@ data:
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: harmony-proxy
+  name: harmony
 spec:
   template:
     spec:
@@ -188,7 +188,7 @@ export RUNBEAM_MACHINE_TOKEN='{"machine_token":"mt_abc123...","expires_at":"2025
 # Optionally set encryption key (for persistence to storage)
 export RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-...
 
-./harmony-proxy --config config.toml
+./harmony --config config.toml
 ```
 
 **Kubernetes Example:**
@@ -368,7 +368,7 @@ age-keygen -o test-key.age
 # Extract and base64 encode the secret key line
 ENCRYPTION_KEY=$(grep AGE-SECRET-KEY test-key.age)
 export RUNBEAM_ENCRYPTION_KEY="$ENCRYPTION_KEY"
-./harmony-proxy --config config.toml
+./harmony --config config.toml
 
 # Verify token encryption
 ls -la ~/.runbeam/harmony/auth.json

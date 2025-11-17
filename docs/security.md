@@ -266,7 +266,7 @@ Reference in `docker-compose.yml`:
 ```yaml
 services:
   harmony:
-    image: harmony-proxy:latest
+    image: harmony:latest
     env_file:
       - .env
     volumes:
@@ -289,7 +289,7 @@ docker run -d \
   -e RUST_LOG=harmony=info \
   -v $(pwd)/config:/etc/harmony:ro \
   -p 8080:8080 -p 9090:9090 \
-  harmony-proxy:latest
+  harmony:latest
 ```
 
 ### Kubernetes with Secrets
@@ -318,7 +318,7 @@ spec:
     spec:
       containers:
       - name: harmony
-        image: harmony-proxy:latest
+        image: harmony:latest
         env:
         - name: RUNBEAM_ENCRYPTION_KEY
           valueFrom:
