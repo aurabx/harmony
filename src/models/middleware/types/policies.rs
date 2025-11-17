@@ -1,4 +1,7 @@
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
+use crate::models::middleware::{
+    AccessDenied, ContentTypeDenied, MethodDenied, RateLimitExceeded,
+};
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use async_trait::async_trait;
@@ -921,7 +924,12 @@ impl PoliciesMiddleware {
                 _ => RuleEvaluation::NoMatch,
             }
         } else {
-            RuleEvaluation::NoMatch
+            // If mode is "allow" and method doesn't match, deny the request
+            // If mode is "deny" and method doesn't match, don't evaluate (NoMatch)
+            match mode {
+                "allow" => RuleEvaluation::Deny,
+                _ => RuleEvaluation::NoMatch,
+            }
         }
     }
 
@@ -1117,7 +1125,12 @@ impl PoliciesMiddleware {
                 _ => RuleEvaluation::NoMatch,
             }
         } else {
-            RuleEvaluation::NoMatch
+            // If mode is "allow" and content-type doesn't match, deny the request
+            // If mode is "deny" and content-type doesn't match, don't evaluate (NoMatch)
+            match mode {
+                "allow" => RuleEvaluation::Deny,
+                _ => RuleEvaluation::NoMatch,
+            }
         }
     }
 
@@ -1251,7 +1264,12 @@ impl PoliciesMiddleware {
                 _ => RuleEvaluation::NoMatch,
             }
         } else {
-            RuleEvaluation::NoMatch
+            // If mode is "allow" and parameters don't match, deny the request
+            // If mode is "deny" and parameters don't match, don't evaluate (NoMatch)
+            match mode {
+                "allow" => RuleEvaluation::Deny,
+                _ => RuleEvaluation::NoMatch,
+            }
         }
     }
 }
@@ -1260,12 +1278,10 @@ impl PoliciesMiddleware {
 impl Middleware for PoliciesMiddleware {
     async fn left(
         &self,
-        mut envelope: RequestEnvelope<serde_json::Value>,
+        envelope: RequestEnvelope<serde_json::Value>,
     ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         let mut has_allow = false;
-        let mut has_deny = false;
-        let mut deny_status = 403; // Default deny status
-        let mut deny_reason = "Access denied by policy";
+        let mut deny_rule: Option<&Rule> = None;
 
         // Evaluate all enabled policies and rules
         for (policy_idx, policy) in self.policies.iter().enumerate() {
@@ -1300,17 +1316,13 @@ impl Middleware for PoliciesMiddleware {
                         );
                     }
                     RuleEvaluation::Deny => {
-                        has_deny = true;
-                        // Set appropriate status code based on rule type
-                        if rule.rule_type == "rate_limit" {
-                            deny_status = 429;
-                            deny_reason = "Rate limit exceeded";
-                        }
+                        deny_rule = Some(rule);
                         tracing::warn!(
-                            "Rule {:?} matched - DENY (status: {})",
+                            "Rule {:?} (type: {}) matched - DENY",
                             rule.name.as_deref().unwrap_or("unnamed"),
-                            deny_status
+                            rule.rule_type
                         );
+                        // Don't break - continue evaluating to capture all allows/denies
                     }
                     RuleEvaluation::NoMatch => {
                         tracing::debug!(
@@ -1323,35 +1335,35 @@ impl Middleware for PoliciesMiddleware {
         }
 
         // Apply evaluation logic:
-        // Request is ACCEPTED only if: has_allow = true AND has_deny = false
-        if has_deny {
-            tracing::warn!("Request DENIED - at least one deny rule matched");
-            envelope
-                .request_details
-                .metadata
-                .insert("skip_backends".to_string(), "true".to_string());
-            envelope.normalized_data = Some(serde_json::json!({
-                "response": {
-                    "status": deny_status,
-                    "body": deny_reason
-                }
-            }));
+        // Request is ACCEPTED only if: has_allow = true AND deny_rule = None
+        if let Some(rule) = deny_rule {
+            let rule_name = rule.name.as_deref().unwrap_or("unnamed");
+            tracing::warn!("Request DENIED by rule '{}' (type: {})", rule_name, rule.rule_type);
+
+            // Return appropriate error based on rule type
+            return Err(match rule.rule_type.as_str() {
+                "rate_limit" => Box::new(RateLimitExceeded(rule_name.to_string())) as Error,
+                "method" => Box::new(MethodDenied(format!(
+                    "Method not allowed by rule '{}'",
+                    rule_name
+                ))) as Error,
+                "content_type" => Box::new(ContentTypeDenied(format!(
+                    "Content type not allowed by rule '{}'",
+                    rule_name
+                ))) as Error,
+                _ => Box::new(AccessDenied(format!(
+                    "Access denied by rule '{}'",
+                    rule_name
+                ))) as Error,
+            });
         } else if !has_allow {
             tracing::warn!("Request DENIED - no allow rule matched (implicit deny)");
-            envelope
-                .request_details
-                .metadata
-                .insert("skip_backends".to_string(), "true".to_string());
-            envelope.normalized_data = Some(serde_json::json!({
-                "response": {
-                    "status": 403,
-                    "body": "Access denied by policy"
-                }
-            }));
-        } else {
-            tracing::debug!("Request ALLOWED - has allow rule(s) and no deny rules");
+            return Err(Box::new(AccessDenied(
+                "No policy rule allows this request".to_string(),
+            )) as Error);
         }
 
+        tracing::debug!("Request ALLOWED - has allow rule(s) and no deny rules");
         Ok(envelope)
     }
 
@@ -1519,22 +1531,10 @@ mod tests {
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
         let envelope = create_test_envelope("192.168.1.100"); // Matches both allow and deny
-        let result = middleware.left(envelope).await.unwrap();
+        let result = middleware.left(envelope).await;
 
-        // Should set skip_backends (request denied)
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
-
-        // Should set 403 response
-        let response = result
-            .normalized_data
-            .as_ref()
-            .unwrap()
-            .get("response")
-            .unwrap();
-        assert_eq!(response.get("status").unwrap().as_u64().unwrap(), 403);
+        // Should return Err (request denied)
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -1564,22 +1564,10 @@ mod tests {
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
         let envelope = create_test_envelope("10.0.0.1"); // Does not match allow rule
-        let result = middleware.left(envelope).await.unwrap();
+        let result = middleware.left(envelope).await;
 
-        // Should set skip_backends (implicit deny)
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
-
-        // Should set 403 response
-        let response = result
-            .normalized_data
-            .as_ref()
-            .unwrap()
-            .get("response")
-            .unwrap();
-        assert_eq!(response.get("status").unwrap().as_u64().unwrap(), 403);
+        // Should return Err (implicit deny)
+        assert!(result.is_err());
     }
 
     #[tokio::test]
@@ -1631,13 +1619,10 @@ mod tests {
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
         let envelope = create_test_envelope("any.ip.address");
-        let result = middleware.left(envelope).await.unwrap();
+        let result = middleware.left(envelope).await;
 
-        // Should set skip_backends (request denied)
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        // Should return Err (request denied)
+        assert!(result.is_err());
     }
 
     #[test]
@@ -1866,11 +1851,8 @@ mod tests {
 
         // 3rd request from IP1 should be denied
         let envelope = create_test_envelope("10.0.0.10");
-        let result = middleware.left(envelope).await.unwrap();
-        assert_eq!(
-            result.request_details.metadata.get("skip_backends"),
-            Some(&"true".to_string())
-        );
+        let result = middleware.left(envelope).await;
+        assert!(result.is_err(), "3rd request should be denied");
     }
 
     #[tokio::test]

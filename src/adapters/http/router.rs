@@ -1,6 +1,8 @@
 use super::HttpAdapter;
 use crate::config::config::Config;
-use crate::models::middleware::AuthFailure;
+use crate::models::middleware::{
+    AccessDenied, AuthFailure, ContentTypeDenied, MethodDenied, PathDenied, RateLimitExceeded,
+};
 use crate::pipeline::{PipelineError, PipelineExecutor};
 use axum::body::Body;
 use axum::extract::Request;
@@ -240,9 +242,19 @@ async fn handle_request(
 fn map_pipeline_error_to_status(err: &PipelineError) -> StatusCode {
     match err {
         PipelineError::MiddlewareError(middleware_err) => {
-            // Check if it's an AuthFailure
-            if let Some(_auth_failure) = middleware_err.downcast_ref::<AuthFailure>() {
+            // Check for specific middleware error types and map to appropriate status codes
+            if middleware_err.downcast_ref::<AuthFailure>().is_some() {
                 StatusCode::UNAUTHORIZED
+            } else if middleware_err.downcast_ref::<PathDenied>().is_some() {
+                StatusCode::NOT_FOUND
+            } else if middleware_err.downcast_ref::<MethodDenied>().is_some() {
+                StatusCode::METHOD_NOT_ALLOWED
+            } else if middleware_err.downcast_ref::<ContentTypeDenied>().is_some() {
+                StatusCode::UNSUPPORTED_MEDIA_TYPE
+            } else if middleware_err.downcast_ref::<RateLimitExceeded>().is_some() {
+                StatusCode::TOO_MANY_REQUESTS
+            } else if middleware_err.downcast_ref::<AccessDenied>().is_some() {
+                StatusCode::FORBIDDEN
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             }

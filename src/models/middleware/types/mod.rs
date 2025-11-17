@@ -1,6 +1,7 @@
 pub mod auth;
 pub mod auth_error;
 pub mod connect;
+pub mod denial_errors;
 pub mod dicomweb_bridge;
 pub mod jmix_builder;
 pub mod jmix_index;

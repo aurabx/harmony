@@ -1,4 +1,5 @@
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
+use crate::models::middleware::PathDenied;
 use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use async_trait::async_trait;
@@ -82,7 +83,7 @@ impl PathFilterMiddleware {
 impl Middleware for PathFilterMiddleware {
     async fn left(
         &self,
-        mut envelope: RequestEnvelope<serde_json::Value>,
+        envelope: RequestEnvelope<serde_json::Value>,
     ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         // Get the subpath from request metadata
         let subpath = envelope
@@ -128,18 +129,7 @@ impl Middleware for PathFilterMiddleware {
                             path_to_match,
                             rule.pattern()
                         );
-                        // Set skip_backends flag and 404 response
-                        envelope
-                            .request_details
-                            .metadata
-                            .insert("skip_backends".to_string(), "true".to_string());
-                        envelope.normalized_data = Some(serde_json::json!({
-                            "response": {
-                                "status": 404,
-                                "body": ""
-                            }
-                        }));
-                        return Ok(envelope);
+                        return Err(Box::new(PathDenied(path_to_match)) as Error);
                     }
                 }
             }
@@ -151,19 +141,7 @@ impl Middleware for PathFilterMiddleware {
             path_to_match
         );
 
-        // Set skip_backends flag and 404 response
-        envelope
-            .request_details
-            .metadata
-            .insert("skip_backends".to_string(), "true".to_string());
-        envelope.normalized_data = Some(serde_json::json!({
-            "response": {
-                "status": 404,
-                "body": ""
-            }
-        }));
-
-        Ok(envelope)
+        Err(Box::new(PathDenied(path_to_match)) as Error)
     }
 
     async fn right(
