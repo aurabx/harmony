@@ -22,9 +22,9 @@ jobs:
       matrix:
         include:
           # Linux (most common distros and containers)
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu        # Ubuntu, Debian, Fedora, RHEL, etc.
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: aarch64-unknown-linux-gnu       # ARM64 Ubuntu/Debian servers
 
           # macOS (Intel + Apple Silicon)
