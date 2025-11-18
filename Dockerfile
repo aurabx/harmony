@@ -2,7 +2,7 @@
 FROM debian:bookworm-slim
 
 WORKDIR /app
-RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates && rm -rf /var/lib/apt/lists/*
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates libdbus-1-3 && rm -rf /var/lib/apt/lists/*
 
 # Create required directories for Harmony operation
 # Note: RUNBEAM_ENCRYPTION_KEY can be provided via environment variable
