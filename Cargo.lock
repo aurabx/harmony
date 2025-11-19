@@ -1800,6 +1800,7 @@ dependencies = [
  "dicom-pixeldata",
  "dicom_json_tool",
  "dimse",
+ "dirs",
  "encoding_rs",
  "fs_extra",
  "futures-util",
