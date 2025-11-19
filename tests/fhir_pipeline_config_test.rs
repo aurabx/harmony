@@ -178,19 +178,20 @@ fn test_no_hardcoded_patient_id() {
     );
 
     // Parse and verify it uses context.target_details correctly
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .expect("Transform should be valid JSON");
-    
+    let json: serde_json::Value =
+        serde_json::from_str(&content).expect("Transform should be valid JSON");
+
     // Find the shift operation
-    let shift_op = json.as_array()
+    let shift_op = json
+        .as_array()
         .and_then(|arr| arr.iter().find(|op| op["operation"] == "shift"))
         .expect("Transform should contain a shift operation");
-    
+
     // Verify it accesses context.target_details.metadata for PatientID
     let patient_id_path = shift_op
         .pointer("/spec/context/target_details/metadata/PatientID")
         .expect("Transform should map context.target_details.metadata.PatientID");
-    
+
     assert_eq!(
         patient_id_path.as_str(),
         Some("data.dimse_identifier.00100020.Value[0]"),
@@ -205,25 +206,29 @@ fn test_jmix_url_pattern() {
     let content =
         std::fs::read_to_string(&transform_path).expect("Should be able to read transform file");
 
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .expect("Transform should be valid JSON");
-    
+    let json: serde_json::Value =
+        serde_json::from_str(&content).expect("Transform should be valid JSON");
+
     // Find the modify operation
-    let modify_op = json.as_array()
-        .and_then(|arr| arr.iter().find(|op| op["operation"] == "modify-overwrite-beta"))
+    let modify_op = json
+        .as_array()
+        .and_then(|arr| {
+            arr.iter()
+                .find(|op| op["operation"] == "modify-overwrite-beta")
+        })
         .expect("Transform should contain a modify-overwrite-beta operation");
-    
+
     // Verify the concat expression builds the correct URL pattern
     let jmix_expr = modify_op
         .pointer("/spec/data/matches/*/_jmix_url")
         .and_then(|v| v.as_str())
         .expect("Transform should have _jmix_url expression");
-    
+
     assert!(
         jmix_expr.contains("concat") && jmix_expr.contains("/api/jmix?studyInstanceUid="),
         "Transform should use concat to build JMIX URL with correct base path"
     );
-    
+
     assert!(
         jmix_expr.contains("@(1,0020000D.Value.0)"),
         "Transform should reference StudyInstanceUID from DICOM tag 0020000D"
@@ -237,52 +242,64 @@ fn test_dicom_to_fhir_includes_endpoints() {
     let content =
         std::fs::read_to_string(&transform_path).expect("Should be able to read transform file");
 
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .expect("Transform should be valid JSON");
-    
+    let json: serde_json::Value =
+        serde_json::from_str(&content).expect("Transform should be valid JSON");
+
     // Find the default operation that sets up the FHIR structure
-    let default_op = json.as_array()
+    let default_op = json
+        .as_array()
         .and_then(|arr| arr.iter().find(|op| op["operation"] == "default"))
         .expect("Transform should contain a default operation");
-    
+
     // Verify Bundle structure
     assert_eq!(
-        default_op.pointer("/spec/data/resourceType").and_then(|v| v.as_str()),
+        default_op
+            .pointer("/spec/data/resourceType")
+            .and_then(|v| v.as_str()),
         Some("Bundle"),
         "Transform should create FHIR Bundle"
     );
-    
+
     // Verify ImagingStudy structure
     assert_eq!(
-        default_op.pointer("/spec/data/entry/0/resource/resourceType").and_then(|v| v.as_str()),
+        default_op
+            .pointer("/spec/data/entry/0/resource/resourceType")
+            .and_then(|v| v.as_str()),
         Some("ImagingStudy"),
         "Transform should create ImagingStudy resources"
     );
-    
+
     // Verify endpoint array exists and has proper structure
-    let endpoint_array = default_op.pointer("/spec/data/entry/0/resource/endpoint")
+    let endpoint_array = default_op
+        .pointer("/spec/data/entry/0/resource/endpoint")
         .and_then(|v| v.as_array())
         .expect("Transform should include endpoint array in ImagingStudy");
-    
-    assert!(!endpoint_array.is_empty(), "Endpoint array should not be empty");
-    
+
+    assert!(
+        !endpoint_array.is_empty(),
+        "Endpoint array should not be empty"
+    );
+
     // Verify endpoint has correct resourceType
     assert_eq!(
-        endpoint_array[0].pointer("/resourceType").and_then(|v| v.as_str()),
+        endpoint_array[0]
+            .pointer("/resourceType")
+            .and_then(|v| v.as_str()),
         Some("Endpoint"),
         "Endpoint should have resourceType of Endpoint"
     );
-    
+
     // Verify shift operation maps _jmix_url to endpoint address
-    let shift_op = json.as_array()
+    let shift_op = json
+        .as_array()
         .and_then(|arr| arr.iter().find(|op| op["operation"] == "shift"))
         .expect("Transform should contain a shift operation");
-    
+
     let jmix_mapping = shift_op
         .pointer("/spec/data/matches/*/_jmix_url")
         .and_then(|v| v.as_str())
         .expect("Transform should map _jmix_url");
-    
+
     assert!(
         jmix_mapping.contains("endpoint") && jmix_mapping.contains("address"),
         "Transform should map _jmix_url to endpoint address"
@@ -340,31 +357,42 @@ fn test_query_params_mapped_to_dicom_tags() {
     let content =
         std::fs::read_to_string(&transform_path).expect("Should be able to read transform file");
 
-    let json: serde_json::Value = serde_json::from_str(&content)
-        .expect("Transform should be valid JSON");
-    
+    let json: serde_json::Value =
+        serde_json::from_str(&content).expect("Transform should be valid JSON");
+
     // Find the shift operation
-    let shift_op = json.as_array()
+    let shift_op = json
+        .as_array()
         .and_then(|arr| arr.iter().find(|op| op["operation"] == "shift"))
         .expect("Transform should contain a shift operation");
-    
+
     let expected_mappings = vec![
         ("patient", "PatientID", "/spec/query_params/patient/0"),
-        ("identifier", "StudyInstanceUID", "/spec/query_params/identifier/0"),
+        (
+            "identifier",
+            "StudyInstanceUID",
+            "/spec/query_params/identifier/0",
+        ),
         ("modality", "Modality", "/spec/query_params/modality/0"),
         ("studyDate", "StudyDate", "/spec/query_params/studyDate/0"),
-        ("accessionNumber", "AccessionNumber", "/spec/query_params/accessionNumber/0"),
+        (
+            "accessionNumber",
+            "AccessionNumber",
+            "/spec/query_params/accessionNumber/0",
+        ),
     ];
 
     for (query_param, metadata_field, pointer_path) in expected_mappings {
         let mapped_value = shift_op
             .pointer(pointer_path)
             .and_then(|v| v.as_str())
-            .unwrap_or_else(|| panic!(
-                "Transform should map query_params.{} to metadata field",
-                query_param
-            ));
-        
+            .unwrap_or_else(|| {
+                panic!(
+                    "Transform should map query_params.{} to metadata field",
+                    query_param
+                )
+            });
+
         assert_eq!(
             mapped_value,
             format!("metadata.{}", metadata_field),

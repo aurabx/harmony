@@ -20,7 +20,11 @@ pub struct ConfigWatcher {
 }
 
 impl ConfigWatcher {
-    pub fn new(config_path: String, pipelines_path: Option<String>, registry: Arc<AdapterRegistry>) -> Self {
+    pub fn new(
+        config_path: String,
+        pipelines_path: Option<String>,
+        registry: Arc<AdapterRegistry>,
+    ) -> Self {
         Self {
             config_path,
             pipelines_path,

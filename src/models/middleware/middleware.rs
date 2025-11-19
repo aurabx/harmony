@@ -49,7 +49,12 @@ pub fn resolve_middleware_type_with_config(
             match module.as_str() {
                 "" => {
                     // Default built-in modules
-                    create_builtin_middleware_type_with_config(middleware_type, options, transforms_path, config)
+                    create_builtin_middleware_type_with_config(
+                        middleware_type,
+                        options,
+                        transforms_path,
+                        config,
+                    )
                 }
                 module_path => {
                     // Custom module loading would go here
@@ -61,14 +66,24 @@ pub fn resolve_middleware_type_with_config(
             }
         } else {
             // Registry is present but does not include this middleware. Attempt built-in fallback.
-            match create_builtin_middleware_type_with_config(middleware_type, options, transforms_path, config) {
+            match create_builtin_middleware_type_with_config(
+                middleware_type,
+                options,
+                transforms_path,
+                config,
+            ) {
                 Ok(mw) => Ok(mw),
                 Err(_) => Err(format!("Unknown middleware type: {}", middleware_type)),
             }
         }
     } else {
         // Fallback to hardcoded types if registry isn't initialized
-        create_builtin_middleware_type_with_config(middleware_type, options, transforms_path, config)
+        create_builtin_middleware_type_with_config(
+            middleware_type,
+            options,
+            transforms_path,
+            config,
+        )
     }
 }
 
@@ -165,16 +180,19 @@ pub fn build_middleware_instances_for_pipeline(
                 transforms_path,
                 Some(config),
             )
-            .map_err(|err| {
-                format!("Failed to resolve middleware instance '{}': {}", name, err)
-            })?;
+            .map_err(|err| format!("Failed to resolve middleware instance '{}': {}", name, err))?;
             instances.push(middleware);
         } else {
             // Fallback: if the name itself corresponds to a built-in middleware type,
             // allow referencing it directly without an instance block.
             // This supports conveniences like using "json_extractor" without an options table.
             let empty_opts: HashMap<String, Value> = HashMap::new();
-            match resolve_middleware_type_with_config(name, &empty_opts, transforms_path, Some(config)) {
+            match resolve_middleware_type_with_config(
+                name,
+                &empty_opts,
+                transforms_path,
+                Some(config),
+            ) {
                 Ok(mw) => instances.push(mw),
                 Err(_) => {
                     return Err(format!("Unknown middleware instance '{}'", name));

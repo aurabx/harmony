@@ -23,7 +23,7 @@ fn get_config_path(proxy_id: &str) -> Option<PathBuf> {
 /// Returns None if file doesn't exist or can't be read/parsed
 pub fn load_config(proxy_id: &str) -> Option<ProxyConfig> {
     let config_path = get_config_path(proxy_id)?;
-    
+
     let content = std::fs::read_to_string(&config_path).ok()?;
     serde_json::from_str(&content).ok()
 }
@@ -32,22 +32,22 @@ pub fn load_config(proxy_id: &str) -> Option<ProxyConfig> {
 ///
 /// Creates the directory structure if it doesn't exist
 pub fn save_config(proxy_id: &str, config: &ProxyConfig) -> Result<(), String> {
-    let proxy_dir = get_proxy_dir(proxy_id)
-        .ok_or_else(|| "Failed to determine home directory".to_string())?;
-    
+    let proxy_dir =
+        get_proxy_dir(proxy_id).ok_or_else(|| "Failed to determine home directory".to_string())?;
+
     let config_path = proxy_dir.join("config.json");
-    
+
     // Create directory if it doesn't exist
     std::fs::create_dir_all(&proxy_dir)
         .map_err(|e| format!("Failed to create proxy directory: {}", e))?;
-    
+
     // Serialize and write config
     let json = serde_json::to_string_pretty(config)
         .map_err(|e| format!("Failed to serialize config: {}", e))?;
-    
+
     std::fs::write(&config_path, json)
         .map_err(|e| format!("Failed to write config file: {}", e))?;
-    
+
     tracing::info!("Saved proxy config to: {:?}", config_path);
     Ok(())
 }

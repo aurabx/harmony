@@ -100,11 +100,11 @@ async fn test_json_content_type() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Echo backend returns normalized_data flattened at top level
     assert_eq!(json["name"], "Alice");
     assert_eq!(json["age"], 30);
-    
+
     // Verify metadata fields from echo backend
     assert_eq!(json["path"], "test");
     assert_eq!(json["full_path"], "/content/test");
@@ -136,10 +136,10 @@ async fn test_xml_content_type() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Echo backend returns normalized_data flattened at top level
     assert!(json["person"].is_object());
-    
+
     let person = &json["person"];
     assert_eq!(person["name"], "Bob");
     assert_eq!(person["age"], "25");
@@ -172,7 +172,7 @@ async fn test_xml_with_attributes() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     let person = &json["person"];
     assert_eq!(person["@id"], "123");
     assert_eq!(person["@type"], "customer");
@@ -205,16 +205,16 @@ async fn test_csv_content_type() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Echo backend returns normalized_data flattened at top level
     assert!(json["rows"].is_array());
     let rows = json["rows"].as_array().unwrap();
     assert_eq!(rows.len(), 3);
-    
+
     assert_eq!(rows[0]["name"], "Alice");
     assert_eq!(rows[0]["age"], "30");
     assert_eq!(rows[0]["city"], "NYC");
-    
+
     assert_eq!(rows[1]["name"], "Bob");
     assert_eq!(rows[2]["name"], "Charlie");
 }
@@ -246,9 +246,9 @@ async fn test_csv_with_formula_injection_prevention() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     let rows = json["rows"].as_array().unwrap();
-    
+
     // Verify formulas are escaped with leading single quote
     assert_eq!(rows[0]["formula"], "'=SUM(A1:A10)");
     assert_eq!(rows[1]["formula"], "'+1234");
@@ -282,12 +282,12 @@ async fn test_form_urlencoded_content_type() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Echo backend returns normalized_data flattened at top level
     assert_eq!(json["name"], "Alice");
     assert_eq!(json["age"], "30");
     assert_eq!(json["city"], "NYC");
-    
+
     // Note: Multiple values with same name get overwritten in form-urlencoded
     // This is expected behavior - use multipart for multiple files
     assert_eq!(json["interests"], "music");
@@ -319,11 +319,11 @@ async fn test_form_urlencoded_with_array_notation() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Echo backend returns normalized_data flattened at top level
     assert_eq!(json["name"], "Alice");
     assert!(json["interests"].is_array());
-    
+
     let interests = json["interests"].as_array().unwrap();
     assert_eq!(interests.len(), 3);
     assert_eq!(interests[0], "coding");
@@ -377,18 +377,18 @@ async fn test_multipart_form_data() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Echo backend returns normalized_data flattened at top level
     assert!(json["fields"].is_object());
     assert_eq!(json["fields"]["name"], "Alice");
     assert_eq!(json["fields"]["age"], "30");
-    
+
     // Verify file metadata
     assert!(json["files"].is_array());
     let files = json["files"].as_array().unwrap();
     assert_eq!(files.len(), 1);
-    
-    assert_eq!(files[0]["name"], "file1");  // Field name in multipart
+
+    assert_eq!(files[0]["name"], "file1"); // Field name in multipart
     assert_eq!(files[0]["filename"], "test.txt");
     assert_eq!(files[0]["content_type"], "text/plain");
     assert!(files[0]["size"].as_u64().unwrap() > 0);
@@ -422,7 +422,7 @@ async fn test_binary_content_type() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Echo backend returns normalized_data flattened at top level
     assert_eq!(json["format"], "binary");
     assert_eq!(json["content_type"], "image/jpeg");
@@ -457,7 +457,7 @@ async fn test_unsupported_content_type_falls_back_to_json() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Should fall back to JSON parsing
     assert_eq!(json["data"], "test");
 }
@@ -489,7 +489,7 @@ async fn test_missing_content_type_defaults_to_json() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Should default to JSON parsing
     assert_eq!(json["fallback"], "json");
 }
@@ -547,7 +547,7 @@ async fn test_content_type_with_charset() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Should parse JSON correctly despite charset parameter
     assert_eq!(json["charset"], "test");
 }
@@ -583,7 +583,7 @@ async fn test_fhir_json_content_type() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Verify FHIR JSON is parsed correctly
     assert_eq!(json["resourceType"], "Patient");
     assert_eq!(json["id"], "example");
@@ -626,13 +626,13 @@ async fn test_xml_nested_elements() {
     let body_str = String::from_utf8(body.to_vec()).expect("utf8");
 
     let json: serde_json::Value = serde_json::from_str(&body_str).expect("json");
-    
+
     // Verify nested XML structure
     let patient = &json["patient"];
     assert!(patient["name"].is_object());
     assert_eq!(patient["name"]["first"], "John");
     assert_eq!(patient["name"]["last"], "Doe");
-    
+
     assert!(patient["contact"].is_object());
     assert_eq!(patient["contact"]["phone"], "555-1234");
     assert_eq!(patient["contact"]["email"], "john@example.com");

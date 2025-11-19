@@ -57,7 +57,7 @@ async fn test_management_service_enabled() {
     // Test router configuration
     let routes = service.build_router(endpoint_options);
     let paths: Vec<_> = routes.iter().map(|r| r.path.as_str()).collect();
-    
+
     // Verify each expected route exists (don't hardcode count)
     let expected_routes = vec![
         "/admin/info",
@@ -68,7 +68,7 @@ async fn test_management_service_enabled() {
         "/admin/token",
         "/admin/update",
     ];
-    
+
     for expected in &expected_routes {
         assert!(
             paths.contains(expected),
@@ -76,7 +76,7 @@ async fn test_management_service_enabled() {
             expected
         );
     }
-    
+
     // Verify no unexpected routes (allow for future additions but fail if routes go missing)
     assert!(
         routes.len() >= expected_routes.len(),

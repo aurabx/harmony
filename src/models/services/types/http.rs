@@ -346,7 +346,7 @@ impl ServiceHandler<Value> for HttpEndpoint {
             // Override URI with the stripped path (without query string)
             // Query parameters are preserved in target.query_params from request_details
             target.uri = path;
-            
+
             target
         };
 

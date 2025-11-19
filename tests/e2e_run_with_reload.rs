@@ -205,10 +205,7 @@ async fn test_run_with_reload_full_lifecycle() {
     )
     .await;
 
-    assert!(
-        mgmt_response.is_ok(),
-        "Management API should be accessible"
-    );
+    assert!(mgmt_response.is_ok(), "Management API should be accessible");
 
     // Test 3: Hot reload - update config with middleware
     let new_config = create_config_with_middleware(&temp_dir, 19200);
@@ -250,7 +247,7 @@ async fn test_run_with_reload_full_lifecycle() {
 #[serial]
 async fn test_run_with_reload_multiple_networks() {
     let temp_dir = TempDir::new().unwrap();
-    
+
     // Create config with two networks
     let config_content = r#"
 [proxy]
@@ -334,7 +331,7 @@ module = ""
 
     let config_path = temp_dir.path().join("multi-net-config.toml");
     fs::write(&config_path, config_content).expect("Failed to write config");
-    
+
     // Create required directories
     fs::create_dir_all(temp_dir.path().join("pipelines")).ok();
     fs::create_dir_all(temp_dir.path().join("transforms")).ok();
