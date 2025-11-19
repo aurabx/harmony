@@ -12,6 +12,9 @@ Welcome to Harmony Proxy's documentation. Harmony is a general-purpose data mesh
 - Backends: backends.md
 - Envelope: envelope.md
 
+## Deployment
+- Deployment guides: deployment/ (Google Cloud Run, AWS, Kubernetes, Docker, etc.)
+
 ## Integration & Features
 - DIMSE integration (DICOM SCU/SCP): dimse-integration.md (requires DCMTK)
 - Management API: management-api.md
