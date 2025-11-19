@@ -37,6 +37,25 @@ impl RunbeamConfig {
     }
 
     pub fn effective_cloud_api_base_url(&self) -> String {
+        // Check environment variable first (set by CLI during authorization)
+        if let Ok(url) = std::env::var("RUNBEAM_CLOUD_API_BASE_URL") {
+            return url;
+        }
+        
+        // Try to load from persisted JSON config file (saved by CLI)
+        let proxy_id = crate::globals::get_config()
+            .map(|config| config.proxy.id.clone())
+            .unwrap_or_else(|| "harmony".to_string());
+        
+        if let Some(config) = super::config_storage::load_config(&proxy_id) {
+            if let Some(api_url) = config.api_base_url {
+                if !api_url.is_empty() {
+                    return api_url;
+                }
+            }
+        }
+        
+        // Fall back to config file, then default
         self.cloud_api_base_url
             .clone()
             .unwrap_or_else(|| "https://api.runbeam.cloud".to_string())

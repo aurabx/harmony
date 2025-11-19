@@ -1,5 +1,6 @@
 #[allow(clippy::module_inception)]
 pub mod config;
+pub mod config_storage;
 mod logging_config;
 mod proxy_config;
 pub mod reload;
