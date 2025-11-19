@@ -105,27 +105,112 @@ Error handling: Authentication failures (missing/invalid/expired tokens) return 
 ### Transform (JOLT)
 Applies JSON-to-JSON transformations using JOLT specifications. Supports configurable application on request/response sides with error handling options.
 
+**Cloud Integration**: When configurations are sourced from Runbeam Cloud, transform specifications (JOLT files) are automatically downloaded before the configuration is applied. The gateway:
+- Extracts transform IDs from middleware `spec_path` fields
+- Downloads JOLT specifications from Runbeam Cloud Transform API
+- Writes transform files to the configured `transforms_path` directory
+- Overwrites existing transforms with the same ID
+- Fails the config change if any transform download fails
+
+This ensures that all referenced transform specifications are available before pipeline execution begins. For manual configurations, transform files must be provided separately in the transforms directory.
+
 ## Path Filter
 
-Filters incoming requests based on URL path patterns using matchit syntax. Requests that don't match any configured rule are rejected with HTTP 404 and backend processing is skipped.
+Filters incoming requests based on URL path patterns with explicit allow/deny rules. Uses first-match-wins evaluation with matchit pattern syntax.
+
+### Configuration
 
 Config keys:
-- `rules` (array of strings, required): List of path patterns to allow using matchit syntax (e.g., "/ImagingStudy", "/Patient/{id}")
+- `rules` (array of objects, required): List of allow/deny rules, each with either an `allow` or `deny` key containing a matchit pattern
 
-Example:
+### Rule Structure
+
+Each rule must be an object with either:
+- `{ allow = "<pattern>" }` - Allow requests matching this pattern
+- `{ deny = "<pattern>" }` - Deny requests matching this pattern
+
+### Evaluation Logic
+
+**First-match-wins**: Rules are processed in order from first to last. The first matching rule determines the outcome:
+- **Allow rule matches**: Request continues to backend
+- **Deny rule matches**: Middleware returns a `PathDenied` error; the HTTP adapter maps this to HTTP 404 Not Found and stops processing
+- **No rule matches**: Implicit deny (middleware returns `PathDenied`, which the HTTP adapter maps to 404)
+
+### Pattern Syntax
+
+Supports matchit pattern syntax:
+- **Exact paths**: `/users`, `/api/health`
+- **Wildcards**: `/api/*` (matches `/api/anything`)
+- **Catch-all**: `/{*rest}` (matches any path, use for deny/allow-all rules)
+- **Parameters**: `/users/{id}` (matches `/users/123`, etc.)
+- **Multiple segments**: `/api/{version}/users/{id}`
+
+### Examples
+
+**Allow specific paths, deny rest:**
 ```toml
 [middleware.imagingstudy_filter]
 type = "path_filter"
 [middleware.imagingstudy_filter.options]
-rules = ["/ImagingStudy", "/Patient"]
+rules = [
+  { allow = "/ImagingStudy" },
+  { allow = "/Patient" },
+  { deny = "/{*rest}" }  # Catch-all: deny all other paths
+]
 ```
 
-Behavior:
+**Deny specific paths, allow rest:**
+```toml
+[middleware.api_filter]
+type = "path_filter"
+[middleware.api_filter.options]
+rules = [
+  { deny = "/admin/*" },     # Block admin paths first
+  { deny = "/internal/*" },  # Block internal paths
+  { allow = "/{*rest}" }      # Catch-all: allow everything else
+]
+```
+
+**Complex mixed allow/deny rules:**
+```toml
+[middleware.complex_filter]
+type = "path_filter"
+[middleware.complex_filter.options]
+rules = [
+  { allow = "/api/public/*" },   # Allow public API (checked first)
+  { deny = "/api/*" },            # Deny other API paths
+  { allow = "/health" },          # Allow health check
+  { allow = "/metrics" },         # Allow metrics endpoint
+  { deny = "/{*rest}" }           # Catch-all: deny everything else
+]
+```
+
+### Behavior
+
 - Only applies to incoming requests (left side of middleware chain)
-- Path matching uses the subpath after the endpoint's path_prefix
+- Path matching uses the subpath after the endpoint's `path_prefix`
 - Trailing slashes are normalized (e.g., "/ImagingStudy/" matches "/ImagingStudy")
-- On rejection: returns 404 status with empty body and sets skip_backends=true to avoid backend calls
-- Supports matchit patterns for dynamic routing (wildcards, parameters)
+- On denial: the middleware returns `PathDenied`; the HTTP adapter maps this to HTTP 404 with an empty body and does not invoke backends
+- Empty path becomes "/" (root)
+
+### Troubleshooting
+
+**Order matters**: More specific patterns should come before broader patterns
+- ✅ Good: `[{ allow = "/api/public/*" }, { deny = "/api/*" }]`
+- ❌ Bad: `[{ deny = "/api/*" }, { allow = "/api/public/*" }]` (public never reached)
+
+**Test incrementally**: Start with allow-all, then add specific denies (or vice versa)
+
+**Use explicit deny-all**: Makes intent clear and prevents implicit deny surprises
+```toml
+rules = [
+  { allow = "/path1" },
+  { allow = "/path2" },
+  { deny = "/{*rest}" }  # Catch-all: deny everything not allowed above
+]
+```
+
+**Debug logging**: Set `RUST_LOG=harmony=debug` to see which rules match
 
 ## Metadata Transform
 
@@ -229,4 +314,68 @@ type = "dicomweb_bridge"
 - Frame-level image extraction with format conversion
 
 This middleware enables DICOMweb endpoints to communicate with traditional DICOM PACS systems via DIMSE protocols.
+
+## Policies
+
+The policies middleware provides comprehensive policy-based access control, rate limiting, and request filtering through a flexible rule system. It supports 13 different rule types including IP filtering, path matching, geographic restrictions, rate limiting, time-based access, HTTP method filtering, User-Agent matching, Content-Type filtering, and query parameter validation.
+
+**For complete documentation on policies and rules, see [policies-middleware.md](policies-middleware.md)**.
+
+### Quick Example
+
+```toml
+[middleware.api_security]
+type = "policies"
+
+[[middleware.api_security.options.policies]]
+id = "api_access_control"
+name = "API Access Control"
+enabled = true
+
+# Allow only GET and POST methods
+[[middleware.api_security.options.policies.rules]]
+type = "method"
+weight = 100
+enabled = true
+[middleware.api_security.options.policies.rules.options]
+mode = "allow"
+methods = ["GET", "POST"]
+
+# Block bots and crawlers
+[[middleware.api_security.options.policies.rules]]
+type = "user_agent"
+weight = 90
+enabled = true
+[middleware.api_security.options.policies.rules.options]
+mode = "deny"
+patterns = [
+    { label = "Bots", pattern = "/bot|crawler|spider/i" }
+]
+
+# Require API key parameter
+[[middleware.api_security.options.policies.rules]]
+type = "query_parameter"
+weight = 95
+enabled = true
+[middleware.api_security.options.policies.rules.options]
+mode = "allow"
+parameters = [
+    { name = "api_key", match_type = "exists" }
+]
+```
+
+**Available Rule Types**:
+- IP Allow/Deny - Allowlist/blocklist by IP/CIDR
+- Path - URL path filtering
+- Header - HTTP header matching
+- Geographic - Country-based filtering
+- Rate Limit - Request throttling
+- Time Based - Business hours/maintenance windows
+- HTTP Method - Filter by GET/POST/etc.
+- User Agent - Regex pattern matching
+- Content Type - MIME type filtering
+- Query Parameter - Parameter validation
+- Allow All / Deny All - Control rules
+
+See [policies-middleware.md](policies-middleware.md) for detailed documentation on all rule types, evaluation logic, configuration examples, and troubleshooting.
 

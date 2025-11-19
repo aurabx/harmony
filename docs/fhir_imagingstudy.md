@@ -155,7 +155,12 @@ backends = ["dicom_backend"]
 [middleware.imagingstudy_filter]
 type = "path_filter"
 [middleware.imagingstudy_filter.options]
-rules = ["/ImagingStudy"]
+# Allow only ImagingStudy endpoint, deny all others
+rules = [
+  { allow = "/ImagingStudy" },
+  { deny = "/{*rest}" }  # Catch-all: deny all other paths
+]
+# See docs/middleware.md for detailed path filter documentation
 
 [middleware.fhir_dimse_meta]
 type = "metadata_transform"
@@ -249,10 +254,10 @@ middleware = [
 
 ### Manual Testing
 
-Start harmony-proxy with your configuration:
+Start harmony with your configuration:
 
 ```bash
-./harmony-proxy --config examples/config/pipelines/fhir_imagingstudy.toml
+./harmony --config examples/config/pipelines/fhir_imagingstudy.toml
 ```
 
 Test the endpoint:

@@ -1,0 +1,49 @@
+# Example configuration demonstrating multi-content-type support
+# This configuration shows how to configure size limits for various content types
+
+[proxy]
+id = "content-types-example"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+jwks_cache_duration_hours = 24
+
+# Content parsing size limits (optional - these are the defaults)
+[proxy.content_limits]
+max_body_size = 10485760      # 10MB - Maximum request body size
+max_csv_rows = 10000           # Maximum rows to parse from CSV files
+max_xml_depth = 100            # Maximum XML nesting depth (prevents XML bombs)
+max_multipart_files = 10       # Maximum files per multipart request
+max_form_fields = 1000         # Maximum form fields per request
+
+[logging]
+log_level = "info"
+log_to_file = true
+log_file_path = "./tmp/harmony.log"
+
+[runbeam]
+enabled = false
+
+[management]
+enabled = true
+base_path = "admin"
+network = "default"
+
+# Network configuration
+[network.default]
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+# Service registrations
+[services.http]
+module = ""
+
+[services.management]
+module = ""
+
+# Middleware type registrations
+[middleware_types.policies]
+module = ""

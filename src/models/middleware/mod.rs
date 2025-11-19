@@ -5,8 +5,11 @@ pub(crate) mod instance;
 pub mod middleware;
 pub mod types;
 
-// Re-export AuthFailure for easier access
+// Re-export error types for easier access
 pub use types::auth_error::AuthFailure;
+pub use types::denial_errors::{
+    AccessDenied, ContentTypeDenied, MethodDenied, PathDenied, RateLimitExceeded,
+};
 
 use crate::models::middleware::config::*;
 use axum::response::Response;

@@ -45,11 +45,14 @@ path = "./tmp"
 # ------------------------
 # Service types
 #-------------------------
-[services.dicom]
+[services.dicom_scu]
 module=""
 
 [services.dicomweb]
 module=""
 
 [middleware_types.dicomweb]
+module=""
+
+[middleware_types.policies]
 module=""

@@ -53,7 +53,8 @@ pub fn resolve_service(
                 }
             }
         } else {
-            Err(format!("Unknown service type: {}", service_type))
+            // Service not in registry - try built-in services as fallback
+            create_builtin_service(service_type)
         }
     } else {
         // Fallback to hardcoded types if registry isn't initialized
@@ -75,13 +76,26 @@ fn create_builtin_service(
         "fhir" => Ok(Box::new(
             crate::models::services::types::fhir::FhirEndpoint {},
         )),
-        "dicom" => Ok(Box::new(
-            crate::models::services::types::dicom::DicomEndpoint {
+        // Backward compatibility: "dicom" maps to "dicom_scu"
+        "dicom" | "dicom_scu" => Ok(Box::new(
+            crate::models::services::types::dicom::DicomScuBackend {
                 local_aet: None,
                 aet: None,
                 host: None,
                 port: None,
                 use_tls: None,
+            },
+        )),
+        "dicom_scp" => Ok(Box::new(
+            crate::models::services::types::dicom_scp::DicomScpEndpoint {
+                local_aet: None,
+                bind_addr: None,
+                port: None,
+                enable_echo: None,
+                enable_find: None,
+                enable_move: None,
+                enable_get: None,
+                storage_dir: None,
             },
         )),
         "dicomweb" => Ok(Box::new(
@@ -105,6 +119,16 @@ fn create_builtin_service(
 
 #[async_trait]
 pub trait ServiceType: ServiceHandler<Value> {
+    /// Returns the protocol this service requires for its adapter
+    ///
+    /// Most services use HTTP (for REST/HTTP-based communication).
+    /// Services like dicom_scp use DIMSE (for DICOM network communication).
+    ///
+    /// Default implementation returns HTTP for backward compatibility.
+    fn required_protocol(&self) -> crate::models::protocol::Protocol {
+        crate::models::protocol::Protocol::Http
+    }
+
     /// Validate the service configuration
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError>;
 
@@ -139,11 +163,11 @@ where
     ) -> Result<RequestEnvelope<Vec<u8>>, Error>;
 
     /// Protocol-aware response processing hook
-    /// 
+    ///
     /// This method is called during pipeline execution to allow services to
     /// modify the ResponseEnvelope based on the protocol context (HTTP, DIMSE, etc.).
     /// Services can use this to add protocol-specific headers, metadata, or transformations.
-    /// 
+    ///
     /// Default implementation does nothing (no-op).
     async fn endpoint_outgoing_protocol(
         &self,
@@ -156,7 +180,7 @@ where
     }
 
     /// Handles the response stage, converting ResponseEnvelope back into an HTTP response
-    /// 
+    ///
     /// NOTE: This is HTTP-specific and will be deprecated in favor of protocol-specific
     /// adapters handling the final conversion. Use endpoint_outgoing_protocol() for
     /// protocol-agnostic response processing.

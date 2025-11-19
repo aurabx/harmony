@@ -25,7 +25,7 @@ fn get_current_store_dir() -> Option<PathBuf> {
 }
 
 /// DIMSE query provider that integrates with the pipeline system
-/// 
+///
 /// This provider implements the dimse::scp::QueryProvider trait to handle
 /// C-FIND, C-MOVE, and C-STORE operations by converting them to protocol
 /// contexts and executing them through the PipelineExecutor.
@@ -91,7 +91,7 @@ impl PipelineQueryProvider {
     }
 
     /// Execute a DIMSE operation through the pipeline
-    /// 
+    ///
     /// Converts DIMSE operation to protocol context, builds envelope via service,
     /// executes pipeline, and returns response envelope.
     async fn run(
@@ -136,14 +136,12 @@ impl PipelineQueryProvider {
         })?;
 
         // Execute pipeline using PipelineExecutor
-        let response_envelope = PipelineExecutor::execute(
-            request_envelope,
-            pipeline_cfg,
-            &config,
-            &ctx,
-        )
-        .await
-        .map_err(|e| DimseError::operation_failed(format!("Pipeline execution failed: {}", e)))?;
+        let response_envelope =
+            PipelineExecutor::execute(request_envelope, pipeline_cfg, &config, &ctx)
+                .await
+                .map_err(|e| {
+                    DimseError::operation_failed(format!("Pipeline execution failed: {}", e))
+                })?;
 
         Ok(response_envelope)
     }
@@ -172,8 +170,9 @@ impl PipelineQueryProvider {
             normalized
         } else if !response.original_data.is_empty() {
             // Try to parse original_data as JSON
-            serde_json::from_slice(&response.original_data)
-                .map_err(|e| DimseError::operation_failed(format!("Failed to parse response as JSON: {}", e)))?
+            serde_json::from_slice(&response.original_data).map_err(|e| {
+                DimseError::operation_failed(format!("Failed to parse response as JSON: {}", e))
+            })?
         } else {
             // Empty response
             return Ok(vec![]);
@@ -226,8 +225,9 @@ impl PipelineQueryProvider {
 
         // Convert JSON back to bytes for DatasetStream
         // In the future, we could parse DICOM JSON and build proper DICOM objects
-        let json_bytes = serde_json::to_vec(json)
-            .map_err(|e| DimseError::operation_failed(format!("Failed to serialize JSON: {}", e)))?;
+        let json_bytes = serde_json::to_vec(json).map_err(|e| {
+            DimseError::operation_failed(format!("Failed to serialize JSON: {}", e))
+        })?;
 
         // DatasetStream::from_bytes expects bytes::Bytes, but it's just a wrapper around Vec<u8>
         // We convert via into() which should work since Bytes implements From<Vec<u8>>
@@ -267,7 +267,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
         let response_envelope = self.run("C-FIND", body, meta).await?;
-        
+
         // Convert response envelope to datasets
         self.response_to_datasets(response_envelope).await
     }
@@ -298,7 +298,38 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
         let response_envelope = self.run("C-MOVE", body, meta).await?;
-        
+
+        // Convert response envelope to datasets
+        self.response_to_datasets(response_envelope).await
+    }
+
+    async fn get(
+        &self,
+        query_level: QueryLevel,
+        parameters: &HashMap<String, String>,
+    ) -> DimseResult<Vec<DatasetStream>> {
+        let mut meta = HashMap::new();
+        meta.insert("dicom.operation".into(), "C-GET".into());
+        meta.insert("dicom.query_level".into(), format!("{}", query_level));
+
+        let cmd = tool::model::CommandMeta {
+            message_id: Some(1),
+            sop_class_uid: None,
+            priority: Some("MEDIUM".into()),
+            direction: Some("REQUEST".into()),
+        };
+        let identifier = self.build_identifier_json(parameters);
+        let qmeta = self.build_query_metadata(parameters);
+        let wrapper = tool::model::Wrapper {
+            command: Some(cmd),
+            identifier,
+            query_metadata: Some(qmeta),
+        };
+        let body = serde_json::to_value(&wrapper)
+            .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
+
+        let response_envelope = self.run("C-GET", body, meta).await?;
+
         // Convert response envelope to datasets
         self.response_to_datasets(response_envelope).await
     }
@@ -353,10 +384,10 @@ mod tests {
         let provider = PipelineQueryProvider::new("p", "e");
         let mut params = HashMap::new();
         params.insert("00100010".to_string(), "Doe^John".to_string());
-        
+
         let json = provider.build_identifier_json(&params);
         let obj = json.as_object().unwrap();
-        
+
         assert!(obj.contains_key("00100010"));
         let entry = &obj["00100010"];
         assert_eq!(entry["vr"], "PN");
@@ -368,7 +399,7 @@ mod tests {
         let provider = PipelineQueryProvider::new("p", "e");
         let mut params = HashMap::new();
         params.insert("00100020".to_string(), "12345".to_string());
-        
+
         let meta = provider.build_query_metadata(&params);
         assert_eq!(
             meta.0.get("00100020").unwrap().match_type.as_deref(),
@@ -381,7 +412,7 @@ mod tests {
         let provider = PipelineQueryProvider::new("p", "e");
         let mut params = HashMap::new();
         params.insert("00100010".to_string(), "Doe*".to_string());
-        
+
         let meta = provider.build_query_metadata(&params);
         assert_eq!(
             meta.0.get("00100010").unwrap().match_type.as_deref(),
@@ -394,7 +425,7 @@ mod tests {
         let provider = PipelineQueryProvider::new("p", "e");
         let mut params = HashMap::new();
         params.insert("00080020".to_string(), "".to_string());
-        
+
         let meta = provider.build_query_metadata(&params);
         assert_eq!(
             meta.0.get("00080020").unwrap().match_type.as_deref(),

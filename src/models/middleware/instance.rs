@@ -1,7 +1,7 @@
 use serde::Deserialize;
 use std::collections::HashMap;
 
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct MiddlewareInstance {
     #[serde(rename = "type")]
     pub middleware_type: String,
@@ -13,10 +13,12 @@ impl MiddlewareInstance {
     /// Resolves the middleware type using the centralized middleware resolver
     pub fn resolve_middleware(
         &self,
+        transforms_path: Option<&str>,
     ) -> Result<Box<dyn crate::models::middleware::middleware::Middleware>, String> {
         crate::models::middleware::middleware::resolve_middleware_type(
             &self.middleware_type,
             &self.options,
+            transforms_path,
         )
     }
 }
@@ -26,8 +28,6 @@ impl MiddlewareInstance {
 pub struct MiddlewareInstanceConfig {
     #[serde(default)]
     pub jwt_auth: Option<crate::models::middleware::types::jwtauth::JwtAuthConfig>,
-    #[serde(default)]
-    pub auth_sidecar: Option<crate::models::middleware::types::auth::AuthSidecarConfig>,
     #[serde(default)]
     pub aurabox_connect: Option<crate::models::middleware::types::connect::AuraboxConnectConfig>,
 }

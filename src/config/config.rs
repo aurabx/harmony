@@ -1,5 +1,6 @@
 use crate::config::logging_config::LoggingConfig;
 use crate::config::proxy_config::ProxyConfig;
+use crate::config::runbeam_config::RunbeamConfig;
 use crate::config::Cli;
 use crate::models::backends::backends::Backend;
 use crate::models::endpoints::endpoint::Endpoint;
@@ -21,10 +22,46 @@ use std::path::Path;
 
 static DEFAULT_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(HashMap::new);
 
-#[derive(Debug, Deserialize, Default)]
+/// Policy definition at top level
+#[derive(Debug, Deserialize, Clone)]
+pub struct PolicyDefinition {
+    pub id: String,
+    pub name: Option<String>,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub rules: Vec<String>, // Rule IDs
+}
+
+/// Rule definition at top level
+#[derive(Debug, Deserialize, Clone)]
+pub struct RuleDefinition {
+    pub id: String,
+    pub name: Option<String>,
+    #[serde(rename = "type")]
+    pub rule_type: String,
+    #[serde(default = "default_weight")]
+    pub weight: i64,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+    #[serde(default)]
+    pub options: HashMap<String, serde_json::Value>,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+fn default_weight() -> i64 {
+    0
+}
+
+#[derive(Debug, Deserialize, Default, Clone)]
 pub struct Config {
     #[serde(default)]
     pub proxy: ProxyConfig,
+    #[serde(default)]
+    pub runbeam: RunbeamConfig,
     #[serde(default)]
     pub management: ManagementConfig,
     #[serde(default)]
@@ -51,13 +88,22 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub transforms: (),
+    /// Top-level policy definitions
+    #[serde(default)]
+    pub policies: HashMap<String, PolicyDefinition>,
+    /// Top-level rule definitions
+    #[serde(default)]
+    pub rules: HashMap<String, RuleDefinition>,
+    /// Resolved absolute path to transforms directory (not serialized)
+    #[serde(skip)]
+    pub resolved_transforms_path: Option<String>,
 }
 
 impl Config {
-    pub fn inject_management_service(&mut self) {
+    pub fn inject_management_service(&mut self) -> Result<(), ConfigError> {
         // Only inject if management is enabled
         if !self.management.enabled {
-            return;
+            return Ok(());
         }
 
         // Inject management endpoint if not already present
@@ -112,19 +158,43 @@ impl Config {
 
         // Inject management pipeline if not already present
         if !self.pipelines.contains_key("management") {
-            // Use specified network or fail if not provided
+            // Use specified network or create default management network
             let network = match &self.management.network {
                 Some(network_name) => {
                     if !self.network.contains_key(network_name) {
-                        panic!(
-                            "Management network '{}' not found in configuration",
-                            network_name
-                        );
+                        let available_networks: Vec<&String> = self.network.keys().collect();
+                        return Err(ConfigError::InvalidManagement {
+                            reason: format!(
+                                "Management network '{}' not found in configuration. Available networks: {}",
+                                network_name,
+                                if available_networks.is_empty() {
+                                    "(none)".to_string()
+                                } else {
+                                    available_networks.iter().map(|s| s.as_str()).collect::<Vec<_>>().join(", ")
+                                }
+                            )
+                        });
                     }
                     network_name.clone()
                 }
                 None => {
-                    panic!("Management API is enabled but no network is specified. Please set management.network in your configuration.");
+                    // Auto-generate default management network on localhost:9090
+                    tracing::info!("Management API enabled without network specified, creating default management network on 127.0.0.1:9090");
+
+                    let default_network = NetworkConfig {
+                        enable_wireguard: false,
+                        interface: "wg0".to_string(),
+                        tcp_config: crate::models::network::config::TcpConfig {
+                            bind_address: "127.0.0.1".to_string(),
+                            bind_port: 9090,
+                        },
+                    };
+
+                    self.network
+                        .insert("management".to_string(), default_network);
+                    self.management.network = Some("management".to_string());
+
+                    "management".to_string()
                 }
             };
 
@@ -149,13 +219,31 @@ impl Config {
                 },
             );
         }
+
+        Ok(())
     }
 
     pub fn from_args(cli: Cli) -> Self {
+        // Verify the config file has a .toml extension
+        let config_path = Path::new(&cli.config_path);
+        if config_path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            panic!(
+                "Configuration file must have a .toml extension: {}",
+                cli.config_path
+            );
+        }
+
         // Load the base configuration file
         let contents =
             std::fs::read_to_string(&cli.config_path).expect("Failed to read config file");
         let mut config: Config = toml::from_str(&contents).expect("Failed to parse config");
+
+        // Resolve transforms_path relative to config file directory
+        let base_dir = config_path
+            .parent()
+            .expect("Failed to get config file directory");
+        let transforms_path = base_dir.join(&config.proxy.transforms_path);
+        config.resolved_transforms_path = Some(transforms_path.to_string_lossy().to_string());
 
         // Attempt to load additional configs and merge them into the current config.
         if let Ok(additional_configs) = Self::load_additional_configs(&config, &cli.config_path) {
@@ -163,7 +251,9 @@ impl Config {
         }
 
         // Inject management service if enabled
-        config.inject_management_service();
+        config
+            .inject_management_service()
+            .expect("Failed to inject management service");
 
         // Initialize both registries
         config.initialize_service_registry();
@@ -239,12 +329,17 @@ impl Config {
             base.middleware_types.extend(config.middleware_types);
             // Merge services if provided
             base.services.extend(config.services);
+            // Merge policies and rules
+            base.policies.extend(config.policies);
+            base.rules.extend(config.rules);
         }
         base
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.validate_proxy()?;
+        self.validate_logging()?;
+        self.validate_runbeam()?;
         self.validate_networks()?;
         self.validate_management()?;
         self.validate_services()?;
@@ -259,26 +354,30 @@ impl Config {
     }
 
     fn validate_proxy(&self) -> Result<(), ConfigError> {
-        if self.proxy.id.trim().is_empty() {
-            return Err(ConfigError::InvalidProxy {
+        self.proxy
+            .validate()
+            .map_err(|e| ConfigError::InvalidProxy {
                 name: self.proxy.id.clone(),
-                reason: "No proxy id provided".to_string(),
-            });
-        }
+                reason: e,
+            })
+    }
 
-        // Check if the log_level is valid; default to "error" if not provided
-        let valid_log_levels = ["trace", "debug", "info", "warn", "error"];
-        if !valid_log_levels.contains(&self.proxy.log_level.as_str()) {
-            return Err(ConfigError::InvalidProxy {
-                name: self.proxy.id.clone(),
-                reason: format!(
-                    "Invalid log_level '{}'. Valid options are: {:?}",
-                    self.proxy.log_level, valid_log_levels
-                ),
-            });
-        }
+    fn validate_logging(&self) -> Result<(), ConfigError> {
+        self.logging
+            .validate()
+            .map_err(|e| ConfigError::InvalidProxy {
+                name: "logging".to_string(),
+                reason: e,
+            })
+    }
 
-        Ok(())
+    fn validate_runbeam(&self) -> Result<(), ConfigError> {
+        self.runbeam
+            .validate()
+            .map_err(|e| ConfigError::InvalidProxy {
+                name: "runbeam".to_string(),
+                reason: e,
+            })
     }
 
     fn validate_networks(&self) -> Result<(), ConfigError> {
@@ -289,7 +388,7 @@ impl Config {
                     reason: "interface is empty".to_string(),
                 });
             }
-            if network.enable_wireguard && network.http.bind_port == 0 {
+            if network.enable_wireguard && network.tcp_config.bind_port == 0 {
                 return Err(ConfigError::InvalidNetwork {
                     name: name.clone(),
                     reason: "invalid bind port for Wireguard".to_string(),
@@ -351,6 +450,25 @@ impl Config {
 
     fn validate_endpoints(&self) -> Result<(), ConfigError> {
         for (name, endpoint) in &self.endpoints {
+            // Check if service type is allowed as endpoint
+            match endpoint.service.to_lowercase().as_str() {
+                "dicom_scu" => {
+                    return Err(ConfigError::InvalidEndpoint {
+                        name: name.clone(),
+                        reason: "Service 'dicom_scu' cannot be used as an endpoint. Use 'dicom_scp' for DICOM endpoints.".to_string(),
+                    });
+                }
+                // "dicom" is allowed for backward compatibility (maps to dicom_scu)
+                // but should only be used as a backend, not endpoint
+                "dicom" => {
+                    return Err(ConfigError::InvalidEndpoint {
+                        name: name.clone(),
+                        reason: "Service 'dicom' (legacy name) cannot be used as an endpoint. Use 'dicom_scp' for DICOM endpoints.".to_string(),
+                    });
+                }
+                _ => {}
+            }
+
             let service =
                 endpoint
                     .resolve_service()
@@ -372,6 +490,17 @@ impl Config {
 
     fn validate_backends(&self) -> Result<(), ConfigError> {
         for (name, backend) in &self.backends {
+            // Check if service type is allowed as backend
+            match backend.service.to_lowercase().as_str() {
+                "dicom_scp" => {
+                    return Err(ConfigError::InvalidBackend {
+                        name: name.clone(),
+                        reason: "Service 'dicom_scp' cannot be used as a backend. Use 'dicom_scu' for DICOM backends.".to_string(),
+                    });
+                }
+                _ => {}
+            }
+
             // Try to resolve the backend service; if it fails, warn and skip validation
             let service = match backend.resolve_service() {
                 Ok(svc) => svc,
@@ -432,7 +561,8 @@ impl Config {
                 // Built-in middleware, validate that it exists
                 match name.as_str() {
                     "jwtauth" | "basic_auth" | "connect" | "passthru" | "json_extractor"
-                    | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "transform" => {}
+                    | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "transform"
+                    | "metadata_transform" | "path_filter" | "policies" => {}
                     _ => {
                         return Err(ConfigError::InvalidMiddleware {
                             name: name.clone(),

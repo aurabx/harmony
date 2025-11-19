@@ -196,8 +196,48 @@ impl MockDicomData {
             "STUDY" => self.query_studies(params),
             "SERIES" => self.query_series(params),
             "IMAGE" => self.query_instances(params),
-            _ => vec![], // PATIENT level or unknown - return empty for now
+            "PATIENT" => self.query_patients(params),
+            _ => vec![], // Unknown level - return empty
         }
+    }
+
+    fn query_patients(&self, params: &HashMap<String, String>) -> Vec<serde_json::Value> {
+        // Check patient ID filter
+        if let Some(patient_id) = params.get("00100020") {
+            // Trim trailing semicolon if present (common in DICOM multi-value syntax)
+            let trimmed_id = patient_id.trim_end_matches(';');
+            if !trimmed_id.is_empty() && trimmed_id != self.patient_id {
+                return vec![]; // Patient ID doesn't match
+            }
+        }
+
+        // Return patient-level response with study information
+        vec![serde_json::json!({
+            "00100020": {
+                "vr": "LO",
+                "Value": [self.patient_id]
+            },
+            "00100010": {
+                "vr": "PN",
+                "Value": [{ "Alphabetic": "Doe^John" }]
+            },
+            "0020000D": {
+                "vr": "UI",
+                "Value": [self.study_uid]
+            },
+            "00080020": {
+                "vr": "DA",
+                "Value": ["20241015"]
+            },
+            "00080030": {
+                "vr": "TM",
+                "Value": ["120000"]
+            },
+            "00081030": {
+                "vr": "LO",
+                "Value": ["Mock CT Study"]
+            }
+        })]
     }
 
     fn query_studies(&self, params: &HashMap<String, String>) -> Vec<serde_json::Value> {
@@ -210,7 +250,9 @@ impl MockDicomData {
 
         // Check patient ID filter
         if let Some(patient_id) = params.get("00100020") {
-            if !patient_id.is_empty() && patient_id != &self.patient_id {
+            // Trim trailing semicolon if present (common in DICOM multi-value syntax)
+            let trimmed_id = patient_id.trim_end_matches(';');
+            if !trimmed_id.is_empty() && trimmed_id != self.patient_id {
                 return vec![]; // Patient ID doesn't match
             }
         }
@@ -645,7 +687,7 @@ impl MockDicomEndpoint {
                 "error": format!("Failed to create mock directory: {}", e)
             });
         }
-        
+
         // Create a minimal mock DICOM file
         let mock_file = mock_dir.join("instance1.dcm");
         if let Err(e) = std::fs::write(&mock_file, b"MOCK DICOM FILE DATA") {
@@ -656,8 +698,11 @@ impl MockDicomEndpoint {
                 "error": format!("Failed to create mock file: {}", e)
             });
         }
-        
-        debug!("[MOCK DICOM] Created mock DICOM file at: {}", mock_file.display());
+
+        debug!(
+            "[MOCK DICOM] Created mock DICOM file at: {}",
+            mock_file.display()
+        );
 
         // Check if this is a frame request
         if path.contains("/frames/") {
@@ -710,7 +755,7 @@ impl MockDicomEndpoint {
             .as_ref()
             .and_then(|nd| nd.get("path").and_then(|p| p.as_str()))
             .map(|s| s.to_string())
-            .or_else(|| envelope.request_details.metadata.get("path").cloned())
+            .or_else(|| Some(crate::models::services::path_utils::extract_path(envelope)))
             .unwrap_or_default();
 
         let op = envelope

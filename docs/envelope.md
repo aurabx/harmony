@@ -1,6 +1,6 @@
 # Envelope: Data Exchange Format
 
-**Last Updated**: 2025-01-18 (Phase 6)
+**Last Updated**: 2025-01-14 (Path handling documentation added)
 
 ## Overview
 
@@ -60,9 +60,46 @@ pub struct RequestDetails {
 ```
 
 **Common metadata keys**:
+- `path`: Request subpath without leading slash (e.g., `"Patient/123"`)
+- `path_with_query`: Subpath with query string (e.g., `"Patient/123?_count=5"`)
+- `full_path`: Complete path with prefix and leading slash (e.g., `"/fhir/Patient/123"`)
 - `dimse_op`: DICOM operation (e.g., `C-FIND`, `C-STORE`)
 - `request_id`: Unique request identifier
 - `protocol`: Source protocol (e.g., `http`, `dimse`, `hl7`)
+
+### Path Handling
+
+**Critical:** The `path` metadata field stores paths **without leading slashes**. Always use `path_utils::extract_path()` when constructing backend URLs.
+
+```rust
+use crate::models::services::path_utils::extract_path;
+
+// ✅ CORRECT: Use extract_path() for URL construction
+let path = extract_path(&envelope);  // Returns: "/Patient/123" (with slash)
+let url = format!("{}{}", base_url, path);
+
+// ❌ WRONG: Direct metadata access
+let path = envelope.request_details.metadata.get("path").unwrap();
+let url = format!("{}{}", base_url, path);  // Broken! Missing slash
+```
+
+**Path metadata fields:**
+
+| Field | Format | Example | Purpose |
+|-------|--------|---------|----------|
+| `path` | No leading slash | `"Patient/123"` | Normalized subpath for comparisons |
+| `path_with_query` | With leading slash | `"/Patient/123?_count=5"` | Full path with query params |
+| `full_path` | With leading slash | `"/fhir/Patient/123"` | Complete path including prefix |
+
+**Why no leading slash in `path`?**
+- Consistency: Always normalized for string matching
+- Safety: The `extract_path()` helper adds the slash when needed
+- Clarity: Explicit about whether a path is a subpath or full path
+
+**When to use each:**
+- `extract_path()`: Backend URL construction (always use this!)
+- `metadata["path"]`: String matching, routing logic (already normalized)
+- `metadata["full_path"]`: Logging, debugging (shows complete request path)
 
 ## ResponseEnvelope
 

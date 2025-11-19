@@ -14,13 +14,13 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 // Helper: initialize global config and storage for tests
 fn init_test_globals(config: Arc<Config>) {
     use harmony::storage::create_storage_backend;
-    
+
     // Set global config
     harmony::globals::set_config(config.clone());
-    
+
     // Initialize storage
-    let storage = create_storage_backend(&config.storage)
-        .expect("Failed to create storage backend");
+    let storage =
+        create_storage_backend(&config.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 }
 
@@ -264,7 +264,7 @@ async fn router_handles_path_based_routing() {
 
     let cfg = load_config_from_str(toml).expect("valid config");
     let cfg_arc = Arc::new(cfg);
-    
+
     // Initialize globals (required for pipeline execution)
     init_test_globals(cfg_arc.clone());
 

@@ -31,5 +31,5 @@ path = "./tmp"
 [services.http]
 module = ""
 
-[services.dicom]
+[services.dicom_scu]
 module = ""

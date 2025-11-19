@@ -30,6 +30,7 @@ impl ManagementConfig {
         if self.base_path.trim().is_empty() {
             return Err("base_path cannot be empty".to_string());
         }
+
         Ok(())
     }
 }

@@ -85,17 +85,17 @@ fn ensure_jmix_envelope(id: &str, store_root: &std::path::Path) -> PathBuf {
 async fn jmix_manifest_and_archive_skip_backends() {
     // Reset global storage to ensure clean state
     harmony::globals::reset_storage();
-    
+
     // Initialize storage backend before creating test data
-    use harmony::storage::filesystem::FilesystemStorage;
+    use harmony::storage::FilesystemStorage;
     let storage = Arc::new(FilesystemStorage::new("./tmp").expect("Failed to create test storage"));
-    
+
     harmony::globals::set_storage(storage.clone());
 
     // Get the store root from storage backend
     let store_root = storage.subpath_str("jmix-store");
     fs::create_dir_all(&store_root).expect("create jmix-store dir");
-    
+
     // Prepare a valid JMIX package on disk
     let id = Uuid::new_v4().to_string();
     let pkg_dir = ensure_jmix_envelope(&id, &store_root);
@@ -133,7 +133,7 @@ async fn jmix_manifest_and_archive_skip_backends() {
         path_prefix = "/jmix"
 
         [backends.dicom_bad]
-        service = "dicom"
+        service = "dicom_scu"
         [backends.dicom_bad.options]
         host = "127.0.0.1"
         port = 104
@@ -147,7 +147,8 @@ async fn jmix_manifest_and_archive_skip_backends() {
         module = ""
         [services.jmix]
         module = ""
-    "#.to_string();
+    "#
+    .to_string();
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;

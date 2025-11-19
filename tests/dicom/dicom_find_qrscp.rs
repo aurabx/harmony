@@ -157,7 +157,7 @@ async fn dicom_find_with_dcmqrscp() {
         path_prefix = "/dicom"
 
         [backends.dicom_pacs]
-        service = "dicom"
+        service = "dicom_scu"
 
         [backends.dicom_pacs.options]
         aet = "QR_SCP"

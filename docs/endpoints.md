@@ -99,7 +99,7 @@ service = "jmix"
 path_prefix = "/data"
 ```
 
-See [jmix-dev-testing.md](../dev/jmix-dev-testing.md) for development testing.
+See [jmix-dev-testing.md](../dev/testing/jmix-dev-testing.md) for development testing.
 
 ### DICOMweb
 
@@ -136,3 +136,52 @@ service = "dicomweb"
 [endpoints.dicomweb_pacs.options]
 path_prefix = "/pacs"
 ```
+
+### DICOM SCP (Service Class Provider)
+
+Provides DICOM DIMSE SCP endpoint for receiving incoming DICOM requests.
+
+**Service behavior**:
+- Accepts incoming DIMSE connections (C-FIND, C-MOVE, C-GET, C-ECHO)
+- Converts DIMSE operations to `RequestEnvelope` via protocol adapter
+- Routes requests through the pipeline system
+- Returns DIMSE responses to the calling SCU
+
+**Configuration**:
+```toml
+[endpoints.<name>]
+service = "dicom_scp"
+[endpoints.<name>.options]
+local_aet = "HARMONY_SCP"    # Local Application Entity Title (required)
+bind_addr = "0.0.0.0"        # Bind address (default: 0.0.0.0)
+port = 11112                  # Listen port (default: 11112)
+enable_echo = true            # Enable C-ECHO (default: true)
+enable_find = true            # Enable C-FIND (default: false)
+enable_move = true            # Enable C-MOVE (default: false)
+enable_get = true             # Enable C-GET (default: false)
+storage_dir = "./tmp/dimse"  # Storage directory (optional)
+```
+
+**Supported Operations**:
+- `C-ECHO` - Connectivity test (enabled by default)
+- `C-FIND` - Query for studies/series/images
+- `C-MOVE` - Request dataset transfer to destination AET
+- `C-GET` - Direct dataset retrieval
+- `C-STORE` - Store incoming datasets (planned)
+
+**Example**: DICOM Query/Retrieve SCP
+```toml
+[endpoints.dicom_qr_scp]
+service = "dicom_scp"
+[endpoints.dicom_qr_scp.options]
+local_aet = "QR_SCP"
+bind_addr = "0.0.0.0"
+port = 11112
+enable_echo = true
+enable_find = true
+enable_move = true
+enable_get = true
+storage_dir = "./data/dicom"
+```
+
+**Note**: The DICOM SCP endpoint uses the `DimseAdapter` protocol adapter, not HTTP. It listens on the configured port for incoming DIMSE associations.

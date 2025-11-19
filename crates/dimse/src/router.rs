@@ -6,7 +6,7 @@ use futures::stream::BoxStream;
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
-use crate::types::{DatasetStream, DimseCommand, FindQuery, MoveQuery};
+use crate::types::{DatasetStream, DimseCommand, FindQuery, GetQuery, MoveQuery};
 use crate::{DimseError, RemoteNode, Result};
 
 /// Request sent to the DIMSE router
@@ -56,6 +56,9 @@ pub enum DimseRequestPayload {
     /// C-MOVE request with query and destination
     Move(MoveQuery),
 
+    /// C-GET request with query parameters
+    Get(GetQuery),
+
     /// C-STORE request with dataset to store
     Store(DatasetStream),
 }
@@ -71,6 +74,15 @@ pub enum DimseResponsePayload {
 
     /// C-MOVE response with moved dataset or status update
     Move {
+        dataset: Option<DatasetStream>,
+        remaining: u32,
+        completed: u32,
+        failed: u32,
+        warning: u32,
+    },
+
+    /// C-GET response with retrieved dataset
+    Get {
         dataset: Option<DatasetStream>,
         remaining: u32,
         completed: u32,
@@ -293,6 +305,18 @@ impl DimseRequest {
         }
     }
 
+    /// Create a new C-GET request
+    pub fn get_request(remote_node: RemoteNode, query: GetQuery) -> Self {
+        Self {
+            id: Uuid::new_v4(),
+            command: DimseCommand::Find, // C-GET uses Find command type
+            remote_node: Some(remote_node),
+            payload: DimseRequestPayload::Get(query),
+            response_tx: None,
+            stream_tx: None,
+        }
+    }
+
     /// Create a new C-STORE request
     pub fn store(remote_node: RemoteNode, dataset: DatasetStream) -> Self {
         Self {
@@ -338,6 +362,29 @@ impl DimseResponse {
         Self {
             request_id,
             payload: DimseResponsePayload::Move {
+                dataset,
+                remaining,
+                completed,
+                failed,
+                warning,
+            },
+            is_final,
+        }
+    }
+
+    /// Create a new C-GET response
+    pub fn get_response(
+        request_id: Uuid,
+        dataset: Option<DatasetStream>,
+        remaining: u32,
+        completed: u32,
+        failed: u32,
+        warning: u32,
+        is_final: bool,
+    ) -> Self {
+        Self {
+            request_id,
+            payload: DimseResponsePayload::Get {
                 dataset,
                 remaining,
                 completed,

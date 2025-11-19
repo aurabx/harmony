@@ -14,10 +14,11 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+pub mod content_type;
 pub mod router;
 
 /// HTTP Protocol Adapter
-/// 
+///
 /// Wraps Axum HTTP server and provides protocol-specific I/O handling
 /// while using the common PipelineExecutor for business logic.
 pub struct HttpAdapter {
@@ -50,13 +51,21 @@ impl HttpAdapter {
             .path_and_query()
             .map(|pq| pq.as_str().to_string())
             .unwrap_or_else(|| path_only.clone());
+
+        // Strip prefix from path and remove leading slash
         let mut subpath = path_only
             .strip_prefix(path_prefix)
-            .unwrap_or("")
+            .unwrap_or(&path_only)
             .to_string();
         if subpath.starts_with('/') {
             subpath = subpath.trim_start_matches('/').to_string();
         }
+
+        // Also create subpath with query string (stripped prefix but includes query)
+        let subpath_with_query = full_path_with_query
+            .strip_prefix(path_prefix)
+            .unwrap_or(&full_path_with_query)
+            .to_string();
 
         // Headers
         let headers_obj: serde_json::Value = {
@@ -127,6 +136,7 @@ impl HttpAdapter {
         let mut meta_map = HashMap::new();
         meta_map.insert("protocol".to_string(), "http".to_string());
         meta_map.insert("path".to_string(), subpath);
+        meta_map.insert("path_with_query".to_string(), subpath_with_query);
         meta_map.insert("full_path".to_string(), full_path_with_query);
 
         // attrs object
@@ -184,6 +194,26 @@ impl HttpAdapter {
 impl ProtocolAdapter for HttpAdapter {
     fn protocol(&self) -> Protocol {
         Protocol::Http
+    }
+
+    fn from_network(
+        network_name: String,
+        network_config: &crate::models::network::config::NetworkConfig,
+    ) -> Box<dyn ProtocolAdapter> {
+        let bind_addr = format!(
+            "{}:{}",
+            network_config.tcp_config.bind_address, network_config.tcp_config.bind_port
+        )
+        .parse::<SocketAddr>()
+        .unwrap_or_else(|_| {
+            panic!(
+                "Invalid TCP bind address or port for network '{}': {}:{}",
+                network_name,
+                network_config.tcp_config.bind_address,
+                network_config.tcp_config.bind_port
+            )
+        });
+        Box::new(HttpAdapter::new(network_name, bind_addr))
     }
 
     async fn start(

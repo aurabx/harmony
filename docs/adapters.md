@@ -6,6 +6,12 @@
 
 Protocol adapters are the foundation of Harmony's protocol-agnostic architecture. Each protocol (HTTP, DIMSE, HL7, etc.) has a dedicated adapter that handles protocol-specific I/O while using the unified `PipelineExecutor` for all business logic.
 
+**Dynamic Adapter Selection**: Harmony automatically determines which protocol adapters to start for each network based on the services configured in that network's pipelines. This means:
+- Networks with only HTTP-based services (http, jmix, fhir, etc.) start only the `HttpAdapter`
+- Networks with only DICOM SCP endpoints start only the `DimseAdapter`
+- Networks with mixed service types start both adapters
+- Networks with no recognized services log a warning but don't fail
+
 ## Architecture
 
 ```
@@ -45,6 +51,25 @@ pub trait ProtocolAdapter: Send + Sync {
 }
 ```
 
+## Protocol to Service Mapping
+
+Each service type declares which protocol adapter it requires through the `ServiceType::required_protocol()` method. This design ensures:
+
+- **No hardcoded mappings**: The protocol requirement lives with the service definition
+- **Extensibility**: New services automatically work by implementing the trait method
+- **Type safety**: The compiler ensures every service declares its protocol
+
+Current protocol assignments:
+
+| Protocol | Service Types | Notes |
+|----------|---------------|-------|
+| **HTTP** | `http`, `jmix`, `fhir`, `dicomweb`, `echo`, `management`, `mock_dicom`, `dicom`, `dicom_scu` | Default for most services |
+| **DIMSE** | `dicom_scp` | DICOM network listener |
+
+**Note**: The `dicom` and `dicom_scu` services are used for backends (outgoing DICOM requests). They require the HTTP adapter to receive incoming HTTP requests, then make outgoing DIMSE calls via the SCU client.
+
+This mapping is automatically applied when starting networks based on each service's declared protocol requirement.
+
 ## Available Adapters
 
 ### HttpAdapter
@@ -73,15 +98,22 @@ let handle = adapter.start(config, shutdown).await?;
 
 **Features**:
 - DIMSE SCP (Service Class Provider) listener
-- Support for C-FIND, C-STORE, C-MOVE, C-ECHO
+- Support for C-ECHO, C-FIND, C-MOVE, C-GET, C-STORE
 - AE title-based routing
 - Dataset encoding/decoding
+- Integration with PipelineExecutor via QueryProvider trait
+
+**Service Integration**:
+The DimseAdapter works with `dicom_scp` endpoints to receive incoming DICOM requests. It does not handle backend/SCU operations - those are handled by the `dicom_scu` service through the SCU client.
 
 **Usage**:
 ```rust
 let adapter = DimseAdapter::new(network_name);
 let handle = adapter.start(config, shutdown).await?;
 ```
+
+**Configuration Detection**:
+The adapter automatically detects and starts SCP listeners for endpoints with `service = "dicom_scp"`. Legacy `service = "dimse"` is also supported with a deprecation warning.
 
 ## Implementing a New Adapter
 

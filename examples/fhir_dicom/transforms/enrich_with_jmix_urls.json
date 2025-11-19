@@ -1,17 +1,11 @@
 [
   {
-    "operation": "shift",
-    "spec": {
-      "*": "&"
-    }
-  },
-  {
-    "operation": "default",
+    "operation": "modify-overwrite-beta",
     "spec": {
       "data": {
         "matches": {
           "*": {
-            "_jmix_url": "/api/jmix"
+            "_jmix_url": "=concat('/api/jmix?studyInstanceUid=',@(1,0020000D.Value.0))"
           }
         }
       }

@@ -135,7 +135,7 @@ impl Middleware for JmixBuilderMiddleware {
             // Serve manifest
             if wants_manifest {
                 let manifest_path = package_dir.join("manifest.json");
-                
+
                 // Try to read manifest from file first, then from ZIP if not found
                 let manifest_json_opt = if manifest_path.exists() {
                     fs::read_to_string(&manifest_path)
@@ -229,7 +229,7 @@ impl Middleware for JmixBuilderMiddleware {
                 Some(id.to_string()),
                 Some(true),
             );
-            
+
             // Also store metadata in request_details for immediate response processing
             envelope
                 .request_details
@@ -243,7 +243,7 @@ impl Middleware for JmixBuilderMiddleware {
         }
 
         // Case 2: GET/HEAD /api/jmix?studyInstanceUid=...
-        // Returns ZIP file if Accept: application/zip, otherwise returns JSON index
+        // Always returns ZIP file for the matching envelope
         if let Some(uid) = study_uid {
             let matches = query_by_study_uid(&store_root, &uid)?;
 
@@ -257,30 +257,7 @@ impl Middleware for JmixBuilderMiddleware {
                 return Ok(envelope);
             }
 
-            // Check Accept header to determine response format
-            let accept = envelope
-                .request_details
-                .headers
-                .get("accept")
-                .map(|s| s.to_lowercase())
-                .unwrap_or_default();
-            let wants_zip = accept.contains("application/zip");
-            let wants_json = accept.contains("application/json") || accept.contains("*/*") || accept.is_empty();
-
-            // If client wants JSON, return index listing
-            if wants_json && !wants_zip {
-                // Build JSON response with list of matching packages
-                let json_response = serde_json::json!({
-                    "jmixEnvelopes": matches
-                });
-                let mut hdrs = HashMap::new();
-                hdrs.insert("content-type".to_string(), "application/json".to_string());
-                set_response_and_skip(200, hdrs, None, Some(json_response), None, None);
-                return Ok(envelope);
-            }
-
-            // Client wants ZIP - serve the zip file
-            // Use the first match (most recent or only one)
+            // Serve the ZIP file for the first match (most recent or only one)
             let m = &matches[0];
             let id = m.get("id").and_then(|v| v.as_str()).unwrap_or("");
             let path = m.get("path").and_then(|v| v.as_str()).unwrap_or("");
@@ -316,7 +293,7 @@ impl Middleware for JmixBuilderMiddleware {
                 Some(id.to_string()),
                 Some(true),
             );
-            
+
             // Also store metadata in request_details for immediate response processing
             envelope
                 .request_details
@@ -628,7 +605,7 @@ mod tests {
     use super::*;
     use crate::globals::set_storage;
     use crate::models::envelope::envelope::{RequestDetails, ResponseDetails, ResponseEnvelope};
-    use crate::storage::{filesystem::FilesystemStorage, StorageBackend};
+    use crate::storage::{FilesystemStorage, StorageBackend};
     use serial_test::serial;
     use std::fs;
     use std::sync::Arc;
@@ -639,7 +616,7 @@ mod tests {
     fn test_builds_jmix_envelope_from_dicom_result() {
         // Reset global storage to ensure clean state
         crate::globals::reset_storage();
-        
+
         // Create unique storage for this test
         let storage = create_test_storage();
         set_storage(storage.clone());
@@ -670,6 +647,7 @@ mod tests {
             query_params: Default::default(),
             cache_status: None,
             metadata: Default::default(),
+            content_metadata: None,
         };
 
         let env = ResponseEnvelope {
@@ -747,6 +725,7 @@ mod tests {
             query_params: Default::default(),
             cache_status: None,
             metadata: Default::default(),
+            content_metadata: None,
         };
 
         let env = ResponseEnvelope {
@@ -763,9 +742,7 @@ mod tests {
 
         let mw = JmixBuilderMiddleware::new();
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(async move {
-            mw.right(env).await
-        });
+        let result = rt.block_on(async move { mw.right(env).await });
 
         // Check if the middleware ran successfully
         match &result {
@@ -854,7 +831,7 @@ mod tests {
         assert!(archive.len() > 0, "Zip should contain files");
         assert!(has_manifest, "Zip should contain manifest.json");
         // Note: metadata.json and DICOM files might be optional depending on jmix-rs behavior
-        
+
         // Clean up: Remove the test-specific storage to avoid interference
         drop(storage);
     }

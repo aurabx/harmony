@@ -54,7 +54,7 @@ pub fn http_status_to_dimse(http_status: u16) -> DimseStatus {
     match http_status {
         // 2xx Success
         200..=299 => DimseStatus::Success,
-        
+
         // 4xx Client Errors
         400 => DimseStatus::Failure(0xC000), // Cannot understand
         401 | 403 => DimseStatus::Failure(0x0124), // Not authorized
@@ -66,13 +66,13 @@ pub fn http_status_to_dimse(http_status: u16) -> DimseStatus {
         413 => DimseStatus::Failure(0xA700), // Out of resources
         415 => DimseStatus::Failure(0xA900), // Dataset does not match SOP class
         429 => DimseStatus::Failure(0xA702), // Resource limitation
-        
+
         // 5xx Server Errors
         500 => DimseStatus::Failure(0x0110), // Processing failure
         501 => DimseStatus::Failure(0x0112), // Unrecognized operation
         502..=504 => DimseStatus::Failure(0xA701), // Out of resources/unable to process
         507 => DimseStatus::Failure(0xA700), // Out of resources
-        
+
         // Default for unknown status codes
         _ if (400..500).contains(&http_status) => DimseStatus::Failure(0xC000),
         _ => DimseStatus::Failure(0x0110), // Processing failure
@@ -96,11 +96,11 @@ pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
                 DimseStatus::Failure(0x0110) // Processing failure
             }
         }
-        
+
         PipelineError::MiddlewareError(_) => {
             DimseStatus::Failure(0x0110) // Processing failure
         }
-        
+
         PipelineError::BackendError(msg) => {
             let msg_lower = msg.to_lowercase();
             if msg_lower.contains("not found") || msg_lower.contains("404") {
@@ -113,7 +113,7 @@ pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
                 DimseStatus::Failure(0x0110) // Processing failure
             }
         }
-        
+
         PipelineError::ConfigError(_) => {
             DimseStatus::Failure(0x0110) // Processing failure
         }
@@ -122,17 +122,20 @@ pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
 
 /// Maps common error scenarios to DIMSE status with context
 #[allow(dead_code)]
-pub fn error_context_to_dimse(http_status: Option<u16>, error: Option<&PipelineError>) -> DimseStatus {
+pub fn error_context_to_dimse(
+    http_status: Option<u16>,
+    error: Option<&PipelineError>,
+) -> DimseStatus {
     // Prefer pipeline error mapping if available (more specific)
     if let Some(err) = error {
         return pipeline_error_to_dimse(err);
     }
-    
+
     // Fall back to HTTP status mapping
     if let Some(status) = http_status {
         return http_status_to_dimse(status);
     }
-    
+
     // Default to generic processing failure
     DimseStatus::Failure(0x0110)
 }
@@ -153,7 +156,7 @@ pub fn is_retriable_status(status: &DimseStatus) -> bool {
                 0xA701 | // Unable to process (temporary)
                 0xA702 | // Resource limitation
                 0xA700 | // Out of resources
-                0x0122   // Timeout-related
+                0x0122 // Timeout-related
             )
         }
         _ => false,
@@ -194,25 +197,37 @@ mod tests {
     #[test]
     fn test_pipeline_error_not_found() {
         let error = PipelineError::ServiceError("Resource not found".to_string());
-        assert_eq!(pipeline_error_to_dimse(&error), DimseStatus::Failure(0xA801));
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0xA801)
+        );
     }
 
     #[test]
     fn test_pipeline_error_unauthorized() {
         let error = PipelineError::ServiceError("Unauthorized access".to_string());
-        assert_eq!(pipeline_error_to_dimse(&error), DimseStatus::Failure(0x0124));
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0x0124)
+        );
     }
 
     #[test]
     fn test_pipeline_error_generic() {
         let error = PipelineError::ServiceError("Something went wrong".to_string());
-        assert_eq!(pipeline_error_to_dimse(&error), DimseStatus::Failure(0x0110));
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0x0110)
+        );
     }
 
     #[test]
     fn test_backend_error_404() {
         let error = PipelineError::BackendError("Backend returned 404".to_string());
-        assert_eq!(pipeline_error_to_dimse(&error), DimseStatus::Failure(0xA801));
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0xA801)
+        );
     }
 
     #[test]

@@ -34,3 +34,6 @@ module = ""
 # Middleware types
 [middleware_types.passthru]
 module = ""
+
+[middleware_types.policies]
+module = ""

@@ -1,6 +1,6 @@
 [package]
 name = "dimse"
-version = "0.3.0"
+version = "0.7.0"
 edition = "2021"
 
 description = "DIMSE protocol implementation for DICOM services"
@@ -17,8 +17,9 @@ dicom-core = "0.9"
 dicom-dictionary-std = "0.9"
 dicom-encoding = "0.9"
 dicom-parser = "0.9"
-dicom-ul = "0.9"
+dicom-ul = { version = "0.9", features = ["async"] }
 dicom-object = "0.9"
+dicom-transfer-syntax-registry = "0.9"
 
 # Async runtime and utilities
 tokio = { version = "1", features = ["full"] }

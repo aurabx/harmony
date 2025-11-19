@@ -1,8 +1,12 @@
 #[allow(clippy::module_inception)]
 pub mod config;
+pub mod config_storage;
 mod logging_config;
 mod proxy_config;
+pub mod reload;
+mod runbeam_config;
 mod tests;
+pub mod watcher;
 
 /// Structure representing application startup arguments or metadata.
 #[derive(Debug)]

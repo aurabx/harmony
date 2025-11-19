@@ -68,12 +68,15 @@ impl MetadataTransformMiddleware {
 
 impl MetadataTransformMiddleware {
     /// Convert JSON value to TargetDetails structure
-    fn json_to_target_details(&self, json: &Value) -> Result<crate::models::envelope::envelope::TargetDetails, Error> {
+    fn json_to_target_details(
+        &self,
+        json: &Value,
+    ) -> Result<crate::models::envelope::envelope::TargetDetails, Error> {
         use crate::models::envelope::envelope::TargetDetails;
-        
-        let obj = json.as_object().ok_or_else(|| {
-            Error::from("Transformed JSON must be an object for target_details")
-        })?;
+
+        let obj = json
+            .as_object()
+            .ok_or_else(|| Error::from("Transformed JSON must be an object for target_details"))?;
 
         // Extract fields with defaults
         let base_url = obj
@@ -81,13 +84,13 @@ impl MetadataTransformMiddleware {
             .and_then(|v| v.as_str())
             .unwrap_or("")
             .to_string();
-        
+
         let method = obj
             .get("method")
             .and_then(|v| v.as_str())
             .unwrap_or("GET")
             .to_string();
-        
+
         let uri = obj
             .get("uri")
             .and_then(|v| v.as_str())
@@ -159,7 +162,7 @@ impl MetadataTransformMiddleware {
         if !new.uri.is_empty() {
             existing.uri = new.uri.clone();
         }
-        
+
         // Merge maps (new values override existing)
         existing.headers.extend(new.headers.clone());
         existing.cookies.extend(new.cookies.clone());
@@ -195,16 +198,21 @@ impl Middleware for MetadataTransformMiddleware {
                     Ok(transformed) => {
                         // Create or update target_details from transformed JSON
                         let target_details = self.json_to_target_details(&transformed)?;
-                        
+
                         // Initialize target_details if not present
                         if envelope.target_details.is_none() {
                             envelope.target_details = Some(target_details);
                         } else {
                             // Merge with existing target_details
-                            self.merge_target_details(envelope.target_details.as_mut().unwrap(), &target_details);
+                            self.merge_target_details(
+                                envelope.target_details.as_mut().unwrap(),
+                                &target_details,
+                            );
                         }
-                        
-                        tracing::debug!("Applied metadata transform to target_details on left side");
+
+                        tracing::debug!(
+                            "Applied metadata transform to target_details on left side"
+                        );
                     }
                     Err(e) => {
                         let error_msg = format!("Metadata transform failed on left side: {}", e);
@@ -212,7 +220,10 @@ impl Middleware for MetadataTransformMiddleware {
                             tracing::error!("{}", error_msg);
                             return Err(Error::from(error_msg));
                         } else {
-                            tracing::warn!("{}, continuing without target_details modification", error_msg);
+                            tracing::warn!(
+                                "{}, continuing without target_details modification",
+                                error_msg
+                            );
                         }
                     }
                 }
@@ -313,12 +324,24 @@ impl Middleware for MetadataTransformMiddleware {
 }
 
 /// Parse configuration from HashMap for middleware registry
-pub fn parse_config(options: &HashMap<String, Value>) -> Result<MetadataTransformConfig, String> {
-    let spec_path = options
+pub fn parse_config(
+    options: &HashMap<String, Value>,
+    transforms_path: Option<&str>,
+) -> Result<MetadataTransformConfig, String> {
+    let spec_path_raw = options
         .get("spec_path")
         .and_then(|v| v.as_str())
         .ok_or("Missing required 'spec_path' in metadata_transform middleware config")?
         .to_string();
+
+    // Resolve spec_path relative to transforms_path if provided
+    let spec_path = if let Some(base_path) = transforms_path {
+        use std::path::Path;
+        let full_path = Path::new(base_path).join(&spec_path_raw);
+        full_path.to_string_lossy().to_string()
+    } else {
+        spec_path_raw
+    };
 
     let apply = options
         .get("apply")
@@ -523,7 +546,7 @@ mod tests {
         options.insert("apply".to_string(), json!("both"));
         options.insert("fail_on_error".to_string(), json!(false));
 
-        let config = parse_config(&options).unwrap();
+        let config = parse_config(&options, None).unwrap();
         assert_eq!(config.spec_path, "/path/to/spec.json");
         assert_eq!(config.apply, "both");
         assert!(!config.fail_on_error);
@@ -534,7 +557,7 @@ mod tests {
         let mut options = HashMap::new();
         options.insert("spec_path".to_string(), json!("/path/to/spec.json"));
 
-        let config = parse_config(&options).unwrap();
+        let config = parse_config(&options, None).unwrap();
         assert_eq!(config.spec_path, "/path/to/spec.json");
         assert_eq!(config.apply, "left"); // default
         assert!(config.fail_on_error); // default
@@ -543,7 +566,7 @@ mod tests {
     #[test]
     fn test_parse_config_missing_spec_path() {
         let options = HashMap::new();
-        let result = parse_config(&options);
+        let result = parse_config(&options, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing required 'spec_path'"));
     }

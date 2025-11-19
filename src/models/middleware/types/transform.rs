@@ -107,10 +107,7 @@ impl Middleware for JoltTransformMiddleware {
                 Ok(transformed) => {
                     // If context was injected, extract the "data" field
                     let result_data = if self.inject_context {
-                        transformed
-                            .get("data")
-                            .cloned()
-                            .unwrap_or(transformed)
+                        transformed.get("data").cloned().unwrap_or(transformed)
                     } else {
                         transformed
                     };
@@ -180,10 +177,7 @@ impl Middleware for JoltTransformMiddleware {
                 Ok(transformed) => {
                     // If context was injected, extract the "data" field
                     let result_data = if self.inject_context {
-                        transformed
-                            .get("data")
-                            .cloned()
-                            .unwrap_or(transformed)
+                        transformed.get("data").cloned().unwrap_or(transformed)
                     } else {
                         transformed
                     };
@@ -214,12 +208,22 @@ impl Middleware for JoltTransformMiddleware {
 /// Parse configuration from HashMap for middleware registry
 pub fn parse_config(
     options: &HashMap<String, Value>,
+    transforms_path: Option<&str>,
 ) -> Result<JoltTransformMiddlewareConfig, String> {
-    let spec_path = options
+    let spec_path_raw = options
         .get("spec_path")
         .and_then(|v| v.as_str())
         .ok_or("Missing required 'spec_path' in transform middleware config")?
         .to_string();
+
+    // Resolve spec_path relative to transforms_path if provided
+    let spec_path = if let Some(base_path) = transforms_path {
+        use std::path::Path;
+        let full_path = Path::new(base_path).join(&spec_path_raw);
+        full_path.to_string_lossy().to_string()
+    } else {
+        spec_path_raw
+    };
 
     let apply = options
         .get("apply")
@@ -248,7 +252,9 @@ pub fn parse_config(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::envelope::envelope::{RequestDetails, RequestEnvelopeBuilder, ResponseDetails, ResponseEnvelope};
+    use crate::models::envelope::envelope::{
+        RequestDetails, RequestEnvelopeBuilder, ResponseDetails, ResponseEnvelope,
+    };
     use serde_json::json;
     use std::fs;
     use tempfile::NamedTempFile;
@@ -408,7 +414,7 @@ mod tests {
         options.insert("apply".to_string(), json!("both"));
         options.insert("fail_on_error".to_string(), json!(false));
 
-        let config = parse_config(&options).unwrap();
+        let config = parse_config(&options, None).unwrap();
         assert_eq!(config.spec_path, "/path/to/spec.json");
         assert_eq!(config.apply, "both");
         assert!(!config.fail_on_error);
@@ -417,7 +423,7 @@ mod tests {
     #[test]
     fn test_parse_config_missing_spec_path() {
         let options = HashMap::new();
-        let result = parse_config(&options);
+        let result = parse_config(&options, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing required 'spec_path'"));
     }
@@ -425,12 +431,12 @@ mod tests {
     #[tokio::test]
     async fn test_middleware_with_real_fhir_to_dicom_params_left() {
         use crate::models::envelope::envelope::TargetDetails;
-        
+
         // Build envelope with target_details.metadata for context injection
         let mut target_metadata = HashMap::new();
         target_metadata.insert("PatientID".to_string(), "PID156695".to_string());
         target_metadata.insert("StudyInstanceUID".to_string(), "1.2.3.4.5".to_string());
-        
+
         let target_details = TargetDetails {
             base_url: "http://backend.example.com".to_string(),
             method: "GET".to_string(),
@@ -440,7 +446,7 @@ mod tests {
             query_params: HashMap::new(),
             metadata: target_metadata,
         };
-        
+
         let mut env = RequestEnvelopeBuilder::new()
             .method("GET")
             .uri("/fhir/ImagingStudy?patient=PID156695")
@@ -453,7 +459,7 @@ mod tests {
             })))
             .build()
             .unwrap();
-        
+
         // Set target_details manually
         env.target_details = Some(target_details);
 
@@ -494,6 +500,7 @@ mod tests {
             query_params: Default::default(),
             cache_status: None,
             metadata: Default::default(),
+            content_metadata: None,
         };
         let input = json!({
             "data": {

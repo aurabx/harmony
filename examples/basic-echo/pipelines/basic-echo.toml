@@ -2,19 +2,45 @@
 # Basic echo-only pipeline (conflict-free)
 #-------------------------
 [pipelines.echo_basic]
-description = "Basic echo endpoint for quick start"
+description = "Basic echo endpoint with public access"
 networks = ["http_net"]
 endpoints = ["echo_endpoint"]
 middleware = [
+    "echo_policies",
     "passthru",
 ]
 backends = ["echo_backend"]
 
 # ------------------------
 # Middleware
+#------------------------
+
+[middleware.echo_policies]
+type = "policies"
+
+[middleware.echo_policies.options]
+policies = ["echo_open"]
+
+# ------------------------
+# Policies
 #-------------------------
-[middleware.passthru]
-type = "passthru"
+[policies.echo_open]
+id = "echo_open"
+name = "Echo Open Access"
+enabled = true
+rules = ["allow_all"]
+
+# ------------------------
+# Rules
+#-------------------------
+[rules.allow_all]
+id = "allow_all"
+name = "Allow All"
+type = "allow_all"
+weight = 100
+enabled = true
+
+[rules.allow_all.options]
 
 # ------------------------
 # Public endpoints

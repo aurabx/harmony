@@ -22,3 +22,6 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
     // Delegate to HttpAdapter's router builder
     crate::adapters::http::router::build_network_router(config, network_name).await
 }
+
+#[cfg(test)]
+mod tests;

@@ -18,24 +18,21 @@ use std::path::Path;
 use tracing::warn;
 use uuid::Uuid;
 
+/// DICOM SCU (Service Class User) backend configuration
+///
+/// This service handles outgoing DICOM DIMSE requests (C-ECHO, C-FIND, C-MOVE, C-GET)
+/// to remote PACS systems.
 #[derive(Debug, Deserialize)]
-pub struct DicomEndpoint {
+pub struct DicomScuBackend {
     pub local_aet: Option<String>,
-    pub aet: Option<String>, // For backward compatibility (remote AET)
+    pub aet: Option<String>, // Remote AET
     pub host: Option<String>,
     pub port: Option<u16>,
     pub use_tls: Option<bool>,
 }
 
-impl DicomEndpoint {
-    /// Check if this is being used as a backend (SCU) vs endpoint (SCP)
-    fn is_backend_usage(&self, options: &HashMap<String, Value>) -> bool {
-        // If host/aet are provided, it's for backend usage (connecting to remote)
-        // Note: 'port' alone can be used for SCP listener and should NOT imply backend usage
-        options.contains_key("host") || options.contains_key("aet")
-    }
-
-    /// Get the local AET from options or struct
+impl DicomScuBackend {
+    /// Get the local AET from options or struct, with default fallback
     fn get_local_aet(&self, options: &HashMap<String, Value>) -> Option<String> {
         options
             .get("local_aet")
@@ -55,7 +52,7 @@ impl DicomEndpoint {
             .and_then(|v| v.as_str())
             .or(self.aet.as_deref())
             .ok_or_else(|| ConfigError::InvalidEndpoint {
-                name: "dicom".to_string(),
+                name: "dicom_scu".to_string(),
                 reason: "Missing remote 'aet' (Application Entity Title)".to_string(),
             })?
             .to_string();
@@ -65,7 +62,7 @@ impl DicomEndpoint {
             .and_then(|v| v.as_str())
             .or(self.host.as_deref())
             .ok_or_else(|| ConfigError::InvalidEndpoint {
-                name: "dicom".to_string(),
+                name: "dicom_scu".to_string(),
                 reason: "Missing 'host' (DICOM server address)".to_string(),
             })?
             .to_string();
@@ -75,14 +72,14 @@ impl DicomEndpoint {
             .and_then(|v| v.as_u64())
             .or(self.port.map(|p| p as u64))
             .ok_or_else(|| ConfigError::InvalidEndpoint {
-                name: "dicom".to_string(),
+                name: "dicom_scu".to_string(),
                 reason: "Missing 'port'".to_string(),
             })?;
 
         // DICOM servers commonly use privileged ports like 104, so allow 1-65535 for remote nodes
         if !(1..=65535).contains(&port) {
             return Err(ConfigError::InvalidEndpoint {
-                name: "dicom".to_string(),
+                name: "dicom_scu".to_string(),
                 reason: "Invalid 'port' (Allowed range: 1-65535)".to_string(),
             });
         }
@@ -103,67 +100,35 @@ impl DicomEndpoint {
 }
 
 #[async_trait]
-impl ServiceType for DicomEndpoint {
+impl ServiceType for DicomScuBackend {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
-        if self.is_backend_usage(options) {
-            // Backend usage - validate remote connection parameters
-            self.create_remote_node(options)?;
-            
-            // Validate dimse_retrieve_mode option if provided
-            if let Some(retrieve_mode) = options.get("dimse_retrieve_mode") {
-                if let Some(mode_str) = retrieve_mode.as_str() {
-                    let mode_lower = mode_str.to_lowercase();
-                    if !matches!(mode_lower.as_str(), "get" | "move") {
-                        return Err(ConfigError::InvalidEndpoint {
-                            name: "dicom".to_string(),
-                            reason: "dimse_retrieve_mode must be either 'get' or 'move'".to_string(),
-                        });
-                    }
-                } else {
+        // DicomScuBackend is always a backend - validate remote connection parameters
+        self.create_remote_node(options)?;
+
+        // Validate dimse_retrieve_mode option if provided
+        if let Some(retrieve_mode) = options.get("dimse_retrieve_mode") {
+            if let Some(mode_str) = retrieve_mode.as_str() {
+                let mode_lower = mode_str.to_lowercase();
+                if !matches!(mode_lower.as_str(), "get" | "move") {
                     return Err(ConfigError::InvalidEndpoint {
-                        name: "dicom".to_string(),
-                        reason: "dimse_retrieve_mode must be a string value".to_string(),
+                        name: "dicom_scu".to_string(),
+                        reason: "dimse_retrieve_mode must be either 'get' or 'move'".to_string(),
                     });
                 }
-            }
-        } else {
-            // Endpoint usage - validate local AET only for SCP listener
-            let local_aet =
-                self.get_local_aet(options)
-                    .ok_or_else(|| ConfigError::InvalidEndpoint {
-                        name: "dicom".to_string(),
-                        reason: "Missing 'local_aet' for DICOM endpoint (SCP)".to_string(),
-                    })?;
-
-            if local_aet.trim().is_empty() || local_aet.len() > 16 {
+            } else {
                 return Err(ConfigError::InvalidEndpoint {
-                    name: "dicom".to_string(),
-                    reason: "Local AE title must be 1-16 characters".to_string(),
+                    name: "dicom_scu".to_string(),
+                    reason: "dimse_retrieve_mode must be a string value".to_string(),
                 });
-            }
-
-            // Optional: validate port if provided
-            if let Some(port_val) = options.get("port").and_then(|v| v.as_u64()) {
-                if port_val == 0 || port_val > 65535 {
-                    return Err(ConfigError::InvalidEndpoint {
-                        name: "dicom".to_string(),
-                        reason: "Invalid 'port' (Allowed range: 1-65535)".to_string(),
-                    });
-                }
             }
         }
 
         Ok(())
     }
 
-    fn build_router(&self, options: &HashMap<String, Value>) -> Vec<RouteConfig> {
-        if self.is_backend_usage(options) {
-            // Backend usage - no HTTP routes needed (DIMSE protocol only)
-            vec![]
-        } else {
-            // Endpoint usage - no HTTP routes; SCP listener is started by the router/dispatcher with pipeline context
-            vec![]
-        }
+    fn build_router(&self, _options: &HashMap<String, Value>) -> Vec<RouteConfig> {
+        // Backend usage only - no HTTP routes (DIMSE SCU operates at protocol level)
+        vec![]
     }
 
     async fn build_protocol_envelope(
@@ -210,16 +175,18 @@ impl ServiceType for DicomEndpoint {
 }
 
 #[async_trait]
-impl ServiceHandler<Value> for DicomEndpoint {
+impl ServiceHandler<Value> for DicomScuBackend {
     type ReqBody = Value;
 
     async fn endpoint_incoming_request(
         &self,
-        envelope: RequestEnvelope<Vec<u8>>,
+        _envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-        // Doesn't run as an endpoint yet
-        Ok(envelope)
+        // DicomScuBackend is not an endpoint - this should never be called
+        Err(Error::from(
+            "DicomScuBackend cannot be used as an endpoint (use dicom_scp instead)",
+        ))
     }
 
     async fn backend_outgoing_request(
@@ -326,7 +293,7 @@ impl ServiceHandler<Value> for DicomEndpoint {
     }
 }
 
-impl DicomEndpoint {
+impl DicomScuBackend {
     /// Handle backend (SCU) request processing
     async fn handle_backend_request(
         &self,
@@ -374,19 +341,13 @@ impl DicomEndpoint {
         // 4. Check if path is a valid DIMSE operation name (for direct HTTP->DICOM calls)
         // 5. Default to "get" for data retrieval
         let valid_ops = ["echo", "find", "get", "move", "store"];
-        
+
         let op = envelope
             .target_details
             .as_ref()
             .and_then(|td| td.metadata.get("dimse_op"))
             .cloned()
-            .or_else(|| {
-                envelope
-                    .request_details
-                    .metadata
-                    .get("dimse_op")
-                    .cloned()
-            })
+            .or_else(|| envelope.request_details.metadata.get("dimse_op").cloned())
             .or_else(|| {
                 // Only use dimse_retrieve_mode for retrieval operations
                 // This allows backend configuration to override default "get" with "move"
@@ -402,7 +363,7 @@ impl DicomEndpoint {
                     .metadata
                     .get("path")
                     .map(|s| s.trim_start_matches('/').to_lowercase())?;
-                
+
                 if valid_ops.contains(&path.as_str()) {
                     Some(path)
                 } else {

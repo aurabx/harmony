@@ -517,7 +517,7 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
             .response_details
             .metadata
             .insert("service".to_string(), "dicomweb".to_string());
-        
+
         // Ensure DICOMweb content-type for HTTP
         if ctx.protocol == crate::models::protocol::Protocol::Http {
             envelope
@@ -615,6 +615,7 @@ mod tests {
             query_params: HashMap::new(),
             cache_status: None,
             metadata: HashMap::new(),
+            content_metadata: None,
         };
 
         let envelope = ResponseEnvelope {
@@ -665,6 +666,7 @@ mod tests {
             query_params: HashMap::new(),
             cache_status: None,
             metadata: HashMap::new(),
+            content_metadata: None,
         };
 
         let envelope = ResponseEnvelope {
@@ -724,6 +726,7 @@ mod tests {
             query_params: HashMap::new(),
             cache_status: None,
             metadata: HashMap::new(),
+            content_metadata: None,
         };
 
         let envelope = ResponseEnvelope {
@@ -786,6 +789,7 @@ mod tests {
             query_params: HashMap::new(),
             cache_status: None,
             metadata: HashMap::new(),
+            content_metadata: None,
         };
 
         let envelope = ResponseEnvelope {

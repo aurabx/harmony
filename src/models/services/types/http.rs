@@ -35,6 +35,15 @@ impl ServiceType for HttpEndpoint {
             .and_then(|v| v.as_str())
             .unwrap_or("/");
 
+        // Ensure clean wildcard path by trimming trailing slashes
+        let prefix_trimmed = path_prefix.trim_end_matches('/');
+        let wildcard_path = if prefix_trimmed.is_empty() {
+            // Root path case
+            "/{*wildcard}".to_string()
+        } else {
+            format!("{}/{{*wildcard}}", prefix_trimmed)
+        };
+
         vec![
             // Handle exact path match
             RouteConfig {
@@ -49,7 +58,7 @@ impl ServiceType for HttpEndpoint {
             },
             // Handle subpaths (e.g., /dicom/echo, /api/v1/users)
             RouteConfig {
-                path: format!("{}/{{*wildcard}}", path_prefix),
+                path: wildcard_path,
                 methods: vec![
                     http::Method::GET,
                     http::Method::POST,
@@ -124,9 +133,12 @@ impl ServiceType for HttpEndpoint {
             .map(|s| s.to_string());
 
         let mut metadata: Map<String, String> = Map::new();
-        // pass through HTTP-derived meta (path, full_path) from ctx.meta
+        // pass through HTTP-derived meta (path, path_with_query, full_path) from ctx.meta
         if let Some(path) = ctx.meta.get("path") {
             metadata.insert("path".into(), path.clone());
+        }
+        if let Some(path_query) = ctx.meta.get("path_with_query") {
+            metadata.insert("path_with_query".into(), path_query.clone());
         }
         if let Some(full) = ctx.meta.get("full_path") {
             metadata.insert("full_path".into(), full.clone());
@@ -146,8 +158,125 @@ impl ServiceType for HttpEndpoint {
             .unwrap_or("")
             .to_string();
 
-        // Try to parse payload as JSON for normalized_data
-        let normalized_data = serde_json::from_slice(&ctx.payload).ok();
+        // Content-type-aware parsing
+        use crate::adapters::http::content_type::*;
+        use crate::models::envelope::envelope::{ContentMetadata, ParseStatus};
+
+        let content_type_header = headers_map
+            .get("content-type")
+            .or_else(|| headers_map.get("Content-Type"))
+            .cloned()
+            .unwrap_or_else(|| "application/json".to_string());
+
+        let (normalized_data, content_metadata) = if ctx.payload.is_empty() {
+            // Empty payload - no parsing needed
+            (
+                None,
+                Some(ContentMetadata {
+                    content_type: content_type_header,
+                    charset: None,
+                    format: "empty".to_string(),
+                    parse_status: ParseStatus::NotAttempted,
+                    original_size: 0,
+                    checksum: None,
+                }),
+            )
+        } else {
+            // Parse content-type header
+            let ct = parse_content_type(&content_type_header).unwrap_or_else(|_| ContentType {
+                media_type: "application/octet-stream".to_string(),
+                charset: None,
+                boundary: None,
+            });
+
+            let original_size = ctx.payload.len();
+
+            // Route to appropriate parser based on content type
+            let (parsed_data, format, status, checksum) = match ct.media_type.as_str() {
+                // JSON types
+                "application/json" | "application/fhir+json" | "application/dicom+json" => {
+                    match serde_json::from_slice(&ctx.payload) {
+                        Ok(json) => (Some(json), "json".to_string(), ParseStatus::Success, None),
+                        Err(e) => {
+                            tracing::warn!("Failed to parse JSON: {}", e);
+                            (None, "json".to_string(), ParseStatus::Failed, None)
+                        }
+                    }
+                }
+
+                // XML types
+                "application/xml" | "text/xml" | "application/soap+xml" => {
+                    match parse_xml(&ctx.payload) {
+                        Ok(json) => (Some(json), "xml".to_string(), ParseStatus::Success, None),
+                        Err(e) => {
+                            tracing::warn!("Failed to parse XML: {}", e);
+                            (None, "xml".to_string(), ParseStatus::Failed, None)
+                        }
+                    }
+                }
+
+                // CSV
+                "text/csv" => match parse_csv(&ctx.payload) {
+                    Ok(json) => (Some(json), "csv".to_string(), ParseStatus::Success, None),
+                    Err(e) => {
+                        tracing::warn!("Failed to parse CSV: {}", e);
+                        (None, "csv".to_string(), ParseStatus::Failed, None)
+                    }
+                },
+
+                // Form URL-encoded
+                "application/x-www-form-urlencoded" => match parse_form_urlencoded(&ctx.payload) {
+                    Ok(json) => (Some(json), "form".to_string(), ParseStatus::Success, None),
+                    Err(e) => {
+                        tracing::warn!("Failed to parse form data: {}", e);
+                        (None, "form".to_string(), ParseStatus::Failed, None)
+                    }
+                },
+
+                // Multipart form data (async parsing)
+                "multipart/form-data" => match parse_multipart(&ctx.payload, ct.boundary).await {
+                    Ok(json) => (
+                        Some(json),
+                        "multipart".to_string(),
+                        ParseStatus::Success,
+                        None,
+                    ),
+                    Err(e) => {
+                        tracing::warn!("Failed to parse multipart data: {}", e);
+                        (None, "multipart".to_string(), ParseStatus::Failed, None)
+                    }
+                },
+
+                // Binary content
+                media_type if is_binary_content(media_type) => {
+                    let checksum = calculate_checksum(&ctx.payload);
+                    let metadata = create_binary_metadata(media_type, &ctx.payload);
+                    (
+                        Some(metadata),
+                        "binary".to_string(),
+                        ParseStatus::Success,
+                        Some(checksum),
+                    )
+                }
+
+                // Unknown/unsupported - try JSON as fallback
+                _ => match serde_json::from_slice(&ctx.payload) {
+                    Ok(json) => (Some(json), "json".to_string(), ParseStatus::Success, None),
+                    Err(_) => (None, "unknown".to_string(), ParseStatus::Unsupported, None),
+                },
+            };
+
+            let metadata = ContentMetadata {
+                content_type: content_type_header,
+                charset: ct.charset,
+                format,
+                parse_status: status,
+                original_size,
+                checksum,
+            };
+
+            (parsed_data, Some(metadata))
+        };
 
         RequestEnvelope::builder()
             .method(method)
@@ -157,6 +286,7 @@ impl ServiceType for HttpEndpoint {
             .query_params(query_params)
             .cache_status(cache_status)
             .metadata(metadata)
+            .content_metadata(content_metadata)
             .target_details(None)
             .original_data(ctx.payload)
             .normalized_data(normalized_data)
@@ -185,13 +315,13 @@ impl ServiceHandler<Value> for HttpEndpoint {
         options: &HashMap<String, Value>,
     ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
         use crate::models::envelope::envelope::TargetDetails;
-        
+
         // Extract base_url from backend options
         let base_url = options
             .get("base_url")
             .and_then(|v| v.as_str())
             .ok_or_else(|| Error::from("HTTP backend requires 'base_url' in options"))?;
-        
+
         // Check if middleware has already set target_details
         let target_details = if let Some(existing_target) = envelope.target_details.take() {
             // Middleware has set target_details - use it
@@ -204,43 +334,41 @@ impl ServiceHandler<Value> for HttpEndpoint {
             target
         } else {
             // No target_details set by middleware - create from request_details
-            // Use the path from metadata (without endpoint prefix) if available,
-            // otherwise fall back to the full URI
-            let path = envelope
-                .request_details
-                .metadata
-                .get("path")
-                .map(|p| format!("/{}", p))
-                .unwrap_or_else(|| envelope.request_details.uri.clone());
-            
+            // Use helper to extract path WITHOUT query string
+            let path = crate::models::services::path_utils::extract_path(&envelope);
+
             // Create TargetDetails from request_details with base_url
             let mut target = TargetDetails::from_request_details(
                 base_url.to_string(),
-                &envelope.request_details
+                &envelope.request_details,
             );
-            
-            // Override URI with the stripped path
+
+            // Override URI with the stripped path (without query string)
+            // Query parameters are preserved in target.query_params from request_details
             target.uri = path;
+
             target
         };
-        
+
         tracing::debug!(
-            "HTTP backend targeting: {} {}", 
-            target_details.method, 
-            target_details.full_url().unwrap_or_else(|_| "<invalid-url>".to_string())
+            "HTTP backend targeting: {} {}",
+            target_details.method,
+            target_details
+                .full_url()
+                .unwrap_or_else(|_| "<invalid-url>".to_string())
         );
-        
+
         // Store target_details in envelope for future use (Targets model, etc.)
         envelope.target_details = Some(target_details.clone());
-        
+
         // Make the actual HTTP request
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
             .build()
             .map_err(|e| Error::from(format!("Failed to create HTTP client: {}", e)))?;
-        
+
         let full_url = target_details.full_url()?;
-        
+
         // Build the request
         let mut request_builder = match target_details.method.as_str() {
             "GET" => client.get(&full_url),
@@ -253,28 +381,41 @@ impl ServiceHandler<Value> for HttpEndpoint {
                 return Err(Error::from(format!("Unsupported HTTP method: {}", method)));
             }
         };
-        
-        // Add headers from target_details
+
+        // Add headers from target_details, but drop hop-by-hop and Host headers
         for (key, value) in &target_details.headers {
+            let k = key.to_ascii_lowercase();
+            if matches!(
+                k.as_str(),
+                "host"
+                    | "connection"
+                    | "keep-alive"
+                    | "proxy-connection"
+                    | "transfer-encoding"
+                    | "upgrade"
+                    | "content-length"
+            ) {
+                continue; // let reqwest set correct values from URL/body
+            }
             request_builder = request_builder.header(key, value);
         }
-        
+
         // Add request body if present
         if !envelope.original_data.is_empty() {
             request_builder = request_builder.body(envelope.original_data.clone());
         }
-        
+
         tracing::debug!("Sending HTTP request to: {}", full_url);
-        
+
         // Execute the request
         let response = request_builder
             .send()
             .await
             .map_err(|e| Error::from(format!("HTTP request failed: {}", e)))?;
-        
+
         let status = response.status().as_u16();
         tracing::debug!("HTTP backend response status: {}", status);
-        
+
         // Extract response headers
         let mut response_headers = HashMap::new();
         for (key, value) in response.headers() {
@@ -282,16 +423,19 @@ impl ServiceHandler<Value> for HttpEndpoint {
                 response_headers.insert(key.to_string(), value_str.to_string());
             }
         }
-        
+
         // Get response body
         let body_bytes = response
             .bytes()
             .await
             .map_err(|e| Error::from(format!("Failed to read response body: {}", e)))?
             .to_vec();
-        
-        tracing::debug!("HTTP backend response body size: {} bytes", body_bytes.len());
-        
+
+        tracing::debug!(
+            "HTTP backend response body size: {} bytes",
+            body_bytes.len()
+        );
+
         let mut response_envelope = ResponseEnvelope::from_backend(
             envelope.request_details.clone(),
             status,
@@ -299,21 +443,27 @@ impl ServiceHandler<Value> for HttpEndpoint {
             body_bytes,
             None,
         );
-        
+
         // Try to parse response as JSON if content-type indicates JSON
-        if let Some(content_type) = response_envelope.response_details.headers.get("content-type") {
+        if let Some(content_type) = response_envelope
+            .response_details
+            .headers
+            .get("content-type")
+        {
             if content_type.contains("application/json") {
-                if let Ok(json_value) = serde_json::from_slice::<serde_json::Value>(&response_envelope.original_data) {
+                if let Ok(json_value) =
+                    serde_json::from_slice::<serde_json::Value>(&response_envelope.original_data)
+                {
                     response_envelope.normalized_data = Some(json_value);
                 }
             }
         }
-        
+
         Ok(response_envelope)
     }
 
     /// Protocol-aware response post-processing
-    /// 
+    ///
     /// For HTTP service, this adds protocol metadata to response headers
     /// to help with debugging and observability.
     async fn endpoint_outgoing_protocol(
@@ -327,7 +477,7 @@ impl ServiceHandler<Value> for HttpEndpoint {
             .response_details
             .metadata
             .insert("protocol".to_string(), format!("{:?}", ctx.protocol));
-        
+
         // For HTTP protocol, optionally add X-Protocol header for debugging
         if ctx.protocol == crate::models::protocol::Protocol::Http {
             envelope
@@ -336,7 +486,7 @@ impl ServiceHandler<Value> for HttpEndpoint {
                 .entry("x-harmony-protocol".to_string())
                 .or_insert_with(|| "http".to_string());
         }
-        
+
         Ok(())
     }
 
@@ -351,8 +501,16 @@ impl ServiceHandler<Value> for HttpEndpoint {
 
         let mut builder = Response::builder().status(status);
 
-        // Add headers from response_details
+        // Add headers from response_details, but skip hop-by-hop headers
+        // including content-length (let hyper set it from actual body)
         for (k, v) in &envelope.response_details.headers {
+            let key_lower = k.to_ascii_lowercase();
+            if matches!(
+                key_lower.as_str(),
+                "content-length" | "transfer-encoding" | "connection" | "keep-alive"
+            ) {
+                continue;
+            }
             builder = builder.header(k.as_str(), v.as_str());
         }
 

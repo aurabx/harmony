@@ -16,7 +16,7 @@ use tokio_util::sync::CancellationToken;
 static STARTED_SCP: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 /// DIMSE protocol adapter
-/// 
+///
 /// Handles DICOM DIMSE protocol via SCP (Service Class Provider) listeners.
 /// Supports C-FIND, C-MOVE, C-STORE, and C-ECHO operations.
 pub struct DimseAdapter {
@@ -56,29 +56,38 @@ impl ProtocolAdapter for DimseAdapter {
         Protocol::Dimse
     }
 
+    fn from_network(
+        network_name: String,
+        _network_config: &crate::models::network::config::NetworkConfig,
+    ) -> Box<dyn ProtocolAdapter> {
+        // DIMSE adapter gets bind settings from network config at runtime
+        // via start_scp method, so we just need the network name here
+        Box::new(DimseAdapter::new(network_name))
+    }
+
     async fn start(
         &self,
         config: Arc<Config>,
         shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
         let network_name = self.network_name.clone();
-        
-        tracing::info!("Starting DIMSE adapter for network '{}'", network_name);
 
-        // Get all DIMSE endpoints for this network from pipelines
+        tracing::debug!("Starting DIMSE adapter for network '{}'", network_name);
+
+        // Collect all DIMSE-related endpoints and backends for this network
         let mut scp_configs: Vec<(String, String, HashMap<String, serde_json::Value>)> = Vec::new();
-        
+
         for (pipeline_name, pipeline_cfg) in &config.pipelines {
             // Check if this pipeline belongs to our network
             if !pipeline_cfg.networks.contains(&network_name) {
                 continue;
             }
-            
-            // Check all endpoints in this pipeline
+
+            // Check all endpoints in this pipeline for DIMSE services
             for endpoint_name in &pipeline_cfg.endpoints {
                 if let Some(endpoint) = config.endpoints.get(endpoint_name) {
-                    // Check if this endpoint is DIMSE by service name
-                    if endpoint.service == "dimse" {
+                    // Check if this endpoint is DICOM SCP by service name
+                    if endpoint.service == "dicom_scp" {
                         scp_configs.push((
                             pipeline_name.clone(),
                             endpoint_name.clone(),
@@ -87,22 +96,74 @@ impl ProtocolAdapter for DimseAdapter {
                     }
                 }
             }
+
+            // Also check for persistent SCP backends (legacy support)
+            for backend_name in &pipeline_cfg.backends {
+                if let Some(backend) = config.backends.get(backend_name) {
+                    // Legacy persistent DICOM SCP backends
+                    if backend.service == "dicom" {
+                        if let Some(options) = &backend.options {
+                            let needs_persistent = options
+                                .get("persistent_store_scp")
+                                .and_then(|v| v.as_bool())
+                                .unwrap_or(false)
+                                || (options.contains_key("host") && options.contains_key("port"));
+
+                            if needs_persistent && options.contains_key("incoming_store_port") {
+                                scp_configs.push((
+                                    pipeline_name.clone(),
+                                    format!("persistent_{}", backend_name),
+                                    options.clone(),
+                                ));
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         if scp_configs.is_empty() {
-            tracing::warn!(
-                "No DIMSE endpoints found for network '{}', adapter will be idle",
+            tracing::debug!(
+                "No DIMSE endpoints or persistent SCPs found for network '{}'",
                 network_name
             );
+            // Return idle adapter
+            return Ok(tokio::spawn(async move {
+                shutdown.cancelled().await;
+            }));
         }
 
+        // Log which DICOM endpoints will be served
+        let endpoint_names: Vec<&str> = scp_configs
+            .iter()
+            .map(|(_, name, _)| name.as_str())
+            .collect();
+        tracing::info!(
+            "DIMSE adapter for network '{}' will serve {} endpoint(s): [{}]",
+            network_name,
+            endpoint_names.len(),
+            endpoint_names.join(", ")
+        );
+
+        // Get network config for TCP bind settings
+        let network_config = config.network.get(&network_name).cloned();
+
         // Spawn task to manage SCPs
+        let shutdown_clone = shutdown.clone();
         let handle = tokio::spawn(async move {
             let mut scp_handles = Vec::new();
 
             // Start each SCP
             for (pipeline_name, endpoint_name, options) in scp_configs {
-                match Self::start_scp(&pipeline_name, &endpoint_name, &options).await {
+                match Self::start_scp(
+                    &pipeline_name,
+                    &endpoint_name,
+                    &options,
+                    network_config.as_ref(),
+                    shutdown_clone.clone(),
+                )
+                .await
+                {
                     Ok(scp_handle) => {
                         scp_handles.push(scp_handle);
                     }
@@ -118,7 +179,7 @@ impl ProtocolAdapter for DimseAdapter {
             }
 
             // Wait for shutdown signal
-            shutdown.cancelled().await;
+            shutdown_clone.cancelled().await;
             tracing::info!("DIMSE adapter for network '{}' shutting down", network_name);
 
             // Wait for all SCPs to complete
@@ -143,6 +204,8 @@ impl DimseAdapter {
         pipeline_name: &str,
         endpoint_name: &str,
         options: &std::collections::HashMap<String, serde_json::Value>,
+        network_config: Option<&crate::models::network::config::NetworkConfig>,
+        shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
         use dimse::{DimseConfig, DEFAULT_DIMSE_PORT};
         use std::net::IpAddr;
@@ -153,16 +216,26 @@ impl DimseAdapter {
             .unwrap_or("HARMONY_SCP")
             .to_string();
 
+        // Use network's TCP bind address, with endpoint override option for backward compatibility
         let bind_addr = options
             .get("bind_addr")
             .and_then(|v| v.as_str())
             .and_then(|s| s.parse::<IpAddr>().ok())
+            .or_else(|| {
+                network_config
+                    .map(|nc| nc.tcp_config.bind_address.parse::<IpAddr>().ok())
+                    .flatten()
+            })
             .unwrap_or_else(|| IpAddr::from(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
+        // Use network's TCP port, with endpoint/backend override for backward compatibility
+        // For persistent backends, use incoming_store_port; for endpoints, use port
         let port = options
-            .get("port")
+            .get("incoming_store_port")
+            .or_else(|| options.get("port"))
             .and_then(|v| v.as_u64())
             .map(|p| p as u16)
+            .or_else(|| network_config.map(|nc| nc.tcp_config.bind_port))
             .unwrap_or(DEFAULT_DIMSE_PORT);
 
         let key = format!("{}@{}:{}#{}", local_aet, bind_addr, port, endpoint_name);
@@ -208,6 +281,9 @@ impl DimseAdapter {
         if let Some(b) = options.get("enable_move").and_then(|v| v.as_bool()) {
             dimse_config.enable_move = b;
         }
+        if let Some(b) = options.get("enable_get").and_then(|v| v.as_bool()) {
+            dimse_config.enable_get = b;
+        }
 
         let pipeline = pipeline_name.to_string();
         let endpoint = endpoint_name.to_string();
@@ -224,10 +300,29 @@ impl DimseAdapter {
 
         if use_dcmtk_store {
             // Spawn DCMTK storescp process
-            Self::start_dcmtk_scp(key, local_aet, port, dimse_config, pipeline, endpoint).await
+            Self::start_dcmtk_scp(
+                key,
+                local_aet,
+                port,
+                dimse_config,
+                pipeline,
+                endpoint,
+                shutdown,
+            )
+            .await
         } else {
             // Use internal SCP with pipeline query provider
-            Self::start_internal_scp(key, local_aet, bind_addr, port, dimse_config, pipeline, endpoint).await
+            Self::start_internal_scp(
+                key,
+                local_aet,
+                bind_addr,
+                port,
+                dimse_config,
+                pipeline,
+                endpoint,
+                shutdown,
+            )
+            .await
         }
     }
 
@@ -239,6 +334,7 @@ impl DimseAdapter {
         dimse_config: dimse::DimseConfig,
         pipeline: String,
         endpoint: String,
+        shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
         use tokio::process::Command;
 
@@ -278,10 +374,11 @@ impl DimseAdapter {
                         e
                     );
                     // Fallback to internal SCP
-                    let provider: Arc<dyn dimse::scp::QueryProvider> =
-                        Arc::new(query_provider::PipelineQueryProvider::new(pipeline, endpoint));
+                    let provider: Arc<dyn dimse::scp::QueryProvider> = Arc::new(
+                        query_provider::PipelineQueryProvider::new(pipeline, endpoint),
+                    );
                     let scp = dimse::DimseScp::new(dimse_config, provider);
-                    if let Err(e2) = scp.run().await {
+                    if let Err(e2) = scp.run(shutdown).await {
                         tracing::error!("DIMSE SCP '{}' failed: {}", local_aet, e2);
                     } else {
                         tracing::info!("DIMSE SCP '{}' stopped gracefully", local_aet);
@@ -307,12 +404,14 @@ impl DimseAdapter {
         dimse_config: dimse::DimseConfig,
         pipeline: String,
         endpoint: String,
+        shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
         let handle = tokio::spawn(async move {
-            let provider: Arc<dyn dimse::scp::QueryProvider> =
-                Arc::new(query_provider::PipelineQueryProvider::new(pipeline, endpoint));
+            let provider: Arc<dyn dimse::scp::QueryProvider> = Arc::new(
+                query_provider::PipelineQueryProvider::new(pipeline, endpoint),
+            );
             let scp = dimse::DimseScp::new(dimse_config, provider);
-            
+
             tracing::info!(
                 "Starting internal DIMSE SCP AET='{}' on {}:{}",
                 local_aet,
@@ -320,7 +419,7 @@ impl DimseAdapter {
                 port
             );
 
-            if let Err(e) = scp.run().await {
+            if let Err(e) = scp.run(shutdown).await {
                 tracing::error!("DIMSE SCP '{}' failed: {}", local_aet, e);
             } else {
                 tracing::info!("DIMSE SCP '{}' stopped gracefully", local_aet);
@@ -407,10 +506,10 @@ mod tests {
 
         // First registration should succeed
         assert!(DimseAdapter::register_scp(key1.clone()));
-        
+
         // Duplicate registration should fail
         assert!(!DimseAdapter::register_scp(key1.clone()));
-        
+
         // Different key should succeed
         assert!(DimseAdapter::register_scp(key2.clone()));
 

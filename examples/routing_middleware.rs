@@ -50,9 +50,9 @@ mod examples {
     //! Example middleware implementations demonstrating target_details usage.
     //!
     //! These are documentation examples showing the API patterns.
-    
+
     use std::collections::HashMap;
-    
+
     /// Example: Route to different backends based on X-Tenant-ID header
     ///
     /// ```rust,no_run
@@ -64,7 +64,7 @@ mod examples {
     ///     .request_details
     ///     .headers
     ///     .get("x-tenant-id");
-    /// 
+    ///
     /// // Route to appropriate backend
     /// match tenant_id.map(|s| s.as_str()) {
     ///     Some("tenant-a") => {
@@ -80,7 +80,7 @@ mod examples {
     /// # }
     /// ```
     pub struct TenantRoutingExample;
-    
+
     /// Example: Rewrite API paths from v1 to v2
     ///
     /// ```rust,no_run
@@ -88,7 +88,7 @@ mod examples {
     /// # async fn example(mut envelope: RequestEnvelope<serde_json::Value>) {
     /// // Read the original URI
     /// let original_uri = &envelope.request_details.uri;
-    /// 
+    ///
     /// // Rewrite /v1/... to /v2/...
     /// if original_uri.starts_with("/v1/") {
     ///     let new_uri = original_uri.replace("/v1/", "/v2/");
@@ -97,7 +97,7 @@ mod examples {
     /// # }
     /// ```
     pub struct ApiVersionRewriteExample;
-    
+
     /// Example: Add authentication headers to backend requests
     ///
     /// ```rust,no_run
@@ -105,13 +105,13 @@ mod examples {
     /// # async fn example(mut envelope: RequestEnvelope<serde_json::Value>, auth_token: &str) {
     /// // Add an Authorization header that will be sent to the backend
     /// envelope.set_target_header("Authorization", format!("Bearer {}", auth_token));
-    /// 
+    ///
     /// // Could also add custom headers for routing or tracing
     /// envelope.set_target_header("X-Proxy-Version", "1.0");
     /// # }
     /// ```
     pub struct AuthInjectionExample;
-    
+
     /// Example: Set DICOM operation based on FHIR resource type
     ///
     /// ```rust,no_run
@@ -119,7 +119,7 @@ mod examples {
     /// # async fn example(mut envelope: RequestEnvelope<serde_json::Value>) {
     /// // Check if this is a FHIR ImagingStudy query
     /// let is_imaging_study = envelope.request_details.uri.contains("/ImagingStudy");
-    /// 
+    ///
     /// if is_imaging_study {
     ///     // Set the DICOM operation metadata for the backend
     ///     // The DICOM backend checks target_details.metadata["dimse_op"] first
@@ -128,7 +128,7 @@ mod examples {
     /// # }
     /// ```
     pub struct FhirToDicomExample;
-    
+
     /// Example: Composite middleware combining multiple routing strategies
     ///
     /// ```rust,no_run
@@ -141,9 +141,9 @@ mod examples {
     ///     .get("x-priority")
     ///     .map(|v| v == "high")
     ///     .unwrap_or(false);
-    /// 
+    ///
     /// let is_urgent_path = envelope.request_details.uri.contains("/urgent/");
-    /// 
+    ///
     /// // Route to high-priority backend if needed
     /// if is_high_priority || is_urgent_path {
     ///     envelope.set_target_base_url("https://high-priority.example.com");

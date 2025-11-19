@@ -1,10 +1,10 @@
 # .github/workflows/release.yml
-name: Release Harmony
+name: Releases
 
 on:
   push:
     tags:
-      - '**'      # match all tags, e.g. 1.0.0, release-1, beta, etc.
+      - '**'      # Match all tags, e.g. 1.0.0, release-1, beta, etc.
   workflow_dispatch:
 
 env:
@@ -12,62 +12,100 @@ env:
   REGISTRY_GHCR: ghcr.io/aurabx/harmony
   REGISTRY_DOCKERHUB: aurabox/harmony
   IMAGE_NAME: harmony
+  PKG_CONFIG_ALLOW_CROSS: 1
 
 jobs:
-  # ---------- 1. Build binaries ----------
   build-binaries:
-    name: Build Harmony binaries (cross/native)
+    runs-on: ${{ matrix.os }}
     strategy:
+      fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            target: x86_64-unknown-linux-musl
-          - os: ubuntu-latest
-            target: aarch64-unknown-linux-musl
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
+          # Linux (most common distros and containers)
+          - os: ubuntu-24.04
+            target: x86_64-unknown-linux-gnu        # Ubuntu, Debian, Fedora, RHEL, etc.
+          - os: ubuntu-24.04
+            target: aarch64-unknown-linux-gnu       # ARM64 Ubuntu/Debian servers
+
+          # macOS (Intel + Apple Silicon)
           - os: macos-latest
             target: x86_64-apple-darwin
           - os: macos-latest
             target: aarch64-apple-darwin
-    runs-on: ${{ matrix.os }}
+
+          # Windows (x64)
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
 
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+
+      - name: Cache Rust build
+        uses: Swatinem/rust-cache@v2
+        with:
+          # Use different cache for cross-compilation to avoid glibc version conflicts
+          key: ${{ matrix.target }}
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
 
-      # Linux builds use cross
-      - name: Build Harmony (Linux cross)
-        if: runner.os == 'Linux'
+      # --- Cross Compilation Setup (ARM) ---
+      - name: Install cross for ARM builds
+        if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf'
+        run: cargo install cross --git https://github.com/cross-rs/cross
+
+      # --- Build step per OS ---
+      - name: Build Harmony
         shell: bash
         run: |
-          cargo install cross --git https://github.com/cross-rs/cross
-          cross build --release --target ${{ matrix.target }}
+          case "${{ runner.os }}" in
+            Windows)
+              echo "Building for Windows..."
+              cargo build --release --target ${{ matrix.target }}
+              ;;
+            macOS)
+              echo "Building for macOS..."
+              cargo build --release --target ${{ matrix.target }}
+              ;;
+            Linux)
+              case "${{ matrix.target }}" in
+                aarch64-unknown-linux-gnu|armv7-unknown-linux-gnueabihf)
+                  echo "Building for ARM target ${{ matrix.target }} with cross..."
+                  cross build --release --target ${{ matrix.target }}
+                  ;;
+                *)
+                  echo "Building for Linux target ${{ matrix.target }}..."
+                  cargo build --release --target ${{ matrix.target }}
+                  ;;
+              esac
+              ;;
+          esac
 
-      # Non-Linux builds are native
-      - name: Build Harmony (native)
-        if: runner.os != 'Linux'
-        run: cargo build --release --target ${{ matrix.target }}
-
+      # --- Package ---
       - name: Package artefacts
         shell: bash
         run: |
           mkdir -p release
-          cp target/${{ matrix.target }}/release/harmony* release/ || true
+          cp target/${{ matrix.target }}/release/harmony* release/ 2>/dev/null || \
+          cp target/${{ matrix.target }}/release/harmony.exe release/ || true
           cd release
-          tar czf harmony-${{ matrix.target }}.tar.gz harmony* || true
+          if [ "${{ runner.os }}" = "Windows" ]; then
+            tar czf harmony-${{ matrix.target }}.tar.gz harmony*.exe || true
+          else
+            tar czf harmony-${{ matrix.target }}.tar.gz harmony* || true
+          fi
 
+      # --- Checksums ---
       - name: Generate SHA256 (Windows)
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
           Get-FileHash "release/harmony-${{ matrix.target }}.tar.gz" -Algorithm SHA256 |
-            ForEach-Object { $_.Hash } | Out-File "release/harmony-${{ matrix.target }}.sha256" -Encoding ascii
+            ForEach-Object { "$($_.Hash)  harmony-${{ matrix.target }}.tar.gz" } |
+            Out-File "release/harmony-${{ matrix.target }}.sha256" -Encoding ascii
 
       - name: Generate SHA256 (non-Windows)
         if: runner.os != 'Windows'
@@ -99,8 +137,14 @@ jobs:
 
       - name: Prepare Linux binaries
         run: |
-          mv binaries/harmony-x86_64-unknown-linux-musl/harmony harmony-amd64 || true
-          mv binaries/harmony-aarch64-unknown-linux-musl/harmony harmony-arm64 || true
+          # Extract binaries from tarballs
+          cd binaries/harmony-x86_64-unknown-linux-gnu && tar xzf harmony-x86_64-unknown-linux-gnu.tar.gz && cd ../..
+          cd binaries/harmony-aarch64-unknown-linux-gnu && tar xzf harmony-aarch64-unknown-linux-gnu.tar.gz && cd ../..
+          # Move to expected locations for Docker build
+          mv binaries/harmony-x86_64-unknown-linux-gnu/harmony harmony-amd64 || true
+          mv binaries/harmony-aarch64-unknown-linux-gnu/harmony harmony-arm64 || true
+          # Verify binaries exist
+          ls -lh harmony-* || echo "Warning: binaries not found"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -120,15 +164,21 @@ jobs:
       - name: Compute image tags
         id: meta
         run: |
-          TAG=${GITHUB_REF_NAME}
-          echo "tags=${{ env.REGISTRY_DOCKERHUB }}:${TAG},${{ env.REGISTRY_DOCKERHUB }}:latest,${{ env.REGISTRY_GHCR }}:${TAG},${{ env.REGISTRY_GHCR }}:latest" >> $GITHUB_OUTPUT
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG=${GITHUB_REF_NAME}
+            echo "tags=${{ env.REGISTRY_DOCKERHUB }}:${TAG},${{ env.REGISTRY_DOCKERHUB }}:latest,${{ env.REGISTRY_GHCR }}:${TAG},${{ env.REGISTRY_GHCR }}:latest" >> $GITHUB_OUTPUT
+          else
+            TAG="test-${GITHUB_SHA::8}"
+            echo "tags=${{ env.REGISTRY_DOCKERHUB }}:${TAG},${{ env.REGISTRY_GHCR }}:${TAG}" >> $GITHUB_OUTPUT
+          fi
+          echo "push=true" >> $GITHUB_OUTPUT
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          push: true
+          push: ${{ steps.meta.outputs.push }}
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha
@@ -138,18 +188,19 @@ jobs:
   release:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
-    needs: [build-binaries, docker]
-    if: startsWith(github.ref, 'refs/tags/v')
+    needs: [build-binaries]  # Docker runs in parallel, doesn't block release
+    if: startsWith(github.ref, 'refs/tags/')
     permissions:
       contents: write
 
     steps:
-      - name: Download artefacts
+      - name: Download Harmony build artefacts only
         uses: actions/download-artifact@v4
         with:
           path: ./artifacts
+          pattern: harmony-*           # Only match real binaries
+          merge-multiple: true         # Flattens them into one directory
 
-      # Combine all SHA256 files into one manifest
       - name: Generate combined checksums manifest
         shell: bash
         run: |
@@ -164,5 +215,7 @@ jobs:
           tag_name: ${{ github.ref_name }}
           name: Harmony ${{ github.ref_name }}
           files: ./artifacts/**/*
+          draft: false
+          prerelease: ${{ contains(github.ref, 'beta') }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

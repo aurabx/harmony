@@ -16,6 +16,7 @@ fn test_create_envelope() {
         cookies: HashMap::new(),
         query_params: HashMap::new(),
         cache_status: None,
+        content_metadata: None,
         metadata: HashMap::new(),
     };
 
@@ -196,6 +197,7 @@ fn test_builder_from_request_details() {
         cookies: HashMap::new(),
         query_params: HashMap::new(),
         cache_status: Some("HIT".to_string()),
+        content_metadata: None,
         metadata: HashMap::new(),
     };
 
@@ -240,6 +242,7 @@ fn test_builder_explicit_backend_request_details() {
         query_params: HashMap::new(),
         cache_status: None,
         metadata: HashMap::new(),
+        content_metadata: None,
     };
 
     let envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
@@ -343,7 +346,10 @@ fn test_builder_chaining() {
 
     assert_eq!(envelope.request_details.method, "POST");
     assert_eq!(envelope.request_details.uri, "/api/test");
-    assert!(envelope.request_details.headers.contains_key("Content-Type"));
+    assert!(envelope
+        .request_details
+        .headers
+        .contains_key("Content-Type"));
     assert!(envelope.request_details.cookies.contains_key("session"));
     assert!(envelope.request_details.query_params.contains_key("id"));
     assert!(envelope.request_details.metadata.contains_key("request_id"));

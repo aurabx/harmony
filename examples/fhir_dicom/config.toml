@@ -64,7 +64,7 @@ path = "./tmp"
 # ------------------------
 # Service types
 #-------------------------
-[services.dicom]
+[services.dicom_scu]
 module=""
 
 [services.fhir]
@@ -79,6 +79,9 @@ module=""
 [services.echo]
 module=""
 
+[services.management]
+module=""
+
 [middleware_types.transform]
 module=""
 
@@ -86,4 +89,10 @@ module=""
 module=""
 
 [middleware_types.dicomweb_bridge]
+module=""
+
+[middleware_types.metadata_transform]
+module=""
+
+[middleware_types.path_filter]
 module=""

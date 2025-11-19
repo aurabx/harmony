@@ -12,10 +12,15 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
+pub mod authorize;
+pub mod cloud_poller;
 pub mod config;
+pub mod config_status;
 pub mod info;
 pub mod pipelines;
 pub mod routes;
+pub mod token;
+pub mod update;
 
 #[derive(Debug, Deserialize)]
 pub struct ManagementEndpoint {}
@@ -64,6 +69,26 @@ impl ServiceType for ManagementEndpoint {
                 path: format!("/{}/routes", base_path),
                 methods: vec![Method::GET],
                 description: Some("List all configured routes".to_string()),
+            },
+            RouteConfig {
+                path: format!("/{}/authorize", base_path),
+                methods: vec![Method::POST],
+                description: Some("Authorize gateway with Runbeam Cloud".to_string()),
+            },
+            RouteConfig {
+                path: format!("/{}/config/status", base_path),
+                methods: vec![Method::GET],
+                description: Some("Get configuration status".to_string()),
+            },
+            RouteConfig {
+                path: format!("/{}/token", base_path),
+                methods: vec![Method::POST],
+                description: Some("Save machine token from CLI".to_string()),
+            },
+            RouteConfig {
+                path: format!("/{}/update", base_path),
+                methods: vec![Method::POST],
+                description: Some("Upload current configuration to Runbeam Cloud".to_string()),
             },
         ]
     }
@@ -123,11 +148,12 @@ impl ServiceHandler<Value> for ManagementEndpoint {
         // Remove leading slash and match the specific endpoint
         let clean_path = path.trim_start_matches('/');
 
-        let response_value = match clean_path {
+        let (response_value, status_code) = match clean_path {
             p if p == "info" || p == format!("{}/info", base_path) => {
                 let info = handle_info().await;
-                serde_json::to_value(info.0)
-                    .map_err(|_| Error::from("Failed to serialize info response"))?
+                let value = serde_json::to_value(info.0)
+                    .map_err(|_| Error::from("Failed to serialize info response"))?;
+                (value, 200)
             }
             p if p == "pipelines" || p == format!("{}/pipelines", base_path) => {
                 // Use global config access to get pipelines
@@ -137,8 +163,9 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                 } else {
                     self::pipelines::PipelinesResponse { pipelines: vec![] }
                 };
-                serde_json::to_value(pipelines_response)
-                    .map_err(|_| Error::from("Failed to serialize pipelines response"))?
+                let value = serde_json::to_value(pipelines_response)
+                    .map_err(|_| Error::from("Failed to serialize pipelines response"))?;
+                (value, 200)
             }
             p if p == "routes" || p == format!("{}/routes", base_path) => {
                 // Use global config access since we need full config for routes analysis
@@ -148,10 +175,136 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                 } else {
                     self::routes::RoutesResponse { routes: vec![] }
                 };
-                serde_json::to_value(routes_response)
-                    .map_err(|_| Error::from("Failed to serialize routes response"))?
+                let value = serde_json::to_value(routes_response)
+                    .map_err(|_| Error::from("Failed to serialize routes response"))?;
+                (value, 200)
             }
-            _ => serde_json::json!({"error": "Not found"}),
+            p if p == "authorize" || p == format!("{}/authorize", base_path) => {
+                // Handle gateway authorization
+                // First check if Runbeam Cloud integration is enabled
+                let config = crate::globals::get_config();
+
+                // Check if runbeam is enabled
+                let runbeam_enabled = config
+                    .as_ref()
+                    .map(|cfg| cfg.runbeam.enabled)
+                    .unwrap_or(false);
+
+                if !runbeam_enabled {
+                    let error_json = serde_json::json!({
+                        "error": "Forbidden",
+                        "message": "Runbeam Cloud integration is disabled. Set runbeam.enabled=true in configuration to use this endpoint."
+                    });
+                    (error_json, 403)
+                } else {
+                    let auth_header = envelope
+                        .request_details
+                        .headers
+                        .get("authorization")
+                        .map(|s| s.as_str());
+
+                    // Get configuration parameters from global config
+                    let jwks_cache_duration = config
+                        .as_ref()
+                        .map(|cfg| cfg.proxy.jwks_cache_duration_hours)
+                        .unwrap_or(24);
+                    let poll_interval = config
+                        .as_ref()
+                        .map(|cfg| cfg.runbeam.poll_interval())
+                        .unwrap_or_else(|| std::time::Duration::from_secs(30));
+                    let api_base_url = config
+                        .as_ref()
+                        .map(|cfg| cfg.runbeam.effective_cloud_api_base_url())
+                        .unwrap_or_else(|| "https://api.runbeam.cloud".to_string());
+
+                    // Get adapter registry for cloud polling
+                    let registry = crate::globals::get_adapter_registry()
+                        .ok_or_else(|| Error::from("Adapter registry not available"))?;
+
+                    match self::authorize::handle_authorize(
+                        auth_header,
+                        &envelope.original_data,
+                        jwks_cache_duration,
+                        registry,
+                        poll_interval,
+                        api_base_url,
+                    )
+                    .await
+                    {
+                        Ok(value) => (value, 201),
+                        Err((status, message)) => {
+                            let error_json = serde_json::json!({
+                                "error": http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR).canonical_reason().unwrap_or("Error"),
+                                "message": message
+                            });
+                            (error_json, status)
+                        }
+                    }
+                }
+            }
+            p if p == "config/status" || p == format!("{}/config/status", base_path) => {
+                // Handle config status
+                let registry = crate::globals::get_adapter_registry()
+                    .ok_or_else(|| Error::from("Adapter registry not available"))?;
+                let config_path = crate::globals::get_config_path()
+                    .unwrap_or_else(|| "./config/config.toml".to_string());
+
+                match self::config_status::handle_config_status(config_path, registry).await {
+                    Ok(value) => (value, 200),
+                    Err((status, message)) => {
+                        let error_json = serde_json::json!({
+                            "error": http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR).canonical_reason().unwrap_or("Error"),
+                            "message": message
+                        });
+                        (error_json, status)
+                    }
+                }
+            }
+            p if p == "token" || p == format!("{}/token", base_path) => {
+                // Handle token save from CLI
+                match self::token::handle_token_post(&envelope.original_data).await {
+                    Ok(value) => (value, 200),
+                    Err((status, message)) => {
+                        let error_json = serde_json::json!({
+                            "error": http::StatusCode::from_u16(status).unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR).canonical_reason().unwrap_or("Error"),
+                            "message": message
+                        });
+                        (error_json, status)
+                    }
+                }
+            }
+            p if p == "update" || p == format!("{}/update", base_path) => {
+                // Handle configuration upload to Runbeam Cloud
+                // Check if Runbeam Cloud integration is enabled
+                let config = crate::globals::get_config();
+                let runbeam_enabled = config
+                    .as_ref()
+                    .map(|cfg| cfg.runbeam.enabled)
+                    .unwrap_or(false);
+
+                if !runbeam_enabled {
+                    let error_json = serde_json::json!({
+                        "error": "Forbidden",
+                        "message": "Runbeam Cloud integration is disabled. Set runbeam.enabled=true in configuration."
+                    });
+                    (error_json, 403)
+                } else {
+                    match self::update::handle_update().await {
+                        Ok((value, status)) => (value, status),
+                        Err((status, message)) => {
+                            let error_json = serde_json::json!({
+                                "error": http::StatusCode::from_u16(status)
+                                    .unwrap_or(http::StatusCode::INTERNAL_SERVER_ERROR)
+                                    .canonical_reason()
+                                    .unwrap_or("Error"),
+                                "message": message
+                            });
+                            (error_json, status)
+                        }
+                    }
+                }
+            }
+            _ => (serde_json::json!({"error": "Not found"}), 404),
         };
 
         let body = serde_json::to_vec(&response_value)
@@ -162,7 +315,7 @@ impl ServiceHandler<Value> for ManagementEndpoint {
 
         let mut response_envelope = ResponseEnvelope::from_backend(
             envelope.request_details.clone(),
-            200,
+            status_code,
             headers,
             body,
             None,

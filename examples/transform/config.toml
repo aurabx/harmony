@@ -32,9 +32,15 @@ path = "./tmp"
 [services.http]
 module = ""
 
+[services.echo]
+module = ""
+
 # Middleware types
 [middleware_types.json_extractor]
 module = ""
 
 [middleware_types.transform]
+module = ""
+
+[middleware_types.policies]
 module = ""
