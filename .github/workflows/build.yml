@@ -52,28 +52,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # --- Linux native build dependencies ---
-      - name: Install system dependencies for native Linux builds
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y pkg-config libssl-dev
-
       # --- Cross Compilation Setup (ARM) ---
       - name: Install cross for ARM builds
         if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf'
         run: cargo install cross --git https://github.com/cross-rs/cross
-
-      # --- macOS OpenSSL setup ---
-      - name: Install OpenSSL on macOS
-        if: runner.os == 'macOS'
-        run: |
-          brew install --quiet openssl@3 pkg-config
-          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> $GITHUB_ENV
-          echo "LIBRARY_PATH=$(brew --prefix openssl@3)/lib" >> $GITHUB_ENV
-          echo "LDFLAGS=-L$(brew --prefix openssl@3)/lib" >> $GITHUB_ENV
-          echo "CPPFLAGS=-I$(brew --prefix openssl@3)/include" >> $GITHUB_ENV
 
       # --- Build step per OS ---
       - name: Build Harmony
@@ -90,10 +72,6 @@ jobs:
               ;;
             Linux)
               case "${{ matrix.target }}" in
-                *musl*)
-                  echo "Skipping musl targets due to DBus dependency"
-                  exit 0
-                  ;;
                 aarch64-unknown-linux-gnu|armv7-unknown-linux-gnueabihf)
                   echo "Building for ARM target ${{ matrix.target }} with cross..."
                   cross build --release --target ${{ matrix.target }}
