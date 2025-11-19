@@ -62,3 +62,4 @@ Thumbs.db
 harmony.log
 /cargo-flamegraph.trace/
 /flamegraph.svg
+/harmony-arm64
