@@ -19,6 +19,9 @@ pub struct TokenRequest {
     /// Optional encryption key for token storage (base64-encoded)
     #[serde(default)]
     pub encryption_key: Option<String>,
+    /// Optional Runbeam Cloud API base URL from CLI configuration
+    #[serde(default)]
+    pub api_base_url: Option<String>,
 }
 
 /// Response for successful token save
@@ -66,11 +69,36 @@ pub async fn handle_token_post(body: &[u8]) -> Result<JsonValue, (u16, String)> 
         request.gateway_id
     );
 
+    // Get proxy ID for instance isolation (needed for both API URL and token storage)
+    let proxy_id = crate::globals::get_config()
+        .map(|config| config.proxy.id.clone())
+        .unwrap_or_else(|| "harmony".to_string());
+
     // If encryption key is provided, set it as environment variable
     // The SDK will use this key for encrypting the token
     if let Some(key) = request.encryption_key {
         tracing::info!("Using provided encryption key for token storage");
         std::env::set_var("RUNBEAM_ENCRYPTION_KEY", &key);
+    }
+
+    // If API base URL is provided, save it to a JSON config file
+    // This allows the CLI to configure the proxy's Runbeam Cloud API URL
+    if let Some(api_url) = &request.api_base_url {
+        tracing::info!("Setting Runbeam Cloud API URL from CLI: {}", api_url);
+        
+        let config = crate::config::config_storage::ProxyConfig {
+            api_base_url: Some(api_url.clone()),
+        };
+        
+        match crate::config::config_storage::save_config(&proxy_id, &config) {
+            Ok(_) => {
+                // Also set environment variable for immediate use in current process
+                std::env::set_var("RUNBEAM_CLOUD_API_BASE_URL", api_url);
+            }
+            Err(e) => {
+                tracing::warn!("Failed to save proxy config: {}", e);
+            }
+        }
     }
 
     // Create machine token struct for storage
@@ -81,11 +109,6 @@ pub async fn handle_token_post(body: &[u8]) -> Result<JsonValue, (u16, String)> 
         request.gateway_code,
         request.abilities,
     );
-
-    // Get proxy ID for instance isolation
-    let proxy_id = crate::globals::get_config()
-        .map(|config| config.proxy.id.clone())
-        .unwrap_or_else(|| "harmony".to_string());
 
     // Save token to secure storage (SDK manages keyring/encrypted filesystem automatically)
     save_token(&proxy_id, "auth", &machine_token)
