@@ -14,8 +14,8 @@ jwks_cache_duration_hours = 24
 # Runbeam Cloud Integration
 #-------------------------
 [runbeam]
-enabled = false
-# cloud_api_base_url = "https://api.runbeam.cloud"  # Optional, defaults to this URL
+enabled = true
+# cloud_api_base_url = "https://app.runbeam.io/api"  # Optional, defaults to this URL
 # poll_interval_secs = 30  # Optional, defaults to 30 (valid range: 5-3600)
 poll_interval_secs = 30
 
