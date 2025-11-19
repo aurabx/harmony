@@ -55,7 +55,7 @@ async fn build_mock_fhir_server() -> (String, tokio::task::JoinHandle<()>) {
             let id = uuid::Uuid::new_v4().to_string();
             let mut response = json.as_object().cloned().unwrap_or_default();
             response.insert("id".to_string(), json!(id));
-            
+
             (
                 StatusCode::CREATED,
                 [(axum::http::header::CONTENT_TYPE, "application/fhir+json")],
@@ -67,7 +67,7 @@ async fn build_mock_fhir_server() -> (String, tokio::task::JoinHandle<()>) {
             if let Some(obj) = json.as_object_mut() {
                 obj.insert("id".to_string(), json!(id));
             }
-            
+
             (
                 StatusCode::OK,
                 [(axum::http::header::CONTENT_TYPE, "application/fhir+json")],

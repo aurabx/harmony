@@ -1,5 +1,30 @@
 # Changelog
 
+## [0.7.0] - 2025-11-19
+
+### Highlights
+- Updated runbeam-sdk integration to 0.7.x for improved cloud connectivity
+- Removed OpenSSL dependencies from build pipeline for better portability
+- Enhanced configuration handling for Runbeam authorization and API defaults
+- Docker build improvements and testing infrastructure
+
+### Changed
+- Updated runbeam-sdk dependency to 0.7.x
+- Improved config handling for cloud integration
+- Enhanced Docker build workflow with better testability
+- Standardized internal crate versions to 0.7.0 across workspace
+
+### Fixed
+- Runbeam authorization and config sync issues
+- Default API URL configuration in cloud integration
+- OpenSSL dependencies removed from build pipeline for improved cross-platform support
+- Docker build dependencies (libdus) for production images
+- Test stability and reliability improvements
+
+### Dependencies
+- Updated runbeam-sdk to 0.7.x
+- Internal workspace crates (harmony-database, harmony-filesystem) bumped to 0.7.0
+
 ## [0.6.0] - 2025-11-17
 
 ### Highlights
@@ -255,6 +280,7 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.7.0]: https://github.com/aurabx/harmony/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/aurabx/harmony/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/aurabx/harmony/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/aurabx/harmony/compare/0.3.4...0.4.0

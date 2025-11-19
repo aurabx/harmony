@@ -163,7 +163,7 @@ impl Config {
                 Some(network_name) => {
                     if !self.network.contains_key(network_name) {
                         let available_networks: Vec<&String> = self.network.keys().collect();
-                        return Err(ConfigError::InvalidManagement { 
+                        return Err(ConfigError::InvalidManagement {
                             reason: format!(
                                 "Management network '{}' not found in configuration. Available networks: {}",
                                 network_name,
