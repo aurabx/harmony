@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   harmony:
     image: aurabox/harmony:latest
