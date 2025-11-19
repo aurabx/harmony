@@ -11,5 +11,9 @@ spec:
     targetPort: http
     protocol: TCP
     name: http
+  - port: {{ .Values.service.managementPort }}
+    targetPort: management
+    protocol: TCP
+    name: management
   selector:
     {{- include "harmony-proxy.selectorLabels" . | nindent 4 }}

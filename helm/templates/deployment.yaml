@@ -25,6 +25,9 @@ spec:
         - name: http
           containerPort: {{ .Values.service.port }}
           protocol: TCP
+        - name: management
+          containerPort: {{ .Values.service.managementPort }}
+          protocol: TCP
         volumeMounts:
         - name: config
           mountPath: /etc/harmony

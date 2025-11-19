@@ -1,13 +1,14 @@
 replicaCount: 1
 
 image:
-  repository: harmony-proxy
+  repository: aurabox/harmony
   pullPolicy: IfNotPresent
   tag: "latest"
 
 service:
   type: ClusterIP
   port: 8080
+  managementPort: 9090
 
 config:
   # Path to mounted config file
