@@ -488,7 +488,7 @@ async fn test_policy_rate_limit_enforcement() {
     // correctly is done in unit tests with mocked envelopes.
     // This integration test verifies that the allow_all rule works and doesn't
     // crash when rate_limit rules are present.
-    
+
     // First request - should succeed (allow_all passes)
     let response1 = app
         .clone()
@@ -619,7 +619,7 @@ async fn test_policy_path_allow() {
     // from the URI. However, the path is computed after stripping path_prefix.
     // The HTTP service should populate this correctly in integration tests.
     // For now, we expect implicit deny since path metadata may not match the pattern.
-    
+
     // Both requests will get implicit deny (no allow rule matches)
     // because path metadata population depends on HTTP adapter processing
     let response1 = app

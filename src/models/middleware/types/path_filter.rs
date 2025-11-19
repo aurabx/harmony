@@ -1,6 +1,6 @@
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
-use crate::models::middleware::PathDenied;
 use crate::models::middleware::middleware::Middleware;
+use crate::models::middleware::PathDenied;
 use crate::utils::Error;
 use async_trait::async_trait;
 use matchit::Router;

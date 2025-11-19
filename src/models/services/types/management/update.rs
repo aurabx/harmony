@@ -110,7 +110,7 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
             tracing::info!(
                 "Configuration uploaded successfully: {} bytes, action: {}",
                 config_size,
-                response.data.model.action
+                response.data.action
             );
 
             // Build success response
@@ -118,7 +118,7 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
                 success: true,
                 message: format!(
                     "Configuration {} successfully (gateway: {})",
-                    response.data.model.action, gateway_id
+                    response.data.action, gateway_id
                 ),
                 config_size,
             };

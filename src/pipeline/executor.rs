@@ -226,7 +226,7 @@ impl PipelineExecutor {
                     .and_then(|s| s.as_u64())
                     .map(|s| s as u16)
                     .unwrap_or(200);
-                
+
                 // Try to extract body from normalized_data.response.body
                 let body = normalized
                     .get("response")
@@ -239,7 +239,7 @@ impl PipelineExecutor {
                         }
                     })
                     .unwrap_or_else(|| serde_json::to_vec(normalized).unwrap_or_default());
-                
+
                 (status, body)
             } else {
                 (200, Vec::new())

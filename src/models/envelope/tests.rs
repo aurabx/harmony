@@ -242,7 +242,7 @@ fn test_builder_explicit_backend_request_details() {
         query_params: HashMap::new(),
         cache_status: None,
         metadata: HashMap::new(),
-            content_metadata: None,
+        content_metadata: None,
     };
 
     let envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()

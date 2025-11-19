@@ -85,11 +85,11 @@ pub async fn handle_token_post(body: &[u8]) -> Result<JsonValue, (u16, String)> 
     // This allows the CLI to configure the proxy's Runbeam Cloud API URL
     if let Some(api_url) = &request.api_base_url {
         tracing::info!("Setting Runbeam Cloud API URL from CLI: {}", api_url);
-        
+
         let config = crate::config::config_storage::ProxyConfig {
             api_base_url: Some(api_url.clone()),
         };
-        
+
         match crate::config::config_storage::save_config(&proxy_id, &config) {
             Ok(_) => {
                 // Also set environment variable for immediate use in current process

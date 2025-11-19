@@ -4,7 +4,7 @@ use crate::models::envelope::envelope::RequestEnvelope;
 /// Extract the path WITHOUT query parameters from request metadata
 ///
 /// This helper function provides consistent path extraction across all service types.
-/// It prefers `path` (without query string), as the query parameters should be 
+/// It prefers `path` (without query string), as the query parameters should be
 /// managed via the `query_params` hash in RequestDetails/TargetDetails.
 ///
 /// # Arguments

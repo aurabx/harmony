@@ -54,8 +54,8 @@ async fn create_test_app(config_toml: &str) -> axum::Router {
     // Initialize globals required by harmony
     use harmony::storage::create_storage_backend;
     harmony::globals::set_config(config_arc.clone());
-    let storage = create_storage_backend(&config_arc.storage)
-        .expect("Failed to create storage backend");
+    let storage =
+        create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
     build_network_router(config_arc, "default").await

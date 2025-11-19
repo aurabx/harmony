@@ -1,8 +1,6 @@
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
-use crate::models::middleware::{
-    AccessDenied, ContentTypeDenied, MethodDenied, RateLimitExceeded,
-};
 use crate::models::middleware::middleware::Middleware;
+use crate::models::middleware::{AccessDenied, ContentTypeDenied, MethodDenied, RateLimitExceeded};
 use crate::utils::Error;
 use async_trait::async_trait;
 use chrono::Utc;
@@ -134,11 +132,8 @@ impl PoliciesMiddleware {
         }
 
         // Filter to enabled policies only
-        let enabled_policies: Vec<Policy> = config
-            .policies
-            .into_iter()
-            .filter(|p| p.enabled)
-            .collect();
+        let enabled_policies: Vec<Policy> =
+            config.policies.into_iter().filter(|p| p.enabled).collect();
 
         if enabled_policies.is_empty() {
             return Err("Policies middleware requires at least one enabled policy".to_string());
@@ -256,7 +251,7 @@ impl PoliciesMiddleware {
         );
 
         let rate_limit_state = Arc::new(RwLock::new(HashMap::new()));
-        
+
         // Spawn background task to cleanup expired rate limit entries
         Self::spawn_cleanup_task(rate_limit_state.clone());
 
@@ -272,20 +267,18 @@ impl PoliciesMiddleware {
     fn spawn_cleanup_task(state: Arc<RwLock<HashMap<String, RateLimitState>>>) {
         tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
-            
+
             loop {
                 interval.tick().await;
-                
+
                 let mut state_map = state.write().await;
                 let current_time = Utc::now().timestamp();
                 let initial_size = state_map.len();
-                
+
                 // Remove entries older than 5 minutes (300 seconds)
                 // This is conservative - keeps entries longer than most rate limit windows
-                state_map.retain(|_key, state| {
-                    current_time - state.window_start < 300
-                });
-                
+                state_map.retain(|_key, state| current_time - state.window_start < 300);
+
                 let removed = initial_size - state_map.len();
                 if removed > 0 {
                     tracing::debug!(
@@ -296,7 +289,7 @@ impl PoliciesMiddleware {
                 }
             }
         });
-        
+
         tracing::info!("Rate limit cleanup task started (runs every 60 seconds)");
     }
 
@@ -320,7 +313,10 @@ impl PoliciesMiddleware {
             "ip_deny" => self.evaluate_ip_rule(rule, policy_idx, rule_idx, envelope, false),
             "allow_all" => RuleEvaluation::Allow,
             "deny_all" => RuleEvaluation::Deny,
-            "rate_limit" => self.evaluate_rate_limit_rule(rule, policy_idx, rule_idx, envelope).await,
+            "rate_limit" => {
+                self.evaluate_rate_limit_rule(rule, policy_idx, rule_idx, envelope)
+                    .await
+            }
             "path" => self.evaluate_path_rule(rule, policy_idx, rule_idx, envelope),
             "geo" => self.evaluate_geo_rule(rule, envelope),
             "header" => self.evaluate_header_rule(rule, envelope),
@@ -511,7 +507,10 @@ impl PoliciesMiddleware {
         let compiled_rule = match self.compiled_path_rules.get(&key) {
             Some(r) => r,
             None => {
-                tracing::error!("Compiled path rule not found for key {} - this is a bug", key);
+                tracing::error!(
+                    "Compiled path rule not found for key {} - this is a bug",
+                    key
+                );
                 return RuleEvaluation::NoMatch;
             }
         };
@@ -665,19 +664,13 @@ impl PoliciesMiddleware {
                 "contains" => actual_value
                     .to_lowercase()
                     .contains(&expected_value.to_lowercase()),
-                "regex" => {
-                    match Regex::new(expected_value) {
-                        Ok(re) => re.is_match(actual_value),
-                        Err(e) => {
-                            tracing::warn!(
-                                "Invalid regex pattern '{}': {}",
-                                expected_value,
-                                e
-                            );
-                            false
-                        }
+                "regex" => match Regex::new(expected_value) {
+                    Ok(re) => re.is_match(actual_value),
+                    Err(e) => {
+                        tracing::warn!("Invalid regex pattern '{}': {}", expected_value, e);
+                        false
                     }
-                }
+                },
                 _ => false,
             };
 
@@ -726,11 +719,7 @@ impl PoliciesMiddleware {
         let timezone: Tz = match timezone_str.parse() {
             Ok(tz) => tz,
             Err(e) => {
-                tracing::warn!(
-                    "Invalid timezone '{}': {} - using UTC",
-                    timezone_str,
-                    e
-                );
+                tracing::warn!("Invalid timezone '{}': {} - using UTC", timezone_str, e);
                 "UTC".parse().unwrap()
             }
         };
@@ -804,7 +793,7 @@ impl PoliciesMiddleware {
 
             if !allowed_days.is_empty() {
                 let current_day = now.weekday().to_string().to_lowercase();
-                
+
                 if !allowed_days.contains(&current_day) {
                     tracing::debug!(
                         "Time-based rule: current day {} not in allowed days {:?}",
@@ -898,10 +887,7 @@ impl PoliciesMiddleware {
         }
 
         // Extract HTTP method from request
-        let request_method = envelope
-            .request_details
-            .method
-            .to_uppercase();
+        let request_method = envelope.request_details.method.to_uppercase();
 
         // Check if method matches any in the list (case-insensitive)
         let matches = methods.iter().any(|m| {
@@ -955,11 +941,7 @@ impl PoliciesMiddleware {
         }
 
         // Extract User-Agent header
-        let user_agent = envelope
-            .request_details
-            .headers
-            .get("user-agent")
-            .cloned();
+        let user_agent = envelope.request_details.headers.get("user-agent").cloned();
 
         let user_agent = match user_agent {
             Some(ua) => ua,
@@ -983,7 +965,9 @@ impl PoliciesMiddleware {
             };
 
             // Parse pattern (format: /pattern/flags or just pattern)
-            let (pattern, flags) = if pattern_str.starts_with('/') && pattern_str.rfind('/').map(|i| i > 0).unwrap_or(false) {
+            let (pattern, flags) = if pattern_str.starts_with('/')
+                && pattern_str.rfind('/').map(|i| i > 0).unwrap_or(false)
+            {
                 let last_slash = pattern_str.rfind('/').unwrap();
                 (&pattern_str[1..last_slash], &pattern_str[last_slash + 1..])
             } else {
@@ -1002,7 +986,10 @@ impl PoliciesMiddleware {
                     if re.is_match(&user_agent) {
                         tracing::debug!(
                             "User-agent pattern matched: pattern='{}', user-agent='{}'",
-                            pattern_obj.get("label").and_then(|v| v.as_str()).unwrap_or(pattern),
+                            pattern_obj
+                                .get("label")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(pattern),
                             user_agent
                         );
                         any_match = true;
@@ -1099,7 +1086,9 @@ impl PoliciesMiddleware {
             // Wildcard match (e.g., "application/*")
             if ct_str.ends_with("/*") {
                 let prefix = &ct_str[..ct_str.len() - 2];
-                if base_content_type.starts_with(prefix) && base_content_type.chars().nth(prefix.len()) == Some('/') {
+                if base_content_type.starts_with(prefix)
+                    && base_content_type.chars().nth(prefix.len()) == Some('/')
+                {
                     wildcard_match = true;
                 }
             }
@@ -1165,7 +1154,8 @@ impl PoliciesMiddleware {
             .unwrap_or_else(|| String::new());
 
         // Parse query parameters manually or from metadata
-        let mut param_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+        let mut param_map: std::collections::HashMap<String, String> =
+            std::collections::HashMap::new();
         for (key, value) in &envelope.request_details.metadata {
             if key.starts_with("param_") {
                 let param_name = key[6..].to_string();
@@ -1177,10 +1167,7 @@ impl PoliciesMiddleware {
         if !query_params.is_empty() {
             for pair in query_params.split('&') {
                 if let Some((key, value)) = pair.split_once('=') {
-                    param_map.insert(
-                        key.to_string(),
-                        value.to_string(),
-                    );
+                    param_map.insert(key.to_string(), value.to_string());
                 }
             }
         }
@@ -1218,25 +1205,21 @@ impl PoliciesMiddleware {
                 "contains" => actual_value
                     .map(|v| v.contains(expected_value))
                     .unwrap_or(false),
-                "regex" => {
-                    match actual_value {
-                        Some(v) => {
-                            match Regex::new(expected_value) {
-                                Ok(re) => re.is_match(v),
-                                Err(e) => {
-                                    tracing::warn!(
-                                        "Invalid regex pattern '{}' for parameter '{}': {}",
-                                        expected_value,
-                                        param_name,
-                                        e
-                                    );
-                                    false
-                                }
-                            }
+                "regex" => match actual_value {
+                    Some(v) => match Regex::new(expected_value) {
+                        Ok(re) => re.is_match(v),
+                        Err(e) => {
+                            tracing::warn!(
+                                "Invalid regex pattern '{}' for parameter '{}': {}",
+                                expected_value,
+                                param_name,
+                                e
+                            );
+                            false
                         }
-                        None => false,
-                    }
-                }
+                    },
+                    None => false,
+                },
                 _ => false,
             };
 
@@ -1305,7 +1288,9 @@ impl Middleware for PoliciesMiddleware {
 
             // Evaluate all rules
             for (rule_idx, rule) in enabled_rules {
-                let evaluation = self.evaluate_rule(rule, policy_idx, rule_idx, &envelope).await;
+                let evaluation = self
+                    .evaluate_rule(rule, policy_idx, rule_idx, &envelope)
+                    .await;
 
                 match evaluation {
                     RuleEvaluation::Allow => {
@@ -1338,7 +1323,11 @@ impl Middleware for PoliciesMiddleware {
         // Request is ACCEPTED only if: has_allow = true AND deny_rule = None
         if let Some(rule) = deny_rule {
             let rule_name = rule.name.as_deref().unwrap_or("unnamed");
-            tracing::warn!("Request DENIED by rule '{}' (type: {})", rule_name, rule.rule_type);
+            tracing::warn!(
+                "Request DENIED by rule '{}' (type: {})",
+                rule_name,
+                rule.rule_type
+            );
 
             // Return appropriate error based on rule type
             return Err(match rule.rule_type.as_str() {
@@ -1395,25 +1384,31 @@ pub fn parse_config(
     let mut policies = Vec::new();
 
     for policy_id_value in policies_array {
-        let policy_id = policy_id_value.as_str()
+        let policy_id = policy_id_value
+            .as_str()
             .ok_or("All entries in 'policies' must be string IDs")?;
-        
-        let pdef = all_policies.get(policy_id)
+
+        let pdef = all_policies
+            .get(policy_id)
             .ok_or_else(|| format!("Unknown policy id '{}'", policy_id))?;
-        
+
         if !pdef.enabled {
             continue;
         }
-        
+
         let mut rules = Vec::new();
         for rule_id in &pdef.rules {
-            let rdef = all_rules.get(rule_id)
-                .ok_or_else(|| format!("Unknown rule id '{}' referenced by policy '{}'", rule_id, pdef.id))?;
-            
+            let rdef = all_rules.get(rule_id).ok_or_else(|| {
+                format!(
+                    "Unknown rule id '{}' referenced by policy '{}'",
+                    rule_id, pdef.id
+                )
+            })?;
+
             if !rdef.enabled {
                 continue;
             }
-            
+
             rules.push(Rule {
                 id: Some(rdef.id.clone()),
                 name: rdef.name.clone(),
@@ -1423,7 +1418,7 @@ pub fn parse_config(
                 options: rdef.options.clone(),
             });
         }
-        
+
         policies.push(Policy {
             id: Some(pdef.id.clone()),
             name: pdef.name.clone(),
@@ -1642,7 +1637,10 @@ mod tests {
         // Create all_rules HashMap with v1.7.0 structure
         let mut all_rules = HashMap::new();
         let mut rule1_options = HashMap::new();
-        rule1_options.insert("ip_addresses".to_string(), serde_json::json!(["192.168.1.0/24"]));
+        rule1_options.insert(
+            "ip_addresses".to_string(),
+            serde_json::json!(["192.168.1.0/24"]),
+        );
         all_rules.insert(
             "rule1".to_string(),
             crate::config::config::RuleDefinition {
@@ -1656,10 +1654,7 @@ mod tests {
         );
 
         let mut options = HashMap::new();
-        options.insert(
-            "policies".to_string(),
-            serde_json::json!(["policy1"]),
-        );
+        options.insert("policies".to_string(), serde_json::json!(["policy1"]));
 
         let config = parse_config(&options, &all_policies, &all_rules).unwrap();
         assert_eq!(config.policies.len(), 1);
@@ -1728,7 +1723,10 @@ mod tests {
             let envelope = create_test_envelope("10.0.0.1");
             let result = middleware.left(envelope).await.unwrap();
             assert!(
-                !result.request_details.metadata.contains_key("skip_backends"),
+                !result
+                    .request_details
+                    .metadata
+                    .contains_key("skip_backends"),
                 "Request {} should be allowed",
                 i
             );
@@ -1775,7 +1773,10 @@ mod tests {
             let envelope = create_test_envelope("10.0.0.2");
             let result = middleware.left(envelope).await.unwrap();
             assert!(
-                !result.request_details.metadata.contains_key("skip_backends"),
+                !result
+                    .request_details
+                    .metadata
+                    .contains_key("skip_backends"),
                 "Request {} should be allowed",
                 i
             );
@@ -1784,7 +1785,10 @@ mod tests {
         // 4th request should be denied (rate limit exceeded)
         let envelope = create_test_envelope("10.0.0.2");
         let result = middleware.left(envelope).await;
-        assert!(result.is_err(), "4th request should be denied due to rate limit");
+        assert!(
+            result.is_err(),
+            "4th request should be denied due to rate limit"
+        );
     }
 
     #[tokio::test]
@@ -1826,14 +1830,20 @@ mod tests {
         for _ in 1..=2 {
             let envelope = create_test_envelope("10.0.0.10");
             let result = middleware.left(envelope).await.unwrap();
-            assert!(!result.request_details.metadata.contains_key("skip_backends"));
+            assert!(!result
+                .request_details
+                .metadata
+                .contains_key("skip_backends"));
         }
 
         // Send 2 requests from IP2 - should also be allowed (separate limit)
         for _ in 1..=2 {
             let envelope = create_test_envelope("10.0.0.20");
             let result = middleware.left(envelope).await.unwrap();
-            assert!(!result.request_details.metadata.contains_key("skip_backends"));
+            assert!(!result
+                .request_details
+                .metadata
+                .contains_key("skip_backends"));
         }
 
         // 3rd request from IP1 should be denied
@@ -1871,10 +1881,13 @@ mod tests {
         let middleware = PoliciesMiddleware::new(config).unwrap();
         let envelope = create_test_envelope("10.0.0.1");
         let result = middleware.left(envelope).await.unwrap();
-        
+
         // Should be allowed (time-based rule allows)
         assert!(
-            !result.request_details.metadata.contains_key("skip_backends"),
+            !result
+                .request_details
+                .metadata
+                .contains_key("skip_backends"),
             "Request should be allowed by time-based rule"
         );
     }
@@ -1909,19 +1922,22 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Create envelope with IPv6 address
-            let envelope = RequestEnvelope::builder()
-                .method("GET")
-                .uri("/test")
-                .metadata_entry("remote_addr", "2001:db8::1")
-                .original_data(serde_json::Value::Null)
-                .normalized_data(Some(serde_json::Value::Null))
-                .build()
-                .unwrap();
-            
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .metadata_entry("remote_addr", "2001:db8::1")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
     }
 
     #[tokio::test]
@@ -1950,7 +1966,11 @@ mod tests {
                             let mut opts = HashMap::new();
                             opts.insert(
                                 "ip_addresses".to_string(),
-                                serde_json::json!(["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"]),
+                                serde_json::json!([
+                                    "10.0.0.0/8",
+                                    "172.16.0.0/12",
+                                    "192.168.0.0/16"
+                                ]),
                             );
                             opts
                         },
@@ -1960,18 +1980,21 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test each range
         for ip in ["10.1.1.1", "172.16.5.5", "192.168.100.100"] {
             let envelope = create_test_envelope(ip);
             let result = middleware.left(envelope).await;
             assert!(result.is_err(), "IP {} should be denied", ip);
         }
-        
+
         // Test non-matching IP
         let envelope = create_test_envelope("8.8.8.8");
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
     }
 
     #[tokio::test]
@@ -2000,7 +2023,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Create envelope without remote_addr metadata
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2009,7 +2032,7 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-            
+
         let result = middleware.left(envelope).await;
         // Should implicitly deny (no allow matched)
         assert!(result.is_err());
@@ -2046,7 +2069,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test matching paths
         for path in ["/api/public/users", "/health", "/status"] {
             let envelope = RequestEnvelope::builder()
@@ -2057,15 +2080,18 @@ mod tests {
                 .normalized_data(Some(serde_json::Value::Null))
                 .build()
                 .unwrap();
-                
+
             let result = middleware.left(envelope).await.unwrap();
             assert!(
-                !result.request_details.metadata.contains_key("skip_backends"),
+                !result
+                    .request_details
+                    .metadata
+                    .contains_key("skip_backends"),
                 "Path {} should be allowed",
                 path
             );
         }
-        
+
         // Test non-matching path
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2075,7 +2101,7 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-            
+
         let result = middleware.left(envelope).await;
         assert!(result.is_err(), "Non-matching path should be denied");
     }
@@ -2111,7 +2137,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test with different case
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2121,9 +2147,12 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap();
-            
+
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
     }
 
     // ============================================
@@ -2146,7 +2175,10 @@ mod tests {
                     options: {
                         let mut opts = HashMap::new();
                         opts.insert("allow_during_window".to_string(), serde_json::json!(true));
-                        opts.insert("timezone".to_string(), serde_json::json!("Invalid/Timezone"));
+                        opts.insert(
+                            "timezone".to_string(),
+                            serde_json::json!("Invalid/Timezone"),
+                        );
                         opts
                     },
                 }],
@@ -2156,9 +2188,12 @@ mod tests {
         let middleware = PoliciesMiddleware::new(config).unwrap();
         let envelope = create_test_envelope("10.0.0.1");
         let result = middleware.left(envelope).await.unwrap();
-        
+
         // Should still work (falls back to UTC)
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
     }
 
     #[tokio::test]
@@ -2189,7 +2224,7 @@ mod tests {
         let middleware = PoliciesMiddleware::new(config).unwrap();
         let envelope = create_test_envelope("10.0.0.1");
         let result = middleware.left(envelope).await;
-        
+
         // Should deny (in window + allow_during_window=false = deny)
         assert!(result.is_err());
     }
@@ -2229,9 +2264,12 @@ mod tests {
         let middleware = PoliciesMiddleware::new(config).unwrap();
         let envelope = create_test_envelope("10.0.0.1");
         let result = middleware.left(envelope).await.unwrap();
-        
+
         // Should allow (deny_all is disabled)
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
     }
 
     // ============================================
@@ -2253,10 +2291,7 @@ mod tests {
                     enabled: true,
                     options: {
                         let mut opts = HashMap::new();
-                        opts.insert(
-                            "methods".to_string(),
-                            serde_json::json!(["GET", "POST"]),
-                        );
+                        opts.insert("methods".to_string(), serde_json::json!(["GET", "POST"]));
                         opts.insert("mode".to_string(), serde_json::json!("allow"));
                         opts
                     },
@@ -2265,7 +2300,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test GET - should allow
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2275,8 +2310,11 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
-        
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
+
         // Test POST - should allow
         let envelope = RequestEnvelope::builder()
             .method("POST")
@@ -2286,8 +2324,11 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
-        
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
+
         // Test DELETE - should deny (implicit deny, no allow matched)
         let envelope = RequestEnvelope::builder()
             .method("DELETE")
@@ -2324,10 +2365,7 @@ mod tests {
                         enabled: true,
                         options: {
                             let mut opts = HashMap::new();
-                            opts.insert(
-                                "methods".to_string(),
-                                serde_json::json!(["DELETE"]),
-                            );
+                            opts.insert("methods".to_string(), serde_json::json!(["DELETE"]));
                             opts.insert("mode".to_string(), serde_json::json!("deny"));
                             opts
                         },
@@ -2337,7 +2375,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test GET - should allow (not in deny list)
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2347,8 +2385,11 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
-        
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
+
         // Test DELETE - should deny
         let envelope = RequestEnvelope::builder()
             .method("DELETE")
@@ -2388,7 +2429,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test with uppercase method
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2398,7 +2439,10 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
     }
 
     // ============================================
@@ -2451,7 +2495,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test bot User-Agent - should deny
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2463,7 +2507,7 @@ mod tests {
             .unwrap();
         let result = middleware.left(envelope).await;
         assert!(result.is_err(), "Bot user-agent should be denied");
-        
+
         // Test regular User-Agent - should allow
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2474,7 +2518,10 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
     }
 
     #[tokio::test]
@@ -2504,7 +2551,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test without User-Agent header - should not match (implicit deny)
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2514,7 +2561,10 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await;
-        assert!(result.is_err(), "Missing user-agent should result in implicit deny");
+        assert!(
+            result.is_err(),
+            "Missing user-agent should result in implicit deny"
+        );
     }
 
     // ============================================
@@ -2551,7 +2601,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test matching content type
         let envelope = RequestEnvelope::builder()
             .method("POST")
@@ -2562,7 +2612,10 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
     }
 
     #[tokio::test]
@@ -2592,7 +2645,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test wildcard match for application/json
         let envelope = RequestEnvelope::builder()
             .method("POST")
@@ -2603,8 +2656,11 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
-        
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
+
         // Test wildcard match for application/xml
         let envelope = RequestEnvelope::builder()
             .method("POST")
@@ -2615,8 +2671,11 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
-        
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
+
         // Test non-matching content type
         let envelope = RequestEnvelope::builder()
             .method("POST")
@@ -2657,7 +2716,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test with charset parameter
         let envelope = RequestEnvelope::builder()
             .method("POST")
@@ -2669,7 +2728,10 @@ mod tests {
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
         assert!(
-            !result.request_details.metadata.contains_key("skip_backends"),
+            !result
+                .request_details
+                .metadata
+                .contains_key("skip_backends"),
             "Content-Type with charset should still match"
         );
     }
@@ -2711,7 +2773,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test with parameter present
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2722,8 +2784,11 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
-        
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
+
         // Test without parameter
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2769,7 +2834,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test exact match
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2780,8 +2845,11 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
-        
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
+
         // Test non-matching value
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2828,7 +2896,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test matching regex
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2839,8 +2907,11 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
-        
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
+
         // Test non-matching regex
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2892,7 +2963,7 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // Test both parameters match
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2904,8 +2975,11 @@ mod tests {
             .build()
             .unwrap();
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
-        
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
+
         // Test first parameter missing
         let envelope = RequestEnvelope::builder()
             .method("GET")
@@ -2967,16 +3041,19 @@ mod tests {
         };
 
         let middleware = PoliciesMiddleware::new(config).unwrap();
-        
+
         // IP matches allow in policy1 and deny in policy2 -> deny
         let envelope = create_test_envelope("192.168.1.100");
         let result = middleware.left(envelope).await;
         assert!(result.is_err(), "IP matches deny rule, should be denied");
-        
+
         // IP matches allow in policy1 but not deny in policy2 -> allow
         let envelope = create_test_envelope("192.168.2.100");
         let result = middleware.left(envelope).await.unwrap();
-        assert!(!result.request_details.metadata.contains_key("skip_backends"));
+        assert!(!result
+            .request_details
+            .metadata
+            .contains_key("skip_backends"));
     }
 
     // ============================================
@@ -3011,7 +3088,11 @@ mod tests {
         let result = PoliciesMiddleware::new(config);
         assert!(result.is_err());
         let err_msg = result.err().unwrap();
-        assert!(err_msg.contains("Invalid IP address"), "Error was: {}", err_msg);
+        assert!(
+            err_msg.contains("Invalid IP address"),
+            "Error was: {}",
+            err_msg
+        );
     }
 
     #[test]
@@ -3043,7 +3124,11 @@ mod tests {
         let result = PoliciesMiddleware::new(config);
         assert!(result.is_err());
         let err_msg = result.err().unwrap();
-        assert!(err_msg.contains("must start with '/'"), "Error was: {}", err_msg);
+        assert!(
+            err_msg.contains("must start with '/'"),
+            "Error was: {}",
+            err_msg
+        );
     }
 
     #[test]
@@ -3061,10 +3146,7 @@ mod tests {
                     enabled: true,
                     options: {
                         let mut opts = HashMap::new();
-                        opts.insert(
-                            "paths".to_string(),
-                            serde_json::json!(["/api/{*path}"]),
-                        );
+                        opts.insert("paths".to_string(), serde_json::json!(["/api/{*path}"]));
                         opts.insert("mode".to_string(), serde_json::json!("invalid"));
                         opts
                     },
@@ -3075,6 +3157,10 @@ mod tests {
         let result = PoliciesMiddleware::new(config);
         assert!(result.is_err());
         let err_msg = result.err().unwrap();
-        assert!(err_msg.contains("must be 'allow' or 'deny'"), "Error was: {}", err_msg);
+        assert!(
+            err_msg.contains("must be 'allow' or 'deny'"),
+            "Error was: {}",
+            err_msg
+        );
     }
 }
