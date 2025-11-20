@@ -14,7 +14,7 @@ COPY src/ ./src/
 RUN cargo build --release --bin harmony
 
 # Runtime stage
-FROM debian:bookworm-slim
+FROM debian:stable-slim
 
 # Install minimal dependencies
 RUN apt-get update && \
