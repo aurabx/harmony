@@ -1,8 +1,12 @@
 replicaCount: 1
 
+serviceAccount:
+  create: true
+  name: ""
+
 image:
   repository: aurabox/harmony
-  pullPolicy: IfNotPresent
+  pullPolicy: Always
   tag: "latest"
 
 service:

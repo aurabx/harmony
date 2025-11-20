@@ -47,3 +47,14 @@ Selector labels
 app.kubernetes.io/name: {{ include "harmony-proxy.name" . }}
 app.kubernetes.io/instance: {{ .Release.Name }}
 {{- end }}
+
+{{/*
+Create the name of the service account to use
+*/}}
+{{- define "harmony-proxy.serviceAccountName" -}}
+{{- if .Values.serviceAccount.create }}
+{{- default (include "harmony-proxy.fullname" .) .Values.serviceAccount.name }}
+{{- else }}
+{{- default "default" .Values.serviceAccount.name }}
+{{- end }}
+{{- end }}
