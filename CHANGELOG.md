@@ -1,5 +1,27 @@
 # Changelog
 
+## [0.7.1] - 2025-11-20
+
+### Highlights
+- Enhanced deployment options with Helm charts and Docker Compose
+- Improved security and deployment best practices
+- Better documentation for cloud deployment scenarios
+
+### Added
+- Helm chart for Kubernetes deployment with security best practices
+- Docker Compose quickstart for simple installation
+- Cloud Run deployment documentation
+- Pre-built Docker images for easier deployment
+
+### Changed
+- Updated Docker base image to debian:stable-slim for improved security
+- Removed version pinning from docker-compose for flexibility
+- Improved Helm chart security (container UID collision prevention, non-root user)
+
+### Fixed
+- Container UID collision prevention in Helm charts
+- Security hardening in Helm deployment configuration
+
 ## [0.7.0] - 2025-11-19
 
 ### Highlights
@@ -280,6 +302,7 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.7.1]: https://github.com/aurabx/harmony/compare/0.7.0...0.7.1
 [0.7.0]: https://github.com/aurabx/harmony/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/aurabx/harmony/compare/0.5.0...0.6.0
 [0.5.0]: https://github.com/aurabx/harmony/compare/0.4.0...0.5.0

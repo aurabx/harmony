@@ -2,6 +2,6 @@ apiVersion: v2
 name: harmony-proxy
 description: A Helm chart for Harmony Proxy - Rust-based gateway for data meshes
 type: application
-version: 0.2.0
-appVersion: "0.7.0"
+version: 0.2.1
+appVersion: "0.7.1"
 icon: https://runbeam.io/favicon.ico
