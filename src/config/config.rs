@@ -7,6 +7,7 @@ use crate::models::endpoints::endpoint::Endpoint;
 use crate::models::middleware::instance::{MiddlewareInstance, MiddlewareInstanceConfig};
 use crate::models::middleware::middleware::{initialise_middleware_registry, MiddlewareConfig};
 use crate::models::network::config::NetworkConfig;
+use crate::models::peers::config::PeerConfig;
 use crate::models::pipelines::config::Pipeline;
 use crate::models::services::services::initialise_service_registry;
 use crate::models::services::services::ServiceConfig;
@@ -84,6 +85,8 @@ pub struct Config {
     pub services: HashMap<String, ServiceConfig>,
     #[serde(default)]
     pub targets: HashMap<String, TargetConfig>,
+    #[serde(default)]
+    pub peers: HashMap<String, PeerConfig>,
     #[serde(default)]
     pub storage: StorageConfig,
     #[serde(default)]
@@ -323,6 +326,7 @@ impl Config {
             base.pipelines.extend(config.pipelines);
             // base.transforms.extend(config.transforms);
             base.targets.extend(config.targets);
+            base.peers.extend(config.peers);
             // Merge middleware instances
             base.middleware.extend(config.middleware);
             // Merge middleware registries if provided
@@ -348,6 +352,7 @@ impl Config {
         self.validate_endpoints()?;
         self.validate_backends()?;
         self.validate_targets()?;
+        self.validate_peers()?;
         self.validate_storage()?;
 
         Ok(())
@@ -539,12 +544,20 @@ impl Config {
 
     fn validate_targets(&self) -> Result<(), ConfigError> {
         for (name, target) in &self.targets {
-            if target.url.trim().is_empty() {
-                return Err(ConfigError::MissingTargets {
-                    name: name.clone(),
-                    reason: "Target URL is empty".to_string(),
-                });
-            }
+            target.validate().map_err(|e| ConfigError::InvalidTarget {
+                name: name.clone(),
+                reason: e,
+            })?;
+        }
+        Ok(())
+    }
+
+    fn validate_peers(&self) -> Result<(), ConfigError> {
+        for (name, peer) in &self.peers {
+            peer.validate().map_err(|e| ConfigError::InvalidPeer {
+                name: name.clone(),
+                reason: e,
+            })?;
         }
         Ok(())
     }
@@ -614,7 +627,8 @@ impl Config {
 #[derive(Debug)]
 pub enum ConfigError {
     InvalidProxy { name: String, reason: String },
-    MissingTargets { name: String, reason: String },
+    InvalidTarget { name: String, reason: String },
+    InvalidPeer { name: String, reason: String },
     InvalidManagement { reason: String },
     InvalidEndpoint { name: String, reason: String },
     InvalidBackend { name: String, reason: String },

@@ -74,3 +74,45 @@ fn test_basic_config() {
         "127.0.0.1"
     );
 }
+
+#[test]
+fn test_peers_and_targets_config() {
+    let toml = r#"
+        [proxy]
+        id = "test-proxy"
+        
+        [peers.hospital_a]
+        name = "Hospital A"
+        type = "dicom"
+        connection.host = "10.0.0.1"
+        connection.port = 11112
+        
+        [targets.pacs_archive]
+        name = "Main PACS"
+        type = "dicom"
+        connection.host = "pacs.internal"
+        connection.port = 104
+        authentication.method = "none"
+    "#;
+
+    let result = load_config_from_str(toml);
+    assert!(result.is_ok(), "Configuration with peers and targets should parse");
+    
+    let config = result.unwrap();
+    
+    // Check Peer
+    let peer = config.peers.get("hospital_a").expect("Peer hospital_a not found");
+    assert_eq!(peer.name, Some("Hospital A".to_string()));
+    assert_eq!(peer.r#type, "dicom");
+    assert_eq!(peer.connection.host, "10.0.0.1");
+    assert_eq!(peer.connection.port, Some(11112));
+    
+    // Check Target
+    let target = config.targets.get("pacs_archive").expect("Target pacs_archive not found");
+    assert_eq!(target.name, Some("Main PACS".to_string()));
+    assert_eq!(target.r#type, "dicom");
+    assert_eq!(target.connection.host, "pacs.internal");
+    assert_eq!(target.connection.port, Some(104));
+    assert!(target.authentication.is_some());
+    assert_eq!(target.authentication.as_ref().unwrap().method, "none");
+}
