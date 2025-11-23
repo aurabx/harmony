@@ -1,6 +1,6 @@
 use crate::adapters::registry::AdapterRegistry;
 use runbeam_sdk::{
-    extract_bearer_token, save_token, save_token_with_key, validate_jwt_token, ApiError,
+    extract_bearer_token, save_token, save_token_with_key, validate_jwt_token, ApiError, JwtValidationOptions,
     MachineToken, RunbeamClient, RunbeamError,
 };
 use serde::{Deserialize, Serialize};
@@ -96,7 +96,13 @@ pub async fn handle_authorize(
     tracing::info!("Authorizing gateway: {}", request.gateway_code);
 
     // Validate JWT using RS256 with JWKS
-    let _claims = validate_jwt_token(user_token, jwks_cache_duration_hours)
+    let _claims = validate_jwt_token(
+        user_token,
+        &JwtValidationOptions {
+            jwks_cache_duration_hours,
+            ..Default::default()
+        },
+    )
         .await
         .map_err(|e| {
             tracing::error!("JWT validation failed: {}", e);
