@@ -3,6 +3,9 @@
 ## [Unreleased]
 
 ### Added
+- Normalized ConnectionConfig support for `fhir`, `dicomweb`, `jmix`, and `echo` endpoints and backends. They now respect `connection` settings (including `base_path` and protocol-derived URLs) when using configuration references (`target_ref`/`peer_ref`).
+
+### Changed
 
 ### Changed
 

@@ -299,6 +299,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "879b6c89592deb404ba4dc0ae6b58ffd1795c78991cbb5b8bc441c48a070440d"
 dependencies = [
  "aws-lc-sys",
+ "untrusted 0.7.1",
  "zeroize",
 ]
 
@@ -1736,7 +1737,7 @@ dependencies = [
  "image 0.24.9",
  "ipnetwork",
  "jmix-rs",
- "jsonwebtoken",
+ "jsonwebtoken 9.3.1",
  "lazy_static",
  "matchit",
  "multer",
@@ -2472,6 +2473,23 @@ dependencies = [
  "ring",
  "serde",
  "serde_json",
+ "simple_asn1",
+]
+
+[[package]]
+name = "jsonwebtoken"
+version = "10.2.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "c76e1c7d7df3e34443b3621b459b066a7b79644f059fc8b2db7070c825fd417e"
+dependencies = [
+ "aws-lc-rs",
+ "base64 0.22.1",
+ "getrandom 0.2.16",
+ "js-sys",
+ "pem",
+ "serde",
+ "serde_json",
+ "signature",
  "simple_asn1",
 ]
 
@@ -3765,7 +3783,7 @@ dependencies = [
  "cfg-if",
  "getrandom 0.2.16",
  "libc",
- "untrusted",
+ "untrusted 0.9.0",
  "windows-sys 0.52.0",
 ]
 
@@ -3791,24 +3809,22 @@ dependencies = [
 
 [[package]]
 name = "runbeam-sdk"
-version = "0.7.2"
+version = "0.8.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2daa06f9eeb87324759b16438e39fc925421a36f0559b62214582c42d57c123b"
+checksum = "7115f29fda20654603dfa144c2cd00f76fa6bce2490f3bf2c8f6a190d372e928"
 dependencies = [
  "age",
  "base64 0.22.1",
  "chrono",
  "dirs",
  "harmony-dsl",
- "jsonwebtoken",
+ "jsonwebtoken 10.2.0",
  "once_cell",
- "rand 0.8.5",
  "regex",
  "reqwest",
  "secrecy",
  "serde",
  "serde_json",
- "thiserror 1.0.69",
  "tokio",
  "toml 0.8.22",
  "tracing",
@@ -3933,7 +3949,7 @@ dependencies = [
  "aws-lc-rs",
  "ring",
  "rustls-pki-types",
- "untrusted",
+ "untrusted 0.9.0",
 ]
 
 [[package]]
@@ -4804,6 +4820,12 @@ dependencies = [
  "crypto-common",
  "subtle",
 ]
+
+[[package]]
+name = "untrusted"
+version = "0.7.1"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a156c684c91ea7d62626509bce3cb4e1d9ed5c4d978f7b4352658f96a4c26b4a"
 
 [[package]]
 name = "untrusted"
