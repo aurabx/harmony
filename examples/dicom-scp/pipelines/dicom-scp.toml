@@ -13,9 +13,10 @@ backends = []
 #-------------------------
 [endpoints.dicom_scp]
 service = "dicom_scp"
+peer_ref = "listener_config"
 [endpoints.dicom_scp.options]
 local_aet = "HARMONY_SCP"
-# Bind address and port are taken from network.dicom_net.http (TCP settings)
+# Bind address and port are inherited from peer_ref (listener_config)
 enable_echo = true
 enable_find = true
 enable_move = true

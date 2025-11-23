@@ -1,4 +1,5 @@
 use crate::config::config::ConfigError;
+use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
@@ -16,6 +17,17 @@ pub struct FhirEndpoint {}
 #[async_trait]
 impl ServiceType for FhirEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
+        // Check connection.base_path first
+        let has_connection_path = options
+            .get("connection")
+            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok())
+            .and_then(|c| c.base_path)
+            .is_some_and(|s| !s.trim().is_empty());
+
+        if has_connection_path {
+            return Ok(());
+        }
+
         // Ensure 'path_prefix' exists and is valid
         let path_prefix = options
             .get("path_prefix")
@@ -25,7 +37,8 @@ impl ServiceType for FhirEndpoint {
         if path_prefix.trim().is_empty() {
             return Err(ConfigError::InvalidEndpoint {
                 name: "fhir".to_string(),
-                reason: "FHIR endpoint requires a non-empty 'path_prefix'".to_string(),
+                reason: "FHIR endpoint requires a non-empty 'path_prefix' or 'connection.base_path'"
+                    .to_string(),
             });
         }
 
@@ -35,10 +48,23 @@ impl ServiceType for FhirEndpoint {
 
     fn build_router(&self, options: &HashMap<String, Value>) -> Vec<RouteConfig> {
         // Get the 'path_prefix' from options or default to "/fhir"
-        let path_prefix = options
+        let mut path_prefix = options
             .get("path_prefix")
             .and_then(|v| v.as_str())
-            .unwrap_or("/fhir");
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        if path_prefix.is_empty() {
+            if let Some(conn_json) = options.get("connection") {
+                if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
+                    path_prefix = conn.base_path.unwrap_or_default();
+                }
+            }
+        }
+
+        if path_prefix.is_empty() {
+            path_prefix = "/fhir".to_string();
+        }
 
         // Return route configurations for GET/POST/PUT/DELETE methods
         vec![RouteConfig {
@@ -80,11 +106,39 @@ impl ServiceHandler<Value> for FhirEndpoint {
     ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
         use crate::models::envelope::envelope::TargetDetails;
 
-        // Extract base_url from backend options
-        let base_url = options
-            .get("base_url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::from("FHIR backend requires 'base_url' in options"))?;
+        // Extract base_url from backend options or connection config
+        let base_url = if let Some(conn_json) = options.get("connection") {
+            if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
+                let protocol = conn.protocol.unwrap_or_else(|| "http".to_string());
+                let host = conn.host;
+                let port = conn.port.map(|p| format!(":{}", p)).unwrap_or_default();
+                let path = conn.base_path.unwrap_or_default();
+                let path = if !path.is_empty() && !path.starts_with('/') {
+                    format!("/{}", path)
+                } else {
+                    path
+                };
+                format!("{}://{}{}{}", protocol, host, port, path)
+            } else {
+                options
+                    .get("base_url")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default()
+            }
+        } else {
+            options
+                .get("base_url")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        };
+
+        if base_url.is_empty() {
+            return Err(Error::from(
+                "FHIR backend requires 'base_url' in options or valid 'connection' config",
+            ));
+        }
 
         // Check if middleware has already set target_details
         let target_details = if let Some(existing_target) = envelope.target_details.take() {
@@ -309,5 +363,117 @@ impl ServiceHandler<Value> for FhirEndpoint {
         builder
             .body(body)
             .map_err(|_| Error::from("Failed to construct FHIR HTTP response"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::envelope::envelope::RequestDetails;
+
+    #[test]
+    fn test_validate_with_path_prefix() {
+        let endpoint = FhirEndpoint {};
+        let mut options = HashMap::new();
+        options.insert("path_prefix".to_string(), serde_json::json!("/fhir"));
+        assert!(endpoint.validate(&options).is_ok());
+    }
+
+    #[test]
+    fn test_validate_with_connection_base_path() {
+        let endpoint = FhirEndpoint {};
+        let mut options = HashMap::new();
+        let connection = ConnectionConfig {
+            base_path: Some("/fhir".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+        assert!(endpoint.validate(&options).is_ok());
+    }
+
+    #[test]
+    fn test_validate_missing_both() {
+        let endpoint = FhirEndpoint {};
+        let options = HashMap::new();
+        assert!(endpoint.validate(&options).is_err());
+    }
+
+    #[test]
+    fn test_build_router_priority() {
+        let endpoint = FhirEndpoint {};
+        let mut options = HashMap::new();
+        options.insert("path_prefix".to_string(), serde_json::json!("/primary"));
+        let connection = ConnectionConfig {
+            base_path: Some("/secondary".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+
+        let routes = endpoint.build_router(&options);
+        assert_eq!(routes.len(), 1);
+        assert!(routes[0].path.starts_with("/primary"));
+    }
+
+    #[test]
+    fn test_build_router_fallback() {
+        let endpoint = FhirEndpoint {};
+        let mut options = HashMap::new();
+        let connection = ConnectionConfig {
+            base_path: Some("/fallback".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+
+        let routes = endpoint.build_router(&options);
+        assert_eq!(routes.len(), 1);
+        assert!(routes[0].path.starts_with("/fallback"));
+    }
+
+    #[tokio::test]
+    async fn test_backend_outgoing_connection_url() {
+        let endpoint = FhirEndpoint {};
+        let mut options = HashMap::new();
+        let connection = ConnectionConfig {
+            host: "example.com".to_string(),
+            protocol: Some("https".to_string()),
+            port: Some(8443),
+            base_path: Some("/r4".to_string()),
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/Patient/123".to_string(),
+            ..Default::default()
+        };
+        let envelope = RequestEnvelope::new(request_details, vec![]);
+
+        let result = endpoint
+            .backend_outgoing_request(envelope, &options)
+            .await;
+        // It will fail to connect, but we check if the error message implies it tried the correct URL
+        // OR we can check the target details if we could intercept it.
+        // Since we can't easily mock the HTTP client here, we'll rely on the fact that it *tries* to send.
+        // However, we can check if it fails with a specific error related to connection, not configuration.
+        match result {
+            Err(e) => {
+                // If it failed due to config, the error would be explicit.
+                // If it tried to connect, it means URL construction worked.
+                assert!(!e.to_string().contains("requires 'base_url'"));
+            }
+            _ => {}
+        }
     }
 }

@@ -1,5 +1,6 @@
 use crate::config::logging_config::LoggingConfig;
 use crate::config::proxy_config::ProxyConfig;
+use crate::config::resolution::resolve_references;
 use crate::config::runbeam_config::RunbeamConfig;
 use crate::config::Cli;
 use crate::models::backends::backends::Backend;
@@ -115,6 +116,9 @@ impl Config {
                 "management".to_string(),
                 Endpoint {
                     service: "management".to_string(),
+                    peer_ref: None,
+                    connection: None,
+                    authentication: None,
                     options: Some({
                         let mut options = HashMap::new();
                         options.insert(
@@ -140,6 +144,11 @@ impl Config {
                 "management".to_string(),
                 Backend {
                     service: "management".to_string(),
+                    target_ref: None,
+                    connection: None,
+                    authentication: None,
+                    timeout_secs: None,
+                    max_retries: None,
                     options: Some({
                         let mut options = HashMap::new();
                         options.insert(
@@ -251,6 +260,11 @@ impl Config {
         // Attempt to load additional configs and merge them into the current config.
         if let Ok(additional_configs) = Self::load_additional_configs(&config, &cli.config_path) {
             config = Self::merge_configs(config, additional_configs);
+        }
+
+        // Resolve references (targets/peers)
+        if let Err(e) = resolve_references(&mut config) {
+            panic!("Configuration reference resolution failed: {}", e);
         }
 
         // Inject management service if enabled

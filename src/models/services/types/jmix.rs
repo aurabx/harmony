@@ -1,6 +1,7 @@
 use crate::config::config::ConfigError;
 use crate::file;
 use crate::globals::get_storage;
+use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
@@ -21,6 +22,17 @@ pub struct JmixEndpoint {}
 #[async_trait]
 impl ServiceType for JmixEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
+        // Check connection.base_path first
+        let has_connection_path = options
+            .get("connection")
+            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok())
+            .and_then(|c| c.base_path)
+            .is_some_and(|s| !s.trim().is_empty());
+
+        if has_connection_path {
+            return Ok(());
+        }
+
         // Ensure 'path_prefix' exists and is non-empty
         if options
             .get("path_prefix")
@@ -29,7 +41,8 @@ impl ServiceType for JmixEndpoint {
         {
             return Err(ConfigError::InvalidEndpoint {
                 name: "jmix".to_string(),
-                reason: "Jmix endpoint requires a non-empty 'path_prefix'".to_string(),
+                reason: "Jmix endpoint requires a non-empty 'path_prefix' or 'connection.base_path'"
+                    .to_string(),
             });
         }
 
@@ -59,10 +72,24 @@ impl ServiceType for JmixEndpoint {
     fn build_router(&self, options: &HashMap<String, Value>) -> Vec<RouteConfig> {
         // JMIX exposes a fixed set of API routes. We register only those here and do NOT add any catch-all.
         // Unknown paths under the prefix will 404 automatically.
-        let path_prefix = options
+        let mut path_prefix = options
             .get("path_prefix")
             .and_then(|v| v.as_str())
-            .unwrap_or("/jmix");
+            .unwrap_or("")
+            .to_string();
+
+        if path_prefix.is_empty() {
+            if let Some(conn_json) = options.get("connection") {
+                if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
+                    path_prefix = conn.base_path.unwrap_or_default();
+                }
+            }
+        }
+
+        if path_prefix.is_empty() {
+            path_prefix = "/jmix".to_string();
+        }
+
         let base = path_prefix.trim_end_matches('/');
 
         let mut routes: Vec<RouteConfig> = vec![
@@ -678,5 +705,77 @@ impl ServiceHandler<Value> for JmixEndpoint {
         builder
             .body(body)
             .map_err(|_| Error::from("Failed to construct JMIX HTTP response"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_with_path_prefix() {
+        let endpoint = JmixEndpoint {};
+        let mut options = HashMap::new();
+        options.insert("path_prefix".to_string(), serde_json::json!("/jmix"));
+        assert!(endpoint.validate(&options).is_ok());
+    }
+
+    #[test]
+    fn test_validate_with_connection_base_path() {
+        let endpoint = JmixEndpoint {};
+        let mut options = HashMap::new();
+        let connection = ConnectionConfig {
+            base_path: Some("/jmix".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+        assert!(endpoint.validate(&options).is_ok());
+    }
+
+    #[test]
+    fn test_validate_missing_both() {
+        let endpoint = JmixEndpoint {};
+        let options = HashMap::new();
+        assert!(endpoint.validate(&options).is_err());
+    }
+
+    #[test]
+    fn test_build_router_priority() {
+        let endpoint = JmixEndpoint {};
+        let mut options = HashMap::new();
+        options.insert("path_prefix".to_string(), serde_json::json!("/primary"));
+        let connection = ConnectionConfig {
+            base_path: Some("/secondary".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+
+        let routes = endpoint.build_router(&options);
+        assert!(!routes.is_empty());
+        assert!(routes[0].path.starts_with("/primary"));
+    }
+
+    #[test]
+    fn test_build_router_fallback() {
+        let endpoint = JmixEndpoint {};
+        let mut options = HashMap::new();
+        let connection = ConnectionConfig {
+            base_path: Some("/fallback".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+
+        let routes = endpoint.build_router(&options);
+        assert!(!routes.is_empty());
+        assert!(routes[0].path.starts_with("/fallback"));
     }
 }

@@ -21,8 +21,7 @@ path_prefix = "/trigger-dicom"
 #-------------------------
 [backends.dicom_pacs]
 service = "dicom_scu"
+target_ref = "orthanc"
 [backends.dicom_pacs.options]
-aet = "ORTHANC"
-host = "localhost"
-port = 4242
+aet = "ORTHANC" # AET is specific to this backend's view of the target
 local_aet = "HARMONY_SCU"

@@ -1,4 +1,5 @@
 use crate::config::config::ConfigError;
+use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
@@ -16,6 +17,17 @@ pub struct EchoEndpoint {}
 #[async_trait]
 impl ServiceType for EchoEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
+        // Check connection.base_path first
+        let has_connection_path = options
+            .get("connection")
+            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok())
+            .and_then(|c| c.base_path)
+            .is_some_and(|s| !s.trim().is_empty());
+
+        if has_connection_path {
+            return Ok(());
+        }
+
         // Ensure 'path_prefix' exists and is non-empty
         if options
             .get("path_prefix")
@@ -24,7 +36,8 @@ impl ServiceType for EchoEndpoint {
         {
             return Err(ConfigError::InvalidEndpoint {
                 name: "echo".to_string(),
-                reason: "Echo endpoint requires a non-empty 'path_prefix'".to_string(),
+                reason: "Echo endpoint requires a non-empty 'path_prefix' or 'connection.base_path'"
+                    .to_string(),
             });
         }
         Ok(())
@@ -32,10 +45,23 @@ impl ServiceType for EchoEndpoint {
 
     fn build_router(&self, options: &HashMap<String, Value>) -> Vec<RouteConfig> {
         // Retrieve 'path_prefix' from the options or use a default value
-        let path_prefix = options
+        let mut path_prefix = options
             .get("path_prefix")
             .and_then(|v| v.as_str())
-            .unwrap_or("/echo");
+            .unwrap_or("")
+            .to_string();
+
+        if path_prefix.is_empty() {
+            if let Some(conn_json) = options.get("connection") {
+                if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
+                    path_prefix = conn.base_path.unwrap_or_default();
+                }
+            }
+        }
+
+        if path_prefix.is_empty() {
+            path_prefix = "/echo".to_string();
+        }
 
         vec![
             // Handle exact path match (e.g., /echo)
@@ -216,5 +242,86 @@ impl ServiceHandler<Value> for EchoEndpoint {
         builder
             .body(body)
             .map_err(|_| Error::from("Failed to construct Echo HTTP response"))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_validate_with_path_prefix() {
+        let endpoint = EchoEndpoint {};
+        let mut options = HashMap::new();
+        options.insert("path_prefix".to_string(), serde_json::json!("/echo"));
+        assert!(endpoint.validate(&options).is_ok());
+    }
+
+    #[test]
+    fn test_validate_with_connection_base_path() {
+        let endpoint = EchoEndpoint {};
+        let mut options = HashMap::new();
+        let connection = ConnectionConfig {
+            base_path: Some("/echo".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+        assert!(endpoint.validate(&options).is_ok());
+    }
+
+    #[test]
+    fn test_validate_missing_both() {
+        let endpoint = EchoEndpoint {};
+        let options = HashMap::new();
+        assert!(endpoint.validate(&options).is_err());
+    }
+
+    #[test]
+    fn test_build_router_priority() {
+        let endpoint = EchoEndpoint {};
+        let mut options = HashMap::new();
+        options.insert("path_prefix".to_string(), serde_json::json!("/primary"));
+        let connection = ConnectionConfig {
+            base_path: Some("/secondary".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+
+        let routes = endpoint.build_router(&options);
+        // Check handle subpaths route
+        let subpath_route = routes.iter().find(|r| r.path.ends_with("/{*wildcard}"));
+        assert!(subpath_route.is_some());
+        assert!(subpath_route
+            .unwrap()
+            .path
+            .starts_with("/primary/{*wildcard}"));
+    }
+
+    #[test]
+    fn test_build_router_fallback() {
+        let endpoint = EchoEndpoint {};
+        let mut options = HashMap::new();
+        let connection = ConnectionConfig {
+            base_path: Some("/fallback".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+
+        let routes = endpoint.build_router(&options);
+        let subpath_route = routes.iter().find(|r| r.path.ends_with("/{*wildcard}"));
+        assert!(subpath_route.is_some());
+        assert!(subpath_route
+            .unwrap()
+            .path
+            .starts_with("/fallback/{*wildcard}"));
     }
 }

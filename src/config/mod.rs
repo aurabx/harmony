@@ -2,7 +2,8 @@
 pub mod config;
 pub mod config_storage;
 mod logging_config;
-mod proxy_config;
+pub mod proxy_config;
+pub mod resolution;
 pub mod reload;
 mod runbeam_config;
 mod tests;

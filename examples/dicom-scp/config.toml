@@ -30,5 +30,9 @@ backend = "filesystem"
 path = "./tmp"
 
 # Service types
-[services.dicom_scp]
-module = ""
+
+# Peer definition for the listener (New in v1.9)
+[peers.listener_config]
+connection.host = "0.0.0.0"
+connection.port = 11112
+connection.protocol = "dicom"

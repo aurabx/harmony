@@ -31,3 +31,17 @@ Notes
 - For JWT tests, explicitly choose RS256 or HS256 mode and sign tokens accordingly
 - Consider adding end-to-end tests against a full server only in separate, slower suites
 - JMIX (dev): See [jmix-dev-testing.md](../dev/testing/jmix-dev-testing.md) for JMIX API development testing
+
+## Verifying Examples
+
+It is recommended to run the provided examples to ensure end-to-end functionality in a real environment.
+
+```bash
+# Run all examples interactively
+./scripts/run-example.sh
+
+# Run specific example directly
+./scripts/run-example.sh http-backend
+```
+
+This script builds the project and runs the selected example's `demo.sh`, which typically starts the proxy and performs integration tests against it.

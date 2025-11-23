@@ -16,9 +16,10 @@ Harmony is a proxy/gateway that handles, transforms and proxies data between sys
 - Hot configuration reload: zero-downtime updates for routes/middleware/backends, selective adapter restart for network changes
 - Configurable routing with groups, endpoints, backends, and middleware
 - JWT and basic authentication
-- Request/response transformation pipeline
-- AES-256-GCM encryption with ephemeral keys
-- Envelope-based data exchange format
+- **Request/response transformation pipeline**
+- **AES-256-GCM encryption** with ephemeral keys
+- **Normalized connection settings** and reference capabilities (`peer_ref`, `target_ref`) for cleaner configuration
+- **Envelope-based data exchange format**
 - Management API for monitoring and administration
 - Security: XXE prevention, CSV formula injection mitigation, configurable size limits
 
@@ -79,6 +80,7 @@ cargo clippy --all-targets -- -D warnings
 - [docs/envelope.md](docs/envelope.md) - Core Envelope struct for data exchange
 - [docs/endpoints.md](docs/endpoints.md) - Endpoint types (HTTP, FHIR, JMIX, DICOMweb)
 - [docs/backends.md](docs/backends.md) - Backend types and target communication
+- [docs/migration/dsl-v1.9.md](docs/migration/dsl-v1.9.md) - Migration guide for DSL v1.9 (Connection normalization)
 - [docs/management-api.md](docs/management-api.md) - Management API for monitoring and administration
 
 ### Other

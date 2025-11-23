@@ -25,6 +25,9 @@ async fn router_builds_and_skips_conflicting_pipeline() {
         harmony::models::endpoints::endpoint::Endpoint {
             service: "http".into(),
             options: Some(ep_opts.clone()),
+            peer_ref: None,
+            connection: None,
+            authentication: None,
         },
     );
     cfg.endpoints.insert(
@@ -32,6 +35,9 @@ async fn router_builds_and_skips_conflicting_pipeline() {
         harmony::models::endpoints::endpoint::Endpoint {
             service: "http".into(),
             options: Some(ep_opts.clone()),
+            peer_ref: None,
+            connection: None,
+            authentication: None,
         },
     );
 

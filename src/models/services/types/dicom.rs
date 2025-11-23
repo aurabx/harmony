@@ -1,4 +1,5 @@
 use crate::config::config::ConfigError;
+use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use async_trait::async_trait;
@@ -47,6 +48,11 @@ impl DicomScuBackend {
         &self,
         options: &HashMap<String, Value>,
     ) -> Result<RemoteNode, ConfigError> {
+        // Parse connection config if present
+        let connection = options
+            .get("connection")
+            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok());
+
         let aet = options
             .get("aet")
             .and_then(|v| v.as_str())
@@ -61,6 +67,7 @@ impl DicomScuBackend {
             .get("host")
             .and_then(|v| v.as_str())
             .or(self.host.as_deref())
+            .or_else(|| connection.as_ref().map(|c| c.host.as_str()))
             .ok_or_else(|| ConfigError::InvalidEndpoint {
                 name: "dicom_scu".to_string(),
                 reason: "Missing 'host' (DICOM server address)".to_string(),
@@ -71,6 +78,7 @@ impl DicomScuBackend {
             .get("port")
             .and_then(|v| v.as_u64())
             .or(self.port.map(|p| p as u64))
+            .or_else(|| connection.as_ref().and_then(|c| c.port.map(|p| p as u64)))
             .ok_or_else(|| ConfigError::InvalidEndpoint {
                 name: "dicom_scu".to_string(),
                 reason: "Missing 'port'".to_string(),

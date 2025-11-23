@@ -109,5 +109,8 @@ path_prefix = "/"
 #-------------------------
 [backends.external_api]
 service = "http"
+target_ref = "local_server"
 [backends.external_api.options]
-base_url = "http://127.0.0.1:8888"
+# base_url is optional if target_ref is used, but can override or augment
+# If target has base_path, it is used. If options has base_url, it might be preferred by service implementation
+# For HTTP service, we now support constructing URL from connection config.

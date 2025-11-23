@@ -16,7 +16,52 @@ RequestEnvelope → Backend Service → External Target → ResponseEnvelope
 - Convert responses back to `ResponseEnvelope`
 - Handle target selection when multiple targets are configured
 
-**Note**: Backends run inside the `PipelineExecutor` (see [router.md](router.md)), not in protocol adapters. All protocols use the same backend implementations.
+## Connection Configuration
+
+Backends can define connection details directly or reference a shared **Target**.
+
+### Using Targets (Recommended)
+
+Define a target in your main configuration and reference it from the backend. This allows connection reuse and centralized management.
+
+**config.toml**:
+```toml
+[targets.prod_api]
+connection.host = "api.example.com"
+connection.protocol = "https"
+authentication.method = "bearer"
+timeout_secs = 60
+```
+
+**pipelines/main.toml**:
+```toml
+[backends.my_backend]
+service = "http"
+target_ref = "prod_api"  # Inherits connection settings from 'prod_api'
+```
+
+### Direct Configuration
+
+You can also define connection settings directly on the backend:
+
+```toml
+[backends.my_backend]
+service = "http"
+[backends.my_backend.connection]
+host = "api.example.com"
+protocol = "https"
+```
+
+### Legacy Configuration (Options)
+
+Service-specific options are still supported for backward compatibility:
+
+```toml
+[backends.my_backend]
+service = "http"
+[backends.my_backend.options]
+base_url = "https://api.example.com"
+```
 
 ## Backend Types
 

@@ -1,4 +1,5 @@
 use crate::config::config::ConfigError;
+use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
@@ -197,6 +198,17 @@ impl DicomwebEndpoint {
 #[async_trait]
 impl ServiceType for DicomwebEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
+        // Check connection.base_path first
+        let has_connection_path = options
+            .get("connection")
+            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok())
+            .and_then(|c| c.base_path)
+            .is_some_and(|s| !s.trim().is_empty());
+
+        if has_connection_path {
+            return Ok(());
+        }
+
         // Ensure 'path_prefix' exists and is non-empty
         if options
             .get("path_prefix")
@@ -205,7 +217,8 @@ impl ServiceType for DicomwebEndpoint {
         {
             return Err(ConfigError::InvalidEndpoint {
                 name: "dicomweb".to_string(),
-                reason: "DICOMweb endpoint requires a non-empty 'path_prefix'".to_string(),
+                reason: "DICOMweb endpoint requires a non-empty 'path_prefix' or 'connection.base_path'"
+                    .to_string(),
             });
         }
         Ok(())
@@ -213,10 +226,20 @@ impl ServiceType for DicomwebEndpoint {
 
     fn build_router(&self, options: &HashMap<String, Value>) -> Vec<RouteConfig> {
         // DICOMweb exposes specific QIDO-RS and WADO-RS routes
-        let path_prefix = options
+        let mut path_prefix = options
             .get("path_prefix")
             .and_then(|v| v.as_str())
-            .unwrap_or("");
+            .unwrap_or("")
+            .to_string();
+
+        if path_prefix.is_empty() {
+            if let Some(conn_json) = options.get("connection") {
+                if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
+                    path_prefix = conn.base_path.unwrap_or_default();
+                }
+            }
+        }
+
         let base = path_prefix.trim_end_matches('/');
 
         let routes = vec![
@@ -828,5 +851,74 @@ mod tests {
             json["message"],
             "Unable to decode frames for requested instance"
         );
+    }
+
+    #[test]
+    fn test_validate_with_path_prefix() {
+        let endpoint = DicomwebEndpoint {};
+        let mut options = HashMap::new();
+        options.insert("path_prefix".to_string(), serde_json::json!("/dicomweb"));
+        assert!(endpoint.validate(&options).is_ok());
+    }
+
+    #[test]
+    fn test_validate_with_connection_base_path() {
+        let endpoint = DicomwebEndpoint {};
+        let mut options = HashMap::new();
+        let connection = ConnectionConfig {
+            base_path: Some("/dicomweb".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+        assert!(endpoint.validate(&options).is_ok());
+    }
+
+    #[test]
+    fn test_validate_missing_both() {
+        let endpoint = DicomwebEndpoint {};
+        let options = HashMap::new();
+        assert!(endpoint.validate(&options).is_err());
+    }
+
+    #[test]
+    fn test_build_router_priority() {
+        let endpoint = DicomwebEndpoint {};
+        let mut options = HashMap::new();
+        options.insert("path_prefix".to_string(), serde_json::json!("/primary"));
+        let connection = ConnectionConfig {
+            base_path: Some("/secondary".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+
+        let routes = endpoint.build_router(&options);
+        // Should be non-empty as it registers many routes
+        assert!(!routes.is_empty());
+        // Check first route path
+        assert!(routes[0].path.starts_with("/primary"));
+    }
+
+    #[test]
+    fn test_build_router_fallback() {
+        let endpoint = DicomwebEndpoint {};
+        let mut options = HashMap::new();
+        let connection = ConnectionConfig {
+            base_path: Some("/fallback".to_string()),
+            ..Default::default()
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+
+        let routes = endpoint.build_router(&options);
+        assert!(!routes.is_empty());
+        assert!(routes[0].path.starts_with("/fallback"));
     }
 }

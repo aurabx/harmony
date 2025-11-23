@@ -1,4 +1,5 @@
 use crate::config::config::ConfigError;
+use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::router::route_config::RouteConfig;
@@ -15,6 +16,17 @@ pub struct HttpEndpoint {}
 #[async_trait]
 impl ServiceType for HttpEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
+        // Check connection.base_path first
+        let has_connection_path = options
+            .get("connection")
+            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok())
+            .and_then(|c| c.base_path)
+            .is_some_and(|s| !s.trim().is_empty());
+
+        if has_connection_path {
+            return Ok(());
+        }
+
         // Ensure 'path_prefix' exists and is not empty
         if options
             .get("path_prefix")
@@ -23,17 +35,31 @@ impl ServiceType for HttpEndpoint {
         {
             return Err(ConfigError::InvalidEndpoint {
                 name: "basic".to_string(),
-                reason: "Basic endpoint requires a non-empty 'path_prefix'".to_string(),
+                reason: "Basic endpoint requires a non-empty 'path_prefix' or 'connection.base_path'"
+                    .to_string(),
             });
         }
         Ok(())
     }
 
     fn build_router(&self, options: &HashMap<String, Value>) -> Vec<RouteConfig> {
-        let path_prefix = options
+        let mut path_prefix = options
             .get("path_prefix")
             .and_then(|v| v.as_str())
-            .unwrap_or("/");
+            .map(|s| s.to_string())
+            .unwrap_or_default();
+
+        if path_prefix.is_empty() {
+            if let Some(conn_json) = options.get("connection") {
+                if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
+                    path_prefix = conn.base_path.unwrap_or_else(|| "/".to_string());
+                }
+            }
+        }
+
+        if path_prefix.is_empty() {
+            path_prefix = "/".to_string();
+        }
 
         // Ensure clean wildcard path by trimming trailing slashes
         let prefix_trimmed = path_prefix.trim_end_matches('/');
@@ -316,11 +342,39 @@ impl ServiceHandler<Value> for HttpEndpoint {
     ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
         use crate::models::envelope::envelope::TargetDetails;
 
-        // Extract base_url from backend options
-        let base_url = options
-            .get("base_url")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| Error::from("HTTP backend requires 'base_url' in options"))?;
+        // Extract base_url from backend options or connection config
+        let base_url = if let Some(conn_json) = options.get("connection") {
+            if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
+                let protocol = conn.protocol.unwrap_or_else(|| "http".to_string());
+                let host = conn.host;
+                let port = conn.port.map(|p| format!(":{}", p)).unwrap_or_default();
+                let path = conn.base_path.unwrap_or_default();
+                let path = if !path.is_empty() && !path.starts_with('/') {
+                    format!("/{}", path)
+                } else {
+                    path
+                };
+                format!("{}://{}{}{}", protocol, host, port, path)
+            } else {
+                options
+                    .get("base_url")
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+                    .unwrap_or_default()
+            }
+        } else {
+            options
+                .get("base_url")
+                .and_then(|v| v.as_str())
+                .map(|s| s.to_string())
+                .unwrap_or_default()
+        };
+
+        if base_url.is_empty() {
+            return Err(Error::from(
+                "HTTP backend requires 'base_url' in options or valid 'connection' config",
+            ));
+        }
 
         // Check if middleware has already set target_details
         let target_details = if let Some(existing_target) = envelope.target_details.take() {

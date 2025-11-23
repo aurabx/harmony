@@ -1,4 +1,5 @@
 use crate::config::config::ConfigError;
+use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use async_trait::async_trait;
@@ -47,6 +48,15 @@ impl DicomScpEndpoint {
 
     /// Get the port from options or struct, with default fallback
     fn get_port(&self, options: &HashMap<String, Value>) -> u16 {
+        // Check connection config first
+        if let Some(conn_json) = options.get("connection") {
+            if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
+                if let Some(p) = conn.port {
+                    return p;
+                }
+            }
+        }
+
         options
             .get("port")
             .and_then(|v| v.as_u64())
@@ -57,6 +67,15 @@ impl DicomScpEndpoint {
 
     /// Get the bind address from options or struct, with default fallback
     fn get_bind_addr(&self, options: &HashMap<String, Value>) -> String {
+        // Check connection config first
+        if let Some(conn_json) = options.get("connection") {
+            if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
+                if !conn.host.is_empty() {
+                    return conn.host;
+                }
+            }
+        }
+
         options
             .get("bind_addr")
             .and_then(|v| v.as_str())

@@ -17,6 +17,40 @@ The endpoint configuration specifies:
 - Service-specific options (e.g., `path_prefix` for HTTP endpoints, `local_aet` for DICOM)
 - How the service should construct request/response envelopes
 
+## Connection Configuration
+
+Endpoints can define connection details directly or reference a shared **Peer**.
+
+### Using Peers (Recommended)
+
+Define a peer in your main configuration and reference it from the endpoint.
+
+**config.toml**:
+```toml
+[peers.hospital_a]
+connection.host = "hospital-a.example.com"
+connection.protocol = "dicom"
+authentication.method = "mutual_tls"
+```
+
+**pipelines/main.toml**:
+```toml
+[endpoints.dicom_listener]
+service = "dicom_scp"
+peer_ref = "hospital_a"  # Inherits connection settings
+```
+
+### Direct Configuration
+
+```toml
+[endpoints.dicom_listener]
+service = "dicom_scp"
+[endpoints.dicom_listener.connection]
+host = "0.0.0.0"
+port = 11112
+protocol = "dicom"
+```
+
 ## Endpoint Types
 
 ### HTTP (Passthru)

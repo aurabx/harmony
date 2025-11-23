@@ -17,6 +17,9 @@ fn create_test_config() -> Config {
         Endpoint {
             service: "echo".to_string(),
             options: Some(HashMap::new()),
+            peer_ref: None,
+            connection: None,
+            authentication: None,
         },
     );
 
@@ -25,6 +28,11 @@ fn create_test_config() -> Config {
         "test_backend".to_string(),
         Backend {
             service: "http".to_string(),
+            target_ref: None,
+            connection: None,
+            authentication: None,
+            timeout_secs: None,
+            max_retries: None,
             options: Some({
                 let mut opts = HashMap::new();
                 opts.insert("host".to_string(), serde_json::json!("example.com"));
