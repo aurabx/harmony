@@ -1,5 +1,17 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+### Changed
+
+### Fixed
+
+### Documentation
+
+### Dependencies
+
 ## [0.7.1] - 2025-11-20
 
 ### Highlights

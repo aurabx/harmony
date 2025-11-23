@@ -1075,7 +1075,7 @@ dependencies = [
 
 [[package]]
 name = "dicom_json_tool"
-version = "0.7.1"
+version = "0.8.0-dev"
 dependencies = [
  "anyhow",
  "clap",
@@ -1105,7 +1105,7 @@ dependencies = [
 
 [[package]]
 name = "dimse"
-version = "0.7.1"
+version = "0.8.0-dev"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1708,7 +1708,7 @@ dependencies = [
 
 [[package]]
 name = "harmony"
-version = "0.7.1"
+version = "0.8.0-dev"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1771,7 +1771,7 @@ dependencies = [
 
 [[package]]
 name = "harmony-database"
-version = "0.7.1"
+version = "0.8.0-dev"
 dependencies = [
  "once_cell",
  "redb",
@@ -1788,7 +1788,7 @@ checksum = "b8079e36b0665792818f711ca67d27b094c8e6a2fcda28c0dbed76634c152334"
 
 [[package]]
 name = "harmony-filesystem"
-version = "0.7.1"
+version = "0.8.0-dev"
 dependencies = [
  "async-trait",
  "tempfile",
@@ -1808,7 +1808,7 @@ dependencies = [
 
 [[package]]
 name = "harmony_transform"
-version = "0.7.1"
+version = "0.8.0-dev"
 dependencies = [
  "harmony-jolt",
  "serde",
