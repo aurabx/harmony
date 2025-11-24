@@ -115,10 +115,9 @@ skip_listing = true   # Skip DICOM files from files.json manifest
 #-------------------------
 [backends.dicom_pacs]
 service = "dicom_scu"
+target_ref = "orthanc"        # Uses target definition from config.toml
 [backends.dicom_pacs.options]
 aet = "ORTHANC"              # Remote AE (Orthanc)
-host = "127.0.0.1"
-port = 4242
 local_aet = "HARMONY_SCU"    # Our AE title
 # DICOM retrieval mode: "get" (default) or "move"
 # - "get" (C-GET): Works without PACS-side AE configuration, images received directly

@@ -96,3 +96,12 @@ module=""
 
 [middleware_types.path_filter]
 module=""
+
+# ------------------------
+# Target Definitions
+#-------------------------
+[targets.pacs_clinic]
+connection.host = "127.0.0.1"
+connection.port = 104
+connection.protocol = "dicom"
+timeout_secs = 60

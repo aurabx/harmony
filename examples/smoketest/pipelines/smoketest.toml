@@ -206,6 +206,4 @@ path_prefix = "/"
 
 [backends.backend_server]
 service = "http"
-
-[backends.backend_server.options]
-base_url = "http://127.0.0.1:8888"  # Python SimpleHTTPServer
+target_ref = "local_test_server"  # Uses target definition from config.toml

@@ -56,3 +56,12 @@ module=""
 
 [middleware_types.policies]
 module=""
+
+# ------------------------
+# Target Definitions
+#-------------------------
+[targets.orthanc]
+connection.host = "localhost"
+connection.port = 4242
+connection.protocol = "dicom"
+timeout_secs = 60

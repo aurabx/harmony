@@ -24,10 +24,9 @@ path_prefix = "/dicomweb"
 #-------------------------
 [backends.dicom_pacs]
 service = "dicom_scu"
+target_ref = "orthanc"  # Uses target definition from config.toml
 [backends.dicom_pacs.options]
 aet = "ORTHANC"
-host = "localhost"
-port = 4242
 local_aet = "HARMONY_SCU"
 
 # ------------------------

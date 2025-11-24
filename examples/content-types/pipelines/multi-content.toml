@@ -115,6 +115,4 @@ path_prefix = "/api"
 #-------------------------
 [backends.echo_backend]
 service = "http"
-
-[backends.echo_backend.options]
-base_url = "https://httpbin.org"
+target_ref = "httpbin"  # Uses target definition from config.toml

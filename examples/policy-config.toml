@@ -60,9 +60,17 @@ path = "/api"
 
 [backends.api_backend]
 service = "http"
+target_ref = "local_api"  # Uses target definition
 
-[backends.api_backend.options]
-base_url = "http://localhost:3000"
+# ============================================================================
+# TARGETS
+# ============================================================================
+
+[targets.local_api]
+connection.host = "localhost"
+connection.port = 3000
+connection.protocol = "http"
+timeout_secs = 60
 
 # ============================================================================
 # MIDDLEWARE - IP ACCESS CONTROL (References policies by ID)

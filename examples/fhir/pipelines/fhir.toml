@@ -6,7 +6,6 @@ description = "FHIR API with healthcare-grade security policies (HIPAA-aligned)"
 networks = ["http_net"]
 endpoints = ["fhir_test"]
 middleware = [
-    "basic_auth",
     "healthcare_policies",
 ]
 backends = ["fhir_backend"]
@@ -15,15 +14,9 @@ backends = ["fhir_backend"]
 # Middleware
 #-------------------------
 
-[middleware.basic_auth]
-type = "basic_auth"
-[middleware.basic_auth.options]
-token_path = "./tmp/test_token"
-username = "test_user"
-password = "test_password"
-
 # Healthcare Security Policies (References policies by ID)
 # Production-grade access control aligned with HIPAA and healthcare compliance requirements
+# Note: Bearer token authentication is configured at the target level (see config.toml)
 [middleware.healthcare_policies]
 type = "policies"
 
@@ -43,8 +36,7 @@ path_prefix = "/fhir"
 #-------------------------
 [backends.fhir_backend]
 service = "fhir"
-[backends.fhir_backend.options]
-base_url = "https://server.fire.ly/r4"
+target_ref = "fire_ly_fhir"  # Uses target definition from config.toml
 
 # Top-level policies
 [policies.fhir_security]
@@ -56,7 +48,6 @@ rules = [
     "fhir_resource_paths",
     "rate_limit",
     "method_filter",
-    "business_hours"
 ]
 
 # Top-level rules
@@ -84,6 +75,7 @@ enabled = true
 
 [rules.fhir_resource_paths.options]
 paths = [
+    "/metadata",                  # Capability statement
     "/Patient/{*path}",           # Patient demographics
     "/Observation/{*path}",       # Clinical observations
     "/ImagingStudy/{*path}",      # Imaging studies
@@ -118,18 +110,4 @@ enabled = true
 [rules.method_filter.options]
 mode = "allow"
 methods = ["GET", "POST", "PUT", "DELETE"]
-
-[rules.business_hours]
-id = "business_hours"
-name = "Business Hours Access Only"
-type = "time_based"
-weight = 80
-enabled = false  # Disabled for demo - enable in production
-
-[rules.business_hours.options]
-allow_during_window = true
-timezone = "America/New_York"
-start_time = "09:00"
-end_time = "17:00"
-days_of_week = ["monday", "tuesday", "wednesday", "thursday", "friday"]
 

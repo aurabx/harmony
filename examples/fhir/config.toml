@@ -1,5 +1,5 @@
 # FHIR Passthrough Example Configuration
-# Demonstrates FHIR endpoint proxying to a real FHIR server with basic authentication
+# Demonstrates FHIR endpoint proxying to a real FHIR server with bearer token authentication
 
 [proxy]
 id = "harmony-fhir"
@@ -44,9 +44,6 @@ module = ""
 module = ""
 
 # Middleware types
-[middleware_types.basic_auth]
-module = ""
-
 [middleware_types.json_extractor]
 module = ""
 
@@ -55,4 +52,24 @@ module = ""
 
 [middleware_types.policies]
 module = ""
+
+# ------------------------
+# Authentication Definitions
+#-------------------------
+[authentications.fhir_bearer]
+id = "fhir_bearer"
+method = "bearer"
+
+[authentications.fhir_bearer.options]
+token = "abc123"  # Replace with actual bearer token
+
+# ------------------------
+# Target Definitions
+#-------------------------
+[targets.fire_ly_fhir]
+connection.host = "server.fire.ly"
+connection.protocol = "https"
+connection.base_path = "/r4"
+authentication = "authentications.fhir_bearer"
+timeout_secs = 60
 

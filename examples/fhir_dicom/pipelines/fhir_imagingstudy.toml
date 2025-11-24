@@ -90,11 +90,10 @@ path_prefix = "/fhir"
 # Production DICOM backend (commented for testing)
 #[backends.dicom_backend]
 #service = "dicom_scu"
+#target_ref = "pacs_clinic"  # Uses target definition from config.toml
 #[backends.dicom_backend.options]
 #local_aet = "HARMONY_SCU"
 #aet = "PACSCLINIC"
-#host = "127.0.0.1"
-#port = 104
 
 # Mock backend for testing
 [backends.dicom_backend]

@@ -47,3 +47,11 @@ module = ""
 # Middleware type registrations
 [middleware_types.policies]
 module = ""
+
+# ------------------------
+# Target Definitions
+#-------------------------
+[targets.httpbin]
+connection.host = "httpbin.org"
+connection.protocol = "https"
+timeout_secs = 60
