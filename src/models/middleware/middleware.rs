@@ -173,10 +173,26 @@ pub fn build_middleware_instances_for_pipeline(
 
     for name in names {
         if let Some(middleware_instance) = config.middleware.get(name) {
+            // Resolve authentication reference if present
+            let mut resolved_options = middleware_instance.options.clone();
+            if let Some(auth_ref) = &middleware_instance.authentication {
+                if let Some(auth_def) = config.authentications.get(auth_ref) {
+                    // Merge authentication options into middleware options
+                    for (key, value) in &auth_def.options {
+                        resolved_options.insert(key.clone(), value.clone());
+                    }
+                } else {
+                    return Err(format!(
+                        "Middleware '{}' references unknown authentication '{}'",
+                        name, auth_ref
+                    ));
+                }
+            }
+
             // Use new method that passes Config context for policies middleware
             let middleware = resolve_middleware_type_with_config(
                 &middleware_instance.middleware_type,
-                &middleware_instance.options,
+                &resolved_options,
                 transforms_path,
                 Some(config),
             )

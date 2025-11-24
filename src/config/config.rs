@@ -4,8 +4,9 @@ use crate::config::resolution::resolve_references;
 use crate::config::runbeam_config::RunbeamConfig;
 use crate::config::Cli;
 use crate::models::backends::backends::Backend;
+use crate::models::connection::AuthenticationDefinition;
 use crate::models::endpoints::endpoint::Endpoint;
-use crate::models::middleware::instance::{MiddlewareInstance, MiddlewareInstanceConfig};
+use crate::models::middleware::instance::MiddlewareInstance;
 use crate::models::middleware::middleware::{initialise_middleware_registry, MiddlewareConfig};
 use crate::models::network::config::NetworkConfig;
 use crate::models::peers::config::PeerConfig;
@@ -77,9 +78,7 @@ pub struct Config {
     #[serde(default)]
     pub middleware: HashMap<String, MiddlewareInstance>, // Middleware instances
     #[serde(default)]
-    pub middleware_legacy: MiddlewareInstanceConfig, // Keep the old middleware config for compatibility
-    #[serde(default)]
-    pub middleware_types: HashMap<String, MiddlewareConfig>, // New middleware registry config
+    pub middleware_types: HashMap<String, MiddlewareConfig>, // Middleware registry config
     #[serde(default)]
     pub logging: LoggingConfig,
     #[serde(default)]
@@ -92,6 +91,9 @@ pub struct Config {
     pub storage: StorageConfig,
     #[serde(default)]
     pub transforms: (),
+    /// Top-level authentication definitions (DSL v1.9.0+)
+    #[serde(default)]
+    pub authentications: HashMap<String, AuthenticationDefinition>,
     /// Top-level policy definitions
     #[serde(default)]
     pub policies: HashMap<String, PolicyDefinition>,

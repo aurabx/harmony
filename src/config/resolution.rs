@@ -58,7 +58,7 @@ fn resolve_endpoints(config: &mut Config) -> Result<(), String> {
 
         // Inject connection into options for services
         inject_connection_into_options(&mut endpoint.options, &endpoint.connection);
-        inject_auth_into_options(&mut endpoint.options, &endpoint.authentication);
+        // Authentication is now a reference string - resolved during middleware construction
     }
     Ok(())
 }
@@ -120,7 +120,7 @@ fn resolve_backends(config: &mut Config) -> Result<(), String> {
         
         // Inject connection into options for services
         inject_connection_into_options(&mut backend.options, &backend.connection);
-        inject_auth_into_options(&mut backend.options, &backend.authentication);
+        // Authentication is now a reference string - resolved during middleware construction
         
         // Inject reliability
         if let Some(options) = &mut backend.options {
@@ -156,12 +156,5 @@ fn inject_connection_into_options(
     }
 }
 
-fn inject_auth_into_options(
-     options: &mut Option<HashMap<String, serde_json::Value>>,
-     auth: &Option<crate::models::connection::AuthenticationConfig>
-) {
-    if let Some(a) = auth {
-        let options_map = options.get_or_insert_with(HashMap::new);
-        options_map.insert("authentication".to_string(), serde_json::to_value(a).unwrap());
-    }
-}
+// inject_auth_into_options removed - authentication is now a reference string
+// resolved during middleware construction phase

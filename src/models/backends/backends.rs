@@ -1,4 +1,4 @@
-use crate::models::connection::{AuthenticationConfig, ConnectionConfig};
+use crate::models::connection::ConnectionConfig;
 use crate::models::services::services::{resolve_service, ServiceType};
 use serde::Deserialize;
 use serde_json::Value;
@@ -11,7 +11,8 @@ pub struct Backend {
     pub options: Option<HashMap<String, serde_json::Value>>, // Service-specific options
     pub target_ref: Option<String>,
     pub connection: Option<ConnectionConfig>,
-    pub authentication: Option<AuthenticationConfig>,
+    /// Authentication reference (DSL v1.9.0+): ID of global authentication definition
+    pub authentication: Option<String>,
     pub timeout_secs: Option<u64>,
     pub max_retries: Option<u32>,
 }

@@ -139,6 +139,7 @@ mod tests {
             "test".to_string(),
             crate::models::middleware::instance::MiddlewareInstance {
                 middleware_type: "test".to_string(),
+                authentication: None,
                 options: Default::default(),
             },
         );

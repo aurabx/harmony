@@ -81,6 +81,10 @@ fn test_peers_and_targets_config() {
         [proxy]
         id = "test-proxy"
         
+        [authentications.none-auth]
+        id = "none-auth"
+        method = "none"
+        
         [peers.hospital_a]
         name = "Hospital A"
         type = "dicom"
@@ -92,7 +96,7 @@ fn test_peers_and_targets_config() {
         type = "dicom"
         connection.host = "pacs.internal"
         connection.port = 104
-        authentication.method = "none"
+        authentication = "authentications.none-auth"
     "#;
 
     let result = load_config_from_str(toml);
@@ -114,5 +118,5 @@ fn test_peers_and_targets_config() {
     assert_eq!(target.connection.host, "pacs.internal");
     assert_eq!(target.connection.port, Some(104));
     assert!(target.authentication.is_some());
-    assert_eq!(target.authentication.as_ref().unwrap().method, "none");
+    assert_eq!(target.authentication.as_ref().unwrap(), "authentications.none-auth");
 }

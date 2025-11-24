@@ -1,4 +1,4 @@
-use crate::models::connection::{AuthenticationConfig, ConnectionConfig};
+use crate::models::connection::ConnectionConfig;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize, Clone, PartialEq)]
@@ -11,7 +11,8 @@ pub struct TargetConfig {
     pub description: Option<String>,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
-    pub authentication: Option<AuthenticationConfig>,
+    /// Authentication reference (DSL v1.9.0+): ID of global authentication definition
+    pub authentication: Option<String>,
     pub tags: Option<Vec<String>>,
     #[serde(default = "default_timeout_secs")]
     pub timeout_secs: u64,
@@ -51,15 +52,8 @@ impl TargetConfig {
             ));
         }
 
-        if let Some(auth) = &self.authentication {
-            let valid_methods = ["none", "basic", "bearer", "api_key", "mutual_tls", "custom"];
-            if !valid_methods.contains(&auth.method.as_str()) {
-                return Err(format!(
-                    "Invalid authentication method '{}'. Must be one of: {:?}",
-                    auth.method, valid_methods
-                ));
-            }
-        }
+        // Authentication reference validation is deferred to config resolution phase
+        // where the global authentications map is available
 
         Ok(())
     }
@@ -74,7 +68,7 @@ impl TargetConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::connection::{AuthenticationConfig, ConnectionConfig};
+    use crate::models::connection::ConnectionConfig;
 
     #[test]
     fn test_valid_target_config() {
@@ -90,10 +84,7 @@ mod tests {
             protocol: Some("http".to_string()),
             description: Some("A test target".to_string()),
             enabled: true,
-            authentication: Some(AuthenticationConfig {
-                method: "basic".to_string(),
-                credentials_path: Some("./creds".to_string()),
-            }),
+            authentication: Some("authentications.basic-auth".to_string()),
             tags: Some(vec!["tag1".to_string()]),
             timeout_secs: 30,
             max_retries: 3,
@@ -191,7 +182,8 @@ mod tests {
     }
 
     #[test]
-    fn test_invalid_auth_method() {
+    fn test_with_auth_reference() {
+        // Auth reference validation happens during config resolution, not during struct validation
         let config = TargetConfig {
             id: None,
             name: None,
@@ -204,15 +196,13 @@ mod tests {
             protocol: Some("http".to_string()),
             description: None,
             enabled: true,
-            authentication: Some(AuthenticationConfig {
-                method: "invalid".to_string(),
-                credentials_path: None,
-            }),
+            authentication: Some("authentications.some-auth".to_string()),
             tags: None,
             timeout_secs: 30,
             max_retries: 3,
         };
-        assert!(config.validate().is_err());
+        // Should pass validation - auth reference is resolved later
+        assert!(config.validate().is_ok());
     }
     
     #[test]

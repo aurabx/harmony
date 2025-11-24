@@ -5,6 +5,9 @@ use std::collections::HashMap;
 pub struct MiddlewareInstance {
     #[serde(rename = "type")]
     pub middleware_type: String,
+    /// Authentication reference (DSL v1.9.0+): ID of global authentication definition
+    /// Used for auth-related middleware (jwt_auth, basic_auth)
+    pub authentication: Option<String>,
     #[serde(default)]
     pub options: HashMap<String, serde_json::Value>,
 }
@@ -23,11 +26,3 @@ impl MiddlewareInstance {
     }
 }
 
-// Rename the existing MiddlewareConfig to avoid confusion
-#[derive(Debug, Deserialize, Default, Clone)]
-pub struct MiddlewareInstanceConfig {
-    #[serde(default)]
-    pub jwt_auth: Option<crate::models::middleware::types::jwtauth::JwtAuthConfig>,
-    #[serde(default)]
-    pub aurabox_connect: Option<crate::models::middleware::types::connect::AuraboxConnectConfig>,
-}

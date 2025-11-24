@@ -1,4 +1,5 @@
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Standardized connection configuration shared across components
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
@@ -10,16 +11,13 @@ pub struct ConnectionConfig {
     pub base_path: Option<String>,
 }
 
-/// Authentication configuration shared across components
+/// Global authentication definition (DSL v1.9.0+)
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
-pub struct AuthenticationConfig {
-    #[serde(default = "default_auth_method")]
+pub struct AuthenticationDefinition {
+    pub id: String,
     pub method: String,
-    pub credentials_path: Option<String>,
-}
-
-fn default_auth_method() -> String {
-    "none".to_string()
+    #[serde(default)]
+    pub options: HashMap<String, serde_json::Value>,
 }
 
 /// Reliability configuration (timeout, retries)
