@@ -3,9 +3,6 @@
 ## [Unreleased]
 
 ### Added
-- Normalized ConnectionConfig support for `fhir`, `dicomweb`, `jmix`, and `echo` endpoints and backends. They now respect `connection` settings (including `base_path` and protocol-derived URLs) when using configuration references (`target_ref`/`peer_ref`).
-
-### Changed
 
 ### Changed
 
@@ -14,6 +11,48 @@
 ### Documentation
 
 ### Dependencies
+
+## [0.8.0] - 2025-11-24
+
+### Highlights
+- Major authentication and authorization overhaul with new authentication handling system
+- Normalized connection configuration support for all endpoint and backend types
+- Updated to runbeam-sdk 0.9 for improved cloud integration
+- Enhanced peer and target configuration with connection references
+
+### Breaking Changes
+- Authentication system has been redesigned - old auth configurations need to be migrated to the new authentication handling system
+- Backend and target configurations now support authorization settings that may require config updates
+
+### Added
+- (AURA-2196) New authorization support for backends and targets
+  - Fine-grained authorization controls at the backend level
+  - Target-specific authorization configuration
+  - Integration with new authentication handling system
+- (AURA-2196) Redesigned authentication handling system
+  - More flexible and extensible authentication framework
+  - Improved JWT token validation
+  - Better separation of authentication and authorization concerns
+- (AURA-2205) Normalized ConnectionConfig support for all services
+  - `fhir`, `dicomweb`, `jmix`, and `echo` endpoints now support connection settings
+  - Backend services respect connection configuration including `base_path` and protocol-derived URLs
+  - Configuration references via `target_ref` and `peer_ref` for cleaner configuration
+- (AURA-1973, AURA-2127) Basic peer and target configuration
+  - Foundation for peer-to-peer communication patterns
+  - Target configuration for more flexible routing
+
+### Changed
+- Replaced existing authentication system with new authentication handling framework
+- Enhanced configuration validation for connection settings
+- Improved error messages for authentication and authorization failures
+
+### Fixed
+- JWT token validation error that could cause authentication failures
+- Connection configuration handling for various service types
+
+### Dependencies
+- Updated runbeam-sdk to 0.9.0 (from 0.7.x)
+- SDK update to 0.8 as intermediate step
 
 ## [0.7.1] - 2025-11-20
 
@@ -317,6 +356,7 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.8.0]: https://github.com/aurabx/harmony/compare/0.7.1...0.8.0
 [0.7.1]: https://github.com/aurabx/harmony/compare/0.7.0...0.7.1
 [0.7.0]: https://github.com/aurabx/harmony/compare/0.6.0...0.7.0
 [0.6.0]: https://github.com/aurabx/harmony/compare/0.5.0...0.6.0
