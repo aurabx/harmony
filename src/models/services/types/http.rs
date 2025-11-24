@@ -436,6 +436,14 @@ impl ServiceHandler<Value> for HttpEndpoint {
             }
         };
 
+        // Apply authentication if present in backend options
+        request_builder =
+            crate::models::services::backend_auth::apply_backend_authentication(
+                request_builder,
+                options,
+                "HTTP",
+            );
+
         // Add headers from target_details, but drop hop-by-hop and Host headers
         for (key, value) in &target_details.headers {
             let k = key.to_ascii_lowercase();

@@ -9,6 +9,17 @@ pub fn resolve_references(config: &mut Config) -> Result<(), String> {
     Ok(())
 }
 
+/// Resolves an authentication reference to the actual AuthenticationDefinition
+fn resolve_authentication_ref(
+    auth_ref: &str,
+    authentications: &HashMap<String, crate::models::connection::AuthenticationDefinition>,
+) -> Result<crate::models::connection::AuthenticationDefinition, String> {
+    authentications
+        .get(auth_ref)
+        .cloned()
+        .ok_or_else(|| format!("Authentication '{}' not found in global authentications", auth_ref))
+}
+
 fn resolve_endpoints(config: &mut Config) -> Result<(), String> {
     let peers = config.peers.clone();
     
@@ -120,7 +131,22 @@ fn resolve_backends(config: &mut Config) -> Result<(), String> {
         
         // Inject connection into options for services
         inject_connection_into_options(&mut backend.options, &backend.connection);
-        // Authentication is now a reference string - resolved during middleware construction
+        
+        // Resolve and inject authentication definition into options
+        if let Some(auth_ref) = &backend.authentication {
+            match resolve_authentication_ref(auth_ref, &config.authentications) {
+                Ok(auth_def) => {
+                    let options_map = backend.options.get_or_insert_with(HashMap::new);
+                    options_map.insert(
+                        "authentication_def".to_string(),
+                        serde_json::to_value(&auth_def).expect("Failed to serialize AuthenticationDefinition"),
+                    );
+                }
+                Err(e) => {
+                    tracing::warn!("Backend '{}': {}", name, e);
+                }
+            }
+        }
         
         // Inject reliability
         if let Some(options) = &mut backend.options {

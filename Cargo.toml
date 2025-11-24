@@ -171,6 +171,10 @@ name = "content_type_integration"
 path = "tests/http/content_type_integration.rs"
 
 [[test]]
+name = "backend_authentication_headers"
+path = "tests/http/backend_authentication_headers.rs"
+
+[[test]]
 name = "config_reload_integration"
 path = "tests/config_reload_integration.rs"
 
