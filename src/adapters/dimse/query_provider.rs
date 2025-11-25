@@ -354,8 +354,12 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::json!({
             "operation": "store",
             "dir": target_dir.to_string_lossy(),
+            "file": _temp.to_string_lossy(), // Include specific file path
         });
-        let _ = self.run("C-STORE", body, meta).await;
+        
+        // Execute pipeline - propagate error if pipeline fails
+        self.run("C-STORE", body, meta).await?;
+        
         Ok(())
     }
 }

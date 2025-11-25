@@ -453,8 +453,13 @@ impl DimseScp {
             }
             0x0001 => {
                 // C-STORE-RQ
-                warn!("C-STORE not yet implemented");
-                Ok(())
+                self.handle_c_store(
+                    association,
+                    message_id,
+                    identifier_data,
+                    presentation_context_id,
+                )
+                .await
             }
             _ => {
                 warn!("Unknown DIMSE command: 0x{:04X}", command_field);
@@ -1099,6 +1104,135 @@ impl DimseScp {
             .send(&Pdu::PData { data: vec![pdata] })
             .await
             .map_err(|e| DimseError::network(format!("Failed to send C-GET response: {}", e)))?;
+
+        Ok(())
+    }
+
+    /// Handle C-STORE request
+    async fn handle_c_store(
+        &self,
+        association: &mut ServerAssociation<tokio::net::TcpStream>,
+        message_id: u16,
+        dataset_data: Vec<u8>,
+        presentation_context_id: u8,
+    ) -> Result<()> {
+        if !self.config.enable_store {
+            return Err(DimseError::operation_failed("C-STORE not enabled"));
+        }
+
+        debug!(
+            "Handling C-STORE request (message ID: {}, dataset size: {} bytes)",
+            message_id,
+            dataset_data.len()
+        );
+
+        // Get the transfer syntax for this presentation context
+        let ts = association
+            .presentation_contexts()
+            .iter()
+            .find(|pc| pc.id == presentation_context_id)
+            .and_then(|pc| TransferSyntaxRegistry.get(&pc.transfer_syntax))
+            .ok_or_else(|| {
+                DimseError::parse(format!(
+                    "Transfer syntax not found for presentation context {}",
+                    presentation_context_id
+                ))
+            })?;
+
+        // Parse the dataset
+        let cursor = std::io::Cursor::new(&dataset_data);
+        let obj = InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
+            cursor,
+            ts,
+            SpecificCharacterSet::default(),
+        )
+        .map_err(|e| DimseError::parse(format!("Failed to parse C-STORE dataset: {}", e)))?;
+
+        // Create DatasetStream
+        let dataset = DatasetStream::from_object(obj);
+
+        // Store the dataset
+        match self.query_provider.store(dataset).await {
+            Ok(()) => {
+                // Send success response
+                self.send_cstore_response(association, message_id, 0x0000, presentation_context_id)
+                    .await
+            }
+            Err(e) => {
+                error!("Failed to store dataset: {}", e);
+                // Send failure response (0xC000 = Error: Cannot Understand)
+                self.send_cstore_response(association, message_id, 0xC000, presentation_context_id)
+                    .await
+            }
+        }
+    }
+
+    /// Send C-STORE response
+    async fn send_cstore_response(
+        &self,
+        association: &mut ServerAssociation<tokio::net::TcpStream>,
+        message_id: u16,
+        status: u16,
+        presentation_context_id: u8,
+    ) -> Result<()> {
+        // Build C-STORE-RSP command dataset
+        let mut response = InMemDicomObject::new_empty();
+
+        // Command Field (0000,0100) = 0x8001 (C-STORE-RSP)
+        response.put(DataElement::new(
+            tags::COMMAND_FIELD,
+            VR::US,
+            PrimitiveValue::from(0x8001u16),
+        ));
+
+        // Message ID Being Responded To (0000,0120)
+        response.put(DataElement::new(
+            tags::MESSAGE_ID_BEING_RESPONDED_TO,
+            VR::US,
+            PrimitiveValue::from(message_id),
+        ));
+
+        // Command Data Set Type (0000,0800) = 0x0101 (no dataset)
+        response.put(DataElement::new(
+            tags::COMMAND_DATA_SET_TYPE,
+            VR::US,
+            PrimitiveValue::from(0x0101u16),
+        ));
+
+        // Status (0000,0900)
+        response.put(DataElement::new(
+            tags::STATUS,
+            VR::US,
+            PrimitiveValue::from(status),
+        ));
+
+        // Encode response
+        let ts = TransferSyntaxRegistry
+            .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
+            .ok_or_else(|| {
+                DimseError::operation_failed("Implicit VR Little Endian TS not found")
+            })?;
+
+        let mut response_bytes = Vec::new();
+        response
+            .write_dataset_with_ts(&mut response_bytes, ts)
+            .map_err(|e| {
+                DimseError::operation_failed(format!("Failed to encode C-STORE response: {}", e))
+            })?;
+
+        let pdata = dicom_ul::pdu::PDataValue {
+            presentation_context_id,
+            value_type: dicom_ul::pdu::PDataValueType::Command,
+            is_last: true,
+            data: response_bytes,
+        };
+
+        association
+            .send(&Pdu::PData {
+                data: vec![pdata],
+            })
+            .await
+            .map_err(|e| DimseError::network(format!("Failed to send C-STORE response: {}", e)))?;
 
         Ok(())
     }

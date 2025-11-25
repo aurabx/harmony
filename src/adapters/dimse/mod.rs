@@ -284,6 +284,9 @@ impl DimseAdapter {
         if let Some(b) = options.get("enable_get").and_then(|v| v.as_bool()) {
             dimse_config.enable_get = b;
         }
+        if let Some(b) = options.get("enable_store").and_then(|v| v.as_bool()) {
+            dimse_config.enable_store = b;
+        }
 
         let pipeline = pipeline_name.to_string();
         let endpoint = endpoint_name.to_string();

@@ -31,6 +31,8 @@ pub struct DicomScpEndpoint {
     pub enable_move: Option<bool>,
     /// Enable C-GET operations
     pub enable_get: Option<bool>,
+    /// Enable C-STORE operations
+    pub enable_store: Option<bool>,
     /// Storage directory for received DICOM files
     pub storage_dir: Option<String>,
 }
@@ -150,11 +152,16 @@ impl ServiceType for DicomScpEndpoint {
             .and_then(|v| v.as_bool())
             .or(self.enable_get)
             .unwrap_or(false);
+        let enable_store = options
+            .get("enable_store")
+            .and_then(|v| v.as_bool())
+            .or(self.enable_store)
+            .unwrap_or(false);
 
-        if !enable_echo && !enable_find && !enable_move && !enable_get {
+        if !enable_echo && !enable_find && !enable_move && !enable_get && !enable_store {
             return Err(ConfigError::InvalidEndpoint {
                 name: "dicom_scp".to_string(),
-                reason: "At least one DIMSE operation must be enabled (echo, find, move, or get)"
+                reason: "At least one DIMSE operation must be enabled (echo, find, move, get, or store)"
                     .to_string(),
             });
         }
@@ -317,6 +324,7 @@ mod tests {
             enable_find: None,
             enable_move: None,
             enable_get: None,
+            enable_store: None,
             storage_dir: None,
         };
 
@@ -334,6 +342,7 @@ mod tests {
             enable_find: None,
             enable_move: None,
             enable_get: None,
+            enable_store: None,
             storage_dir: None,
         };
 
@@ -351,11 +360,30 @@ mod tests {
             enable_find: Some(false),
             enable_move: Some(false),
             enable_get: Some(false),
+            enable_store: Some(false),
             storage_dir: None,
         };
 
         let options = HashMap::new();
         assert!(scp.validate(&options).is_err());
+    }
+
+    #[test]
+    fn test_scp_validation_store_only() {
+        let scp = DicomScpEndpoint {
+            local_aet: Some("TEST_SCP".to_string()),
+            bind_addr: Some("127.0.0.1".to_string()),
+            port: Some(11112),
+            enable_echo: Some(false),
+            enable_find: Some(false),
+            enable_move: Some(false),
+            enable_get: Some(false),
+            enable_store: Some(true),
+            storage_dir: None,
+        };
+
+        let options = HashMap::new();
+        assert!(scp.validate(&options).is_ok());
     }
 
     #[test]
@@ -368,6 +396,7 @@ mod tests {
             enable_find: None,
             enable_move: None,
             enable_get: None,
+            enable_store: None,
             storage_dir: None,
         };
 
@@ -385,6 +414,7 @@ mod tests {
             enable_find: None,
             enable_move: None,
             enable_get: None,
+            enable_store: None,
             storage_dir: None,
         };
 

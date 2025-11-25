@@ -62,6 +62,7 @@ async fn test_scp_starts_and_stops() {
         enable_find: true,
         enable_move: false,
         enable_get: false,
+        enable_store: true,
         storage_dir: std::path::PathBuf::from("/tmp/dimse_test"),
         max_associations: 10,
         incoming_store_port: 11113,
@@ -117,6 +118,7 @@ async fn test_scp_accepts_c_echo() {
         enable_find: false,
         enable_move: false,
         enable_get: false,
+        enable_store: false,
         storage_dir: std::path::PathBuf::from("/tmp/dimse_test"),
         max_associations: 10,
         incoming_store_port: 11113,
@@ -176,6 +178,7 @@ async fn test_scp_accepts_c_find() {
         enable_find: true,
         enable_move: false,
         enable_get: false,
+        enable_store: false,
         storage_dir: std::path::PathBuf::from("/tmp/dimse_test"),
         max_associations: 10,
         incoming_store_port: 11113,
@@ -222,6 +225,127 @@ async fn test_scp_accepts_c_find() {
 }
 
 #[tokio::test]
+async fn test_scp_accepts_c_store() {
+    if !dimse_test_helpers::dcmtk_available() {
+        eprintln!("Skipping test: DCMTK not available");
+        return;
+    }
+
+    // Create a temporary DICOM file
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dcm_path = temp_dir.path().join("test.dcm");
+
+    {
+        use dicom_core::{DataElement, PrimitiveValue, VR};
+        use dicom_dictionary_std::tags;
+        use dicom_object::meta::FileMetaTableBuilder;
+        use dicom_object::InMemDicomObject;
+
+        let mut obj = InMemDicomObject::new_empty();
+
+        // Patient Name
+        obj.put(DataElement::new(
+            tags::PATIENT_NAME,
+            VR::PN,
+            PrimitiveValue::from("Doe^John"),
+        ));
+
+        // Patient ID
+        obj.put(DataElement::new(
+            tags::PATIENT_ID,
+            VR::LO,
+            PrimitiveValue::from("12345"),
+        ));
+
+        // SOP Class UID (Secondary Capture Image Storage)
+        obj.put(DataElement::new(
+            tags::SOP_CLASS_UID,
+            VR::UI,
+            PrimitiveValue::from("1.2.840.10008.5.1.4.1.1.7"),
+        ));
+
+        // SOP Instance UID
+        obj.put(DataElement::new(
+            tags::SOP_INSTANCE_UID,
+            VR::UI,
+            PrimitiveValue::from("1.2.3.4.5.6.7"),
+        ));
+
+        let file_meta = FileMetaTableBuilder::new()
+            .media_storage_sop_class_uid("1.2.840.10008.5.1.4.1.1.7")
+            .media_storage_sop_instance_uid("1.2.3.4.5.6.7")
+            .transfer_syntax("1.2.840.10008.1.2.1"); // Explicit VR Little Endian
+
+        let file_obj = obj.with_meta(file_meta).expect("Failed to create file object");
+        file_obj
+            .write_to_file(&dcm_path)
+            .expect("Failed to create DICOM file");
+    }
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind port");
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let config = DimseConfig {
+        local_aet: "STORE_SCP".to_string(),
+        bind_addr: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        port,
+        enable_echo: true,
+        enable_find: false,
+        enable_move: false,
+        enable_get: false,
+        enable_store: true,
+        storage_dir: temp_dir.path().to_path_buf(),
+        max_associations: 10,
+        incoming_store_port: 11113,
+        max_pdu: 16384,
+        connect_timeout_ms: 5000,
+        association_timeout_ms: 30000,
+        tls: None,
+        preferred_transfer_syntaxes: vec![],
+        external_store_scp: false,
+    };
+
+    let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
+    let scp = DimseScp::new(config, provider);
+
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+
+    let handle = tokio::spawn(async move { scp.run(shutdown_clone).await });
+
+    tokio::time::sleep(Duration::from_millis(200)).await;
+
+    // Run storescu
+    let output = tokio::process::Command::new("storescu")
+        .arg("--aetitle")
+        .arg("TEST_SCU")
+        .arg("--call")
+        .arg("STORE_SCP")
+        .arg("127.0.0.1")
+        .arg(port.to_string())
+        .arg(dcm_path.to_str().unwrap())
+        .output()
+        .await
+        .expect("Failed to run storescu");
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(2), handle).await;
+
+    if !output.status.success() {
+        eprintln!(
+            "storescu stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+    }
+
+    assert!(
+        output.status.success(),
+        "storescu should complete successfully"
+    );
+}
+
+#[tokio::test]
 async fn test_scp_config_validation() {
     // Invalid AET (too long)
     let config = DimseConfig {
@@ -232,6 +356,7 @@ async fn test_scp_config_validation() {
         enable_find: true,
         enable_move: false,
         enable_get: false,
+        enable_store: false,
         storage_dir: std::path::PathBuf::from("/tmp"),
         max_associations: 10,
         incoming_store_port: 11113,
@@ -269,6 +394,7 @@ async fn test_scp_multiple_associations() {
         enable_find: false,
         enable_move: false,
         enable_get: false,
+        enable_store: false,
         storage_dir: std::path::PathBuf::from("/tmp/dimse_test"),
         max_associations: 5,
         incoming_store_port: 11113,

@@ -95,6 +95,7 @@ fn create_builtin_service(
                 enable_find: None,
                 enable_move: None,
                 enable_get: None,
+                enable_store: None,
                 storage_dir: None,
             },
         )),
