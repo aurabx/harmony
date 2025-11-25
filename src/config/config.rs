@@ -260,8 +260,13 @@ impl Config {
         config.resolved_transforms_path = Some(transforms_path.to_string_lossy().to_string());
 
         // Attempt to load additional configs and merge them into the current config.
-        if let Ok(additional_configs) = Self::load_additional_configs(&config, &cli.config_path) {
-            config = Self::merge_configs(config, additional_configs);
+        match Self::load_additional_configs(&config, &cli.config_path) {
+            Ok(additional_configs) => {
+                config = Self::merge_configs(config, additional_configs);
+            }
+            Err(e) => {
+                tracing::error!("Failed to load additional configurations: {}", e);
+            }
         }
 
         // Resolve references (targets/peers)
@@ -321,11 +326,20 @@ impl Config {
 
         let mut configs = Vec::new();
         for entry in fs::read_dir(dir)? {
-            let path = entry?.path();
+            let entry = entry?;
+            let path = entry.path();
             if path.is_file() && path.extension().is_some_and(|ext| ext == "toml") {
-                let contents = fs::read_to_string(&path)?;
-                let config: Config = toml::from_str(&contents)?;
-                configs.push(config);
+                match fs::read_to_string(&path) {
+                    Ok(contents) => match toml::from_str(&contents) {
+                        Ok(config) => configs.push(config),
+                        Err(e) => {
+                            tracing::error!("Failed to parse config file {:?}: {}", path, e);
+                        }
+                    },
+                    Err(e) => {
+                        tracing::error!("Failed to read config file {:?}: {}", path, e);
+                    }
+                }
             }
         }
 
