@@ -1,0 +1,22 @@
+[pipelines.dicom_ingest]
+description = "Ingest DICOM files to local storage"
+networks = ["default"]
+endpoints = ["dicom_listener"]
+backends = ["filesystem_storage"] 
+middleware = []
+
+# Define the DICOM SCP endpoint
+[endpoints.dicom_listener]
+service = "dicom_scp"
+[endpoints.dicom_listener.options]
+local_aet = "HARMONY_SCP"
+port = 11112
+enable_echo = true
+enable_store = true
+
+# Define the filesystem storage backend
+[backends.filesystem_storage]
+service = "storage"
+[backends.filesystem_storage.options]
+root = "data/archive"
+write_pattern = "{file}"  # Use the 'file' field from the C-STORE payload

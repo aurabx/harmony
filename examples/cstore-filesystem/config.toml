@@ -1,0 +1,29 @@
+[proxy]
+id = "cstore-filesystem"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+
+[logging]
+log_level = "info"
+log_to_file = false
+
+# Configure the storage backend
+# This determines where received DICOM files will be written.
+[storage]
+backend = "filesystem"
+[storage.options]
+path = "data"
+
+[network.default]
+enable_wireguard = false
+interface = "eth0"
+
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+[services.dicom_scp]
+module = ""
+
+[services.storage]
+module = ""

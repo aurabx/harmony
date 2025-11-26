@@ -176,7 +176,7 @@ path_prefix = "/pacs"
 Provides DICOM DIMSE SCP endpoint for receiving incoming DICOM requests.
 
 **Service behavior**:
-- Accepts incoming DIMSE connections (C-FIND, C-MOVE, C-GET, C-ECHO)
+- Accepts incoming DIMSE connections (C-FIND, C-MOVE, C-GET, C-ECHO, C-STORE)
 - Converts DIMSE operations to `RequestEnvelope` via protocol adapter
 - Routes requests through the pipeline system
 - Returns DIMSE responses to the calling SCU
@@ -193,6 +193,7 @@ enable_echo = true            # Enable C-ECHO (default: true)
 enable_find = true            # Enable C-FIND (default: false)
 enable_move = true            # Enable C-MOVE (default: false)
 enable_get = true             # Enable C-GET (default: false)
+enable_store = true           # Enable C-STORE (default: false)
 storage_dir = "./tmp/dimse"  # Storage directory (optional)
 ```
 
@@ -201,7 +202,7 @@ storage_dir = "./tmp/dimse"  # Storage directory (optional)
 - `C-FIND` - Query for studies/series/images
 - `C-MOVE` - Request dataset transfer to destination AET
 - `C-GET` - Direct dataset retrieval
-- `C-STORE` - Store incoming datasets (planned)
+- `C-STORE` - Store incoming datasets
 
 **Example**: DICOM Query/Retrieve SCP
 ```toml
@@ -219,3 +220,22 @@ storage_dir = "./data/dicom"
 ```
 
 **Note**: The DICOM SCP endpoint uses the `DimseAdapter` protocol adapter, not HTTP. It listens on the configured port for incoming DIMSE associations.
+
+### C-STORE Handling
+
+When `enable_store` is set to `true`, Harmony accepts incoming DICOM objects (C-STORE requests).
+
+1. **Reception**: The file is received and written to the configured storage backend (e.g., `./tmp/dimse/<uuid>.dcm`).
+2. **Pipeline Execution**: Harmony executes the pipeline with a request payload containing metadata about the stored file.
+3. **Response**: Once the pipeline executes successfully, a C-STORE Success status (0x0000) is returned to the caller.
+
+**Pipeline Request Payload (JSON):**
+```json
+{
+  "operation": "store",
+  "dir": "/path/to/storage/dimse",
+  "file": "/path/to/storage/dimse/unique-id.dcm"
+}
+```
+
+This allows you to use middleware to process the file (e.g., extract metadata, forward to another system, or trigger a notification) after it has been safely stored.
