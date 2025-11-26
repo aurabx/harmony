@@ -19,9 +19,9 @@ use std::path::PathBuf;
 /// LEFT side: Converts DICOMweb requests to DIMSE operations
 /// RIGHT side: Converts DICOM backend responses to DICOMweb JSON/binary
 #[derive(Default, Debug)]
-pub struct DicomwebBridgeMiddleware;
+pub struct DICOMwebToDICOMMiddleware;
 
-impl DicomwebBridgeMiddleware {
+impl DICOMwebToDICOMMiddleware {
     pub fn new() -> Self {
         Self
     }
@@ -313,7 +313,7 @@ impl DicomwebBridgeMiddleware {
 }
 
 #[async_trait::async_trait]
-impl Middleware for DicomwebBridgeMiddleware {
+impl Middleware for DICOMwebToDICOMMiddleware {
     async fn left(
         &self,
         mut envelope: RequestEnvelope<serde_json::Value>,
@@ -1049,7 +1049,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_left_includefield_adds_return_keys() {
-        let bridge = DicomwebBridgeMiddleware::new();
+        let bridge = DICOMwebToDICOMMiddleware::new();
 
         // Create a mock request envelope with includefield parameters
         let mut query_params: HashMap<String, Vec<String>> = HashMap::new();
@@ -1121,7 +1121,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_left_no_includefield_uses_defaults() {
-        let bridge = DicomwebBridgeMiddleware::new();
+        let bridge = DICOMwebToDICOMMiddleware::new();
 
         // Create a mock request envelope without includefield
         let envelope = RequestEnvelopeBuilder::new()
@@ -1173,7 +1173,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_left_includefield_preserves_search_criteria() {
-        let bridge = DicomwebBridgeMiddleware::new();
+        let bridge = DICOMwebToDICOMMiddleware::new();
 
         // Create a mock request with both search params and includefield
         let mut query_params: HashMap<String, Vec<String>> = HashMap::new();
@@ -1217,7 +1217,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_right_qido_transformation() {
-        let bridge = DicomwebBridgeMiddleware::new();
+        let bridge = DICOMwebToDICOMMiddleware::new();
 
         // Create a mock right-side request with DICOM find results
         let mut metadata: HashMap<String, String> = HashMap::new();
@@ -1292,7 +1292,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_left_processes_all_query_parameters() {
-        let bridge = DicomwebBridgeMiddleware::new();
+        let bridge = DICOMwebToDICOMMiddleware::new();
 
         // Create a mock request with various DICOM query parameters
         let mut query_params: HashMap<String, Vec<String>> = HashMap::new();
@@ -1374,7 +1374,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pagination_default_limit() {
-        let bridge = DicomwebBridgeMiddleware::new();
+        let bridge = DICOMwebToDICOMMiddleware::new();
 
         // No limit specified - should use default of 100
         let envelope = RequestEnvelopeBuilder::new()
@@ -1401,7 +1401,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pagination_custom_limit_offset() {
-        let bridge = DicomwebBridgeMiddleware::new();
+        let bridge = DICOMwebToDICOMMiddleware::new();
 
         let mut query_params = HashMap::new();
         query_params.insert("limit".to_string(), vec!["25".to_string()]);
@@ -1436,7 +1436,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pagination_filtering_right_side() {
-        let bridge = DicomwebBridgeMiddleware::new();
+        let bridge = DICOMwebToDICOMMiddleware::new();
 
         // Create mock response with 10 results
         let mock_matches = serde_json::json!([
@@ -1512,7 +1512,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_date_range_query_passed_through() {
-        let bridge = DicomwebBridgeMiddleware::new();
+        let bridge = DICOMwebToDICOMMiddleware::new();
 
         let mut query_params = HashMap::new();
         query_params.insert(
@@ -1554,7 +1554,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_combined_pagination_and_date_range() {
-        let bridge = DicomwebBridgeMiddleware::new();
+        let bridge = DICOMwebToDICOMMiddleware::new();
 
         let mut query_params = HashMap::new();
         query_params.insert(

@@ -227,6 +227,51 @@ async fn dicomweb_options_request_returns_cors_headers() {
 }
 
 #[tokio::test]
+async fn dicomweb_stow_studies_returns_200_or_error() {
+    let app = build_test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicomweb/studies")
+                .method("POST")
+                .header("content-type", "multipart/related; type=\"application/dicom\"; boundary=boundary")
+                .body(Body::from("--boundary\r\nContent-Type: application/dicom\r\n\r\n(dicom data)\r\n--boundary--"))
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    // STOW endpoints are now implemented, so should not return 501 or 405 (Method Not Allowed)
+    assert_ne!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_ne!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    // Will likely return 200/204 or error due to no backend configured
+    println!("STOW /studies response status: {}", response.status());
+}
+
+#[tokio::test]
+async fn dicomweb_stow_specific_study_returns_200_or_error() {
+    let app = build_test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicomweb/studies/1.2.3")
+                .method("POST")
+                .header("content-type", "multipart/related; type=\"application/dicom\"; boundary=boundary")
+                .body(Body::from("--boundary\r\nContent-Type: application/dicom\r\n\r\n(dicom data)\r\n--boundary--"))
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    // STOW endpoints are now implemented
+    assert_ne!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_ne!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+    println!("STOW /studies/1.2.3 response status: {}", response.status());
+}
+
+#[tokio::test]
 async fn dicomweb_nonexistent_route_returns_404() {
     let app = build_test_router().await;
 

@@ -2,6 +2,7 @@ use crate::config::config::ConfigError;
 use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
+use crate::models::services::types::http::HttpEndpoint;
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use async_trait::async_trait;
@@ -243,17 +244,17 @@ impl ServiceType for DicomwebEndpoint {
         let base = path_prefix.trim_end_matches('/');
 
         let routes = vec![
-            // QIDO-RS: Query for studies
+            // QIDO-RS: Query for studies; STOW-RS: Store instances
             RouteConfig {
                 path: format!("{}/studies", base),
-                methods: vec![Method::GET],
-                description: Some("DICOMweb QIDO-RS: Query for studies".to_string()),
+                methods: vec![Method::GET, Method::POST],
+                description: Some("DICOMweb QIDO-RS: Query for studies; STOW-RS: Store instances".to_string()),
             },
-            // QIDO-RS: Query for specific study
+            // QIDO-RS: Query for specific study; STOW-RS: Store instances to study
             RouteConfig {
                 path: format!("{}/studies/{{study_uid}}", base),
-                methods: vec![Method::GET],
-                description: Some("DICOMweb QIDO-RS: Query for specific study".to_string()),
+                methods: vec![Method::GET, Method::POST],
+                description: Some("DICOMweb QIDO-RS: Query for specific study; STOW-RS: Store instances to study".to_string()),
             },
             // QIDO-RS: Query for series within a study
             RouteConfig {
@@ -455,75 +456,11 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
     async fn backend_outgoing_request(
         &self,
         envelope: RequestEnvelope<Vec<u8>>,
-        _options: &HashMap<String, Value>,
+        options: &HashMap<String, Value>,
     ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
-        // DICOMweb prepares response in endpoint_incoming_request or middleware
-        // Extract response metadata from normalized_data
-        let nd = envelope
-            .normalized_data
-            .clone()
-            .unwrap_or(serde_json::Value::Null);
-        let response_meta = nd.get("response");
-
-        // Extract status code
-        let status = response_meta
-            .and_then(|m| m.get("status"))
-            .and_then(|s| s.as_u64())
-            .unwrap_or(200) as u16;
-
-        // Extract headers
-        let mut headers = HashMap::new();
-        if let Some(hdrs) = response_meta
-            .and_then(|m| m.get("headers"))
-            .and_then(|h| h.as_object())
-        {
-            for (k, v) in hdrs.iter() {
-                if let Some(val_str) = v.as_str() {
-                    headers.insert(k.clone(), val_str.to_string());
-                }
-            }
-        }
-
-        // Build body from various sources
-        let body = if let Some(body_b64) = response_meta
-            .and_then(|m| m.get("body_b64"))
-            .and_then(|b| b.as_str())
-        {
-            // Binary body (base64-encoded)
-            base64::engine::general_purpose::STANDARD
-                .decode(body_b64)
-                .unwrap_or_default()
-        } else if let Some(body_str) = response_meta
-            .and_then(|m| m.get("body"))
-            .and_then(|b| b.as_str())
-        {
-            // String body
-            body_str.as_bytes().to_vec()
-        } else if let Some(json_val) = response_meta.and_then(|m| m.get("json")) {
-            // JSON body
-            serde_json::to_vec(json_val).unwrap_or_default()
-        } else {
-            // Empty body
-            Vec::new()
-        };
-
-        // Ensure content-type is set if not present
-        if !headers.contains_key("content-type") && !headers.contains_key("Content-Type") {
-            headers.insert("content-type".to_string(), "application/json".to_string());
-        }
-
-        let mut response_envelope = ResponseEnvelope::from_backend(
-            envelope.request_details.clone(),
-            status,
-            headers,
-            body,
-            None,
-        );
-
-        // Preserve normalized_data for special handling in endpoint_outgoing_response
-        response_envelope.normalized_data = envelope.normalized_data;
-
-        Ok(response_envelope)
+        // Delegate to HttpEndpoint for generic HTTP backend behavior to support STOW-RS and other outbound requests
+        let http_endpoint = HttpEndpoint {};
+        http_endpoint.backend_outgoing_request(envelope, options).await
     }
 
     async fn endpoint_outgoing_protocol(
