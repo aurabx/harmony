@@ -1,0 +1,12 @@
+[proxy]
+id = "file-upload-example"
+pipelines_path = "pipelines"
+
+[logging]
+log_level = "info"
+log_to_file = true
+log_file_path = "examples/http-file-upload/tmp/harmony.log"
+
+[network.default]
+http.bind_address = "127.0.0.1"
+http.bind_port = 8080

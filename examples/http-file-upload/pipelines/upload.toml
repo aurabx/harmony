@@ -1,0 +1,18 @@
+[pipelines.file_upload]
+description = "Upload files to local storage via HTTP"
+networks = ["default"]
+endpoints = ["upload_endpoint"]
+backends = ["storage_backend"]
+
+[endpoints.upload_endpoint]
+service = "http"
+[endpoints.upload_endpoint.options]
+method = "POST"
+path_prefix = "/upload"
+
+[backends.storage_backend]
+service = "storage"
+[backends.storage_backend.options]
+root = "examples/http-file-upload/tmp/uploads"
+write_pattern = "files/{uuid}.bin"
+read_pattern = "files/{uuid}.bin"
