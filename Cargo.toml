@@ -87,6 +87,7 @@ dicom-dictionary-std = "0.9"
 dicom-core = "0.9"
 tempfile = "3.10"
 serial_test = "3.0"
+dimse = { path = "crates/dimse" }
 
 # Test organization
 
@@ -120,6 +121,10 @@ name = "dicom_scu_scp_separation"
 path = "tests/dicom/scu_scp_separation.rs"
 
 # DICOMweb tests
+[[test]]
+name = "dicom_cstore_filesystem"
+path = "tests/dicom/cstore_filesystem.rs"
+
 [[test]]
 name = "dicomweb_frames_qrscp"
 path = "tests/dicomweb/dicomweb_frames_qrscp.rs"

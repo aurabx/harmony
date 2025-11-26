@@ -1,5 +1,5 @@
 use crate::adapters::dimse::status_mapper;
-use crate::globals::get_config;
+use crate::globals::{get_config, get_storage};
 use crate::models::envelope::envelope::ResponseEnvelope;
 use crate::models::protocol::{Protocol, ProtocolCtx};
 use crate::pipeline::executor::PipelineExecutor;
@@ -335,14 +335,24 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
     }
 
     async fn store(&self, dataset: DatasetStream) -> DimseResult<()> {
-        // Write incoming dataset into the current per-move directory if set, otherwise default
-        let target_dir = get_current_store_dir().unwrap_or_else(|| PathBuf::from("./tmp/dimse"));
-        if let Err(e) = tokio::fs::create_dir_all(&target_dir).await {
-            return Err(DimseError::operation_failed(format!(
-                "ensure store dir: {}",
-                e
-            )));
-        }
+        // Resolve storage directory using global storage backend if available, otherwise fallback
+        let target_dir = if let Some(storage) = get_storage() {
+            // For filesystem backend, ensure_dir_str returns the full path
+            storage
+                .ensure_dir_str("dimse")
+                .map_err(|e| DimseError::operation_failed(format!("Storage error: {}", e)))?
+        } else {
+            // Fallback for legacy behavior or when no storage backend configured
+            let dir = get_current_store_dir().unwrap_or_else(|| PathBuf::from("./tmp/dimse"));
+            if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+                return Err(DimseError::operation_failed(format!(
+                    "ensure store dir: {}",
+                    e
+                )));
+            }
+            dir
+        };
+
         let _temp = dataset
             .to_temp_file(&target_dir)
             .await
