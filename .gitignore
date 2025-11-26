@@ -63,3 +63,4 @@ harmony.log
 /cargo-flamegraph.trace/
 /flamegraph.svg
 /harmony-arm64
+examples/cstore-filesystem/data/
