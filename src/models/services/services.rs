@@ -110,6 +110,9 @@ fn create_builtin_service(
         "mock_dicom" => Ok(Box::new(
             crate::models::services::types::mock_dicom::MockDicomEndpoint {},
         )),
+        "disk" | "storage" => Ok(Box::new(
+            crate::models::services::types::storage::StorageBackend::default(),
+        )),
         _ => Err(format!(
             "Unsupported built-in service type: {}",
             service_type

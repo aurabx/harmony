@@ -2,6 +2,7 @@ pub mod custom;
 pub mod dicom;
 pub mod dicom_scp;
 pub mod dicomweb;
+pub mod storage;
 pub mod echo;
 pub mod fhir;
 pub mod http;

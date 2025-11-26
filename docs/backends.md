@@ -201,6 +201,56 @@ use_tls = false
 
 See [dimse-integration.md](dimse-integration.md) for detailed DIMSE usage.
 
+### Storage (Filesystem/S3)
+
+A backend for reading and writing files to local storage or S3-compatible object storage.
+
+**Service behavior**:
+- **GET**: Reads file at path resolved from `read_pattern`
+- **POST/PUT**: Writes request body to path resolved from `write_pattern`
+- Supports path templating with metadata, UUIDs, and timestamps
+- Returns `Location` header and JSON status on successful write
+
+**Configuration**:
+```toml
+[backends.<name>]
+service = "storage"
+[backends.<name>.options]
+root = "./data"  # Local path or "s3://bucket/prefix"
+read_pattern = "files/{uuid}.bin"
+write_pattern = "files/{uuid}.bin"
+```
+
+**S3 Configuration**:
+To use S3, set `root` to an S3 URI (`s3://bucket-name/prefix`) and provide credentials:
+```toml
+[backends.s3_storage]
+service = "storage"
+[backends.s3_storage.options]
+root = "s3://my-bucket/uploads"
+region = "us-east-1"
+access_key_id = "..."      # Optional (can use env vars)
+secret_access_key = "..."  # Optional (can use env vars)
+endpoint = "..."           # Optional (for MinIO/custom S3)
+```
+
+**Path Templating**:
+Patterns can use placeholders replaced at runtime:
+- `{uuid}`: Generates a random UUID (v4)
+- `{timestamp}`: Current timestamp (RFC3339)
+- `{metadata_key}`: Replaced by value from request metadata (e.g. `{tenant}` from JWT)
+- `{field_name}`: Replaced by value from normalized data (e.g. `{PatientID}`)
+
+**Example**:
+```toml
+[backends.patient_docs]
+service = "storage"
+[backends.patient_docs.options]
+root = "./patient_data"
+# Write to: ./patient_data/{tenant}/{PatientID}/{uuid}.dcm
+write_pattern = "{tenant}/{PatientID}/{uuid}.dcm"
+```
+
 ### Echo (Test)
 
 A simple echo backend that reflects the request back as the response.

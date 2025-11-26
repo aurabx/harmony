@@ -74,6 +74,7 @@ sha2 = "0.10"
 lazy_static = "1.4"
 bytes = "1.5"
 dirs = "5.0"
+object_store = { version = "0.12.4", features = ["aws", "http"] }
 
 [features]
 default = []
