@@ -473,13 +473,13 @@ impl<T> Default for RequestEnvelopeBuilder<T> {
     }
 }
 
-impl ResponseEnvelope<Vec<u8>> {
+impl<T> ResponseEnvelope<T> {
     /// Creates a new ResponseEnvelope from backend response components
     pub fn from_backend(
         request_details: RequestDetails,
         status: u16,
         headers: HashMap<String, String>,
-        body: Vec<u8>,
+        original_data: T,
         metadata: Option<HashMap<String, String>>,
     ) -> Self {
         let response_details = ResponseDetails {
@@ -491,12 +491,14 @@ impl ResponseEnvelope<Vec<u8>> {
         ResponseEnvelope {
             request_details,
             response_details,
-            original_data: body,
+            original_data,
             normalized_data: None,
             normalized_snapshot: None,
         }
     }
+}
 
+impl ResponseEnvelope<Vec<u8>> {
     /// Converts to JSON-aware envelope by parsing body if content-type indicates JSON
     pub fn to_json(self) -> Result<ResponseEnvelope<serde_json::Value>, crate::utils::Error> {
         // If normalized_data already exists AND body is empty, preserve normalized_data
@@ -560,7 +562,6 @@ impl ResponseEnvelope<Vec<u8>> {
         })
     }
 }
-
 impl ResponseEnvelope<serde_json::Value> {
     /// Converts back to byte-level envelope, serializing JSON if needed
     pub fn to_bytes(mut self) -> Result<ResponseEnvelope<Vec<u8>>, crate::utils::Error> {

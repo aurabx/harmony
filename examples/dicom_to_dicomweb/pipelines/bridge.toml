@@ -1,0 +1,23 @@
+[pipelines.bridge]
+description = "DICOM to DICOMweb Bridge"
+networks = ["default"]
+endpoints = ["dicom_listener"]
+middleware = ["to_dicomweb"]
+backends = ["orthanc_server"]
+
+[endpoints.dicom_listener]
+service = "dicom_scp"
+peer_ref = "listener_config"
+[endpoints.dicom_listener.options]
+local_aet = "BRIDGE_SCP"
+enable_echo = true
+enable_find = true
+enable_store = true
+enable_get = true
+
+[middleware.to_dicomweb]
+type = "dicom_to_dicomweb"
+
+[backends.orthanc_server]
+service = "http"
+target_ref = "orthanc"

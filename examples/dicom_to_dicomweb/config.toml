@@ -1,0 +1,27 @@
+[proxy]
+id = "dicom-to-dicomweb"
+log_level = "debug"
+pipelines_path = "pipelines"
+
+[network.default]
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.tcp_config]
+bind_address = "0.0.0.0"
+bind_port = 11112
+
+[logging]
+log_to_file = true
+log_file_path = "./tmp/dicom_to_dicomweb.log"
+
+[peers.listener_config]
+connection.host = "0.0.0.0"
+connection.port = 11112
+connection.protocol = "dicom"
+
+[targets.orthanc]
+connection.host = "localhost"
+connection.port = 8042
+connection.base_path = "/dicom-web"
+connection.protocol = "http"

@@ -1,11 +1,22 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Find all demo.sh scripts in examples directory
-mapfile -t scripts < <(find examples -type f -name "demo.sh" | sort)
+# Build list of runnable examples:
+# - Prefer examples with demo.sh
+# - Fallback to examples that have a config.toml (run Harmony with that config)
+mapfile -t example_dirs < <(find examples -mindepth 1 -maxdepth 1 -type d | sort)
+
+scripts=()
+for d in "${example_dirs[@]}"; do
+  if [ -f "$d/demo.sh" ]; then
+    scripts+=("$d/demo.sh")
+  elif [ -f "$d/config.toml" ]; then
+    scripts+=("$d/config.toml")
+  fi
+done
 
 if [ ${#scripts[@]} -eq 0 ]; then
-    echo "No example scripts found in examples/"
+    echo "No runnable examples found in examples/"
     exit 1
 fi
 
@@ -43,10 +54,13 @@ else
     echo "Available Examples:"
     echo "==================="
     for i in "${!scripts[@]}"; do
-        # Extract directory name for display
         dir=$(dirname "${scripts[$i]}")
         name=$(basename "$dir")
-        printf "%2d) %s\n" $((i+1)) "$name"
+        suffix=""
+        if [ "$(basename "${scripts[$i]}")" = "config.toml" ]; then
+          suffix=" (auto-run)"
+        fi
+        printf "%2d) %s%s\n" $((i+1)) "$name" "$suffix"
     done
     echo ""
     echo " q) Quit"
@@ -68,10 +82,24 @@ else
 fi
 
 dir=$(dirname "$selected")
+base=$(basename "$selected")
 
 echo ""
 echo "Running: $selected"
 echo "=========================================="
 echo ""
 
-cd "$dir" && bash demo.sh
+PROJECT_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
+
+if [ "$base" = "demo.sh" ]; then
+  cd "$dir" && bash demo.sh
+else
+  # Auto-run using Harmony with the example's config.toml
+  cd "$dir"
+  if [ ! -x "$PROJECT_ROOT/target/release/harmony" ]; then
+    echo "Building Harmony (release) ..."
+    (cd "$PROJECT_ROOT" && cargo build --release)
+  fi
+  echo "Starting Harmony with $dir/config.toml (Ctrl+C to stop)"
+  "$PROJECT_ROOT/target/release/harmony" --config ./config.toml
+fi

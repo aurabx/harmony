@@ -126,6 +126,9 @@ fn create_builtin_middleware_type_with_config(
         "dicomweb_bridge" | "dicomweb" => Ok(Box::new(
             crate::models::middleware::types::dicomweb_to_dicom::DICOMwebToDICOMMiddleware::new(),
         )),
+        "dicom_to_dicomweb" => Ok(Box::new(
+            crate::models::middleware::types::dicom_to_dicomweb::DicomToDicomwebMiddleware::new(),
+        )),
         "transform" => {
             let config = crate::models::middleware::types::transform::parse_config(
                 options,

@@ -1,7 +1,7 @@
 pub mod backends;
 pub mod connection;
 pub mod endpoints;
-pub(crate) mod envelope;
+pub mod envelope;
 pub mod middleware;
 pub mod network;
 pub mod peers;

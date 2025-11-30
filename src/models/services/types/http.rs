@@ -462,9 +462,29 @@ impl ServiceHandler<Value> for HttpEndpoint {
             request_builder = request_builder.header(key, value);
         }
 
-        // Add request body if present
-        if !envelope.original_data.is_empty() {
+        // Add request body
+        // 1. Check for explicit binary body in normalized_data (e.g. from middleware)
+        let explicit_body = if let Some(nd) = &envelope.normalized_data {
+            if let Some(b64) = nd.get("body_b64").and_then(|v| v.as_str()) {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD.decode(b64).ok()
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(bytes) = explicit_body {
+            request_builder = request_builder.body(bytes);
+        } else if !envelope.original_data.is_empty() {
+            // 2. Use original data if present (standard behavior)
             request_builder = request_builder.body(envelope.original_data.clone());
+        } else if let Some(nd) = &envelope.normalized_data {
+            // 3. Fallback to JSON serialization of normalized_data
+            if let Ok(json_bytes) = serde_json::to_vec(nd) {
+                request_builder = request_builder.body(json_bytes);
+            }
         }
 
         tracing::debug!("Sending HTTP request to: {}", full_url);

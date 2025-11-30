@@ -141,6 +141,10 @@ path = "tests/dicomweb/dicomweb_bridge_middleware.rs"
 name = "dicomweb_integration"
 path = "tests/dicomweb/integration.rs"
 
+[[test]]
+name = "dicom_to_dicomweb_middleware"
+path = "tests/dicomweb/dicom_to_dicomweb_middleware.rs"
+
 # FHIR tests
 [[test]]
 name = "fhir_service"
