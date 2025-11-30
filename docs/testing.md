@@ -4,6 +4,7 @@ Strategy
 - Unit and integration tests should be fast and deterministic
 - Avoid spawning real HTTP listeners in tests
 - Build the network router and use Router::oneshot for request handling in tests
+- Documentation examples should use text blocks to avoid compilation issues.
 
 Commands
 - Run all tests: cargo test
