@@ -1,5 +1,7 @@
 # FHIR ImagingStudy Pipeline Documentation
 
+**Last Updated**: 2025-11-30
+
 This document describes how to implement FHIR ImagingStudy endpoints that query DICOM backends using harmony-proxy, specifically for the endpoint:
 
 ```

@@ -1,5 +1,7 @@
 # Config Hot-Reload Strategy
 
+**Last Updated**: 2025-11-30
+
 ## Overview
 
 Harmony supports hot-reloading configuration changes without requiring a full application restart. The reload strategy uses two approaches depending on the type of change:

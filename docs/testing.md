@@ -1,10 +1,14 @@
 # Testing
 
-Strategy
+**Last Updated**: 2025-11-30
+
+## Strategy
 - Unit and integration tests should be fast and deterministic
 - Avoid spawning real HTTP listeners in tests
 - Build the network router and use Router::oneshot for request handling in tests
-- Documentation examples should use text blocks to avoid compilation issues.
+- Documentation examples should use text blocks (with path/start metadata) to avoid compilation issues
+
+## Running Tests
 
 Commands
 - Run all tests: cargo test
@@ -31,7 +35,7 @@ Notes
 - Prefer fixture configs under examples/default/pipelines or tests/data
 - For JWT tests, explicitly choose RS256 or HS256 mode and sign tokens accordingly
 - Consider adding end-to-end tests against a full server only in separate, slower suites
-- JMIX (dev): See [jmix-dev-testing.md](../dev/testing/jmix-dev-testing.md) for JMIX API development testing
+- JMIX (dev): Development testing documentation for JMIX API is available in the project's dev directory
 
 ## Verifying Examples
 

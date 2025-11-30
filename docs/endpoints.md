@@ -1,6 +1,6 @@
 # Endpoints
 
-**Last Updated**: 2025-01-18 (Phase 6)
+**Last Updated**: 2025-11-30
 
 Endpoints define protocol entry points into the Harmony pipeline. Each endpoint is associated with a **Service** that handles protocol-specific data conversion to/from the internal `Envelope` format.
 
@@ -133,7 +133,7 @@ service = "jmix"
 path_prefix = "/data"
 ```
 
-See [jmix-dev-testing.md](../dev/testing/jmix-dev-testing.md) for development testing.
+For development testing guidance, refer to the project's development documentation.
 
 ### DICOMweb
 

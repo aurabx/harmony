@@ -1,6 +1,6 @@
 # DIMSE Integration
 
-**Last Updated**: 2025-01-18 (Phase 6)
+**Last Updated**: 2025-11-30
 
 Harmony integrates DIMSE via:
 - **DimseAdapter**: Protocol adapter for DICOM DIMSE network operations (SCP)

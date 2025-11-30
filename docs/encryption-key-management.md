@@ -1,5 +1,7 @@
 # Encryption Key Management
 
+**Last Updated**: 2025-11-30
+
 This document describes how encryption keys are managed across the Runbeam ecosystem for securing machine tokens.
 
 ## Overview

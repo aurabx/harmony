@@ -1,5 +1,7 @@
 # Security
 
+**Last Updated**: 2025-11-30
+
 ## Gateway Authentication (Middleware)
 
 JWT authentication for gateway middleware:
