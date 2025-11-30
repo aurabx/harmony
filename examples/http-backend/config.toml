@@ -35,6 +35,9 @@ module = ""
 [middleware_types.passthru]
 module = ""
 
+[middleware_types.policies]
+module = ""
+
 
 # Target definition (New in v1.9)
 [targets.local_server]

@@ -188,7 +188,7 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// let envelope = RequestEnvelope::builder()
     ///     .method("GET")
     ///     .uri("/test")
@@ -210,7 +210,7 @@ where
 /// # Examples
 ///
 /// ## Minimal usage
-/// ```ignore
+/// ```text
 /// let envelope = RequestEnvelopeBuilder::new()
 ///     .method("POST")
 ///     .uri("/api/resource")
@@ -219,7 +219,7 @@ where
 /// ```
 ///
 /// ## From existing RequestDetails
-/// ```ignore
+/// ```text
 /// let request_details = RequestDetails { /* ... */ };
 /// let envelope = RequestEnvelopeBuilder::from_request_details(request_details)
 ///     .original_data(serde_json::json!({"key": "value"}))
@@ -227,7 +227,7 @@ where
 /// ```
 ///
 /// ## With metadata and headers
-/// ```ignore
+/// ```text
 /// let envelope = RequestEnvelopeBuilder::new()
 ///     .method("GET")
 ///     .uri("/test")
@@ -627,7 +627,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_base_url("https://api.example.com");
     /// ```
     pub fn set_target_base_url(&mut self, base_url: impl Into<String>) {
@@ -642,7 +642,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_uri("/v2/resource");
     /// ```
     pub fn set_target_uri(&mut self, uri: impl Into<String>) {
@@ -657,7 +657,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_header("Authorization", "Bearer token123");
     /// ```
     pub fn set_target_header(&mut self, key: impl Into<String>, value: impl Into<String>) {
@@ -672,7 +672,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_query_param("filter", vec!["active".to_string()]);
     /// ```
     pub fn set_target_query_param(&mut self, key: impl Into<String>, values: Vec<String>) {
@@ -687,7 +687,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_metadata("dimse_op", "find");
     /// ```
     pub fn set_target_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
@@ -702,7 +702,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_method("POST");
     /// ```
     pub fn set_target_method(&mut self, method: impl Into<String>) {
