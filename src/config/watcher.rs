@@ -64,7 +64,10 @@ impl ConfigWatcher {
         }
 
         // Debounce and handle reload
-        let mut last_reload = tokio::time::Instant::now();
+        // Initialize to a time far in the past so first reload isn't blocked by cooldown
+        let mut last_reload = tokio::time::Instant::now()
+            .checked_sub(Duration::from_secs(2))
+            .unwrap_or_else(|| tokio::time::Instant::now());
 
         while rx.recv().await.is_some() {
             // Debounce: wait for stable file state
