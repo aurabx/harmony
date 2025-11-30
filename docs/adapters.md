@@ -1,6 +1,6 @@
 # Protocol Adapters
 
-**Last Updated**: 2025-01-18 (Phase 6)
+**Last Updated**: 2025-11-30
 
 ## Overview
 
@@ -14,7 +14,7 @@ Protocol adapters are the foundation of Harmony's protocol-agnostic architecture
 
 ## Architecture
 
-```
+``` path=null start=null
 Protocol Request
   ↓
 ProtocolAdapter
@@ -25,7 +25,7 @@ ProtocolAdapter
   └─ Protocol-specific response formatting
   ↓
 Protocol Response
-```
+``` path=null start=null
 
 **Key Principle**: Protocol adapters handle I/O; `PipelineExecutor` handles business logic.
 
@@ -49,7 +49,7 @@ pub trait ProtocolAdapter: Send + Sync {
     /// Returns a human-readable summary
     fn summary(&self) -> String;
 }
-```
+``` path=null start=null
 
 ## Protocol to Service Mapping
 
@@ -88,7 +88,7 @@ This mapping is automatically applied when starting networks based on each servi
 ```rust
 let adapter = HttpAdapter::new(network_name, bind_addr);
 let handle = adapter.start(config, shutdown).await?;
-```
+``` path=null start=null
 
 ### DimseAdapter
 
@@ -110,7 +110,7 @@ The DimseAdapter works with `dicom_scp` endpoints to receive incoming DICOM requ
 ```rust
 let adapter = DimseAdapter::new(network_name);
 let handle = adapter.start(config, shutdown).await?;
-```
+``` path=null start=null
 
 **Configuration Detection**:
 The adapter automatically detects and starts SCP listeners for endpoints with `service = "dicom_scp"`. Legacy `service = "dimse"` is also supported with a deprecation warning.
@@ -150,7 +150,7 @@ impl Hl7MllpAdapter {
         }
     }
 }
-```
+``` path=null start=null
 
 #### 2. Implement Protocol-Specific Conversion
 
@@ -200,7 +200,7 @@ impl Hl7MllpAdapter {
         ).into_bytes()
     }
 }
-```
+``` path=null start=null
 
 #### 3. Implement ProtocolAdapter Trait
 
@@ -291,7 +291,7 @@ async fn handle_hl7_connection(
     
     Ok(())
 }
-```
+``` path=null start=null
 
 #### 4. Register in Orchestrator
 
@@ -320,7 +320,7 @@ if has_hl7 {
         }
     }
 }
-```
+``` path=null start=null
 
 ## Best Practices
 
@@ -362,7 +362,7 @@ tracing::info!(
     protocol = ?Protocol::Hl7,
     "Processing request"
 );
-```
+``` path=null start=null
 
 ### Protocol Metadata
 ```rust
@@ -379,7 +379,7 @@ let ctx = ProtocolCtx {
         "transaction_id": 12345,
     }),
 };
-```
+``` path=null start=null
 
 ### Status Code Mapping
 ```rust
@@ -391,7 +391,7 @@ fn map_status_to_protocol(status: u16) -> CustomStatus {
         _ => CustomStatus::Unknown,
     }
 }
-```
+``` path=null start=null
 
 ## See Also
 

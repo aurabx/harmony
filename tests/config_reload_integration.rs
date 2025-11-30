@@ -457,18 +457,38 @@ async fn test_file_watcher_detects_changes() {
     // Spawn watcher in background
     let watcher_handle = tokio::spawn(async move { watcher.start().await });
 
-    // Give watcher time to start
-    sleep(Duration::from_millis(500)).await;
+    // Give watcher time to start watching - use longer delay on macOS
+    sleep(Duration::from_millis(1000)).await;
 
     // Modify config
     add_middleware_to_config(&config_path, 19085);
 
-    // Wait for reload (debounce + processing)
-    sleep(Duration::from_secs(2)).await;
+    // Use retry loop instead of fixed wait to handle timing variability
+    let max_retries = 30; // ~3 seconds with 100ms delays
+    let mut retry_count = 0;
+    loop {
+        sleep(Duration::from_millis(100)).await;
+        
+        let current = globals::get_config().unwrap();
+        if current.middleware.contains_key("test_middleware") {
+            tracing::info!("✓ File watcher detected middleware change after {} retries", retry_count);
+            break;
+        }
+        
+        retry_count += 1;
+        if retry_count >= max_retries {
+            tracing::error!("Timeout waiting for file watcher to detect changes");
+            break;
+        }
+    }
 
     // Verify config updated
     let current = globals::get_config().unwrap();
-    assert!(current.middleware.contains_key("test_middleware"));
+    assert!(
+        current.middleware.contains_key("test_middleware"),
+        "File watcher should have detected middleware change (tried {} times)",
+        retry_count
+    );
 
     // Cleanup
     watcher_handle.abort();
@@ -502,8 +522,8 @@ async fn test_cloud_poller_writes_file_watcher_applies() {
     // Spawn watcher in background
     let watcher_handle = tokio::spawn(async move { watcher.start().await });
 
-    // Give watcher time to start watching
-    sleep(Duration::from_millis(500)).await;
+    // Give watcher time to start watching - use longer delay on macOS
+    sleep(Duration::from_millis(1000)).await;
 
     // Simulate cloud poller writing new config
     // This mimics what write_cloud_config() does in cloud_poller.rs
@@ -549,15 +569,38 @@ module = ""
     tracing::info!("Simulating cloud poller writing config file...");
     fs::write(&config_path, cloud_config_content).expect("Failed to write cloud config");
 
-    // Wait for file watcher to detect, debounce, and apply
-    // File watcher has 200ms debounce + processing time
-    sleep(Duration::from_secs(2)).await;
+    // Use retry loop instead of fixed wait to handle timing variability
+    // File system events can be delayed, so poll for the condition
+    let max_retries = 30; // ~3 seconds with 100ms delays
+    let mut retry_count = 0;
+    loop {
+        sleep(Duration::from_millis(100)).await;
+        
+        let updated = globals::get_config().unwrap();
+        if updated.middleware.contains_key("cloud_middleware") {
+            tracing::info!("✓ Cloud config update detected after {} retries", retry_count);
+            break;
+        }
+        
+        retry_count += 1;
+        if retry_count >= max_retries {
+            // Log current config for debugging
+            let current = globals::get_config().unwrap();
+            let keys: Vec<&String> = current.middleware.keys().collect();
+            tracing::error!(
+                "Timeout waiting for config update. Current middleware keys: {:?}",
+                keys
+            );
+            break;
+        }
+    }
 
     // Verify config was updated by file watcher
     let updated = globals::get_config().unwrap();
     assert!(
         updated.middleware.contains_key("cloud_middleware"),
-        "File watcher should have detected and applied cloud config change"
+        "File watcher should have detected and applied cloud config change (tried {} times)",
+        retry_count
     );
 
     tracing::info!("✓ Cloud poller → File watcher → Config application flow verified!");

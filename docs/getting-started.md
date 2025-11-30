@@ -1,6 +1,6 @@
 # Getting Started
 
-**Last Updated**: 2025-01-18 (Phase 6)
+**Last Updated**: 2025-11-30
 
 **Status**: Alpha-quality software under active development. Some features are placeholders.
 
@@ -97,13 +97,24 @@ Conventions
 Harmony uses environment variables for runtime configuration and security settings. These are optional for local development but recommended for production deployments.
 
 ### Quick Reference
+**RUST_LOG** - Logging verbosity (optional, default: `info`)
+- Example: `RUST_LOG=harmony=debug,info`
+- Controls tracing output; use `debug` for development, `info` for production
 
-| Variable | Purpose | Required | Default | Example |
-|----------|---------|----------|---------|--------|
-| `RUST_LOG` | Logging verbosity | No | `info` | `harmony=debug,info` |
-| `RUNBEAM_ENCRYPTION_KEY` | Token storage encryption key | No (containers: recommended) | Auto-generated | `$(age-keygen \| base64)` |
-| `RUNBEAM_JWT_SECRET` | JWT validation secret for Runbeam Cloud | No (production: yes) | Development default | `your-secret-key` |
-| `RUNBEAM_DISABLE_KEYRING` | Force encrypted filesystem storage | No (testing only) | Not set | `1` |
+**RUNBEAM_ENCRYPTION_KEY** - Token storage encryption key (optional for local dev, recommended for containers)
+- Base64-encoded age X25519 key
+- Example: Generated via `age-keygen | base64 | tr -d '\n'`
+- In containers without OS keyring, ensures tokens survive restarts; without it, tokens are lost on restart
+
+**RUNBEAM_JWT_SECRET** - JWT validation secret for Runbeam Cloud (required for production cloud integration)
+- String (recommend 32+ character random value)
+- Example: Generated via `openssl rand -base64 32`
+- Must match secret configured in Runbeam Cloud
+
+**RUNBEAM_DISABLE_KEYRING** - Force encrypted filesystem storage (testing only, optional)
+- Any value presence enables it
+- Example: `RUNBEAM_DISABLE_KEYRING=1`
+- Used to test encrypted filesystem behavior when OS keyring is available
 
 ### Local Development Example
 

@@ -1,6 +1,6 @@
 # Middleware
 
-**Last Updated**: 2025-01-18 (Phase 6)
+**Last Updated**: 2025-11-30
 
 Middleware extends the request/response pipeline to authenticate, enrich, or transform the `RequestEnvelope` and `ResponseEnvelope` as they flow through the `PipelineExecutor`.
 

@@ -31,11 +31,11 @@ fn test_basic_echo_example_loads() {
     let pipeline = &config.pipelines["echo_basic"];
     assert!(pipeline
         .middleware
-        .contains(&"security_policies".to_string()));
+        .contains(&"echo_policies".to_string()));
 
     // Check middleware definition exists
-    assert!(config.middleware.contains_key("security_policies"));
-    let middleware = &config.middleware["security_policies"];
+    assert!(config.middleware.contains_key("echo_policies"));
+    let middleware = &config.middleware["echo_policies"];
     assert_eq!(middleware.middleware_type, "policies");
 }
 
@@ -85,8 +85,10 @@ fn test_fhir_example_loads() {
         .middleware
         .contains(&"healthcare_policies".to_string()));
 
-    // Check that basic_auth is also present (healthcare requires both)
-    assert!(pipeline.middleware.contains(&"basic_auth".to_string()));
+    // Check middleware definition exists
+    assert!(config.middleware.contains_key("healthcare_policies"));
+    let middleware = &config.middleware["healthcare_policies"];
+    assert_eq!(middleware.middleware_type, "policies");
 }
 
 #[test]
@@ -157,7 +159,7 @@ fn test_transform_example_loads() {
 #[ignore = "Requires echo service to be loaded"]
 fn test_basic_echo_has_public_access_policy() {
     let config = load_and_validate_example("examples/basic-echo/config.toml");
-    let middleware = &config.middleware["security_policies"];
+    let middleware = &config.middleware["echo_policies"];
 
     // Check that policies middleware type is correct
     assert_eq!(middleware.middleware_type, "policies");

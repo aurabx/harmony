@@ -1,14 +1,14 @@
 # Backends
 
-**Last Updated**: 2025-01-18 (Phase 6)
+**Last Updated**: 2025-11-30
 
 Backends enable the pipeline to communicate with external systems (targets). Backends operate within the unified `PipelineExecutor` and handle the "backend invocation" step of the pipeline.
 
 ## Architecture
 
-```
+``` path=null start=null
 RequestEnvelope → Backend Service → External Target → ResponseEnvelope
-```
+``` path=null start=null
 
 **Backend responsibilities**:
 - Convert `RequestEnvelope` to protocol-specific requests
@@ -31,14 +31,14 @@ connection.host = "api.example.com"
 connection.protocol = "https"
 authentication.method = "bearer"
 timeout_secs = 60
-```
+``` path=null start=null
 
 **pipelines/main.toml**:
 ```toml
 [backends.my_backend]
 service = "http"
 target_ref = "prod_api"  # Inherits connection settings from 'prod_api'
-```
+``` path=null start=null
 
 ### Direct Configuration
 
@@ -50,7 +50,7 @@ service = "http"
 [backends.my_backend.connection]
 host = "api.example.com"
 protocol = "https"
-```
+``` path=null start=null
 
 ### Legacy Configuration (Options)
 
@@ -61,7 +61,7 @@ Service-specific options are still supported for backward compatibility:
 service = "http"
 [backends.my_backend.options]
 base_url = "https://api.example.com"
-```
+``` path=null start=null
 
 ## Backend Types
 
@@ -81,7 +81,7 @@ A basic HTTP backend for connecting to HTTP/HTTPS targets.
 service = "http"
 [backends.<name>.options]
 base_url = "https://api.example.com"
-```
+``` path=null start=null
 
 **Example**: HTTP API backend
 ```toml
@@ -89,7 +89,7 @@ base_url = "https://api.example.com"
 service = "http"
 [backends.external_api.options]
 base_url = "https://external-api.example.com/v1"
-```
+``` path=null start=null
 
 ### FHIR
 
@@ -106,7 +106,7 @@ Extends the HTTP backend for FHIR resource servers.
 service = "fhir"
 [backends.<name>.options]
 base_url = "https://fhir.example.com/r4"
-```
+``` path=null start=null
 
 **Example**: FHIR R4 server
 ```toml
@@ -114,7 +114,7 @@ base_url = "https://fhir.example.com/r4"
 service = "fhir"
 [backends.fhir_server.options]
 base_url = "https://hapi.fhir.org/baseR4"
-```
+``` path=null start=null
 
 ### DICOMweb
 
@@ -131,7 +131,7 @@ Extends the HTTP backend for DICOMweb QIDO-RS/WADO-RS/STOW-RS targets.
 service = "dicomweb"
 [backends.<name>.options]
 base_url = "https://dicomweb.example.com"
-```
+``` path=null start=null
 
 **Example**: DICOMweb PACS
 ```toml
@@ -139,7 +139,7 @@ base_url = "https://dicomweb.example.com"
 service = "dicomweb"
 [backends.pacs_dicomweb.options]
 base_url = "https://pacs.example.com/dicomweb"
-```
+``` path=null start=null
 
 ### DICOM SCU (Service Class User)
 
@@ -162,7 +162,7 @@ port = 4242
 local_aet = "HARMONY_SCU"    # Local AE title
 dimse_retrieve_mode = "get" # DICOM retrieval mode: "get" or "move"
 use_tls = false
-```
+``` path=null start=null
 
 **Configuration Options**:
 - `aet` (string, required): Remote Application Entity Title
@@ -189,7 +189,7 @@ dimse_retrieve_mode = "get"
 incoming_store_port = 11112
 persistent_store_scp = true
 use_tls = false
-```
+``` path=null start=null
 
 **Prerequisites**: Requires DCMTK installed (see [dimse-integration.md](dimse-integration.md))
 
@@ -219,7 +219,7 @@ service = "storage"
 root = "./data"  # Local path or "s3://bucket/prefix"
 read_pattern = "files/{uuid}.bin"
 write_pattern = "files/{uuid}.bin"
-```
+``` path=null start=null
 
 **S3 Configuration**:
 To use S3, set `root` to an S3 URI (`s3://bucket-name/prefix`) and provide credentials:
@@ -232,7 +232,7 @@ region = "us-east-1"
 access_key_id = "..."      # Optional (can use env vars)
 secret_access_key = "..."  # Optional (can use env vars)
 endpoint = "..."           # Optional (for MinIO/custom S3)
-```
+``` path=null start=null
 
 **Path Templating**:
 Patterns can use placeholders replaced at runtime:
@@ -249,7 +249,7 @@ service = "storage"
 root = "./patient_data"
 # Write to: ./patient_data/{tenant}/{PatientID}/{uuid}.dcm
 write_pattern = "{tenant}/{PatientID}/{uuid}.dcm"
-```
+``` path=null start=null
 
 ### Echo (Test)
 
@@ -264,13 +264,13 @@ A simple echo backend that reflects the request back as the response.
 ```toml
 [backends.<name>]
 service = "echo"
-```
+``` path=null start=null
 
 **Example**: Echo test backend
 ```toml
 [backends.test_echo]
 service = "echo"
-```
+``` path=null start=null
 
 ## Target Selection
 
@@ -290,7 +290,7 @@ url = "https://api1.example.com"
 
 [targets.api2]
 url = "https://api2.example.com"
-```
+``` path=null start=null
 
 ## See Also
 

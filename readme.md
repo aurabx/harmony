@@ -243,7 +243,7 @@ docker run -p 8080:8080 \
   harmony --config /examples/basic-echo/config.toml
 ```
 
-If you’d rather build everything from scratch (no prebuilt binaries), specify the full build image explicitly:
+If you'd rather build everything from scratch (no prebuilt binaries), specify the full build image explicitly:
 
 ```bash
 docker build -f Dockerfile.build -t harmony .

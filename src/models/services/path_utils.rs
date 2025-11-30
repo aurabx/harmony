@@ -14,11 +14,9 @@ use crate::models::envelope::envelope::RequestEnvelope;
 /// A string containing the path without query string, with a leading slash if not already present
 ///
 /// # Example
-/// ```ignore
-/// // For a request to /fhir/Patient?_count=5 with endpoint prefix "/fhir"
-/// // Returns: "/Patient" (query params are in envelope.request_details.query_params)
-/// use harmony::models::services::path_utils::extract_path;
-/// let path = extract_path(&envelope);
+/// ```text
+/// For a request to /fhir/Patient?_count=5 with endpoint prefix "/fhir"
+/// Returns: "/Patient" (query params are in envelope.request_details.query_params)
 /// ```
 pub fn extract_path(envelope: &RequestEnvelope<Vec<u8>>) -> String {
     envelope
