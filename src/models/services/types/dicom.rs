@@ -644,7 +644,8 @@ impl DicomScuBackend {
                     (dir, true)
                 };
 
-                // In persistent SCP mode, create a per-move subdirectory and direct the SCP to use it
+                // In persistent SCP mode, create a per-move subdirectory
+                // Note: The QueryProvider now uses get_storage() directly, so no need to set a static store dir
                 let mut per_move_dir_opt: Option<std::path::PathBuf> = None;
                 if persistent_scp {
                     let scp_root = options
@@ -654,10 +655,6 @@ impl DicomScuBackend {
                     let per_move_dir = std::path::Path::new(scp_root).join(&folder_id);
                     let _ = std::fs::create_dir_all(&per_move_dir);
                     per_move_dir_opt = Some(per_move_dir.clone());
-                    // Set the current store dir for the persistent SCP QueryProvider (internal SCP)
-                    crate::integrations::dimse::pipeline_query_provider::set_current_store_dir(
-                        per_move_dir.clone(),
-                    );
                 }
 
                 match scu

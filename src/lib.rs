@@ -2,7 +2,6 @@ pub mod adapters;
 pub mod config;
 mod file;
 pub mod globals;
-pub mod integrations;
 pub mod models;
 pub mod pipeline;
 pub mod router;
