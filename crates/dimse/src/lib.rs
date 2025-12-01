@@ -10,6 +10,7 @@
 //! - Binary stream handling with minimal file I/O
 //! - Integration with harmony proxy via internal router
 
+pub mod common;
 pub mod config;
 pub mod error;
 pub mod router;

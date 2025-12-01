@@ -59,6 +59,7 @@ Thumbs.db
 
 # Project specific
 /store_dir/
+/data/
 harmony.log
 /cargo-flamegraph.trace/
 /flamegraph.svg
