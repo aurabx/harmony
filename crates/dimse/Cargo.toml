@@ -7,8 +7,7 @@ description = "DIMSE protocol implementation for DICOM services"
 authors = ["runbeam"]
 
 [features]
-default = ["dcmtk_cli"]
-dcmtk_cli = []
+default = []
 tls = ["tokio-rustls", "rustls-pemfile"]
 
 [dependencies]
@@ -57,3 +56,4 @@ tokio-stream = "0.1"
 [dev-dependencies]
 tokio-test = "0.4"
 env_logger = "0.11"
+dicom_json_tool = { path = "../dicom_json_tool" }

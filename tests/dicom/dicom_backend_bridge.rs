@@ -10,7 +10,7 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn http_to_dicom_backend_echo_succeeds() {
     let toml = r#"
         [proxy]

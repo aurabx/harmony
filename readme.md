@@ -313,7 +313,7 @@ See [docs/configuration.md](docs/configuration.md), [docs/endpoints.md](docs/end
 ## System requirements
 - Rust (stable)
 - macOS or Linux runtime environment
-- DCMTK (required if you use DICOM DIMSE features)
+- DCMTK (optional, only needed for integration tests - all DIMSE operations are native Rust implementations)
   - macOS (Homebrew): `brew install dcmtk`
   - Debian/Ubuntu: `sudo apt-get install dcmtk`
 

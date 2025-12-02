@@ -1,71 +1,30 @@
 //! Response building and encoding helpers for DIMSE operations
 
-use dicom_core::{DataElement, PrimitiveValue, VR};
-use dicom_dictionary_std::{tags, uids};
-use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
-use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
-use dicom_ul::pdu::PDataValue;
 use dicom_ul::{Pdu, ServerAssociation};
 use tokio::net::TcpStream;
 
+use crate::common::{
+    build_response, command_fields, create_command_pdata, create_data_pdata, encode_command,
+    encode_dataset, status, DimseMessageBuilder,
+};
 use crate::types::DatasetStream;
 use crate::{DimseError, Result};
 
-/// Sub-operation counts for C-MOVE and C-GET responses
-pub struct SubOperationCounts {
-    pub remaining: u16,
-    pub completed: u16,
-    pub failed: u16,
-    pub warning: u16,
-}
+// Re-export for backwards compatibility
+pub use crate::common::SubOperationCounts;
 
 /// Build a command response object with common fields
+///
+/// This is a convenience wrapper around the common build_response function.
 pub fn build_command_response(
     command_field: u16,
     message_id: u16,
-    status: u16,
+    status_code: u16,
     has_dataset: bool,
     sop_class_uid: &str,
 ) -> InMemDicomObject<StandardDataDictionary> {
-    let mut response = InMemDicomObject::new_empty();
-
-    // Command Field (0000,0100)
-    response.put(DataElement::new(
-        tags::COMMAND_FIELD,
-        VR::US,
-        PrimitiveValue::from(command_field),
-    ));
-
-    // Message ID Being Responded To (0000,0120)
-    response.put(DataElement::new(
-        tags::MESSAGE_ID_BEING_RESPONDED_TO,
-        VR::US,
-        PrimitiveValue::from(message_id),
-    ));
-
-    // Command Data Set Type (0000,0800)
-    response.put(DataElement::new(
-        tags::COMMAND_DATA_SET_TYPE,
-        VR::US,
-        PrimitiveValue::from(if has_dataset { 0x0000u16 } else { 0x0101u16 }),
-    ));
-
-    // Status (0000,0900)
-    response.put(DataElement::new(
-        tags::STATUS,
-        VR::US,
-        PrimitiveValue::from(status),
-    ));
-
-    // Affected SOP Class UID (0000,0002)
-    response.put(DataElement::new(
-        tags::AFFECTED_SOP_CLASS_UID,
-        VR::UI,
-        PrimitiveValue::from(sop_class_uid),
-    ));
-
-    response
+    build_response(command_field, message_id, status_code, has_dataset, sop_class_uid)
 }
 
 /// Encode and send a response with optional dataset
@@ -75,44 +34,17 @@ pub async fn encode_and_send_response(
     dataset: Option<&DatasetStream>,
     presentation_context_id: u8,
 ) -> Result<()> {
-    let ts = TransferSyntaxRegistry
-        .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
-        .ok_or_else(|| DimseError::operation_failed("Implicit VR Little Endian TS not found"))?;
-
-    let mut response_bytes = Vec::new();
-    response
-        .write_dataset_with_ts(&mut response_bytes, ts)
-        .map_err(|e| {
-            DimseError::operation_failed(format!("Failed to encode response: {}", e))
-        })?;
+    let response_bytes = encode_command(&response)?;
 
     let has_dataset = dataset.is_some();
-    let command_pdata = PDataValue {
-        presentation_context_id,
-        value_type: dicom_ul::pdu::PDataValueType::Command,
-        is_last: !has_dataset,
-        data: response_bytes,
-    };
+    let command_pdata = create_command_pdata(presentation_context_id, response_bytes, !has_dataset);
 
     // If we have a dataset, send it as well
     if let Some(ds) = dataset {
         // Convert the dataset to a DICOM object
         let dicom_obj = ds.to_object().await?;
-
-        // Encode the identifier dataset
-        let mut identifier_bytes = Vec::new();
-        dicom_obj
-            .write_dataset_with_ts(&mut identifier_bytes, ts)
-            .map_err(|e| {
-                DimseError::operation_failed(format!("Failed to encode dataset: {}", e))
-            })?;
-
-        let data_pdata = PDataValue {
-            presentation_context_id,
-            value_type: dicom_ul::pdu::PDataValueType::Data,
-            is_last: true,
-            data: identifier_bytes,
-        };
+        let identifier_bytes = encode_dataset(&dicom_obj)?;
+        let data_pdata = create_data_pdata(presentation_context_id, identifier_bytes, true);
 
         association
             .send(&Pdu::PData {
@@ -138,11 +70,11 @@ pub async fn send_echo_response(
     message_id: u16,
     presentation_context_id: u8,
 ) -> Result<()> {
-    let response = build_command_response(
-        0x8030, // C-ECHO-RSP
+    let response = build_response(
+        command_fields::C_ECHO_RSP,
         message_id,
-        0x0000, // Success
-        false,   // No dataset
+        status::SUCCESS,
+        false,
         "1.2.840.10008.1.1", // Verification SOP Class
     );
 
@@ -156,14 +88,14 @@ pub async fn send_echo_response(
 pub async fn send_find_response(
     association: &mut ServerAssociation<TcpStream>,
     message_id: u16,
-    status: u16,
+    status_code: u16,
     dataset: Option<&DatasetStream>,
     presentation_context_id: u8,
 ) -> Result<()> {
-    let response = build_command_response(
-        0x8020, // C-FIND-RSP
+    let response = build_response(
+        command_fields::C_FIND_RSP,
         message_id,
-        status,
+        status_code,
         dataset.is_some(),
         "1.2.840.10008.5.1.4.1.2.2.1", // Study Root Query/Retrieve - FIND
     );
@@ -177,46 +109,18 @@ pub async fn send_find_response(
 pub async fn send_move_response(
     association: &mut ServerAssociation<TcpStream>,
     message_id: u16,
-    status: u16,
+    status_code: u16,
     counts: SubOperationCounts,
     presentation_context_id: u8,
 ) -> Result<()> {
-    let mut response = build_command_response(
-        0x8021, // C-MOVE-RSP
-        message_id,
-        status,
-        false, // No dataset
-        "1.2.840.10008.5.1.4.1.2.2.2", // Study Root Query/Retrieve - MOVE
-    );
-
-    // Add sub-operation status fields
-    // Number of Remaining Sub-operations (0000,1020)
-    response.put(DataElement::new(
-        tags::NUMBER_OF_REMAINING_SUBOPERATIONS,
-        VR::US,
-        PrimitiveValue::from(counts.remaining),
-    ));
-
-    // Number of Completed Sub-operations (0000,1021)
-    response.put(DataElement::new(
-        tags::NUMBER_OF_COMPLETED_SUBOPERATIONS,
-        VR::US,
-        PrimitiveValue::from(counts.completed),
-    ));
-
-    // Number of Failed Sub-operations (0000,1022)
-    response.put(DataElement::new(
-        tags::NUMBER_OF_FAILED_SUBOPERATIONS,
-        VR::US,
-        PrimitiveValue::from(counts.failed),
-    ));
-
-    // Number of Warning Sub-operations (0000,1023)
-    response.put(DataElement::new(
-        tags::NUMBER_OF_WARNING_SUBOPERATIONS,
-        VR::US,
-        PrimitiveValue::from(counts.warning),
-    ));
+    let response = DimseMessageBuilder::new()
+        .command_field(command_fields::C_MOVE_RSP)
+        .message_id_being_responded_to(message_id)
+        .status(status_code)
+        .has_dataset(false)
+        .affected_sop_class_uid("1.2.840.10008.5.1.4.1.2.2.2") // Study Root Query/Retrieve - MOVE
+        .sub_operation_counts(&counts)
+        .build();
 
     encode_and_send_response(association, response, None, presentation_context_id).await?;
 
@@ -227,46 +131,18 @@ pub async fn send_move_response(
 pub async fn send_get_response(
     association: &mut ServerAssociation<TcpStream>,
     message_id: u16,
-    status: u16,
+    status_code: u16,
     counts: SubOperationCounts,
     presentation_context_id: u8,
 ) -> Result<()> {
-    let mut response = build_command_response(
-        0x8010, // C-GET-RSP
-        message_id,
-        status,
-        false, // No dataset
-        "1.2.840.10008.5.1.4.1.2.2.3", // Study Root Query/Retrieve - GET
-    );
-
-    // Add sub-operation status fields
-    // Number of Remaining Sub-operations (0000,1020)
-    response.put(DataElement::new(
-        tags::NUMBER_OF_REMAINING_SUBOPERATIONS,
-        VR::US,
-        PrimitiveValue::from(counts.remaining),
-    ));
-
-    // Number of Completed Sub-operations (0000,1021)
-    response.put(DataElement::new(
-        tags::NUMBER_OF_COMPLETED_SUBOPERATIONS,
-        VR::US,
-        PrimitiveValue::from(counts.completed),
-    ));
-
-    // Number of Failed Sub-operations (0000,1022)
-    response.put(DataElement::new(
-        tags::NUMBER_OF_FAILED_SUBOPERATIONS,
-        VR::US,
-        PrimitiveValue::from(counts.failed),
-    ));
-
-    // Number of Warning Sub-operations (0000,1023)
-    response.put(DataElement::new(
-        tags::NUMBER_OF_WARNING_SUBOPERATIONS,
-        VR::US,
-        PrimitiveValue::from(counts.warning),
-    ));
+    let response = DimseMessageBuilder::new()
+        .command_field(command_fields::C_GET_RSP)
+        .message_id_being_responded_to(message_id)
+        .status(status_code)
+        .has_dataset(false)
+        .affected_sop_class_uid("1.2.840.10008.5.1.4.1.2.2.3") // Study Root Query/Retrieve - GET
+        .sub_operation_counts(&counts)
+        .build();
 
     encode_and_send_response(association, response, None, presentation_context_id).await?;
 
@@ -277,42 +153,209 @@ pub async fn send_get_response(
 pub async fn send_store_response(
     association: &mut ServerAssociation<TcpStream>,
     message_id: u16,
-    status: u16,
+    status_code: u16,
     presentation_context_id: u8,
 ) -> Result<()> {
-    let mut response = InMemDicomObject::new_empty();
-
-    // Command Field (0000,0100) = 0x8001 (C-STORE-RSP)
-    response.put(DataElement::new(
-        tags::COMMAND_FIELD,
-        VR::US,
-        PrimitiveValue::from(0x8001u16),
-    ));
-
-    // Message ID Being Responded To (0000,0120)
-    response.put(DataElement::new(
-        tags::MESSAGE_ID_BEING_RESPONDED_TO,
-        VR::US,
-        PrimitiveValue::from(message_id),
-    ));
-
-    // Command Data Set Type (0000,0800) = 0x0101 (no dataset)
-    response.put(DataElement::new(
-        tags::COMMAND_DATA_SET_TYPE,
-        VR::US,
-        PrimitiveValue::from(0x0101u16),
-    ));
-
-    // Status (0000,0900)
-    response.put(DataElement::new(
-        tags::STATUS,
-        VR::US,
-        PrimitiveValue::from(status),
-    ));
-
-    // Note: C-STORE-RSP does not include Affected SOP Class UID
+    // C-STORE-RSP is slightly different - it doesn't include Affected SOP Class UID
+    let response = DimseMessageBuilder::new()
+        .command_field(command_fields::C_STORE_RSP)
+        .message_id_being_responded_to(message_id)
+        .status(status_code)
+        .has_dataset(false)
+        .build();
 
     encode_and_send_response(association, response, None, presentation_context_id).await?;
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::common::{command_fields, status};
+    use dicom_dictionary_std::tags;
+
+    #[test]
+    fn test_build_command_response_echo() {
+        let response = build_command_response(
+            command_fields::C_ECHO_RSP,
+            42,
+            status::SUCCESS,
+            false,
+            "1.2.840.10008.1.1",
+        );
+
+        // Verify command field
+        let cmd_field = response
+            .element(tags::COMMAND_FIELD)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(cmd_field, command_fields::C_ECHO_RSP);
+
+        // Verify message ID being responded to
+        let msg_id = response
+            .element(tags::MESSAGE_ID_BEING_RESPONDED_TO)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(msg_id, 42);
+
+        // Verify status
+        let status_val = response.element(tags::STATUS).unwrap().uint16().unwrap();
+        assert_eq!(status_val, status::SUCCESS);
+
+        // Verify no dataset (0x0101)
+        let data_set_type = response
+            .element(tags::COMMAND_DATA_SET_TYPE)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(data_set_type, 0x0101);
+    }
+
+    #[test]
+    fn test_build_command_response_find_with_dataset() {
+        let response = build_command_response(
+            command_fields::C_FIND_RSP,
+            1,
+            status::PENDING,
+            true, // has dataset
+            "1.2.840.10008.5.1.4.1.2.2.1",
+        );
+
+        // Verify has dataset (0x0000)
+        let data_set_type = response
+            .element(tags::COMMAND_DATA_SET_TYPE)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(data_set_type, 0x0000);
+
+        // Verify status is PENDING
+        let status_val = response.element(tags::STATUS).unwrap().uint16().unwrap();
+        assert_eq!(status_val, status::PENDING);
+    }
+
+    #[test]
+    fn test_build_move_response_with_sub_operations() {
+        let counts = SubOperationCounts {
+            remaining: 10,
+            completed: 5,
+            failed: 2,
+            warning: 1,
+        };
+
+        let response = DimseMessageBuilder::new()
+            .command_field(command_fields::C_MOVE_RSP)
+            .message_id_being_responded_to(100)
+            .status(status::PENDING)
+            .has_dataset(false)
+            .affected_sop_class_uid("1.2.840.10008.5.1.4.1.2.2.2")
+            .sub_operation_counts(&counts)
+            .build();
+
+        // Verify sub-operation counts
+        let remaining = response
+            .element(tags::NUMBER_OF_REMAINING_SUBOPERATIONS)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(remaining, 10);
+
+        let completed = response
+            .element(tags::NUMBER_OF_COMPLETED_SUBOPERATIONS)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(completed, 5);
+
+        let failed = response
+            .element(tags::NUMBER_OF_FAILED_SUBOPERATIONS)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(failed, 2);
+
+        let warning = response
+            .element(tags::NUMBER_OF_WARNING_SUBOPERATIONS)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(warning, 1);
+    }
+
+    #[test]
+    fn test_build_get_response_with_sub_operations() {
+        let counts = SubOperationCounts {
+            remaining: 0,
+            completed: 3,
+            failed: 0,
+            warning: 0,
+        };
+
+        let response = DimseMessageBuilder::new()
+            .command_field(command_fields::C_GET_RSP)
+            .message_id_being_responded_to(50)
+            .status(status::SUCCESS)
+            .has_dataset(false)
+            .affected_sop_class_uid("1.2.840.10008.5.1.4.1.2.2.3")
+            .sub_operation_counts(&counts)
+            .build();
+
+        // Verify command field is C-GET-RSP
+        let cmd_field = response
+            .element(tags::COMMAND_FIELD)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(cmd_field, command_fields::C_GET_RSP);
+
+        // Verify success status
+        let status_val = response.element(tags::STATUS).unwrap().uint16().unwrap();
+        assert_eq!(status_val, status::SUCCESS);
+
+        // Verify completed count
+        let completed = response
+            .element(tags::NUMBER_OF_COMPLETED_SUBOPERATIONS)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(completed, 3);
+    }
+
+    #[test]
+    fn test_build_store_response() {
+        let response = DimseMessageBuilder::new()
+            .command_field(command_fields::C_STORE_RSP)
+            .message_id_being_responded_to(77)
+            .status(status::SUCCESS)
+            .has_dataset(false)
+            .build();
+
+        // C-STORE-RSP should not have Affected SOP Class UID
+        let cmd_field = response
+            .element(tags::COMMAND_FIELD)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(cmd_field, command_fields::C_STORE_RSP);
+
+        // Verify message ID
+        let msg_id = response
+            .element(tags::MESSAGE_ID_BEING_RESPONDED_TO)
+            .unwrap()
+            .uint16()
+            .unwrap();
+        assert_eq!(msg_id, 77);
+    }
+
+    #[test]
+    fn test_sub_operation_counts_default() {
+        let counts = SubOperationCounts::default();
+        assert_eq!(counts.remaining, 0);
+        assert_eq!(counts.completed, 0);
+        assert_eq!(counts.failed, 0);
+        assert_eq!(counts.warning, 0);
+    }
 }

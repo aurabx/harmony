@@ -1,6 +1,7 @@
 //! Association establishment and lifecycle management
 
 use std::net::SocketAddr;
+use std::sync::atomic::Ordering;
 
 use dicom_ul::association::server::{AcceptAny, ServerAssociationOptions};
 use dicom_ul::Pdu;
@@ -19,17 +20,14 @@ pub async fn handle_association(
 ) -> Result<()> {
     // Increment active associations
     {
-        let mut active = scp.active_associations.write().await;
-        *active += 1;
+        scp.active_associations.fetch_add(1, Ordering::Relaxed);
     }
 
     let result = handle_association_inner(scp, stream, peer_addr).await;
 
     // Decrement active associations
-    {
-        let mut active = scp.active_associations.write().await;
-        *active -= 1;
-    }
+    scp.active_associations.fetch_sub(1, Ordering::Relaxed);
+
 
     result
 }

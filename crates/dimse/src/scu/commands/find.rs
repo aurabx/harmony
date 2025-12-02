@@ -1,24 +1,35 @@
 //! C-FIND command handler
 
+use std::sync::atomic::{AtomicU16, Ordering};
+
 use tokio::sync::mpsc;
 use tokio_stream::wrappers::ReceiverStream;
-use tracing::{debug, info, warn};
+use tracing::{debug, info};
 
-use crate::config::RemoteNode;
-use crate::scu::dcmtk_builder::DcmtkCommandBuilder;
+use crate::config::{DimseConfig, RemoteNode};
+use crate::scu::command_builder;
+use crate::scu::native_connection;
 use crate::types::{DatasetStream, FindQuery};
-use crate::Result;
+use crate::{DimseError, Result};
 
-/// Handle C-FIND request using DCMTK findscu
-#[cfg(feature = "dcmtk_cli")]
+// Message ID counter (thread-safe)
+static MESSAGE_ID_COUNTER: AtomicU16 = AtomicU16::new(1);
+
+fn next_message_id() -> u16 {
+    MESSAGE_ID_COUNTER.fetch_add(1, Ordering::Relaxed)
+}
+
+// Study Root Query/Retrieve Information Model - FIND SOP Class
+const FIND_SOP_CLASS_STUDY: &str = "1.2.840.10008.5.1.4.1.2.2.1";
+// Patient Root Query/Retrieve Information Model - FIND SOP Class
+const FIND_SOP_CLASS_PATIENT: &str = "1.2.840.10008.5.1.4.1.2.1.1";
+
+/// Handle C-FIND request using native DICOM UL
 pub async fn handle_find(
-    builder: &DcmtkCommandBuilder,
+    config: &DimseConfig,
     node: &RemoteNode,
     query: FindQuery,
 ) -> Result<ReceiverStream<Result<DatasetStream>>> {
-    use tokio::process::Command;
-    use uuid::Uuid;
-
     info!(
         "Sending C-FIND to {}@{}:{} (level: {}, max_results: {})",
         node.ae_title, node.host, node.port, query.query_level, query.max_results
@@ -27,94 +38,211 @@ pub async fn handle_find(
     node.validate()?;
     debug!("C-FIND query parameters: {:?}", query.parameters);
 
-    let mut args = builder.build_find_args(node, &query);
-
-    // Output directory for matches under storage_dir/dcmtk
-    let dcmtk_base = builder.storage_dir().join("dcmtk");
-    let out_dir = dcmtk_base.join(format!("find_{}", Uuid::new_v4()));
-    if let Err(e) = tokio::fs::create_dir_all(&out_dir).await {
-        warn!("Failed to create output dir {:?}: {}", out_dir, e);
-    } else {
-        // DCMTK findscu options to write matches to directory
-        args.push("-X".into()); // extract responses to DICOM files
-        args.push("-od".into());
-        args.push(out_dir.to_string_lossy().to_string());
-    }
-
-    // Prepare channel to stream results
+    // Build streaming channel for results
     let (tx, rx) = mpsc::channel(100);
 
-    debug!("Running findscu args: {:?}", args);
+    // Spawn task to handle the C-FIND operation
+    let config_clone = config.clone();
+    let node_clone = node.clone();
+    let query_clone = query.clone();
     let tx_clone = tx.clone();
-    let out_dir_clone = out_dir.clone();
+
     tokio::spawn(async move {
-        let cleanup_dir;
-        match Command::new("findscu").args(&args).output().await {
-            Ok(out) => {
-                if out.status.success() {
-                    info!("C-FIND completed (findscu success)");
-                    // Read produced files and convert to in-memory streams immediately
-                    if let Ok(mut rd) = tokio::fs::read_dir(&out_dir_clone).await {
-                        while let Ok(Some(entry)) = rd.next_entry().await {
-                            let path = entry.path();
-                            if path.extension().and_then(|s| s.to_str()).unwrap_or("") == "dcm"
-                            {
-                                // Read file contents immediately to avoid race condition with cleanup
-                                if let Ok(bytes) = tokio::fs::read(&path).await {
-                                    use bytes::Bytes;
-                                    let _ = tx_clone
-                                        .send(Ok(DatasetStream::from_bytes(Bytes::from(bytes))))
-                                        .await;
-                                } else {
-                                    warn!("Failed to read C-FIND result file: {:?}", path);
-                                }
-                            }
-                        }
-                    }
-                    cleanup_dir = out_dir_clone.clone();
-                } else {
-                    let stderr = String::from_utf8_lossy(&out.stderr);
-                    let stdout = String::from_utf8_lossy(&out.stdout);
-                    warn!(
-                        "findscu failed: status={:?}, stdout={}, stderr={}",
-                        out.status.code(),
-                        stdout,
-                        stderr
-                    );
-                    cleanup_dir = out_dir_clone.clone();
-                }
-            }
-            Err(e) => {
-                warn!("Failed to spawn findscu: {}", e);
-                cleanup_dir = out_dir_clone.clone();
-            }
+        let result = perform_find(&config_clone, &node_clone, &query_clone, tx_clone).await;
+        if let Err(e) = result {
+            tracing::error!("C-FIND operation failed: {}", e);
         }
-
-        // Clean up the temporary directory
-        if let Err(e) = tokio::fs::remove_dir_all(&cleanup_dir).await {
-            warn!(
-                "Failed to cleanup C-FIND temp directory {:?}: {}",
-                cleanup_dir, e
-            );
-        } else {
-            debug!("🧹 Cleaned up C-FIND temp directory: {:?}", cleanup_dir);
-        }
-
-        // drop sender to close stream
     });
 
     let stream = ReceiverStream::new(rx);
     Ok(stream)
 }
 
-#[cfg(not(feature = "dcmtk_cli"))]
-pub async fn handle_find(
-    _builder: &DcmtkCommandBuilder,
-    _node: &RemoteNode,
-    _query: FindQuery,
-) -> Result<ReceiverStream<Result<DatasetStream>>> {
-    // No CLI available; return empty stream
-    let (_tx, rx) = mpsc::channel(0);
-    let stream = ReceiverStream::new(rx);
-    Ok(stream)
+/// Perform the actual C-FIND operation
+async fn perform_find(
+    config: &DimseConfig,
+    node: &RemoteNode,
+    query: &FindQuery,
+    tx: mpsc::Sender<Result<DatasetStream>>,
+) -> Result<()> {
+    // Establish association with Query/Retrieve FIND SOP Class
+    // Select model based on query level:
+    // - Patient level queries require Patient Root
+    // - Study/Series/Image level queries can use Study Root (preferred) or Patient Root
+    let sop_class_uids: Vec<&str> = match query.query_level {
+        crate::types::QueryLevel::Patient => vec![FIND_SOP_CLASS_PATIENT],
+        _ => vec![FIND_SOP_CLASS_STUDY, FIND_SOP_CLASS_PATIENT], // Study/Series/Image prefer Study Root
+    };
+    
+    let mut association = native_connection::establish_association(config, node, &sop_class_uids)
+        .await?;
+
+    // Get presentation context ID - prefer the model that matches the query level
+    let pc_id = match query.query_level {
+        crate::types::QueryLevel::Patient => {
+            match native_connection::get_presentation_context_id(&association, FIND_SOP_CLASS_PATIENT) {
+                Ok(id) => (id, FIND_SOP_CLASS_PATIENT),
+                Err(e) => {
+                    native_connection::abort_association(association).await;
+                    return Err(e);
+                }
+            }
+        }
+        _ => {
+            // Prefer Study Root, fall back to Patient Root
+            match native_connection::get_presentation_context_id(&association, FIND_SOP_CLASS_STUDY) {
+                Ok(id) => (id, FIND_SOP_CLASS_STUDY),
+                Err(_) => match native_connection::get_presentation_context_id(&association, FIND_SOP_CLASS_PATIENT) {
+                    Ok(id) => (id, FIND_SOP_CLASS_PATIENT),
+                    Err(e) => {
+                        native_connection::abort_association(association).await;
+                        return Err(e);
+                    }
+                }
+            }
+        }
+    };
+
+    let message_id = next_message_id();
+
+    // Build identifier dataset from query parameters
+    let identifier = command_builder::build_identifier_dataset(query.query_level, &query.parameters)?;
+
+    // Build C-FIND request with the accepted SOP class
+    let (pc_id, accepted_sop_class) = pc_id;
+    let request = command_builder::build_command_request(
+        0x0020, // C-FIND-RQ
+        message_id,
+        true, // Has dataset
+        accepted_sop_class,
+    );
+
+    debug!("Sending C-FIND request (message ID: {})", message_id);
+
+    // Send the request with identifier dataset
+    if let Err(e) = command_builder::encode_and_send_request(&mut association, request, Some(&identifier), pc_id).await {
+        native_connection::abort_association(association).await;
+        let _ = tx.send(Err(e)).await;
+        return Ok(()); // Channel is closed
+    }
+
+    // Receive and stream responses
+    let mut results_count = 0u32;
+    let max_results = if query.max_results > 0 {
+        query.max_results
+    } else {
+        u32::MAX // No limit
+    };
+
+    loop {
+        // Use receive_dimse_message to handle split PDUs
+        match command_builder::receive_dimse_message(&mut association).await {
+            Ok((response_obj, dataset_data, _pc_id)) => {
+                // Verify this is the response to our request
+                let responded_to = match command_builder::extract_message_id_being_responded_to(&response_obj) {
+                    Ok(id) => id,
+                    Err(e) => {
+                        native_connection::abort_association(association).await;
+                        let _ = tx.send(Err(e)).await;
+                        break;
+                    }
+                };
+
+                if responded_to != message_id {
+                    debug!(
+                        "Received response for different message ID (expected: {}, got: {}), continuing",
+                        message_id, responded_to
+                    );
+                    continue;
+                }
+
+                // Check command field (should be 0x8020 for C-FIND-RSP)
+                let command_field = response_obj
+                    .element(dicom_dictionary_std::tags::COMMAND_FIELD)
+                    .ok()
+                    .and_then(|e| e.uint16().ok())
+                    .unwrap_or(0);
+
+                if command_field != 0x8020 {
+                    native_connection::abort_association(association).await;
+                    let _ = tx.send(Err(DimseError::operation_failed(format!(
+                        "Unexpected command field in response: 0x{:04X}",
+                        command_field
+                    )))).await;
+                    break;
+                }
+
+                // Extract status
+                let status = match command_builder::extract_status(&response_obj) {
+                    Ok(s) => s,
+                    Err(e) => {
+                        native_connection::abort_association(association).await;
+                        let _ = tx.send(Err(e)).await;
+                        break;
+                    }
+                };
+
+                // Handle different status codes
+                match status {
+                    0x0000 => {
+                        // Success - no more results
+                        debug!("C-FIND completed successfully (received {} results)", results_count);
+                        // Release association
+                        let _ = native_connection::release_association(association).await;
+                        break;
+                    }
+                    0xFF00 | 0xFF01 => {
+                        // Pending - more results to come
+                        if let Some(dataset_bytes) = dataset_data {
+                            results_count += 1;
+                            if results_count > max_results {
+                                // Reached max results, close channel and release
+                                let _ = native_connection::release_association(association).await;
+                                break;
+                            }
+
+                            // Parse dataset bytes to DICOM object
+                            match command_builder::parse_dataset_bytes(dataset_bytes, pc_id, &association) {
+                                Ok(dicom_obj) => {
+                                    // Convert to DatasetStream
+                                    let dataset = DatasetStream::from_object(dicom_obj);
+                                    if tx.send(Ok(dataset)).await.is_err() {
+                                        // Receiver closed, abort and exit
+                                        native_connection::abort_association(association).await;
+                                        break;
+                                    }
+                                }
+                                Err(e) => {
+                                    debug!("Failed to parse C-FIND result dataset: {}", e);
+                                    // Continue with next response
+                                }
+                            }
+                        }
+                        // Continue waiting for more responses
+                    }
+                    _ => {
+                        // Failure or cancellation
+                        native_connection::abort_association(association).await;
+                        let _ = tx.send(Err(DimseError::operation_failed(format!(
+                            "C-FIND failed with status: 0x{:04X}",
+                            status
+                        )))).await;
+                        break;
+                    }
+                }
+            }
+            Err(e) => {
+                native_connection::abort_association(association).await;
+                let _ = tx.send(Err(DimseError::network(format!(
+                    "Error receiving C-FIND response: {}",
+                    e
+                )))).await;
+                break;
+            }
+        }
+    }
+
+    info!("C-FIND completed ({} results)", results_count);
+    Ok(())
 }
+

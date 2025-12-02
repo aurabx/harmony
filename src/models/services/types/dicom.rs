@@ -433,7 +433,7 @@ impl DicomScuBackend {
                 let mut params: HashMap<String, String> = HashMap::new();
                 if let Some(map) = identifier_json.as_object() {
                     for (tag, entry) in map.iter() {
-                        // Expect { vr: ..., Value: [...] }
+                        // Expect { vr: ..., Value: [...] } or just { vr: ... } for return keys
                         if let Some(val_array) = entry.get("Value").and_then(|v| v.as_array()) {
                             if let Some(first) = val_array.first() {
                                 if let Some(s) = first.as_str() {
@@ -450,39 +450,40 @@ impl DicomScuBackend {
                                 // Empty array indicates return key
                                 params.insert(tag.clone(), String::new());
                             }
+                        } else if entry.get("vr").is_some() {
+                            // Entry has vr but no Value - treat as return key
+                            params.insert(tag.clone(), String::new());
                         }
                     }
                 }
 
-                // Determine appropriate query level based on filters and return keys
-                let query_level = if params.get("00080018").is_some_and(|v| !v.is_empty()) {
-                    // SOPInstanceUID filter present -> IMAGE level
-                    QueryLevel::Image
-                } else if params.contains_key("00080018")
-                    && (params.get("0020000D").is_some_and(|v| !v.is_empty())
-                        || params.get("0020000E").is_some_and(|v| !v.is_empty()))
-                {
-                    // SOPInstanceUID return key + Study/Series filter -> query for instances (IMAGE level)
-                    // This must come BEFORE the Series condition to take precedence
-                    QueryLevel::Image
-                } else if params.get("0020000E").is_some_and(|v| !v.is_empty()) {
-                    // SeriesInstanceUID filter present -> SERIES level
-                    QueryLevel::Series
-                } else if params.contains_key("0020000E")
-                    && params.get("0020000D").is_some_and(|v| !v.is_empty())
-                {
-                    // SeriesInstanceUID return key + StudyInstanceUID filter -> query for series (SERIES level)
-                    QueryLevel::Series
-                } else if params.get("0020000D").is_some_and(|v| !v.is_empty()) {
-                    // StudyInstanceUID filter present -> STUDY level (for specific study)
-                    QueryLevel::Study
-                } else if params.contains_key("0020000D") {
-                    // StudyInstanceUID return key present (but empty) -> query for studies (STUDY level)
-                    QueryLevel::Study
-                } else {
-                    // Default to PATIENT level
-                    QueryLevel::Patient
-                };
+                // Determine query level from metadata (explicit) or infer from parameters (fallback)
+                let query_level = envelope
+                    .target_details
+                    .as_ref()
+                    .and_then(|td| td.metadata.get("query_level"))
+                    .or_else(|| envelope.request_details.metadata.get("query_level"))
+                    .and_then(|level| match level.to_uppercase().as_str() {
+                        "PATIENT" => Some(QueryLevel::Patient),
+                        "STUDY" => Some(QueryLevel::Study),
+                        "SERIES" => Some(QueryLevel::Series),
+                        "IMAGE" => Some(QueryLevel::Image),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| {
+                        // Fallback: infer from parameters
+                        if params.get("00080018").is_some_and(|v| !v.is_empty()) {
+                            QueryLevel::Image
+                        } else if params.get("0020000E").is_some_and(|v| !v.is_empty()) {
+                            QueryLevel::Series
+                        } else if params.get("0020000D").is_some_and(|v| !v.is_empty())
+                            || params.contains_key("0020000D")
+                        {
+                            QueryLevel::Study
+                        } else {
+                            QueryLevel::Study // Default to STUDY for typical FHIR ImagingStudy queries
+                        }
+                    });
 
                 let mut query = FindQuery::patient(params.get("00100020").cloned()); // PatientID if present
                 query.query_level = query_level;

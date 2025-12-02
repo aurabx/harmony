@@ -4,11 +4,11 @@ This document describes the comprehensive test suite for the `dimse` crate.
 
 ## Test Overview
 
-The dimse crate has **26 total tests** covering unit and integration testing:
+The dimse crate has **55+ total tests** covering unit and integration testing:
 
-- **15 unit tests** - Internal functionality tests
-- **5 SCP integration tests** - End-to-end Service Class Provider tests
-- **6 SCU integration tests** - End-to-end Service Class User tests
+- **38 unit tests** - Internal functionality tests
+- **11 SCP integration tests** - End-to-end Service Class Provider tests
+- **16 SCU integration tests** - End-to-end Service Class User tests
 
 ## Running Tests
 
@@ -29,7 +29,7 @@ cargo test --test scu_integration
 RUST_LOG=debug cargo test -- --nocapture
 ```
 
-## Unit Tests (15 tests)
+## Unit Tests (38 tests)
 
 Located in `src/` modules with `#[cfg(test)]` blocks:
 
@@ -38,11 +38,48 @@ Located in `src/` modules with `#[cfg(test)]` blocks:
 - `test_config_validation` - Tests configuration validation rules
 - `test_remote_node_builder` - Tests remote node builder pattern
 
-### SCP Tests (2)
+### Common Module Tests
+
+#### Message Builder Tests (4)
+- `test_build_request` - Tests DIMSE request building
+- `test_build_response` - Tests DIMSE response building
+- `test_builder_with_sub_operations` - Tests sub-operation counts in responses
+- `test_encode_command` - Tests command encoding to bytes
+
+#### Query Utils Tests (2)
+- `test_normalize_tag` - Tests DICOM tag normalization
+- `test_query_level_to_string` - Tests query level string conversion
+
+### SCP Tests
+
+#### Response Builder Tests (6) - NEW
+- `test_build_command_response_echo` - Tests C-ECHO response building
+- `test_build_command_response_find_with_dataset` - Tests C-FIND response with dataset
+- `test_build_move_response_with_sub_operations` - Tests C-MOVE response with sub-ops
+- `test_build_get_response_with_sub_operations` - Tests C-GET response with sub-ops
+- `test_build_store_response` - Tests C-STORE response building
+- `test_sub_operation_counts_default` - Tests SubOperationCounts default values
+
+#### SCP Core Tests (2)
 - `test_scp_creation` - Tests SCP instantiation
 - `test_default_query_provider` - Tests default query provider
 
-### SCU Tests (5)
+### SCU Tests
+
+#### Command Builder Tests (12) - NEW
+- `test_build_command_request` - Tests DIMSE request building
+- `test_build_command_request_with_dataset` - Tests request with dataset flag
+- `test_parse_response_command_only` - Tests parsing command-only response
+- `test_parse_response_command_with_dataset` - Tests parsing response with dataset
+- `test_parse_response_command_empty_fails` - Tests empty PDU rejection
+- `test_parse_response_command_data_only_fails` - Tests data-only PDU rejection
+- `test_extract_status` - Tests status extraction from response
+- `test_extract_status_pending` - Tests PENDING status extraction
+- `test_extract_message_id_being_responded_to` - Tests message ID extraction
+- `test_build_identifier_dataset` - Tests identifier dataset building
+- `test_build_identifier_dataset_with_hex_tags` - Tests hex tag parsing
+
+#### SCU Core Tests (5)
 - `test_scu_creation` - Tests SCU instantiation
 - `test_echo_stub` - Tests C-ECHO stub (ignored unless feature enabled)
 - `test_find_stub` - Tests C-FIND stub
@@ -58,144 +95,88 @@ Located in `src/` modules with `#[cfg(test)]` blocks:
 - `test_find_query_builder` - Tests C-FIND query builder
 - `test_query_level_parsing` - Tests DICOM query level parsing
 
-## SCP Integration Tests (5 tests)
+## SCP Integration Tests (11 tests)
 
 Located in `tests/scp_integration.rs`:
 
-### test_scp_starts_and_stops
-Tests SCP lifecycle management:
-- Allocates ephemeral port
-- Starts SCP in background task
-- Verifies port is listening
-- Triggers graceful shutdown
-- Confirms shutdown completes within 2 seconds
+### Core Functionality Tests (6)
+- `test_scp_starts_and_stops` - SCP lifecycle management
+- `test_scp_accepts_c_echo` - C-ECHO with DCMTK echoscu
+- `test_scp_accepts_c_find` - C-FIND with DCMTK findscu
+- `test_scp_accepts_c_store` - C-STORE with DCMTK storescu
+- `test_scp_accepts_c_move` - **NEW** C-MOVE with DCMTK movescu
+- `test_scp_accepts_c_get` - **NEW** C-GET with DCMTK getscu
 
-**Status**: ✅ Passes
+### Error Handling Tests (5) - NEW
+- `test_scp_config_validation` - Config validation rules
+- `test_scp_multiple_associations` - Concurrent association handling
+- `test_scp_rejects_unknown_aet` - Unknown AET handling
+- `test_scp_handles_rapid_connections` - Stress testing rapid connections
+- `test_scp_handles_connection_drop` - Graceful handling of dropped connections
 
-### test_scp_accepts_c_echo
-Tests C-ECHO connectivity with DCMTK:
-- Starts SCP with C-ECHO enabled
-- Runs DCMTK `echoscu` to test connectivity
-- Verifies C-ECHO success response
-- Cleans up gracefully
-
-**Requirements**: DCMTK `echoscu` tool
-**Status**: ✅ Passes (skips if DCMTK not available)
-
-### test_scp_accepts_c_find
-Tests C-FIND query handling with DCMTK:
-- Starts SCP with C-FIND enabled
-- Runs DCMTK `findscu` with wildcard query
-- Verifies C-FIND completes successfully
-- Validates empty result set handling
-
-**Requirements**: DCMTK `findscu` tool
-**Status**: ✅ Passes (skips if DCMTK not available)
-
-### test_scp_config_validation
-Tests configuration validation rules:
-- Rejects AE titles longer than 16 characters
-- Ensures proper error messages
-
-**Status**: ✅ Passes
-
-### test_scp_multiple_associations
-Tests concurrent association handling:
-- Starts SCP with max_associations=5
-- Runs 3 concurrent `echoscu` commands
-- Verifies all associations succeed
-- Tests thread safety
-
-**Requirements**: DCMTK `echoscu` tool
-**Status**: ✅ Passes (skips if DCMTK not available)
-
-## SCU Integration Tests (6 tests)
+## SCU Integration Tests (16 tests)
 
 Located in `tests/scu_integration.rs`:
 
-### test_scu_echo_success
-Tests SCU C-ECHO functionality:
-- Creates remote node configuration
-- Attempts C-ECHO to remote SCP
-- Expected to fail in CI unless SCP is running
-- Validates error handling
+### Core Functionality Tests (5)
+- `test_scu_echo_success` - C-ECHO to dcmqrscp
+- `test_scu_find` - C-FIND to dcmqrscp
+- `test_scu_store` - C-STORE to dcmqrscp
+- `test_scu_get` - C-GET from dcmqrscp
+- `test_scu_move` - C-MOVE from dcmqrscp
 
-**Note**: This test is informational - expects failure unless a test PACS is available
-**Status**: ✅ Passes (handles expected failure)
+### Query Builder Tests (3)
+- `test_scu_find_query_builder` - FindQuery builder API
+- `test_scu_move_query_builder` - MoveQuery builder API
+- `test_scu_get_query_builder` - GetQuery builder API
 
-### test_scu_config_validation
-Tests SCU configuration validation:
-- Rejects empty AE title
-- Rejects AE title longer than 16 characters
-- Rejects empty host
-- Rejects port 0
-
-**Status**: ✅ Passes
-
-### test_scu_connection_timeout
-Tests connection timeout behavior:
-- Configures 500ms timeout
-- Attempts connection to non-routable address (192.0.2.1)
-- Verifies timeout/connection failure
-
-**Status**: ✅ Passes
-
-### test_scu_find_query_builder
-Tests C-FIND query builder API:
-- Patient-level queries with parameters
-- Study-level queries with filters
-- Parameter mapping (PatientID, PatientName, StudyDate)
-- Max results configuration
-
-**Status**: ✅ Passes
-
-### test_scu_move_query_builder
-Tests C-MOVE query builder API:
-- Query level configuration
-- Destination AET specification
-- Priority setting (High/Medium/Low)
-- Parameter handling
-
-**Status**: ✅ Passes
-
-### test_scu_get_query_builder
-Tests C-GET query builder API:
-- Series-level queries
-- Parameter mapping
-- Query construction
-
-**Status**: ✅ Passes
+### Error Handling Tests (8) - NEW
+- `test_scu_config_validation` - Config validation rules
+- `test_scu_connection_timeout` - Timeout handling
+- `test_scu_handles_server_disconnect` - Server disconnect handling
+- `test_scu_handles_invalid_response` - Invalid port/response handling
+- `test_scu_find_with_empty_results` - Empty query results handling
+- `test_scu_get_with_no_results` - C-GET with no matching data
+- `test_scu_validates_query_level` - Query level validation
+- `test_scu_remote_node_validation_comprehensive` - Comprehensive RemoteNode validation
 
 ## Test Coverage Summary
 
 ### What's Tested
 - ✅ SCP starts and stops gracefully
-- ✅ SCP accepts C-ECHO from DCMTK tools
-- ✅ SCP accepts C-FIND from DCMTK tools
+- ✅ SCP accepts C-ECHO, C-FIND, C-STORE from DCMTK tools
+- ✅ SCP accepts C-MOVE requests (NEW)
+- ✅ SCP accepts C-GET requests (NEW)
 - ✅ SCP handles multiple concurrent associations
-- ✅ SCP configuration validation
+- ✅ SCP handles rapid connections/disconnections (NEW)
+- ✅ SCP handles dropped connections gracefully (NEW)
 - ✅ SCU configuration validation
 - ✅ SCU connection timeouts
+- ✅ SCU handles server disconnects (NEW)
+- ✅ SCU handles empty query results (NEW)
 - ✅ Query builder APIs (FIND, MOVE, GET)
+- ✅ Response building for all DIMSE operations (NEW)
+- ✅ PDU parsing and validation (NEW)
 - ✅ Dataset metadata handling
 - ✅ DICOM query level parsing
 
 ### What's NOT Tested (Future Work)
-- ❌ C-MOVE actual retrieval operations
-- ❌ C-GET actual retrieval operations
-- ❌ C-STORE operations
 - ❌ TLS/encryption
-- ❌ Query provider with real data
+- ❌ Query provider with real data returning results
 - ❌ DICOMweb integration
 - ❌ Performance/load testing
 - ❌ Association negotiation edge cases
+- ❌ Transfer syntax negotiation
 
 ## DCMTK Compatibility
 
 The integration tests use DCMTK tools for end-to-end validation:
 - `echoscu` - C-ECHO verification
 - `findscu` - C-FIND query testing
-- `dcmqrscp` - Optional test PACS (for SCU tests)
+- `storescu` - C-STORE testing
+- `movescu` - C-MOVE testing (NEW)
+- `getscu` - C-GET testing (NEW)
+- `dcmqrscp` - Test PACS for SCU tests
 
 Tests automatically skip if DCMTK is not installed.
 

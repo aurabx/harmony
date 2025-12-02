@@ -1130,6 +1130,7 @@ dependencies = [
  "dicom-parser",
  "dicom-transfer-syntax-registry",
  "dicom-ul",
+ "dicom_json_tool",
  "env_logger",
  "futures",
  "rustls-pemfile",

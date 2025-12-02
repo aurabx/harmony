@@ -1,5 +1,6 @@
 //! Command handlers for SCU operations
 
+pub mod dcmtk_helper;
 pub mod echo;
 pub mod find;
 pub mod get;
@@ -11,3 +12,4 @@ pub use find::handle_find;
 pub use get::handle_get;
 pub use r#move::handle_move;
 pub use store::handle_store;
+

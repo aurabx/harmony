@@ -48,3 +48,4 @@ mod tests {
         assert_eq!(query_level_to_string(QueryLevel::Image), "IMAGE");
     }
 }
+

@@ -13,7 +13,7 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use tokio::net::TcpListener;
-use tokio::sync::RwLock;
+use std::sync::atomic::{AtomicU32, Ordering};
 use tracing::{debug, error, info, warn};
 
 use crate::config::DimseConfig;
@@ -56,7 +56,7 @@ pub struct DimseScp {
     #[allow(dead_code)]
     pub(crate) query_provider: Arc<dyn QueryProvider>, // TODO: Used for database queries
     router: Option<Arc<dyn Router>>,
-    pub(crate) active_associations: Arc<RwLock<u32>>,
+    pub(crate) active_associations: Arc<AtomicU32>,
 }
 
 impl DimseScp {
@@ -66,7 +66,7 @@ impl DimseScp {
             config,
             query_provider,
             router: None,
-            active_associations: Arc::new(RwLock::new(0)),
+            active_associations: Arc::new(AtomicU32::new(0)),
         }
     }
 
@@ -114,8 +114,8 @@ impl DimseScp {
 
                             // Check association limit
                             {
-                                let active = scp.active_associations.read().await;
-                                if *active >= scp.config.max_associations {
+                                let active = scp.active_associations.load(Ordering::Relaxed);
+                                if active >= scp.config.max_associations {
                                     warn!(
                                         "Maximum associations reached, rejecting connection from {}",
                                         peer_addr

@@ -2,35 +2,30 @@
 
 pub mod commands;
 pub mod connection;
-pub mod dcmtk_builder;
+pub mod native_connection;
+pub mod command_builder;
 
 use tokio_stream::wrappers::ReceiverStream;
 
 use crate::config::{DimseConfig, RemoteNode};
 use crate::scu::commands::{echo, find, get, r#move, store};
-use crate::scu::dcmtk_builder::DcmtkCommandBuilder;
 use crate::types::{DatasetStream, FindQuery, GetQuery, MoveQuery};
 use crate::Result;
 
 /// DIMSE Service Class User
 pub struct DimseScu {
     config: DimseConfig,
-    builder: DcmtkCommandBuilder,
 }
 
 impl DimseScu {
     /// Create a new SCU with the given configuration
     pub fn new(config: DimseConfig) -> Self {
-        let builder = DcmtkCommandBuilder::new(
-            config.local_aet.clone(),
-            config.storage_dir.clone(),
-        );
-        Self { config, builder }
+        Self { config }
     }
 
     /// Send a C-ECHO request to a remote node
     pub async fn echo(&self, node: &RemoteNode) -> Result<bool> {
-        echo::handle_echo(&self.builder, node).await
+        echo::handle_echo(&self.config, node).await
     }
 
     /// Send a C-FIND request to a remote node
@@ -39,7 +34,7 @@ impl DimseScu {
         node: &RemoteNode,
         query: FindQuery,
     ) -> Result<ReceiverStream<Result<DatasetStream>>> {
-        find::handle_find(&self.builder, node, query).await
+        find::handle_find(&self.config, node, query).await
     }
 
     /// Send a C-MOVE request to a remote node
@@ -50,7 +45,7 @@ impl DimseScu {
         output_dir: Option<std::path::PathBuf>,
     ) -> Result<ReceiverStream<Result<DatasetStream>>> {
         r#move::handle_move(
-            &self.builder,
+            &self.config,
             node,
             query,
             output_dir,
@@ -67,17 +62,17 @@ impl DimseScu {
         query: GetQuery,
         output_dir: Option<std::path::PathBuf>,
     ) -> Result<ReceiverStream<Result<DatasetStream>>> {
-        get::handle_get(&self.builder, node, query, output_dir).await
+        get::handle_get(&self.config, node, query, output_dir).await
     }
 
     /// Send a C-STORE request to a remote node
     pub async fn store(&self, node: &RemoteNode, dataset: DatasetStream) -> Result<bool> {
-        store::handle_store(&self.builder, node, dataset).await
+        store::handle_store(&self.config, node, dataset).await
     }
 
     /// Test connectivity to a remote node with retry logic
     pub async fn test_connection(&self, node: &RemoteNode, max_retries: u32) -> Result<bool> {
-        connection::test_connection(&self.builder, node, max_retries).await
+        connection::test_connection(&self.config, node, max_retries).await
     }
 
     /// Get connection timeout for a node (uses node-specific or global setting)

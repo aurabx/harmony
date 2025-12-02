@@ -6,12 +6,11 @@ use tracing::{error, info, warn};
 
 use crate::config::{DimseConfig, RemoteNode};
 use crate::scu::commands::echo;
-use crate::scu::dcmtk_builder::DcmtkCommandBuilder;
 use crate::{DimseError, Result};
 
 /// Test connectivity to a remote node with retry logic
 pub async fn test_connection(
-    builder: &DcmtkCommandBuilder,
+    config: &DimseConfig,
     node: &RemoteNode,
     max_retries: u32,
 ) -> Result<bool> {
@@ -23,7 +22,7 @@ pub async fn test_connection(
             tokio::time::sleep(Duration::from_secs(1 << retries)).await; // Exponential backoff
         }
 
-        match echo::handle_echo(builder, node).await {
+        match echo::handle_echo(config, node).await {
             Ok(_) => {
                 info!("Connection test successful");
                 return Ok(true);
