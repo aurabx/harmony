@@ -53,6 +53,9 @@ module = ""
 [middleware_types.policies]
 module = ""
 
+[middleware_types.basic_auth]
+module = ""
+
 # ------------------------
 # Authentication Definitions
 #-------------------------
