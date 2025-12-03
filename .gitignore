@@ -65,3 +65,4 @@ harmony.log
 /flamegraph.svg
 /harmony-arm64
 examples/cstore-filesystem/data/
+/test_upload.txt
