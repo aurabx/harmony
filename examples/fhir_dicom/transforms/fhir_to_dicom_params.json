@@ -18,6 +18,13 @@
   {
     "operation": "default",
     "spec": {
+      "context": {
+        "target_details": {
+          "metadata": {
+            "dimse_op": "find"
+          }
+        }
+      },
       "data": {
         "dimse_identifier": {
           "00100020": {
@@ -40,9 +47,7 @@
             "vr": "SH",
             "Value": []
           }
-        },
-        "dimse_op": "find",
-        "operation_type": "C-FIND"
+        }
       }
     }
   }

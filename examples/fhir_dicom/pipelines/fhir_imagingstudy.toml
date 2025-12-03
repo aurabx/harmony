@@ -56,7 +56,6 @@ type = "transform"
 spec_path = "fhir_to_dicom_params.json"
 apply = "left"  # Transform request to DICOM parameters
 fail_on_error = false
-inject_context = true  # Enable context injection for query params access
 
 [middleware.enrich_jmix_urls]
 type = "transform"
@@ -64,7 +63,6 @@ type = "transform"
 spec_path = "enrich_with_jmix_urls.json"
 apply = "right"  # Transform DICOM response to add JMIX URLs
 fail_on_error = false
-inject_context = true
 
 [middleware.dicom_to_fhir_transform]
 type = "transform"
@@ -72,7 +70,6 @@ type = "transform"
 spec_path = "dicom_to_imagingstudy_simple.json"
 apply = "right"  # Transform DICOM response to FHIR
 fail_on_error = true
-inject_context = true  # Enable context injection
 
 # ------------------------
 # Endpoints

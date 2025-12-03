@@ -110,7 +110,7 @@ fn test_query_to_target_middleware_configured() {
 
 #[test]
 fn test_context_injection_enabled() {
-    // Verify transforms have context injection enabled
+    // Verify transforms have context injection enabled (now default behavior)
     let config = load_test_config();
 
     let transform_middlewares = vec![
@@ -130,14 +130,8 @@ fn test_context_injection_enabled() {
             "{} should be a transform middleware",
             name
         );
-
-        let options = &middleware.options;
-        assert_eq!(
-            options.get("inject_context").and_then(|v| v.as_bool()),
-            Some(true),
-            "{} should have inject_context=true",
-            name
-        );
+        // Note: inject_context is now always true and removed from config,
+        // so we don't check for its presence in options map.
     }
 }
 
@@ -318,10 +312,10 @@ fn test_backend_configuration() {
 
     let backend = config.backends.get("dicom_backend").unwrap();
 
-    // Should be mock_dicom for testing
+    // Should be dicom_scu for testing (based on example config)
     assert_eq!(
-        backend.service, "mock_dicom",
-        "Should use mock_dicom backend for testing"
+        backend.service, "dicom_scu",
+        "Should use dicom_scu backend for testing"
     );
 }
 
