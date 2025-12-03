@@ -88,13 +88,13 @@ path_prefix = "/fhir"
 # ------------------------
 
 # Production DICOM backend (commented for testing)
-#[backends.dicom_backend]
-#service = "dicom_scu"
-#target_ref = "pacs_clinic"  # Uses target definition from config.toml
-#[backends.dicom_backend.options]
-#local_aet = "HARMONY_SCU"
-#aet = "PACSCLINIC"
+[backends.dicom_backend]
+service = "dicom_scu"
+target_ref = "orthanc"
+[backends.dicom_backend.options]
+aet = "ORTHANC" # AET is specific to this backend's view of the target
+local_aet = "HARMONY_SCU"
 
 # Mock backend for testing
-[backends.dicom_backend]
-service = "mock_dicom"
+#[backends.dicom_backend]
+#service = "mock_dicom"

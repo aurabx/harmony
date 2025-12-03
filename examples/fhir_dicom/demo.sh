@@ -17,6 +17,8 @@ MGMT_PORT=9091
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(cd "$SCRIPT_DIR/../.." && pwd)"
 TMP_DIR="$SCRIPT_DIR/tmp"
+PATIENT_ID="85123652"
+STUDY_INSTANCE_UID="1.3.6.1.4.1.5962.99.1.939772310.1977867020.1426868947350.4.0"
 export TMP_DIR
 
 echo -e "${BLUE}=== FHIR-DICOM Integration Demo ===${NC}"
@@ -104,8 +106,8 @@ echo ""
 
 # Test 1: FHIR ImagingStudy search by patient
 echo -e "${YELLOW}Test 1: Search ImagingStudy by patient ID${NC}"
-echo "  Command: curl 'http://localhost:$HARMONY_PORT/fhir/ImagingStudy?patient=PID156695'"
-RESPONSE=$(curl -s -w "\n%{http_code}" "http://127.0.0.1:$HARMONY_PORT/fhir/ImagingStudy?patient=PID156695" \
+echo "  Command: curl 'http://localhost:$HARMONY_PORT/fhir/ImagingStudy?patient=$PATIENT_ID'"
+RESPONSE=$(curl -s -w "\n%{http_code}" "http://127.0.0.1:$HARMONY_PORT/fhir/ImagingStudy?patient=$PATIENT_ID" \
     -H "Accept: application/fhir+json")
 HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
 BODY=$(echo "$RESPONSE" | sed '$d')
@@ -128,14 +130,21 @@ echo ""
 
 # Test 2: FHIR ImagingStudy search by identifier
 echo -e "${YELLOW}Test 2: Search ImagingStudy by identifier${NC}"
-echo "  Command: curl 'http://localhost:$HARMONY_PORT/fhir/ImagingStudy?identifier=1.2.826.0.1.3680043.9.7133.3280065491876470'"
-RESPONSE=$(curl -s -w "\n%{http_code}" "http://127.0.0.1:$HARMONY_PORT/fhir/ImagingStudy?identifier=1.2.826.0.1.3680043.9.7133.3280065491876470" \
+echo "  Command: curl 'http://localhost:$HARMONY_PORT/fhir/ImagingStudy?identifier=$STUDY_INSTANCE_UID'"
+RESPONSE=$(curl -s -w "\n%{http_code}" "http://127.0.0.1:$HARMONY_PORT/fhir/ImagingStudy?identifier=$STUDY_INSTANCE_UID" \
     -H "Accept: application/fhir+json")
 HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
 BODY=$(echo "$RESPONSE" | sed '$d')
 
 if [ "$HTTP_CODE" = "200" ]; then
     echo -e "${GREEN}  ✓ Identifier search successful (HTTP $HTTP_CODE)${NC}"
+    echo ""
+    echo "  Response (FHIR Bundle):"
+    if [ "$HAS_JQ" = true ]; then
+        echo "$BODY" | jq '.' 2>/dev/null
+    else
+        echo "$BODY"
+    fi
     
     # Check for JMIX URL in response
     if echo "$BODY" | grep -q "_jmix_url" || echo "$BODY" | grep -q "endpoint"; then
@@ -148,15 +157,24 @@ echo ""
 
 # Test 3: FHIR ImagingStudy search with modality
 echo -e "${YELLOW}Test 3: Search ImagingStudy by patient and modality${NC}"
-echo "  Command: curl 'http://localhost:$HARMONY_PORT/fhir/ImagingStudy?patient=PID123&modality=CT'"
-RESPONSE=$(curl -s -w "\n%{http_code}" "http://127.0.0.1:$HARMONY_PORT/fhir/ImagingStudy?patient=PID123&modality=CT" \
+echo "  Command: curl 'http://localhost:$HARMONY_PORT/fhir/ImagingStudy?patient=$PATIENT_ID&modality=MR'"
+RESPONSE=$(curl -s -w "\n%{http_code}" "http://127.0.0.1:$HARMONY_PORT/fhir/ImagingStudy?patient=$PATIENT_ID&modality=MR" \
     -H "Accept: application/fhir+json")
 HTTP_CODE=$(echo "$RESPONSE" | tail -n1)
+BODY=$(echo "$RESPONSE" | sed '$d')
 
 if [ "$HTTP_CODE" = "200" ]; then
     echo -e "${GREEN}  ✓ Modality filter search successful (HTTP $HTTP_CODE)${NC}"
+    echo ""
+    echo "  Response (FHIR Bundle):"
+    if [ "$HAS_JQ" = true ]; then
+        echo "$BODY" | jq '.' 2>/dev/null
+    else
+        echo "$BODY"
+    fi
 else
     echo -e "${YELLOW}  ⚠ Modality filter search returned HTTP $HTTP_CODE${NC}"
+    echo "  Response: $BODY"
 fi
 echo ""
 
