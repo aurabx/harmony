@@ -345,10 +345,16 @@ impl DicomScuBackend {
         // Resolve DIMSE operation with proper precedence:
         // 1. Check target_details.metadata["dimse_op"] (set by middleware)
         // 2. Check request_details.metadata["dimse_op"] (fallback for compatibility)
-        // 3. Check dimse_retrieve_mode option (only applies to get/move operations)
-        // 4. Check if path is a valid DIMSE operation name (for direct HTTP->DICOM calls)
-        // 5. Default to "get" for data retrieval
+        // 3. Check normalized_data["dimse_op"] (set by transform middleware)
+        // 4. Check dimse_retrieve_mode option (only applies to get/move operations)
+        // 5. Check if path is a valid DIMSE operation name (for direct HTTP->DICOM calls)
+        // 6. Default to "get" for data retrieval
         let valid_ops = ["echo", "find", "get", "move", "store"];
+        
+        // DEBUG: Log normalized_data structure
+        if let Some(nd) = envelope.normalized_data.as_ref() {
+            tracing::debug!("normalized_data: {}", serde_json::to_string_pretty(nd).unwrap_or_default());
+        }
 
         let op = envelope
             .target_details
@@ -356,6 +362,16 @@ impl DicomScuBackend {
             .and_then(|td| td.metadata.get("dimse_op"))
             .cloned()
             .or_else(|| envelope.request_details.metadata.get("dimse_op").cloned())
+            .or_else(|| {
+                // Check normalized_data which may contain dimse_op from transform middleware
+                // Normalize C-FIND/C-MOVE/etc to find/move/etc
+                envelope
+                    .normalized_data
+                    .as_ref()
+                    .and_then(|nd| nd.get("dimse_op"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.trim_start_matches("C-").trim_start_matches("c-").to_lowercase())
+            })
             .or_else(|| {
                 // Only use dimse_retrieve_mode for retrieval operations
                 // This allows backend configuration to override default "get" with "move"
