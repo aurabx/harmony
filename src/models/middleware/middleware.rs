@@ -99,7 +99,8 @@ fn create_builtin_middleware_type_with_config(
     use crate::models::middleware::types::jwtauth::JwtAuthMiddleware;
     use crate::models::middleware::types::metadata_transform::MetadataTransformMiddleware;
     use crate::models::middleware::types::path_filter::PathFilterMiddleware;
-    use crate::models::middleware::types::transform::JoltTransformMiddleware;
+use crate::models::middleware::types::logger::{LogDumpMiddleware, parse_config as parse_logger_config};
+use crate::models::middleware::types::transform::JoltTransformMiddleware;
 
     match middleware_type.to_lowercase().as_str() {
         "jwtauth" | "jwt_auth" => {
@@ -136,6 +137,10 @@ fn create_builtin_middleware_type_with_config(
         "path_filter" => {
             let config = crate::models::middleware::types::path_filter::parse_config(options)?;
             Ok(Box::new(PathFilterMiddleware::new(config)?))
+        }
+        "log_dump" | "dump" => {
+            let config = parse_logger_config(options)?;
+            Ok(Box::new(LogDumpMiddleware::new(config)))
         }
         "metadata_transform" => {
             let config = crate::models::middleware::types::metadata_transform::parse_config(
