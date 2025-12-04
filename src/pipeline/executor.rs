@@ -131,9 +131,10 @@ impl PipelineExecutor {
         pipeline: &Pipeline,
         config: &Config,
     ) -> Result<RequestEnvelope<Vec<u8>>, PipelineError> {
+        let left_chain = pipeline.middleware.left_chain();
         tracing::debug!(
             "Processing incoming middleware for {} middlewares",
-            pipeline.middleware.len()
+            left_chain.len()
         );
 
         // Convert to JSON envelope for middleware processing
@@ -160,7 +161,7 @@ impl PipelineExecutor {
 
         // Build middleware instances
         let middleware_instances =
-            build_middleware_instances_for_pipeline(&pipeline.middleware, config).map_err(
+            build_middleware_instances_for_pipeline(&left_chain, config).map_err(
                 |err| {
                     PipelineError::MiddlewareError(Box::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
@@ -310,9 +311,10 @@ impl PipelineExecutor {
         pipeline: &Pipeline,
         config: &Config,
     ) -> Result<ResponseEnvelope<Vec<u8>>, PipelineError> {
+        let right_chain = pipeline.middleware.right_chain();
         tracing::debug!(
             "Processing outgoing middleware for {} middlewares",
-            pipeline.middleware.len()
+            right_chain.len()
         );
 
         // Convert to JSON envelope for middleware processing
@@ -325,7 +327,7 @@ impl PipelineExecutor {
 
         // Build middleware instances
         let middleware_instances =
-            build_middleware_instances_for_pipeline(&pipeline.middleware, config).map_err(
+            build_middleware_instances_for_pipeline(&right_chain, config).map_err(
                 |err| {
                     PipelineError::MiddlewareError(Box::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,

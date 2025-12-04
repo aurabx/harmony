@@ -219,7 +219,7 @@ impl Config {
                     networks: vec![network],
                     endpoints: vec!["management".to_string()],
                     backends: vec!["management".to_string()],
-                    middleware: Vec::new(),
+                    middleware: crate::models::pipelines::config::PipelineMiddleware::default(),
                 },
             );
         }
@@ -475,7 +475,7 @@ impl Config {
             // Warn if middleware is empty
             if pipeline.middleware.is_empty() {
                 tracing::warn!(
-                    "Pipeline '{}' has an empty middleware of middleware/services",
+                    "Pipeline '{}' has no middleware configured",
                     name
                 );
             }

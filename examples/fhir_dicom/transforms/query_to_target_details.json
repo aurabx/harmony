@@ -20,13 +20,5 @@
         }
       }
     }
-  },
-  {
-    "operation": "default",
-    "spec": {
-      "base_url": "",
-      "method": "GET",
-      "uri": "/"
-    }
   }
 ]

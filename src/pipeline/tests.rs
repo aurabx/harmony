@@ -3,7 +3,7 @@ use crate::config::config::Config;
 use crate::models::backends::backends::Backend;
 use crate::models::endpoints::endpoint::Endpoint;
 use crate::models::envelope::envelope::{RequestEnvelope, RequestEnvelopeBuilder};
-use crate::models::pipelines::config::Pipeline;
+use crate::models::pipelines::config::{Pipeline, PipelineMiddleware};
 use crate::models::protocol::{Protocol, ProtocolCtx};
 use std::collections::HashMap;
 
@@ -52,7 +52,7 @@ fn create_test_pipeline(endpoints: Vec<String>, backends: Vec<String>) -> Pipeli
         networks: vec!["test_network".to_string()],
         endpoints,
         backends,
-        middleware: vec![],
+        middleware: PipelineMiddleware::default(),
     }
 }
 
@@ -236,7 +236,7 @@ async fn test_normalized_data_preserved() {
 async fn test_middleware_chain_empty_succeeds() {
     let config = create_test_config();
     let mut pipeline = create_test_pipeline(vec!["test_endpoint".to_string()], vec![]);
-    pipeline.middleware = vec![]; // Explicitly empty
+    pipeline.middleware = PipelineMiddleware::List(vec![]); // Explicitly empty
 
     let envelope = create_test_envelope();
     let ctx = create_test_protocol_ctx(Protocol::Http);

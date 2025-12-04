@@ -1,0 +1,20 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "data": {
+        "matches": "data.matches"
+      }
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "data": {
+        "resourceType": "Bundle",
+        "type": "searchset",
+        "entry": []
+      }
+    }
+  }
+]
