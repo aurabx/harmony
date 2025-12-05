@@ -2,6 +2,7 @@ pub mod auth;
 pub mod auth_error;
 pub mod connect;
 pub mod denial_errors;
+pub mod dicom_flatten;
 pub mod dicomweb_to_dicom;
 pub mod jmix_builder;
 pub mod jmix_index;

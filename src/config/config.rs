@@ -604,8 +604,8 @@ impl Config {
                 // Built-in middleware, validate that it exists
                 match name.as_str() {
                     "jwtauth" | "basic_auth" | "connect" | "passthru" | "json_extractor"
-                    | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "transform"
-                    | "metadata_transform" | "path_filter" | "policies" | "log_dump" => {}
+                    | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "dicom_flatten"
+                    | "transform" | "metadata_transform" | "path_filter" | "policies" | "log_dump" => {}
                     _ => {
                         return Err(ConfigError::InvalidMiddleware {
                             name: name.clone(),
