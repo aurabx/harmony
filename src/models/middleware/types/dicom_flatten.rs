@@ -11,48 +11,20 @@ use std::collections::BTreeMap;
 
 /// Configuration for DICOM flatten middleware
 #[derive(Debug, Deserialize, Clone)]
-pub struct DicomFlattenConfig {
-    /// When to apply: "left", "right", or "both" (default)
-    #[serde(default = "default_apply")]
-    pub apply: String,
-}
-
-fn default_apply() -> String {
-    "both".to_string()
-}
+pub struct DicomFlattenConfig {}
 
 /// Parses middleware configuration from options
-pub fn parse_config(options: &std::collections::HashMap<String, Value>) -> Result<DicomFlattenConfig, String> {
-    let apply = options
-        .get("apply")
-        .and_then(|v| v.as_str())
-        .unwrap_or("both")
-        .to_string();
-
-    if !["left", "right", "both"].contains(&apply.as_str()) {
-        return Err(format!("Invalid apply value: {}. Must be 'left', 'right', or 'both'", apply));
-    }
-
-    Ok(DicomFlattenConfig { apply })
+pub fn parse_config(_options: &std::collections::HashMap<String, Value>) -> Result<DicomFlattenConfig, String> {
+    Ok(DicomFlattenConfig {})
 }
 
 /// DICOM JSON flattening middleware
-/// Converts between standard DICOM JSON format and flat key-value pairs
-pub struct DicomFlattenMiddleware {
-    apply: String,
-}
+/// Converts standard DICOM JSON format (with vr/Value) to flat key-value pairs
+pub struct DicomFlattenMiddleware {}
 
 impl DicomFlattenMiddleware {
-    pub fn new(config: DicomFlattenConfig) -> Self {
-        Self { apply: config.apply }
-    }
-
-    fn should_apply_left(&self) -> bool {
-        self.apply == "left" || self.apply == "both"
-    }
-
-    fn should_apply_right(&self) -> bool {
-        self.apply == "right" || self.apply == "both"
+    pub fn new(_config: DicomFlattenConfig) -> Self {
+        Self {}
     }
 }
 
@@ -60,30 +32,9 @@ impl DicomFlattenMiddleware {
 impl Middleware for DicomFlattenMiddleware {
     async fn left(
         &self,
-        mut envelope: RequestEnvelope<Value>,
+        envelope: RequestEnvelope<Value>,
     ) -> Result<RequestEnvelope<Value>, Error> {
-        if !self.should_apply_left() {
-            return Ok(envelope);
-        }
-
-        if let Some(ref data) = envelope.normalized_data {
-            // Store snapshot before transformation if not already present
-            if envelope.normalized_snapshot.is_none() {
-                envelope.normalized_snapshot = Some(data.clone());
-            }
-
-            match flatten_dicom_json(data) {
-                Ok(flattened) => {
-                    envelope.normalized_data = Some(flattened);
-                    tracing::debug!("Applied DICOM flatten on left side");
-                }
-                Err(e) => {
-                    tracing::error!("DICOM flatten failed on left side: {}", e);
-                    return Err(Error::from(format!("DICOM flatten failed: {}", e)));
-                }
-            }
-        }
-
+        // Flatten is typically used on responses, not requests
         Ok(envelope)
     }
 
@@ -91,24 +42,47 @@ impl Middleware for DicomFlattenMiddleware {
         &self,
         mut envelope: ResponseEnvelope<Value>,
     ) -> Result<ResponseEnvelope<Value>, Error> {
-        if !self.should_apply_right() {
-            return Ok(envelope);
-        }
-
         if let Some(ref data) = envelope.normalized_data {
             // Store snapshot before transformation if not already present
             if envelope.normalized_snapshot.is_none() {
                 envelope.normalized_snapshot = Some(data.clone());
             }
 
-            match unflatten_dicom_json(data) {
-                Ok(unflattened) => {
-                    envelope.normalized_data = Some(unflattened);
-                    tracing::debug!("Applied DICOM unflatten on right side");
+            tracing::debug!("Flatten middleware input: {}", serde_json::to_string_pretty(data).unwrap_or_default());
+
+            // Handle both direct DICOM JSON and wrapped response with matches array
+            let flattened = if let Some(matches) = data.get("matches").and_then(|m| m.as_array()) {
+                // Flatten each match in the array
+                let mut flattened_matches = Vec::new();
+                for match_item in matches {
+                    match flatten_dicom_json(match_item) {
+                        Ok(flat) => flattened_matches.push(flat),
+                        Err(e) => {
+                            tracing::warn!("Failed to flatten match item: {}", e);
+                            flattened_matches.push(match_item.clone());
+                        }
+                    }
+                }
+                
+                // Rebuild the response structure with flattened matches
+                let mut result = data.clone();
+                if let Some(obj) = result.as_object_mut() {
+                    obj.insert("matches".to_string(), serde_json::json!(flattened_matches));
+                }
+                Ok(result)
+            } else {
+                // Direct DICOM JSON object
+                flatten_dicom_json(data)
+            };
+
+            match flattened {
+                Ok(flat) => {
+                    envelope.normalized_data = Some(flat);
+                    tracing::debug!("Applied DICOM flatten on response");
                 }
                 Err(e) => {
-                    tracing::error!("DICOM unflatten failed on right side: {}", e);
-                    return Err(Error::from(format!("DICOM unflatten failed: {}", e)));
+                    tracing::error!("DICOM flatten failed: {}", e);
+                    return Err(Error::from(format!("DICOM flatten failed: {}", e)));
                 }
             }
         }
@@ -237,7 +211,7 @@ fn can_lookup_in_dict(tag_hex: &str) -> bool {
 }
 
 /// Unflattens DICOM JSON from flat key-value pairs back to standard format
-fn unflatten_dicom_json(data: &Value) -> Result<Value, String> {
+pub fn unflatten_dicom_json(data: &Value) -> Result<Value, String> {
     let obj = data.as_object().ok_or("Expected flat DICOM JSON to be an object")?;
 
     // Extract VR metadata if present (fallback for non-standard tags)

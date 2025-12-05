@@ -97,6 +97,7 @@ fn create_builtin_middleware_type_with_config(
     use crate::models::middleware::types::auth::AuthSidecarMiddleware;
     use crate::models::middleware::types::connect::AuraboxConnectMiddleware;
     use crate::models::middleware::types::dicom_flatten::DicomFlattenMiddleware;
+    use crate::models::middleware::types::dicom_unflatten::DicomUnflattenMiddleware;
     use crate::models::middleware::types::jwtauth::JwtAuthMiddleware;
     use crate::models::middleware::types::metadata_transform::MetadataTransformMiddleware;
     use crate::models::middleware::types::path_filter::PathFilterMiddleware;
@@ -131,6 +132,10 @@ use crate::models::middleware::types::transform::JoltTransformMiddleware;
         "dicom_flatten" | "dicom_flatten_middleware" => {
             let config = crate::models::middleware::types::dicom_flatten::parse_config(options)?;
             Ok(Box::new(DicomFlattenMiddleware::new(config)))
+        }
+        "dicom_unflatten" | "dicom_unflatten_middleware" => {
+            let config = crate::models::middleware::types::dicom_unflatten::parse_config(options)?;
+            Ok(Box::new(DicomUnflattenMiddleware::new(config)))
         }
         "transform" => {
             let config = crate::models::middleware::types::transform::parse_config(

@@ -133,8 +133,14 @@ impl PipelineExecutor {
     ) -> Result<RequestEnvelope<Vec<u8>>, PipelineError> {
         let left_chain = pipeline.middleware.left_chain();
         tracing::debug!(
-            "Processing incoming middleware for {} middlewares",
-            left_chain.len()
+            "Pipeline '{}' middleware config: {:?}",
+            pipeline.description,
+            pipeline.middleware
+        );
+        tracing::debug!(
+            "Processing incoming middleware for {} middlewares: {:?}",
+            left_chain.len(),
+            left_chain
         );
 
         // Convert to JSON envelope for middleware processing
@@ -338,9 +344,14 @@ impl PipelineExecutor {
 
         let middleware_chain = MiddlewareChain::new(middleware_instances);
 
+        // Determine if we should reverse the chain
+        // For List format: reverse to mirror left chain
+        // For Split format: use exact order specified by user
+        let should_reverse = pipeline.middleware.should_reverse_right();
+
         // Process through middleware chain (right side)
         let processed_json_envelope = middleware_chain
-            .right(json_envelope)
+            .right(json_envelope, should_reverse)
             .await
             .map_err(PipelineError::MiddlewareError)?;
 

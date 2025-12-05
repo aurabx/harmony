@@ -27,6 +27,13 @@ impl PipelineMiddleware {
         }
     }
 
+    /// Check if the right chain should be reversed during processing
+    /// Returns true for List format (where same middleware runs in reverse on right)
+    /// Returns false for Split format (where user explicitly specifies right order)
+    pub fn should_reverse_right(&self) -> bool {
+        matches!(self, PipelineMiddleware::List(_))
+    }
+
     /// Check if both chains are empty
     pub fn is_empty(&self) -> bool {
         match self {

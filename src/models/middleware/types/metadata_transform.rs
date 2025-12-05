@@ -194,8 +194,10 @@ impl Middleware for MetadataTransformMiddleware {
                 });
 
                 // Apply transform to create/modify target_details
+                tracing::debug!("Metadata transform input: {}", serde_json::to_string_pretty(&input_json).unwrap_or_default());
                 match self.engine.transform(input_json) {
                     Ok(transformed) => {
+                        tracing::debug!("Metadata transform output: {}", serde_json::to_string_pretty(&transformed).unwrap_or_default());
                         // Create or update target_details from transformed JSON
                         let target_details = self.json_to_target_details(&transformed)?;
 

@@ -227,3 +227,47 @@ fn test_pipeline_middleware_deserialization_empty_split() {
 
     assert!(middleware.is_empty());
 }
+
+#[test]
+fn test_should_reverse_right_list_format() {
+    // List format should reverse right chain
+    let middleware = PipelineMiddleware::List(vec!["a".to_string(), "b".to_string()]);
+    assert_eq!(middleware.should_reverse_right(), true);
+}
+
+#[test]
+fn test_should_reverse_right_split_format() {
+    // Split format should NOT reverse right chain
+    let middleware = PipelineMiddleware::Split {
+        left: vec!["a".to_string()],
+        right: vec!["b".to_string()],
+    };
+    assert_eq!(middleware.should_reverse_right(), false);
+}
+
+#[test]
+fn test_should_reverse_right_empty_list() {
+    // Empty list should still indicate reversal (though it won't matter)
+    let middleware = PipelineMiddleware::List(vec![]);
+    assert_eq!(middleware.should_reverse_right(), true);
+}
+
+#[test]
+fn test_should_reverse_right_split_left_only() {
+    // Split format with only left chain should not reverse
+    let middleware = PipelineMiddleware::Split {
+        left: vec!["a".to_string()],
+        right: vec![],
+    };
+    assert_eq!(middleware.should_reverse_right(), false);
+}
+
+#[test]
+fn test_should_reverse_right_split_right_only() {
+    // Split format with only right chain should not reverse
+    let middleware = PipelineMiddleware::Split {
+        left: vec![],
+        right: vec!["b".to_string()],
+    };
+    assert_eq!(middleware.should_reverse_right(), false);
+}

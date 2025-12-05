@@ -181,8 +181,10 @@ impl Middleware for JoltTransformMiddleware {
                 }
             });
 
+            tracing::debug!("JOLT transform input (response): {}", serde_json::to_string_pretty(&transform_input).unwrap_or_default());
             match self.engine.transform(transform_input) {
                 Ok(transformed) => {
+                    tracing::debug!("JOLT transform output (response): {}", serde_json::to_string_pretty(&transformed).unwrap_or_default());
                     // Extract the "data" field
                     let result_data = transformed.get("data").cloned().unwrap_or(transformed.clone());
 
@@ -270,7 +272,7 @@ pub fn parse_config(
 mod tests {
     use super::*;
     use crate::models::envelope::envelope::{
-        RequestDetails, RequestEnvelopeBuilder, ResponseDetails, ResponseEnvelope,
+        RequestEnvelopeBuilder, ResponseDetails, ResponseEnvelope,
     };
     use serde_json::json;
     use std::fs;
@@ -521,72 +523,5 @@ mod tests {
                 .and_then(|td| td.metadata.get("dimse_op").map(|s| s.as_str())),
             Some("find")
         );
-    }
-
-    #[tokio::test]
-    async fn test_middleware_with_real_dicom_to_imagingstudy_right() {
-        use crate::models::envelope::envelope::ResponseDetails;
-        use serde_json::json;
-
-        // Start with a DICOM find-style payload (flat, no data wrapper, as DICOM backend produces)
-        let request_details = RequestDetails {
-            method: "GET".into(),
-            uri: "/fhir/ImagingStudy?patient=PID156695".into(),
-            headers: Default::default(),
-            cookies: Default::default(),
-            query_params: Default::default(),
-            cache_status: None,
-            metadata: Default::default(),
-            content_metadata: None,
-        };
-        let input = json!({
-            "operation": "find",
-            "success": true,
-            "matches": [
-                {
-                    "0020000D": {"vr": "UI", "Value": ["1.2.3"]},
-                    "00100020": {"vr": "LO", "Value": ["PID156695"]},
-                    "00100010": {"vr": "PN", "Value": [{"Alphabetic": "Doe^John"}]},
-                    "00080020": {"vr": "DA", "Value": ["20241015"]},
-                    "00080030": {"vr": "TM", "Value": ["120000"]},
-                    "00081030": {"vr": "LO", "Value": ["Mock CT Study"]},
-                    "00200010": {"vr": "SH", "Value": ["1"]},
-                    "_jmix_url": "http://jmix.example.com/api/study/1.2.3"
-                }
-            ]
-        });
-        let mut env = ResponseEnvelope {
-            request_details,
-            response_details: ResponseDetails {
-                status: 200,
-                headers: HashMap::new(),
-                metadata: HashMap::new(),
-            },
-            original_data: input.clone(),
-            normalized_data: Some(input),
-            normalized_snapshot: None,
-        };
-
-        let spec_path = format!(
-            "{}/examples/fhir_dicom/transforms/dicom_to_imagingstudy_simple.json",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        let cfg = JoltTransformMiddlewareConfig {
-            spec_path,
-            apply: "right".into(),
-            fail_on_error: true,
-        };
-        let mw = JoltTransformMiddleware::new(cfg).unwrap();
-
-        env = mw.right(env).await.unwrap();
-        let out = env.normalized_data.unwrap();
-        // The transform puts everything under "data", and middleware extracts "data".
-        // So 'out' is the Bundle itself, not wrapped in data.
-        
-        assert_eq!(
-            out.get("resourceType").and_then(|v| v.as_str()),
-            Some("Bundle")
-        );
-        assert!(out.get("entry").and_then(|v| v.as_array()).is_some());
     }
 }

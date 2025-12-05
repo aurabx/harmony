@@ -353,6 +353,15 @@ impl Config {
             base.network.extend(config.network);
             base.endpoints.extend(config.endpoints);
             base.backends.extend(config.backends);
+            // Debug log pipelines being merged
+            for (name, pipeline) in &config.pipelines {
+                tracing::debug!(
+                    "Merging pipeline '{}': left_chain={:?}, right_chain={:?}",
+                    name,
+                    pipeline.middleware.left_chain(),
+                    pipeline.middleware.right_chain()
+                );
+            }
             base.pipelines.extend(config.pipelines);
             // base.transforms.extend(config.transforms);
             base.targets.extend(config.targets);
@@ -605,7 +614,7 @@ impl Config {
                 match name.as_str() {
                     "jwtauth" | "basic_auth" | "connect" | "passthru" | "json_extractor"
                     | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "dicom_flatten"
-                    | "transform" | "metadata_transform" | "path_filter" | "policies" | "log_dump" => {}
+                    | "dicom_unflatten" | "transform" | "metadata_transform" | "path_filter" | "policies" | "log_dump" => {}
                     _ => {
                         return Err(ConfigError::InvalidMiddleware {
                             name: name.clone(),
