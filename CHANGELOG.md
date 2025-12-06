@@ -3,12 +3,29 @@
 ## [Unreleased]
 
 ### Added
+- (AURA-2226) Data dumper middleware for inspecting and debugging pipeline data
+- New `dicom_flatten`  and `dicom_unflatten` middleware for flattening DICOM structures in pipelines
+- Additional `left` / `right` transform application options in middleware configuration
+- Filesystem/S3 backend type
+- Support C-STORE on the DIMSE SCP service
 
 ### Changed
+- Transform pipeline now uses a more consistent internal data structure for normalized/transform data
+- DIMSE crates (SCU/SCP) refactored to reduce reliance on dcmtk and improve maintainability
+- Demo scripts updated to reflect current examples and configuration
+- Minor internal cleanups including removal of dead code and whitespace-only changes
 
 ### Fixed
+- Transform behavior and FHIR DICOM example pipeline reliability improvements
+- FHIR and FHIR-DICOM example authentication and configuration issues
+- DIMSE task handling and related example correctness
+- Doctest stability and test-only file handling
+- Improved configuration error handling
+- Config reload blocking on first run
 
 ### Documentation
+- General docs improvements and pass over existing content
+- Chore-level documentation updates and AI assistant rules refinements
 
 ### Dependencies
 
