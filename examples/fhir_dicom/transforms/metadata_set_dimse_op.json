@@ -1,11 +1,10 @@
 [
   {
-    "operation": "default",
+    "operation": "shift",
     "spec": {
-      "metadata": {
-        "dimse_op": "find",
-        "query_level": "STUDY"
-      }
+      "*": "&",
+      "#find": "metadata.dimse_op",
+      "#STUDY": "metadata.query_level"
     }
   }
 ]

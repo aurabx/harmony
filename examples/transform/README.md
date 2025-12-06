@@ -103,7 +103,7 @@ curl -X POST http://127.0.0.1:8083/transform \
 
 ## JOLT Operations
 
-The transform middleware uses [Fluvio JOLT](https://github.com/infinyon/fluvio-jolt) and supports:
+The transform middleware uses [Jolt-RS](https://github.com/aurabx/jolt-rs) and supports:
 
 - **shift**: Move/copy data with path transformations
 - **default**: Apply default values for missing fields
@@ -139,6 +139,6 @@ fail_on_error = true  # true or false
 
 ## Next Steps
 
-- See [Fluvio JOLT documentation](https://github.com/infinyon/fluvio-jolt) for complete JOLT specification
+- See [Jolt-RS documentation](https://github.com/aurabx/jolt-rs) for complete JOLT specification
 - Explore `examples/fhir-to-dicom/` for real-world transformation use cases
 - Create your own JOLT specifications for custom transformations

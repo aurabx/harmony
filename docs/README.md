@@ -32,6 +32,7 @@ Welcome to Harmony Proxy's documentation. Harmony is a general-purpose data mesh
 - **[security.md](security.md)** - Security best practices and environment variables
 - **[policies-middleware.md](policies-middleware.md)** - Policy-based middleware configuration
 - **[policy-rules-reference.md](policy-rules-reference.md)** - Policy rules reference
+- **[transforms.md](Transforms)** - How to use the Jolt transform syntax
 
 ## Deployment
 - **[deployment/README.md](deployment/README.md)** - Deployment overview

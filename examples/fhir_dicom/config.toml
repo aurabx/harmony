@@ -97,6 +97,15 @@ module=""
 [middleware_types.path_filter]
 module=""
 
+[middleware_types.log_dump]
+module=""
+
+[middleware_types.dicom_flatten]
+module=""
+
+[middleware_types.dicom_unflatten]
+module=""
+
 # ------------------------
 # Target Definitions
 #-------------------------

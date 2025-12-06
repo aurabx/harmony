@@ -462,7 +462,7 @@ module = ""
 
 ## Transform Middleware
 
-The transform middleware uses [Fluvio JOLT](https://github.com/infinyon/fluvio-jolt) to perform JSON-to-JSON transformations on request/response data.
+The transform middleware uses [Jolt-RS](https://github.com/aurabx/jolt-rs) to perform JSON-to-JSON transformations on request/response data.
 
 ### Configuration
 
@@ -561,4 +561,4 @@ The transform middleware automatically preserves the original `normalized_data` 
 - **remove**: Remove fields from the output
 - **wildcards**: Use `*` and `&` for dynamic field matching
 
-See the [Fluvio JOLT documentation](https://github.com/infinyon/fluvio-jolt) for complete specification details.
+See the [Jolt-RS documentation](https://github.com/aurabx/jolt-rs) for complete specification details.

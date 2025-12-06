@@ -75,25 +75,49 @@ When the request is processed, the left chain is empty (no middleware processing
 ## Execution Order
 
 ### Left Chain (Request to Backend)
-Middleware executes in order:
+Middleware always executes in order (both List and Split formats):
 ```
 request → [1] → [2] → [3] → backend
 ```
 
 ### Right Chain (Response from Backend)
-Middleware executes in **reverse** order:
+
+#### List Format: Automatic Reversal
+When using `middleware = [...]`, the right chain executes in **reverse** order:
 ```
-backend → [3] → [2] → [1] → response
+middleware = ["auth", "validate", "log"]
+
+request → auth → validate → log → backend
+backend → log → validate → auth → response
 ```
 
-### Example: Symmetric Middleware
+This creates a symmetric "wrap" around the backend call.
+
+#### Split Format: Exact Order Preserved
+When using `middleware.left` and `middleware.right`, the right chain executes in the **exact order specified** (no reversal):
+```
+middleware.left = ["auth", "validate"]
+middleware.right = ["flatten", "transform", "log"]
+
+request → auth → validate → backend
+backend → flatten → transform → log → response
+```
+
+This gives you complete control over response processing order.
+
+### Example: Symmetric Processing with Split Format
+If you want symmetric middleware behavior with split format, you must explicitly reverse the right chain:
 ```toml
 [pipelines.my_pipeline.middleware]
 left = ["auth", "log"]      # auth → log → backend
-right = ["log", "auth"]     # backend → auth → log → response
+right = ["log", "auth"]     # backend → log → auth → response (specify reversed order)
 ```
 
-This ensures `auth` processes the request first and the response last, with `log` in the middle on both paths.
+With List format, this happens automatically:
+```toml
+[pipelines.my_pipeline]
+middleware = ["auth", "log"]  # auto-reversed on right: backend → log → auth → response
+```
 
 ## Use Cases
 

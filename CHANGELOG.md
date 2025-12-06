@@ -147,10 +147,10 @@
 - Runbeam Cloud integration for gateway authentication and authorization
 - Production-ready DICOM SCP implementation with full C-ECHO, C-FIND, C-GET, C-MOVE support
 - Enhanced security with encryption key management and token storage
-- Migration from fluvio-jolt to harmony-jolt for transform middleware
+- Migration from fulvio-jolt to jolt-rs for transform middleware
 
 ### Breaking Changes
-- Transform middleware now requires harmony-jolt instead of fluvio-jolt
+- Transform middleware now requires jolt-rs instead of fluvio-jolt
 - JOLT specification format remains compatible but dependency has changed
 
 ### Added
@@ -200,7 +200,7 @@
 - Path filter middleware TOML serialization fixes
 
 ### Changed
-- Replaced fluvio-jolt dependency with harmony-jolt for transform middleware
+- Replaced fulvio-jolt dependency with jolt-rs for transform middleware
   - Maintains compatibility with existing JOLT specifications
   - Improved performance and reliability
 - Updated runbeam-sdk integration to latest version

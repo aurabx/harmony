@@ -1,0 +1,104 @@
+[proxy]
+id = "middleware-split-example"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+
+[logging]
+log_level = "info"
+
+# Network configuration
+[network.default]
+interface = "wg0"
+enable_wireguard = false
+
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+# Endpoints
+[endpoints.rest_api]
+service = "http"
+
+[endpoints.rest_api.options]
+host = "example.com"
+port = 80
+
+# Backends
+[backends.api_backend]
+service = "http"
+
+[backends.api_backend.options]
+host = "api.example.com"
+port = 443
+
+# Middleware definitions
+[middleware.auth]
+middleware_type = "jwtauth"
+
+[middleware.auth.options]
+disable = false
+
+[middleware.validate]
+middleware_type = "path_filter"
+
+[middleware.validate.options]
+rules = [
+  { allow = "/api/public/{*path}" },
+  { deny = "/{*rest}" }
+]
+
+[middleware.transform]
+middleware_type = "transform"
+
+[middleware.transform.options]
+spec_path = "transforms/sample.json"
+
+[middleware.log]
+middleware_type = "log_dump"
+
+# Services
+[services.http]
+module = ""
+
+# ============================================================================
+# PIPELINE EXAMPLES: Different middleware configurations
+# ============================================================================
+
+# Example 1: List format - both left and right chains use the same middleware
+[pipelines.simple_pipeline]
+description = "Simple pipeline with list-style middleware"
+networks = ["default"]
+endpoints = ["rest_api"]
+backends = ["api_backend"]
+middleware = ["auth", "validate", "transform"]
+
+# Example 2: Split format - different middleware for requests (left) vs responses (right)
+[pipelines.split_pipeline]
+description = "Split middleware for request vs response processing"
+networks = ["default"]
+endpoints = ["rest_api"]
+backends = ["api_backend"]
+
+[pipelines.split_pipeline.middleware]
+left = ["auth", "validate", "transform"]     # Applied to requests (in order)
+right = ["log"]                              # Applied to responses (in reverse order)
+
+# Example 3: Left-only middleware (only processes requests)
+[pipelines.request_only_pipeline]
+description = "Middleware only on request path"
+networks = ["default"]
+endpoints = ["rest_api"]
+backends = ["api_backend"]
+
+[pipelines.request_only_pipeline.middleware]
+left = ["auth", "validate"]
+
+# Example 4: Right-only middleware (only processes responses)
+[pipelines.response_only_pipeline]
+description = "Middleware only on response path"
+networks = ["default"]
+endpoints = ["rest_api"]
+backends = ["api_backend"]
+
+[pipelines.response_only_pipeline.middleware]
+right = ["log"]

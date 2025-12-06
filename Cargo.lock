@@ -1829,13 +1829,13 @@ dependencies = [
 
 [[package]]
 name = "harmony-jolt"
-version = "0.5.0"
+version = "0.6.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "5b98f82c742faf5a3ab92105fb7a8308de8af0133235d60da7582c498850ba98"
+checksum = "14d0b0fd53bedcebd9b709be05ba2ae21b17173b6717b57a305c913433fe3d82"
 dependencies = [
  "serde",
  "serde_json",
- "thiserror 1.0.69",
+ "thiserror 2.0.17",
 ]
 
 [[package]]
