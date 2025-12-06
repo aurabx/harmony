@@ -72,6 +72,10 @@ This Constitution establishes rules to prevent common modes of failure in autono
 - Evaluate trade-offs rationally: scalability, security, maintainability.
 - If a task exceeds your knowledge or context, escalate, clarify, or stop.
 
+### 12. Plan and communicate
+- Always make a clear plan for your actions and provide clear and concise information to the user about what you are going to do
+- If the plan changes, or becomes invalid, communicate this.
+
 ---
 
 ## Section II. Good Coding Patterns
