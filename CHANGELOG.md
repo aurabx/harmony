@@ -8,6 +8,7 @@
 - Additional `left` / `right` transform application options in middleware configuration
 - Filesystem/S3 backend type
 - Support C-STORE on the DIMSE SCP service
+- Support for environment variable replacement in configuration files
 
 ### Changed
 - Transform pipeline now uses a more consistent internal data structure for normalized/transform data

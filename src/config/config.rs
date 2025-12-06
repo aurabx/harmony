@@ -1,3 +1,4 @@
+use crate::config::env_substitution::substitute_env_vars;
 use crate::config::logging_config::LoggingConfig;
 use crate::config::proxy_config::ProxyConfig;
 use crate::config::resolution::resolve_references;
@@ -250,7 +251,10 @@ impl Config {
         // Load the base configuration file
         let contents =
             std::fs::read_to_string(&cli.config_path).expect("Failed to read config file");
-        let mut config: Config = toml::from_str(&contents).expect("Failed to parse config");
+        
+        // Apply environment variable substitution
+        let (contents_substituted, _audit) = substitute_env_vars(&contents);
+        let mut config: Config = toml::from_str(&contents_substituted).expect("Failed to parse config");
 
         // Resolve transforms_path relative to config file directory
         let base_dir = config_path
@@ -330,10 +334,14 @@ impl Config {
             let path = entry.path();
             if path.is_file() && path.extension().is_some_and(|ext| ext == "toml") {
                 match fs::read_to_string(&path) {
-                    Ok(contents) => match toml::from_str(&contents) {
-                        Ok(config) => configs.push(config),
-                        Err(e) => {
-                            tracing::error!("Failed to parse config file {:?}: {}", path, e);
+                    Ok(contents) => {
+                        // Apply environment variable substitution
+                        let (contents_substituted, _audit) = substitute_env_vars(&contents);
+                        match toml::from_str(&contents_substituted) {
+                            Ok(config) => configs.push(config),
+                            Err(e) => {
+                                tracing::error!("Failed to parse config file {:?}: {}", path, e);
+                            }
                         }
                     },
                     Err(e) => {

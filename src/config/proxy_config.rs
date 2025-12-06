@@ -46,6 +46,9 @@ pub struct ProxyConfig {
     /// Content parsing size limits
     #[serde(default)]
     pub content_limits: ContentLimits,
+    /// List of required environment variables that must be present for configuration to be valid
+    #[serde(default)]
+    pub required_env_vars: Vec<String>,
 }
 
 /// Default pipelines path for the proxy configuration
