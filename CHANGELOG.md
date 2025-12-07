@@ -2,9 +2,18 @@
 
 ## [Unreleased]
 
+## [0.9.0] - 2025-12-07
+
+### Highlights
+- Enhanced debugging and data transformation capabilities with new middleware
+- Improved DICOM handling with structure flattening/unflattening
+- Extended DIMSE SCP service with C-STORE support
+- Configuration flexibility with environment variable replacement
+- Refactored and streamlined DIMSE implementation
+
 ### Added
 - (AURA-2226) Data dumper middleware for inspecting and debugging pipeline data
-- New `dicom_flatten`  and `dicom_unflatten` middleware for flattening DICOM structures in pipelines
+- New `dicom_flatten` and `dicom_unflatten` middleware for flattening DICOM structures in pipelines
 - Additional `left` / `right` transform application options in middleware configuration
 - Filesystem/S3 backend type
 - Support C-STORE on the DIMSE SCP service
@@ -374,6 +383,7 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.9.0]: https://github.com/aurabx/harmony/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/aurabx/harmony/compare/0.7.1...0.8.0
 [0.7.1]: https://github.com/aurabx/harmony/compare/0.7.0...0.7.1
 [0.7.0]: https://github.com/aurabx/harmony/compare/0.6.0...0.7.0

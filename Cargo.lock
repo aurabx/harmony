@@ -1086,7 +1086,7 @@ dependencies = [
 
 [[package]]
 name = "dicom_json_tool"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1116,7 +1116,7 @@ dependencies = [
 
 [[package]]
 name = "dimse"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "async-stream",
@@ -1739,7 +1739,7 @@ dependencies = [
 
 [[package]]
 name = "harmony"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "anyhow",
  "arc-swap",
@@ -1803,7 +1803,7 @@ dependencies = [
 
 [[package]]
 name = "harmony-database"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "once_cell",
  "redb",
@@ -1814,13 +1814,13 @@ dependencies = [
 
 [[package]]
 name = "harmony-dsl"
-version = "1.8.0"
+version = "1.9.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "e545cfe9e6e2f0246e18a0187ec82d8d5cb301c75204190beedf00b1dfa926e9"
+checksum = "b56852dd7c75c194619b9d1939666624ca8abbf1944bff207af133e7c910804e"
 
 [[package]]
 name = "harmony-filesystem"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "async-trait",
  "tempfile",
@@ -1840,7 +1840,7 @@ dependencies = [
 
 [[package]]
 name = "harmony_transform"
-version = "0.8.0"
+version = "0.9.0"
 dependencies = [
  "harmony-jolt",
  "serde",
@@ -3912,9 +3912,9 @@ dependencies = [
 
 [[package]]
 name = "runbeam-sdk"
-version = "0.9.0"
+version = "0.9.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "c6a2d8dd8c1e56103cbdbefc2423f33fa14dc56852a0c91a68e5a3e109e47d4c"
+checksum = "fbb44f3bef4c0445d8c7278df323a40ffe06b560ffe5c16ae5b809a29fb3fbe8"
 dependencies = [
  "age",
  "base64 0.22.1",
