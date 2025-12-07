@@ -557,7 +557,7 @@ See [Hot Configuration Reload](#hot-configuration-reload) for reload behavior de
 
 ### Security Considerations
 
-- **Machine tokens**: Stored securely using OS keyring (macOS Keychain, Linux Secret Service) or encrypted filesystem fallback
+- **Machine tokens**: Stored securely using encrypted filesystem (age X25519 encryption)
 - **Token validation**: Tokens checked for expiry before each poll
 - **HTTPS required**: All Cloud API communication uses TLS
 - **Configuration integrity**: TOML validated before applying to prevent malformed configs
@@ -568,7 +568,7 @@ See [security.md](security.md) for comprehensive security guidance.
 
 **Polling not starting?**
 - Verify gateway is authorized: check for `🌥️ Starting cloud config polling` in logs
-- Check token storage: look for token file in `./tmp/runbeam/auth.json` or OS keyring
+- Check token storage: look for token file in `~/.runbeam/<proxy_id>/auth.json`
 - Verify management API is enabled in config
 
 **Changes not applying?**
@@ -596,18 +596,18 @@ Harmony supports several environment variables that affect runtime behavior. Mos
 
 #### RUNBEAM_ENCRYPTION_KEY
 
-**Purpose**: Provides encryption key for secure machine token storage when OS keyring is unavailable.
+**Purpose**: Provides encryption key for secure machine token storage (encrypted filesystem).
 
 **Interaction with Configuration**:
 - Does not override TOML configuration
 - Affects how machine tokens are stored (see Management API authorization)
-- Used automatically when OS keyring (macOS Keychain, Linux Secret Service) is unavailable
+- Recommended for persistent token storage across restarts
 - Typical in container environments
 
 **When to Set**:
 - Production container deployments (recommended)
 - Headless/CI environments
-- When `RUNBEAM_DISABLE_KEYRING=1` is set (testing)
+- When persistent token storage is needed
 
 **See**: [Security Documentation](security.md#runbeam_encryption_key) for generation examples and best practices.
 
@@ -649,19 +649,6 @@ export RUST_LOG=debug
 
 **Precedence**: `RUST_LOG` environment variable > `logging.log_level` in TOML.
 
-#### RUNBEAM_DISABLE_KEYRING
-
-**Purpose**: Forces use of encrypted filesystem storage instead of OS keyring.
-
-**Interaction with Configuration**:
-- Does not affect TOML configuration
-- Changes token storage backend selection
-- Primarily for testing keyring fallback behavior
-
-**When to Set**:
-- Testing encrypted filesystem storage
-- Debugging keyring-related issues
-- Not needed in containers (keyring typically unavailable anyway)
 
 ### Environment Variable Precedence Rules
 

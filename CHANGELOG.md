@@ -23,7 +23,7 @@
 - Transform pipeline now uses a more consistent internal data structure for normalized/transform data
 - DIMSE crates (SCU/SCP) refactored to reduce reliance on dcmtk and improve maintainability
 - Demo scripts updated to reflect current examples and configuration
-- Minor internal cleanups including removal of dead code and whitespace-only changes
+- Minor internal cleanups
 
 ### Fixed
 - Transform behavior and FHIR DICOM example pipeline reliability improvements

@@ -25,7 +25,7 @@ Highlights:
 - Authentication: JWT (recommend RS256 in production), optional Basic
 - Transformations: JSON transforms (JOLT), DICOM↔DICOMweb bridging, JMIX packaging
 - Runbeam Cloud Integration: Gateway authorization for autonomous API access with 30-day machine tokens
-- Secure Token Storage: Automatic selection of OS keyring or encrypted filesystem (no configuration needed)
+- Secure Token Storage: Encrypted filesystem storage for machine tokens (no configuration needed)
 - Security: XXE prevention, CSV formula injection mitigation, configurable size limits
 - Operationally sound: structured logging, local ./tmp storage convention
 
@@ -353,7 +353,7 @@ runbeam harmony:show-key my-instance
 runbeam harmony:delete-key my-instance
 ```
 
-The CLI stores keys in your OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager) and automatically sends them to Harmony's `/admin/authorize` endpoint during gateway authorization.
+The CLI can optionally manage and send encryption keys to Harmony's `/admin/authorize` endpoint during gateway authorization.
 
 **2. Environment Variable (Recommended for Single Instance/Container)**
 
@@ -375,9 +375,8 @@ If neither CLI keys nor environment variables are provided, Harmony auto-generat
 2. `RUNBEAM_ENCRYPTION_KEY` environment variable
 3. Auto-generated key
 
-**Storage Backends:**
-- **OS Keyring** (preferred): Uses native credential storage when available
-- **Encrypted Filesystem** (fallback): `~/.runbeam/<proxy_id>/auth.json` encrypted with age X25519
+**Storage Backend:**
+- **Encrypted Filesystem**: `~/.runbeam/<proxy_id>/auth.json` encrypted with age X25519
 
 **Headless/Pre-Provisioned Deployments:**
 
