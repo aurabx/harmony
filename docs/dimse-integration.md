@@ -6,13 +6,13 @@ Harmony integrates DIMSE via:
 - **DimseAdapter**: Native DICOM DIMSE network operations (SCP) using `dicom-ul` Rust library
 - **DICOM Backend**: Native Service Class User (SCU) for outbound DIMSE operations using `dicom-ul`
 
-This enables both DICOM endpoint operations (SCP - Service Class Provider) and backend operations (SCU - Service Class User) with **no external dependencies**.
-
 ## Prerequisites
 
-- **No external dependencies required** - All DIMSE operations use native Rust implementations
-- DCMTK is **optional** and only used in integration tests for compatibility validation
-  - If running integration tests: macOS (Homebrew): `brew install dcmtk` or Debian/Ubuntu: `sudo apt-get install dcmtk`
+- **DCMTK is required** for DICOM SCU operations (C-GET and C-MOVE commands)
+- **Native Rust SCP**: The SCP (endpoint listener) is implemented natively in Rust
+- **DCMTK tools**: Install for backend SCU functionality and integration testing
+  - macOS (Homebrew): `brew install dcmtk`
+  - Debian/Ubuntu: `sudo apt-get install dcmtk`
 
 ## Architecture (Phase 6)
 
@@ -158,9 +158,9 @@ curl -X POST http://localhost:8080/dicom/find \
 ## Implementation Status
 
 ### ✅ Completed
-- **Native DIMSE Protocol**: All SCU/SCP operations use `dicom-ul` Rust library (no external dependencies)
-- **SCU Operations**: C-ECHO, C-FIND, C-STORE, C-GET, and C-MOVE implemented natively
-- **SCP Operations**: Native server implementation for all DIMSE operations
+- **Native DIMSE SCP**: Endpoint (SCP) implementation uses `dicom-ul` Rust library (no external dependencies)
+- **DCMTK-based SCU**: Backend (SCU) operations (C-ECHO, C-FIND, C-GET, C-MOVE) use DCMTK CLI tools
+- **SCP Operations**: C-ECHO, C-FIND, C-STORE supported via native Rust implementation
 - **Persistent Store SCP**: Supports persistent Store SCP mode for C-STORE delivery
 - **Dual Service Support**: Single service type supports both backend and endpoint usage
 - **Configuration Integration**: Seamlessly integrated with existing service architecture

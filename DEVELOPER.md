@@ -7,7 +7,7 @@
 ## Prerequisites
 - Rust (stable) via rustup
 - macOS or Linux
-- Optional: DCMTK tools for DIMSE integration tests (e.g., macOS: `brew install dcmtk`, Debian/Ubuntu: `sudo apt-get install dcmtk`)
+- DCMTK: Required for DICOM SCU operations (C-GET and C-MOVE); optional for SCP-only use cases (macOS: `brew install dcmtk`, Debian/Ubuntu: `sudo apt-get install dcmtk`)
 
 ## Repository layout
 - Root crate: harmony (src/lib.rs, src/main.rs)
