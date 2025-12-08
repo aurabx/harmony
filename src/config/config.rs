@@ -406,12 +406,24 @@ impl Config {
     }
 
     fn validate_proxy(&self) -> Result<(), ConfigError> {
+        // Validate basic proxy config
         self.proxy
             .validate()
             .map_err(|e| ConfigError::InvalidProxy {
                 name: self.proxy.id.clone(),
                 reason: e,
-            })
+            })?;
+
+        // Enforce required environment variables (Harmony DSL 1.9.0)
+        for var in &self.proxy.required_env_vars {
+            if std::env::var(var).is_err() {
+                return Err(ConfigError::InvalidProxy {
+                    name: self.proxy.id.clone(),
+                    reason: format!("Missing required environment variable: {}", var),
+                });
+            }
+        }
+        Ok(())
     }
 
     fn validate_logging(&self) -> Result<(), ConfigError> {
