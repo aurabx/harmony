@@ -64,7 +64,11 @@ pub fn parse_config(
         .get("audience")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let leeway_secs = options.get("leeway_secs").and_then(|v| v.as_u64());
+    // DSL 1.9.0: prefer leeway_secs, fall back to deprecated leeway_seconds
+    let leeway_secs = options
+        .get("leeway_secs")
+        .and_then(|v| v.as_u64())
+        .or_else(|| options.get("leeway_seconds").and_then(|v| v.as_u64()));
     let use_hs256 = options
         .get("use_hs256")
         .and_then(|v| v.as_bool())
