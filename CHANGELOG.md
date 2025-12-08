@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+- Environment variable validation: `proxy.required_env_vars` field enforces required environment variables at startup with clear error messages
+- Sensitive field patterns: `proxy.sensitive_field_patterns` field for log redaction rules
+
+### Changed
+- JWT authentication: Added support for deprecated `leeway_seconds` field as fallback to `leeway_secs` for backward compatibility
+
 ## [0.9.0] - 2025-12-07
 
 ### Highlights
