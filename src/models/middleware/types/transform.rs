@@ -136,6 +136,11 @@ impl Middleware for JoltTransformMiddleware {
                                 }
                                 if let Some(uri) = td_obj.get("uri").and_then(|v| v.as_str()) {
                                     target.uri = uri.to_string();
+                                    // If the new URI contains query params, clear existing query_params
+                                    // to avoid duplication when full_url() appends them
+                                    if uri.contains('?') {
+                                        target.query_params.clear();
+                                    }
                                 }
                                 if let Some(base_url) = td_obj.get("base_url").and_then(|v| v.as_str()) {
                                     target.base_url = base_url.to_string();
@@ -148,6 +153,8 @@ impl Middleware for JoltTransformMiddleware {
                                     }
                                 }
                                 if let Some(query_params) = td_obj.get("query_params").and_then(|v| v.as_object()) {
+                                    // Replace existing query_params entirely (not merge)
+                                    target.query_params.clear();
                                     for (k, v) in query_params {
                                         if let Some(s) = v.as_str() {
                                             target.query_params.insert(k.clone(), vec![s.to_string()]);
