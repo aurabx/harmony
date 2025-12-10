@@ -473,12 +473,14 @@ type = "transform"
 spec_path = "path/to/jolt_spec.json"
 apply = "both"  # "left", "right", or "both" (default)
 fail_on_error = true  # true (default) or false
+debug = false  # true or false (default) - enables detailed logging of transform input/output
 ```
 
 **Field Descriptions:**
 - `spec_path`: Path to the JOLT specification file (JSON format). Relative paths are resolved from the config directory.
 - `apply`: When to apply the transform - "left" (request to backend), "right" (response from backend), or "both" (default)
 - `fail_on_error`: Whether to fail the request on transformation errors (true) or log and continue (false)
+- `debug`: When true, logs the transform input and output at DEBUG level before and after transformation. Useful for debugging transform specs. Default false. Requires `RUST_LOG` to include `debug` or `trace` level for these logs to appear.
 
 ### JOLT Specification Example
 
@@ -548,6 +550,29 @@ Example transformation from patient data to FHIR-like structure:
     ]
   }
 }
+```
+
+### Debugging Transforms
+
+Enable the `debug` option in your transform middleware configuration to log the complete input and output of the JOLT transformation. This is useful when developing or troubleshooting transform specs:
+
+```toml
+[middleware.debug_transform]
+type = "transform"
+[middleware.debug_transform.options]
+spec_path = "path/to/jolt_spec.json"
+debug = true  # Enable detailed logging
+```
+
+When enabled, logs will show the transform input (including injected context) and the output from the JOLT engine. Run with appropriate log level:
+```bash
+RUST_LOG=harmony=debug cargo run -- --config config.toml
+```
+
+Logs will appear as:
+```
+JOLT transform input (request): {...}
+JOLT transform output (request): {...}
 ```
 
 ### Pre-Transform Snapshot
