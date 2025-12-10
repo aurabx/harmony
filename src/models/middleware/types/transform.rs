@@ -17,6 +17,9 @@ pub struct JoltTransformMiddlewareConfig {
     /// Whether to fail the request on transform errors
     #[serde(default = "default_fail_on_error")]
     pub fail_on_error: bool,
+    /// Whether to debug log transform input and output
+    #[serde(default = "default_debug")]
+    pub debug: bool,
 }
 
 fn default_apply() -> String {
@@ -25,6 +28,10 @@ fn default_apply() -> String {
 
 fn default_fail_on_error() -> bool {
     true
+}
+
+fn default_debug() -> bool {
+    false
 }
 
 impl From<JoltTransformMiddlewareConfig> for TransformConfig {
@@ -39,6 +46,7 @@ impl From<JoltTransformMiddlewareConfig> for TransformConfig {
 
 pub struct JoltTransformMiddleware {
     engine: JoltTransformEngine,
+    debug: bool,
 }
 
 impl JoltTransformMiddleware {
@@ -48,7 +56,10 @@ impl JoltTransformMiddleware {
             .map_err(|e| format!("Failed to create JOLT transform engine: {}", e))?;
 
         tracing::info!("JOLT transform middleware initialized");
-        Ok(Self { engine })
+        Ok(Self {
+            engine,
+            debug: config.debug,
+        })
     }
 }
 
@@ -85,27 +96,54 @@ impl Middleware for JoltTransformMiddleware {
                 }
             });
 
+            if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
+                tracing::debug!("JOLT transform input (request): {}", serde_json::to_string_pretty(&transform_input).unwrap_or_default());
+            }
+
             match self.engine.transform(transform_input) {
                 Ok(transformed) => {
+                    if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
+                        tracing::debug!("JOLT transform output (request): {}", serde_json::to_string_pretty(&transformed).unwrap_or_default());
+                    }
                     // Extract the "data" field
                     let result_data = transformed.get("data").cloned().unwrap_or(transformed.clone());
 
                     // Check for context updates to merge back
                     if let Some(context_out) = transformed.get("context") {
-                        // Merge target_details.metadata if present in output context
+                        // Merge target_details if present in output context
                         if let Some(td_out) = context_out.get("target_details") {
-                            if let Some(meta_out) = td_out.get("metadata").and_then(|m| m.as_object()) {
-                                if envelope.target_details.is_none() {
-                                    // This is tricky if target_details is None but we want to set metadata.
-                                    // For now, we only update if target_details exists, or if we should create it?
-                                    // The middleware usually runs after routing so target_details might be there.
-                                    // If not, we might need to rely on request_details.metadata.
-                                }
+                            if let Ok(td_from_transform) = serde_json::from_value::<crate::models::envelope::envelope::TargetDetails>(td_out.clone()) {
+                                // Transform provided full target_details - use it
+                                envelope.target_details = Some(td_from_transform);
+                            } else if td_out.is_object() {
+                                // Partial target_details - merge into existing or create new
+                                let td_obj = td_out.as_object().unwrap();
+                                let mut target = envelope.target_details.take().unwrap_or_else(|| {
+                                    crate::models::envelope::envelope::TargetDetails {
+                                        method: "GET".to_string(),
+                                        uri: String::new(),
+                                        base_url: String::new(),
+                                        headers: HashMap::new(),
+                                        cookies: HashMap::new(),
+                                        query_params: HashMap::new(),
+                                        metadata: HashMap::new(),
+                                    }
+                                });
                                 
-                                if let Some(td) = &mut envelope.target_details {
-                                    for (k, v) in meta_out {
+                                // Merge individual fields
+                                if let Some(method) = td_obj.get("method").and_then(|v| v.as_str()) {
+                                    target.method = method.to_string();
+                                }
+                                if let Some(uri) = td_obj.get("uri").and_then(|v| v.as_str()) {
+                                    target.uri = uri.to_string();
+                                }
+                                if let Some(base_url) = td_obj.get("base_url").and_then(|v| v.as_str()) {
+                                    target.base_url = base_url.to_string();
+                                }
+                                if let Some(headers) = td_obj.get("headers").and_then(|v| v.as_object()) {
+                                    for (k, v) in headers {
                                         if let Some(s) = v.as_str() {
-                                            td.metadata.insert(k.clone(), s.to_string());
+                                            target.headers.insert(k.clone(), s.to_string());
                                         }
                                     }
                                 }
@@ -201,10 +239,14 @@ impl Middleware for JoltTransformMiddleware {
                 }
             });
 
-            tracing::debug!("JOLT transform input (response): {}", serde_json::to_string_pretty(&transform_input).unwrap_or_default());
+            if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
+                tracing::debug!("JOLT transform input (response): {}", serde_json::to_string_pretty(&transform_input).unwrap_or_default());
+            }
             match self.engine.transform(transform_input) {
                 Ok(transformed) => {
-                    tracing::debug!("JOLT transform output (response): {}", serde_json::to_string_pretty(&transformed).unwrap_or_default());
+                    if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
+                        tracing::debug!("JOLT transform output (response): {}", serde_json::to_string_pretty(&transformed).unwrap_or_default());
+                    }
                     // Extract the "data" field
                     let result_data = transformed.get("data").cloned().unwrap_or(transformed.clone());
 
@@ -281,10 +323,16 @@ pub fn parse_config(
         .and_then(|v| v.as_bool())
         .unwrap_or(true); // Deprecated, but still parsed if present (ignored in logic as we always inject)
 
+    let debug = options
+        .get("debug")
+        .and_then(|v| v.as_bool())
+        .unwrap_or_else(default_debug);
+
     Ok(JoltTransformMiddlewareConfig {
         spec_path,
         apply,
         fail_on_error,
+        debug,
     })
 }
 
@@ -347,6 +395,7 @@ mod tests {
             spec_path: temp_file.path().to_string_lossy().to_string(),
             apply: "left".to_string(),
             fail_on_error: true,
+            debug: false,
         };
 
         let middleware = JoltTransformMiddleware::new(config).unwrap();
@@ -397,6 +446,7 @@ mod tests {
             spec_path: temp_file.path().to_string_lossy().to_string(),
             apply: "right".to_string(),
             fail_on_error: true,
+            debug: false,
         };
 
         let middleware = JoltTransformMiddleware::new(config).unwrap();
@@ -439,6 +489,7 @@ mod tests {
             spec_path: temp_file.path().to_string_lossy().to_string(),
             apply: "both".to_string(),
             fail_on_error: true,
+            debug: false,
         };
         let middleware = JoltTransformMiddleware::new(config).unwrap();
 
@@ -477,6 +528,64 @@ mod tests {
         let result = parse_config(&options, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing required 'spec_path'"));
+    }
+
+    #[test]
+    fn test_parse_config_with_debug() {
+        let mut options = HashMap::new();
+        options.insert("spec_path".to_string(), json!("/path/to/spec.json"));
+        options.insert("debug".to_string(), json!(true));
+
+        let config = parse_config(&options, None).unwrap();
+        assert_eq!(config.spec_path, "/path/to/spec.json");
+        assert!(config.debug);
+    }
+
+    #[test]
+    fn test_parse_config_debug_defaults_to_false() {
+        let mut options = HashMap::new();
+        options.insert("spec_path".to_string(), json!("/path/to/spec.json"));
+
+        let config = parse_config(&options, None).unwrap();
+        assert!(!config.debug);
+    }
+
+    #[tokio::test]
+    async fn test_transform_with_debug_enabled() {
+        // Test that debug flag is properly set and doesn't break execution
+        let spec = json!([
+            {
+                "operation": "shift",
+                "spec": {
+                    "data": {
+                        "name": "data.name"
+                    }
+                }
+            }
+        ]);
+
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+
+        let config = JoltTransformMiddlewareConfig {
+            spec_path: temp_file.path().to_string_lossy().to_string(),
+            apply: "both".to_string(),
+            fail_on_error: true,
+            debug: true,
+        };
+
+        let middleware = JoltTransformMiddleware::new(config).unwrap();
+        assert!(middleware.debug);
+
+        let input = json!({"name": "Alice"});
+        let envelope = create_test_envelope(input.clone());
+        let result = middleware.left(envelope).await.unwrap();
+
+        // Verify the transform still works with debug enabled
+        assert_eq!(
+            result.normalized_data,
+            Some(json!({"name": "Alice"}))
+        );
     }
 
     #[tokio::test]
@@ -523,6 +632,7 @@ mod tests {
             spec_path,
             apply: "left".into(),
             fail_on_error: true,
+            debug: false,
         };
         let mw = JoltTransformMiddleware::new(cfg).unwrap();
 
