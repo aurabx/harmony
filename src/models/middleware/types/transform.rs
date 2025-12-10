@@ -109,6 +109,26 @@ impl Middleware for JoltTransformMiddleware {
                                         }
                                     }
                                 }
+                                if let Some(query_params) = td_obj.get("query_params").and_then(|v| v.as_object()) {
+                                    for (k, v) in query_params {
+                                        if let Some(s) = v.as_str() {
+                                            target.query_params.insert(k.clone(), vec![s.to_string()]);
+                                        } else if let Some(arr) = v.as_array() {
+                                            let values: Vec<String> = arr.iter().filter_map(|item| item.as_str().map(|s| s.to_string())).collect();
+                                            if !values.is_empty() {
+                                                target.query_params.insert(k.clone(), values);
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some(metadata) = td_obj.get("metadata").and_then(|v| v.as_object()) {
+                                    for (k, v) in metadata {
+                                        if let Some(s) = v.as_str() {
+                                            target.metadata.insert(k.clone(), s.to_string());
+                                        }
+                                    }
+                                }
+                                envelope.target_details = Some(target);
                             }
                         }
                         
