@@ -2,12 +2,27 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2025-12-11
+
 ### Added
+- Debug logging support for JOLT transforms (enable with `debug = true` in transform middleware config)
 - Environment variable validation: `proxy.required_env_vars` field enforces required environment variables at startup with clear error messages
 - Sensitive field patterns: `proxy.sensitive_field_patterns` field for log redaction rules
+- JWT authentication: Support for deprecated `leeway_seconds` field as fallback to `leeway_secs` for backward compatibility
 
 ### Changed
-- JWT authentication: Added support for deprecated `leeway_seconds` field as fallback to `leeway_secs` for backward compatibility
+- Transform pipeline behavior improved for better handling of nested array structures
+- Query parameter handling improved to preserve parameters set by middleware
+- Target details now available earlier in the request processing pipeline
+
+### Fixed
+- Transform arrays now handled correctly (via harmony-jolt 0.7)
+- Query parameters are now properly cleared if provided by middleware
+- Target details can now be set in transforms without requiring pre-existing entry
+- Test suite improvements and stability fixes
+
+### Dependencies
+- Updated harmony-jolt to 0.7.0 for improved array transformation handling
 
 ## [0.9.0] - 2025-12-07
 
@@ -390,6 +405,7 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.10.0]: https://github.com/aurabx/harmony/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/aurabx/harmony/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/aurabx/harmony/compare/0.7.1...0.8.0
 [0.7.1]: https://github.com/aurabx/harmony/compare/0.7.0...0.7.1
