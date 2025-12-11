@@ -1829,9 +1829,9 @@ dependencies = [
 
 [[package]]
 name = "harmony-jolt"
-version = "0.6.0"
+version = "0.7.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "14d0b0fd53bedcebd9b709be05ba2ae21b17173b6717b57a305c913433fe3d82"
+checksum = "f1abe3d53fbe74e8a16198846124bc985dddecbc65e2bb4f6a18b5be77132e40"
 dependencies = [
  "serde",
  "serde_json",
@@ -1846,8 +1846,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
- "thiserror 1.0.69",
- "tokio-test",
+ "thiserror 2.0.17",
  "tracing",
 ]
 

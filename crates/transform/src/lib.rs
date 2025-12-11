@@ -129,6 +129,8 @@ mod tests {
 
     #[test]
     fn test_wildcard_transform() {
+        // &0 references the matched key, so "*": "data.&0" means
+        // "copy each field to data.{original_key}"
         let spec = json!([{
             "operation": "shift",
             "spec": {
@@ -148,10 +150,11 @@ mod tests {
 
         let output = engine.transform(input).unwrap();
 
+        // &0 resolves to the matched key ("id", "name"), so output is data.id, data.name
         let expected = json!({
             "data": {
-                "id0": 1,
-                "name0": "John Smith"
+                "id": 1,
+                "name": "John Smith"
             }
         });
 
@@ -159,22 +162,138 @@ mod tests {
     }
 
     #[test]
-    fn test_config_apply_directions() {
-        let config = TransformConfig {
-            spec_path: "test.json".to_string(),
+    fn test_array_index_reference() {
+        // Test [&N] syntax for array index references
+        // This extracts array entries into structured objects
+        let spec = json!([{
+            "operation": "shift",
+            "spec": {
+                "items": {
+                    "*": {
+                        "name": "results[&1].name",
+                        "value": "results[&1].value"
+                    }
+                }
+            }
+        }]);
+
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+
+        let engine = JoltTransformEngine::from_spec_path(temp_file.path()).unwrap();
+
+        let input = json!({
+            "items": [
+                { "name": "first", "value": 1 },
+                { "name": "second", "value": 2 }
+            ]
+        });
+
+        let output = engine.transform(input).unwrap();
+
+        // [&1] references the array index, so each item goes to results[0], results[1]
+        let expected = json!({
+            "results": [
+                { "name": "first", "value": 1 },
+                { "name": "second", "value": 2 }
+            ]
+        });
+
+        assert_eq!(output, expected);
+    }
+
+    #[test]
+    fn test_should_apply_left() {
+        let spec = json!([{"operation": "shift", "spec": {"a": "b"}}]);
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+
+        // Test "left" - should apply left only
+        let config_left = TransformConfig {
+            spec_path: temp_file.path().to_string_lossy().to_string(),
             apply: "left".to_string(),
             fail_on_error: true,
         };
+        let engine_left = JoltTransformEngine::new(config_left).unwrap();
+        assert!(engine_left.should_apply_left());
+        assert!(!engine_left.should_apply_right());
 
-        assert!(config.apply == "left");
+        // Test "right" - should apply right only
+        let config_right = TransformConfig {
+            spec_path: temp_file.path().to_string_lossy().to_string(),
+            apply: "right".to_string(),
+            fail_on_error: true,
+        };
+        let engine_right = JoltTransformEngine::new(config_right).unwrap();
+        assert!(!engine_right.should_apply_left());
+        assert!(engine_right.should_apply_right());
 
+        // Test "both" - should apply both
         let config_both = TransformConfig {
-            spec_path: "test.json".to_string(),
+            spec_path: temp_file.path().to_string_lossy().to_string(),
+            apply: "both".to_string(),
+            fail_on_error: true,
+        };
+        let engine_both = JoltTransformEngine::new(config_both).unwrap();
+        assert!(engine_both.should_apply_left());
+        assert!(engine_both.should_apply_right());
+    }
+
+    #[test]
+    fn test_should_fail_on_error() {
+        let spec = json!([{"operation": "shift", "spec": {"a": "b"}}]);
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+
+        let config_fail = TransformConfig {
+            spec_path: temp_file.path().to_string_lossy().to_string(),
+            apply: "both".to_string(),
+            fail_on_error: true,
+        };
+        let engine_fail = JoltTransformEngine::new(config_fail).unwrap();
+        assert!(engine_fail.should_fail_on_error());
+
+        let config_no_fail = TransformConfig {
+            spec_path: temp_file.path().to_string_lossy().to_string(),
             apply: "both".to_string(),
             fail_on_error: false,
         };
+        let engine_no_fail = JoltTransformEngine::new(config_no_fail).unwrap();
+        assert!(!engine_no_fail.should_fail_on_error());
+    }
 
-        assert!(config_both.apply == "both");
+    #[test]
+    fn test_default_operation() {
+        let spec = json!([{
+            "operation": "default",
+            "spec": {
+                "status": "pending",
+                "count": 0
+            }
+        }]);
+
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+
+        let engine = JoltTransformEngine::from_spec_path(temp_file.path()).unwrap();
+
+        // Input with missing fields
+        let input = json!({
+            "name": "test"
+        });
+
+        let output = engine.transform(input).unwrap();
+
+        // Default values should be added
+        assert_eq!(output.get("name").and_then(|v| v.as_str()), Some("test"));
+        assert_eq!(output.get("status").and_then(|v| v.as_str()), Some("pending"));
+        assert_eq!(output.get("count").and_then(|v| v.as_i64()), Some(0));
+    }
+
+    #[test]
+    fn test_invalid_spec_file() {
+        let result = JoltTransformEngine::from_spec_path("/nonexistent/path/spec.json");
+        assert!(result.is_err());
     }
 
     #[test]
