@@ -10,6 +10,7 @@
 //! - Binary stream handling with minimal file I/O
 //! - Integration with harmony proxy via internal router
 
+pub mod common;
 pub mod config;
 pub mod error;
 pub mod router;
@@ -24,7 +25,7 @@ pub mod tls;
 pub use config::{DimseConfig, RemoteNode};
 pub use error::{DimseError, Result};
 pub use router::{DimseRequest, DimseResponse, InMemoryRouter, Router};
-pub use scp::DimseScp;
+pub use scp::{DimseScp, QueryProvider};
 pub use scu::DimseScu;
 pub use types::{DatasetStream, DimseCommand};
 

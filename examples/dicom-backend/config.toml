@@ -31,7 +31,6 @@ path = "./tmp"
 [services.http]
 module = ""
 
-
 # Target definition
 [targets.orthanc]
 connection.host = "localhost"

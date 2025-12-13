@@ -2,7 +2,7 @@ use harmony::config::config::Config;
 use harmony::models::backends::backends::Backend;
 use harmony::models::endpoints::endpoint::Endpoint;
 use harmony::models::network::config::{NetworkConfig, TcpConfig};
-use harmony::models::pipelines::config::Pipeline;
+use harmony::models::pipelines::config::{Pipeline, PipelineMiddleware};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -53,7 +53,7 @@ fn create_test_config_with_backends(backends: Vec<(&str, &str, serde_json::Value
                 networks: vec!["test_network".to_string()],
                 endpoints: vec![],
                 backends: backend_names,
-                middleware: vec![],
+                middleware: PipelineMiddleware::default(),
             },
         );
     }
@@ -106,7 +106,7 @@ fn create_test_config_with_endpoints(endpoints: Vec<(&str, &str, serde_json::Val
                 networks: vec!["test_network".to_string()],
                 endpoints: endpoint_names,
                 backends: vec![],
-                middleware: vec![],
+                middleware: PipelineMiddleware::default(),
             },
         );
     }

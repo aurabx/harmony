@@ -11,7 +11,8 @@ pub struct PipelineInfo {
     pub networks: Vec<String>,
     pub endpoints: Vec<String>,
     pub backends: Vec<String>,
-    pub middleware: Vec<String>,
+    pub middleware_left: Vec<String>,
+    pub middleware_right: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -28,7 +29,8 @@ pub fn get_pipelines_info(pipelines: &HashMap<String, Pipeline>) -> PipelinesRes
             networks: pipeline.networks.clone(),
             endpoints: pipeline.endpoints.clone(),
             backends: pipeline.backends.clone(),
-            middleware: pipeline.middleware.clone(),
+            middleware_left: pipeline.middleware.left_chain(),
+            middleware_right: pipeline.middleware.right_chain(),
         })
         .collect();
 

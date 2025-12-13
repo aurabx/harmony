@@ -11,7 +11,7 @@ Harmony uses a **protocol adapter architecture** where each protocol (HTTP, DIMS
 Prerequisites
 - Rust (stable; repository currently targets recent stable toolchains)
 - macOS or Linux
-- DCMTK (required if you use DICOM DIMSE features: endpoints/backends performing C-ECHO/C-FIND/C-MOVE/C-GET)
+- DCMTK (required for DICOM SCU operations: C-GET and C-MOVE; optional for persistent C-STORE SCP)
   - macOS (Homebrew): `brew install dcmtk`
   - Debian/Ubuntu: `sudo apt-get install dcmtk`
 - Optional: WireGuard kernel module if you plan to use WireGuard features
@@ -104,17 +104,13 @@ Harmony uses environment variables for runtime configuration and security settin
 **RUNBEAM_ENCRYPTION_KEY** - Token storage encryption key (optional for local dev, recommended for containers)
 - Base64-encoded age X25519 key
 - Example: Generated via `age-keygen | base64 | tr -d '\n'`
-- In containers without OS keyring, ensures tokens survive restarts; without it, tokens are lost on restart
+- In containers, ensures tokens survive restarts; without it, tokens are lost on restart
 
 **RUNBEAM_JWT_SECRET** - JWT validation secret for Runbeam Cloud (required for production cloud integration)
 - String (recommend 32+ character random value)
 - Example: Generated via `openssl rand -base64 32`
 - Must match secret configured in Runbeam Cloud
 
-**RUNBEAM_DISABLE_KEYRING** - Force encrypted filesystem storage (testing only, optional)
-- Any value presence enables it
-- Example: `RUNBEAM_DISABLE_KEYRING=1`
-- Used to test encrypted filesystem behavior when OS keyring is available
 
 ### Local Development Example
 
@@ -143,7 +139,7 @@ cargo run --release -- --config /etc/harmony/config.toml
 ```
 
 **Notes**:
-- **RUNBEAM_ENCRYPTION_KEY**: In containers without OS keyring, this ensures tokens survive restarts. Without it, tokens are lost when container restarts. See [Security Documentation](security.md#runbeam_encryption_key) for platform-specific generation commands.
+- **RUNBEAM_ENCRYPTION_KEY**: In containers, this ensures tokens survive restarts. Without it, tokens are lost when container restarts. See [Security Documentation](security.md#runbeam_encryption_key) for platform-specific generation commands.
 - **RUNBEAM_JWT_SECRET**: Required for Runbeam Cloud integration. Falls back to insecure development default with warning.
 - **RUST_LOG**: Controls tracing output. Use `debug` for development, `info` for production.
 

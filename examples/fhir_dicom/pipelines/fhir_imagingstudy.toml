@@ -8,71 +8,20 @@
 description = "GET /ImagingStudy?patient={id}"
 networks = ["default"]
 endpoints = ["fhir_imagingstudy_ep"]
-middleware = [
+backends = ["dicom_backend"]
+middleware.left = [
     "imagingstudy_filter",
     "query_to_target",
     "json_extractor",
     "fhir_dimse_meta",
+    "debug_dump_meta",
     "fhir_to_dicom_transform",
-    "enrich_jmix_urls",
-    "dicom_to_fhir_transform"
 ]
-backends = ["dicom_backend"]
-
-# ------------------------
-# Middleware
-# ------------------------
-
-[middleware.imagingstudy_filter]
-type = "path_filter"
-[middleware.imagingstudy_filter.options]
-# First match wins - rules processed in order
-rules = [
-  { allow = "/ImagingStudy" },  # Allow ImagingStudy endpoint
-  { deny = "/{*rest}" }          # Catch-all: deny all other paths
+middleware.right = [
+    "flatten_dicom",
+    "dicom_to_fhir_bundle",
+    "dump_final_bundle"
 ]
-
-[middleware.query_to_target]
-type = "metadata_transform"
-[middleware.query_to_target.options]
-spec_path = "query_to_target_details.json"
-apply = "left"
-fail_on_error = false
-transform_target = "target_details"
-
-[middleware.json_extractor]
-type = "json_extractor"
-
-[middleware.fhir_dimse_meta]
-type = "metadata_transform"
-[middleware.fhir_dimse_meta.options]
-spec_path = "metadata_set_dimse_op.json"
-apply = "left"
-fail_on_error = true
-
-[middleware.fhir_to_dicom_transform]
-type = "transform"
-[middleware.fhir_to_dicom_transform.options]
-spec_path = "fhir_to_dicom_params.json"
-apply = "left"  # Transform request to DICOM parameters
-fail_on_error = false
-inject_context = true  # Enable context injection for query params access
-
-[middleware.enrich_jmix_urls]
-type = "transform"
-[middleware.enrich_jmix_urls.options]
-spec_path = "enrich_with_jmix_urls.json"
-apply = "right"  # Transform DICOM response to add JMIX URLs
-fail_on_error = false
-inject_context = true
-
-[middleware.dicom_to_fhir_transform]
-type = "transform"
-[middleware.dicom_to_fhir_transform.options]
-spec_path = "dicom_to_imagingstudy_simple.json"
-apply = "right"  # Transform DICOM response to FHIR
-fail_on_error = true
-inject_context = true  # Enable context injection
 
 # ------------------------
 # Endpoints
@@ -88,13 +37,84 @@ path_prefix = "/fhir"
 # ------------------------
 
 # Production DICOM backend (commented for testing)
-#[backends.dicom_backend]
-#service = "dicom_scu"
-#target_ref = "pacs_clinic"  # Uses target definition from config.toml
-#[backends.dicom_backend.options]
-#local_aet = "HARMONY_SCU"
-#aet = "PACSCLINIC"
+[backends.dicom_backend]
+service = "dicom_scu"
+target_ref = "orthanc"
+[backends.dicom_backend.options]
+aet = "ORTHANC" # AET is specific to this backend's view of the target
+local_aet = "HARMONY_SCU"
 
 # Mock backend for testing
-[backends.dicom_backend]
-service = "mock_dicom"
+#[backends.dicom_backend]
+#service = "mock_dicom"
+
+# ------------------------
+# Middleware instances
+# ------------------------
+
+[middleware.debug_dump_meta]
+type = "log_dump"
+[middleware.debug_dump_meta.options]
+label = "after_meta_transform"
+pretty = true
+
+[middleware.imagingstudy_filter]
+type = "path_filter"
+[middleware.imagingstudy_filter.options]
+# First match wins - rules processed in order
+rules = [
+  { allow = "/ImagingStudy" },  # Allow ImagingStudy endpoint
+  { deny = "/{*rest}" }          # Catch-all: deny all other paths
+]
+
+[middleware.query_to_target]
+type = "metadata_transform"
+[middleware.query_to_target.options]
+spec_path = "query_to_target_details.json"
+fail_on_error = false
+transform_target = "target_details"
+
+[middleware.json_extractor]
+type = "json_extractor"
+
+[middleware.fhir_dimse_meta]
+type = "metadata_transform"
+[middleware.fhir_dimse_meta.options]
+spec_path = "metadata_set_dimse_op.json"
+fail_on_error = true
+
+[middleware.fhir_to_dicom_transform]
+type = "transform"
+[middleware.fhir_to_dicom_transform.options]
+spec_path = "fhir_to_dicom_params.json"
+fail_on_error = false
+
+
+[middleware.flatten_dicom]
+type = "dicom_flatten"
+[middleware.flatten_dicom.options]
+apply = "right"
+
+[middleware.dicom_to_fhir_bundle]
+type = "transform"
+[middleware.dicom_to_fhir_bundle.options]
+spec_path = "dicom_to_fhir_bundle.json"
+fail_on_error = true
+
+[middleware.dump_final_bundle]
+type = "log_dump"
+[middleware.dump_final_bundle.options]
+label = "final_fhir_bundle"
+pretty = true
+
+#[middleware.enrich_jmix_urls]
+#type = "transform"
+#[middleware.enrich_jmix_urls.options]
+#spec_path = "enrich_with_jmix_urls.json"
+#fail_on_error = false
+#
+#[middleware.dump_after_jmix]
+#type = "log_dump"
+#[middleware.dump_after_jmix.options]
+#label = "after_jmix_enrichment"
+#pretty = true

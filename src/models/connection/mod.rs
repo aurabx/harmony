@@ -11,6 +11,21 @@ pub struct ConnectionConfig {
     pub base_path: Option<String>,
 }
 
+impl ConnectionConfig {
+    /// Constructs a base URL from the connection configuration
+    pub fn to_base_url(&self) -> String {
+        let protocol = self.protocol.as_deref().unwrap_or("http");
+        let port = self.port.map(|p| format!(":{}", p)).unwrap_or_default();
+        let path = self.base_path.as_deref().unwrap_or("");
+        let path = if !path.is_empty() && !path.starts_with('/') {
+            format!("/{}", path)
+        } else {
+            path.to_string()
+        };
+        format!("{}://{}{}{}", protocol, self.host, port, path)
+    }
+}
+
 /// Global authentication definition (DSL v1.9.0+)
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 pub struct AuthenticationDefinition {

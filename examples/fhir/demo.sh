@@ -42,6 +42,14 @@ echo ""
 # Setup directories
 echo -e "${YELLOW}Setting up test environment...${NC}"
 mkdir -p "$TMP_DIR"
+
+# Kill any stale harmony processes that might be holding our port
+if lsof -i :$HARMONY_PORT -t > /dev/null 2>&1; then
+    echo -e "${YELLOW}  Killing stale process on port $HARMONY_PORT...${NC}"
+    lsof -i :$HARMONY_PORT -t | xargs kill -9 2>/dev/null || true
+    sleep 1
+fi
+
 echo -e "${GREEN}✓ Test environment ready${NC}"
 echo ""
 

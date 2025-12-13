@@ -97,11 +97,19 @@ module=""
 [middleware_types.path_filter]
 module=""
 
+[middleware_types.log_dump]
+module=""
+
+[middleware_types.dicom_flatten]
+module=""
+
+[middleware_types.dicom_unflatten]
+module=""
+
 # ------------------------
 # Target Definitions
 #-------------------------
-[targets.pacs_clinic]
-connection.host = "127.0.0.1"
-connection.port = 104
+[targets.orthanc]
+connection.host = "localhost"
+connection.port = 4242
 connection.protocol = "dicom"
-timeout_secs = 60

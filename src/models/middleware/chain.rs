@@ -30,14 +30,23 @@ impl MiddlewareChain {
     }
 
     /// Processes the response envelope through the "right" middleware chain.
+    /// If `reverse` is true, processes middleware in reverse order.
+    /// If `reverse` is false, processes middleware in the order specified.
     pub async fn right(
         &self,
         mut envelope: ResponseEnvelope<serde_json::Value>,
+        reverse: bool,
     ) -> Result<ResponseEnvelope<serde_json::Value>, Error> {
-        // Process middleware in reverse order for right-side processing
-        for middleware in self.middlewares.iter().rev() {
-            // Pass the envelope through the middleware
-            envelope = middleware.right(envelope).await?;
+        if reverse {
+            // Process middleware in reverse order (for List format)
+            for middleware in self.middlewares.iter().rev() {
+                envelope = middleware.right(envelope).await?;
+            }
+        } else {
+            // Process middleware in specified order (for Split format)
+            for middleware in self.middlewares.iter() {
+                envelope = middleware.right(envelope).await?;
+            }
         }
         Ok(envelope)
     }

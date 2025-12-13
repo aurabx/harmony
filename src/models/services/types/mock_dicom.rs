@@ -749,7 +749,7 @@ impl MockDicomEndpoint {
         envelope: &mut RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-        // Extract path for context and resolve operation (check normalized_data first)
+        // Extract path for context and resolve operation
         let path = envelope
             .normalized_data
             .as_ref()
@@ -758,12 +758,13 @@ impl MockDicomEndpoint {
             .or_else(|| Some(crate::models::services::path_utils::extract_path(envelope)))
             .unwrap_or_default();
 
+        // Check metadata for dimse_op (set by middleware)
+        // Fallback to path if not set
         let op = envelope
-            .normalized_data
-            .as_ref()
-            .and_then(|nd| nd.get("dimse_op").and_then(|op| op.as_str()))
-            .map(|s| s.to_string())
-            .or_else(|| envelope.request_details.metadata.get("dimse_op").cloned())
+            .request_details
+            .metadata
+            .get("dimse_op")
+            .cloned()
             .unwrap_or_else(|| path.clone());
 
         let result = match op.as_str() {

@@ -2,13 +2,62 @@
 
 ## [Unreleased]
 
+## [0.10.0] - 2025-12-11
+
 ### Added
+- Debug logging support for JOLT transforms (enable with `debug = true` in transform middleware config)
+- Environment variable validation: `proxy.required_env_vars` field enforces required environment variables at startup with clear error messages
+- Sensitive field patterns: `proxy.sensitive_field_patterns` field for log redaction rules
+- JWT authentication: Support for deprecated `leeway_seconds` field as fallback to `leeway_secs` for backward compatibility
 
 ### Changed
+- Transform pipeline behavior improved for better handling of nested array structures
+- Query parameter handling improved to preserve parameters set by middleware
+- Target details now available earlier in the request processing pipeline
 
 ### Fixed
+- Transform arrays now handled correctly (via harmony-jolt 0.7)
+- Query parameters are now properly cleared if provided by middleware
+- Target details can now be set in transforms without requiring pre-existing entry
+- Test suite improvements and stability fixes
+
+### Dependencies
+- Updated harmony-jolt to 0.7.0 for improved array transformation handling
+
+## [0.9.0] - 2025-12-07
+
+### Highlights
+- Enhanced debugging and data transformation capabilities with new middleware
+- Improved DICOM handling with structure flattening/unflattening
+- Extended DIMSE SCP service with C-STORE support
+- Configuration flexibility with environment variable replacement
+- Refactored and streamlined DIMSE implementation
+
+### Added
+- (AURA-2226) Data dumper middleware for inspecting and debugging pipeline data
+- New `dicom_flatten` and `dicom_unflatten` middleware for flattening DICOM structures in pipelines
+- Additional `left` / `right` transform application options in middleware configuration
+- Filesystem/S3 backend type
+- Support C-STORE on the DIMSE SCP service
+- Support for environment variable replacement in configuration files
+
+### Changed
+- Transform pipeline now uses a more consistent internal data structure for normalized/transform data
+- DIMSE crates (SCU/SCP) refactored to reduce reliance on dcmtk and improve maintainability
+- Demo scripts updated to reflect current examples and configuration
+- Minor internal cleanups
+
+### Fixed
+- Transform behavior and FHIR DICOM example pipeline reliability improvements
+- FHIR and FHIR-DICOM example authentication and configuration issues
+- DIMSE task handling and related example correctness
+- Doctest stability and test-only file handling
+- Improved configuration error handling
+- Config reload blocking on first run
 
 ### Documentation
+- General docs improvements and pass over existing content
+- Chore-level documentation updates and AI assistant rules refinements
 
 ### Dependencies
 
@@ -147,10 +196,10 @@
 - Runbeam Cloud integration for gateway authentication and authorization
 - Production-ready DICOM SCP implementation with full C-ECHO, C-FIND, C-GET, C-MOVE support
 - Enhanced security with encryption key management and token storage
-- Migration from fluvio-jolt to harmony-jolt for transform middleware
+- Migration from fulvio-jolt to jolt-rs for transform middleware
 
 ### Breaking Changes
-- Transform middleware now requires harmony-jolt instead of fluvio-jolt
+- Transform middleware now requires jolt-rs instead of fluvio-jolt
 - JOLT specification format remains compatible but dependency has changed
 
 ### Added
@@ -200,7 +249,7 @@
 - Path filter middleware TOML serialization fixes
 
 ### Changed
-- Replaced fluvio-jolt dependency with harmony-jolt for transform middleware
+- Replaced fulvio-jolt dependency with jolt-rs for transform middleware
   - Maintains compatibility with existing JOLT specifications
   - Improved performance and reliability
 - Updated runbeam-sdk integration to latest version
@@ -356,6 +405,8 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.10.0]: https://github.com/aurabx/harmony/compare/0.9.0...0.10.0
+[0.9.0]: https://github.com/aurabx/harmony/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/aurabx/harmony/compare/0.7.1...0.8.0
 [0.7.1]: https://github.com/aurabx/harmony/compare/0.7.0...0.7.1
 [0.7.0]: https://github.com/aurabx/harmony/compare/0.6.0...0.7.0

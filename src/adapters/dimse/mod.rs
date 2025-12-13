@@ -101,7 +101,7 @@ impl ProtocolAdapter for DimseAdapter {
             for backend_name in &pipeline_cfg.backends {
                 if let Some(backend) = config.backends.get(backend_name) {
                     // Legacy persistent DICOM SCP backends
-                    if backend.service == "dicom" {
+                    if backend.service == "dicom" || backend.service == "dicom_scu" {
                         if let Some(options) = &backend.options {
                             let needs_persistent = options
                                 .get("persistent_store_scp")

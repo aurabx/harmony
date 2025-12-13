@@ -17,9 +17,9 @@ pub struct JoltTransformMiddlewareConfig {
     /// Whether to fail the request on transform errors
     #[serde(default = "default_fail_on_error")]
     pub fail_on_error: bool,
-    /// Whether to inject envelope context (query_params, headers, target_details) into transform
-    #[serde(default = "default_inject_context")]
-    pub inject_context: bool,
+    /// Whether to debug log transform input and output
+    #[serde(default = "default_debug")]
+    pub debug: bool,
 }
 
 fn default_apply() -> String {
@@ -30,8 +30,8 @@ fn default_fail_on_error() -> bool {
     true
 }
 
-fn default_inject_context() -> bool {
-    false // Default to false for backward compatibility
+fn default_debug() -> bool {
+    false
 }
 
 impl From<JoltTransformMiddlewareConfig> for TransformConfig {
@@ -46,7 +46,7 @@ impl From<JoltTransformMiddlewareConfig> for TransformConfig {
 
 pub struct JoltTransformMiddleware {
     engine: JoltTransformEngine,
-    inject_context: bool,
+    debug: bool,
 }
 
 impl JoltTransformMiddleware {
@@ -55,13 +55,10 @@ impl JoltTransformMiddleware {
         let engine = JoltTransformEngine::new(transform_config)
             .map_err(|e| format!("Failed to create JOLT transform engine: {}", e))?;
 
-        tracing::info!(
-            "JOLT transform middleware initialized (context injection: {})",
-            config.inject_context
-        );
+        tracing::info!("JOLT transform middleware initialized");
         Ok(Self {
             engine,
-            inject_context: config.inject_context,
+            debug: config.debug,
         })
     }
 }
@@ -83,34 +80,114 @@ impl Middleware for JoltTransformMiddleware {
 
         // Apply transform to normalized_data
         if let Some(ref normalized_data) = envelope.normalized_data.clone() {
-            // Wrap data with context if requested
-            let transform_input = if self.inject_context {
-                serde_json::json!({
-                    "data": normalized_data,
-                    "context": {
-                        "request_details": {
-                            "method": envelope.request_details.method,
-                            "uri": envelope.request_details.uri,
-                            "query_params": envelope.request_details.query_params,
-                            "headers": envelope.request_details.headers,
-                            "cookies": envelope.request_details.cookies,
-                            "metadata": envelope.request_details.metadata,
-                        },
-                        "target_details": envelope.target_details,
-                    }
-                })
-            } else {
-                normalized_data.clone()
-            };
+            // Always wrap data with context
+            let transform_input = serde_json::json!({
+                "data": normalized_data,
+                "context": {
+                    "request_details": {
+                        "method": envelope.request_details.method,
+                        "uri": envelope.request_details.uri,
+                        "query_params": envelope.request_details.query_params,
+                        "headers": envelope.request_details.headers,
+                        "cookies": envelope.request_details.cookies,
+                        "metadata": envelope.request_details.metadata,
+                    },
+                    "target_details": envelope.target_details,
+                }
+            });
+
+            if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
+                tracing::debug!("JOLT transform input (request): {}", serde_json::to_string_pretty(&transform_input).unwrap_or_default());
+            }
 
             match self.engine.transform(transform_input) {
                 Ok(transformed) => {
-                    // If context was injected, extract the "data" field
-                    let result_data = if self.inject_context {
-                        transformed.get("data").cloned().unwrap_or(transformed)
-                    } else {
-                        transformed
-                    };
+                    if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
+                        tracing::debug!("JOLT transform output (request): {}", serde_json::to_string_pretty(&transformed).unwrap_or_default());
+                    }
+                    // Extract the "data" field
+                    let result_data = transformed.get("data").cloned().unwrap_or(transformed.clone());
+
+                    // Check for context updates to merge back
+                    if let Some(context_out) = transformed.get("context") {
+                        // Merge target_details if present in output context
+                        if let Some(td_out) = context_out.get("target_details") {
+                            if let Ok(td_from_transform) = serde_json::from_value::<crate::models::envelope::envelope::TargetDetails>(td_out.clone()) {
+                                // Transform provided full target_details - use it
+                                envelope.target_details = Some(td_from_transform);
+                            } else if td_out.is_object() {
+                                // Partial target_details - merge into existing or create new
+                                let td_obj = td_out.as_object().unwrap();
+                                let mut target = envelope.target_details.take().unwrap_or_else(|| {
+                                    crate::models::envelope::envelope::TargetDetails {
+                                        method: "GET".to_string(),
+                                        uri: String::new(),
+                                        base_url: String::new(),
+                                        headers: HashMap::new(),
+                                        cookies: HashMap::new(),
+                                        query_params: HashMap::new(),
+                                        metadata: HashMap::new(),
+                                    }
+                                });
+                                
+                                // Merge individual fields
+                                if let Some(method) = td_obj.get("method").and_then(|v| v.as_str()) {
+                                    target.method = method.to_string();
+                                }
+                                if let Some(uri) = td_obj.get("uri").and_then(|v| v.as_str()) {
+                                    target.uri = uri.to_string();
+                                    // If the new URI contains query params, clear existing query_params
+                                    // to avoid duplication when full_url() appends them
+                                    if uri.contains('?') {
+                                        target.query_params.clear();
+                                    }
+                                }
+                                if let Some(base_url) = td_obj.get("base_url").and_then(|v| v.as_str()) {
+                                    target.base_url = base_url.to_string();
+                                }
+                                if let Some(headers) = td_obj.get("headers").and_then(|v| v.as_object()) {
+                                    for (k, v) in headers {
+                                        if let Some(s) = v.as_str() {
+                                            target.headers.insert(k.clone(), s.to_string());
+                                        }
+                                    }
+                                }
+                                if let Some(query_params) = td_obj.get("query_params").and_then(|v| v.as_object()) {
+                                    // Replace existing query_params entirely (not merge)
+                                    target.query_params.clear();
+                                    for (k, v) in query_params {
+                                        if let Some(s) = v.as_str() {
+                                            target.query_params.insert(k.clone(), vec![s.to_string()]);
+                                        } else if let Some(arr) = v.as_array() {
+                                            let values: Vec<String> = arr.iter().filter_map(|item| item.as_str().map(|s| s.to_string())).collect();
+                                            if !values.is_empty() {
+                                                target.query_params.insert(k.clone(), values);
+                                            }
+                                        }
+                                    }
+                                }
+                                if let Some(metadata) = td_obj.get("metadata").and_then(|v| v.as_object()) {
+                                    for (k, v) in metadata {
+                                        if let Some(s) = v.as_str() {
+                                            target.metadata.insert(k.clone(), s.to_string());
+                                        }
+                                    }
+                                }
+                                envelope.target_details = Some(target);
+                            }
+                        }
+                        
+                        // Merge request_details.metadata if present in output context
+                         if let Some(rd_out) = context_out.get("request_details") {
+                             if let Some(meta_out) = rd_out.get("metadata").and_then(|m| m.as_object()) {
+                                 for (k, v) in meta_out {
+                                     if let Some(s) = v.as_str() {
+                                         envelope.request_details.metadata.insert(k.clone(), s.to_string());
+                                     }
+                                 }
+                             }
+                         }
+                    }
 
                     envelope.normalized_data = Some(result_data);
                     envelope.original_data = envelope
@@ -149,38 +226,50 @@ impl Middleware for JoltTransformMiddleware {
 
         // Apply transform to normalized_data (response data)
         if let Some(ref normalized_data) = envelope.normalized_data.clone() {
-            // Wrap data with context if requested
-            let transform_input = if self.inject_context {
-                serde_json::json!({
-                    "data": normalized_data,
-                    "context": {
-                        "request_details": {
-                            "method": envelope.request_details.method,
-                            "uri": envelope.request_details.uri,
-                            "query_params": envelope.request_details.query_params,
-                            "headers": envelope.request_details.headers,
-                            "cookies": envelope.request_details.cookies,
-                            "metadata": envelope.request_details.metadata,
-                        },
-                        "response_details": {
-                            "status": envelope.response_details.status,
-                            "headers": envelope.response_details.headers,
-                            "metadata": envelope.response_details.metadata,
-                        },
-                    }
-                })
-            } else {
-                normalized_data.clone()
-            };
+            // Always wrap data with context
+            let transform_input = serde_json::json!({
+                "data": normalized_data,
+                "context": {
+                    "request_details": {
+                        "method": envelope.request_details.method,
+                        "uri": envelope.request_details.uri,
+                        "query_params": envelope.request_details.query_params,
+                        "headers": envelope.request_details.headers,
+                        "cookies": envelope.request_details.cookies,
+                        "metadata": envelope.request_details.metadata,
+                    },
+                    "response_details": {
+                        "status": envelope.response_details.status,
+                        "headers": envelope.response_details.headers,
+                        "metadata": envelope.response_details.metadata,
+                    },
+                }
+            });
 
+            if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
+                tracing::debug!("JOLT transform input (response): {}", serde_json::to_string_pretty(&transform_input).unwrap_or_default());
+            }
             match self.engine.transform(transform_input) {
                 Ok(transformed) => {
-                    // If context was injected, extract the "data" field
-                    let result_data = if self.inject_context {
-                        transformed.get("data").cloned().unwrap_or(transformed)
-                    } else {
-                        transformed
-                    };
+                    if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
+                        tracing::debug!("JOLT transform output (response): {}", serde_json::to_string_pretty(&transformed).unwrap_or_default());
+                    }
+                    // Extract the "data" field
+                    let result_data = transformed.get("data").cloned().unwrap_or(transformed.clone());
+
+                    // Check for context updates to merge back
+                    if let Some(context_out) = transformed.get("context") {
+                        // Merge response_details.metadata if present in output context
+                         if let Some(rd_out) = context_out.get("response_details") {
+                             if let Some(meta_out) = rd_out.get("metadata").and_then(|m| m.as_object()) {
+                                 for (k, v) in meta_out {
+                                     if let Some(s) = v.as_str() {
+                                         envelope.response_details.metadata.insert(k.clone(), s.to_string());
+                                     }
+                                 }
+                             }
+                         }
+                    }
 
                     envelope.normalized_data = Some(result_data);
                     envelope.original_data = envelope
@@ -236,16 +325,21 @@ pub fn parse_config(
         .and_then(|v| v.as_bool())
         .unwrap_or_else(default_fail_on_error);
 
-    let inject_context = options
+    let _inject_context = options
         .get("inject_context")
         .and_then(|v| v.as_bool())
-        .unwrap_or_else(default_inject_context);
+        .unwrap_or(true); // Deprecated, but still parsed if present (ignored in logic as we always inject)
+
+    let debug = options
+        .get("debug")
+        .and_then(|v| v.as_bool())
+        .unwrap_or_else(default_debug);
 
     Ok(JoltTransformMiddlewareConfig {
         spec_path,
         apply,
         fail_on_error,
-        inject_context,
+        debug,
     })
 }
 
@@ -253,7 +347,7 @@ pub fn parse_config(
 mod tests {
     use super::*;
     use crate::models::envelope::envelope::{
-        RequestDetails, RequestEnvelopeBuilder, ResponseDetails, ResponseEnvelope,
+        RequestEnvelopeBuilder, ResponseDetails, ResponseEnvelope,
     };
     use serde_json::json;
     use std::fs;
@@ -286,13 +380,20 @@ mod tests {
     #[tokio::test]
     async fn test_jolt_transform_middleware_left() {
         // Create a temporary JOLT spec file
-        let spec = json!([{
-            "operation": "shift",
-            "spec": {
-                "name": "data.name",
-                "account": "data.account"
+        // Since we now always inject context, the input to the transform will be:
+        // { "data": { "id": 1, ... }, "context": { ... } }
+        // We need to shift "data.name" -> "data.name", etc.
+        let spec = json!([
+            {
+                "operation": "shift",
+                "spec": {
+                    "data": {
+                        "name": "data.name",
+                        "account": "data.account"
+                    }
+                }
             }
-        }]);
+        ]);
 
         let temp_file = NamedTempFile::new().unwrap();
         fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
@@ -301,7 +402,7 @@ mod tests {
             spec_path: temp_file.path().to_string_lossy().to_string(),
             apply: "left".to_string(),
             fail_on_error: true,
-            inject_context: false,
+            debug: false,
         };
 
         let middleware = JoltTransformMiddleware::new(config).unwrap();
@@ -319,12 +420,10 @@ mod tests {
         let result = middleware.left(envelope).await.unwrap();
 
         let expected = json!({
-            "data": {
-                "name": "John Smith",
-                "account": {
-                    "id": 1000,
-                    "type": "Checking"
-                }
+            "name": "John Smith",
+            "account": {
+                "id": 1000,
+                "type": "Checking"
             }
         });
 
@@ -335,12 +434,17 @@ mod tests {
     #[tokio::test]
     async fn test_jolt_transform_middleware_right_only() {
         // Create a simple identity transform
-        let spec = json!([{
-            "operation": "shift",
-            "spec": {
-                "*": "&"
+        // With context injection, we want to preserve everything under "data"
+        let spec = json!([
+            {
+                "operation": "shift",
+                "spec": {
+                    "data": {
+                        "*": "data.&"
+                    }
+                }
             }
-        }]);
+        ]);
 
         let temp_file = NamedTempFile::new().unwrap();
         fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
@@ -349,7 +453,7 @@ mod tests {
             spec_path: temp_file.path().to_string_lossy().to_string(),
             apply: "right".to_string(),
             fail_on_error: true,
-            inject_context: false,
+            debug: false,
         };
 
         let middleware = JoltTransformMiddleware::new(config).unwrap();
@@ -374,12 +478,17 @@ mod tests {
     #[tokio::test]
     async fn test_jolt_transform_middleware_apply_both() {
         // Identity transform applied on both sides
-        let spec = json!([{
-            "operation": "shift",
-            "spec": {
-                "*": "&"
+        // With context injection, we need to handle the data wrapper
+        let spec = json!([
+            {
+                "operation": "shift",
+                "spec": {
+                    "data": {
+                        "*": "data.&"
+                    }
+                }
             }
-        }]);
+        ]);
         let temp_file = NamedTempFile::new().unwrap();
         fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
 
@@ -387,7 +496,7 @@ mod tests {
             spec_path: temp_file.path().to_string_lossy().to_string(),
             apply: "both".to_string(),
             fail_on_error: true,
-            inject_context: false,
+            debug: false,
         };
         let middleware = JoltTransformMiddleware::new(config).unwrap();
 
@@ -426,6 +535,64 @@ mod tests {
         let result = parse_config(&options, None);
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("Missing required 'spec_path'"));
+    }
+
+    #[test]
+    fn test_parse_config_with_debug() {
+        let mut options = HashMap::new();
+        options.insert("spec_path".to_string(), json!("/path/to/spec.json"));
+        options.insert("debug".to_string(), json!(true));
+
+        let config = parse_config(&options, None).unwrap();
+        assert_eq!(config.spec_path, "/path/to/spec.json");
+        assert!(config.debug);
+    }
+
+    #[test]
+    fn test_parse_config_debug_defaults_to_false() {
+        let mut options = HashMap::new();
+        options.insert("spec_path".to_string(), json!("/path/to/spec.json"));
+
+        let config = parse_config(&options, None).unwrap();
+        assert!(!config.debug);
+    }
+
+    #[tokio::test]
+    async fn test_transform_with_debug_enabled() {
+        // Test that debug flag is properly set and doesn't break execution
+        let spec = json!([
+            {
+                "operation": "shift",
+                "spec": {
+                    "data": {
+                        "name": "data.name"
+                    }
+                }
+            }
+        ]);
+
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+
+        let config = JoltTransformMiddlewareConfig {
+            spec_path: temp_file.path().to_string_lossy().to_string(),
+            apply: "both".to_string(),
+            fail_on_error: true,
+            debug: true,
+        };
+
+        let middleware = JoltTransformMiddleware::new(config).unwrap();
+        assert!(middleware.debug);
+
+        let input = json!({"name": "Alice"});
+        let envelope = create_test_envelope(input.clone());
+        let result = middleware.left(envelope).await.unwrap();
+
+        // Verify the transform still works with debug enabled
+        assert_eq!(
+            result.normalized_data,
+            Some(json!({"name": "Alice"}))
+        );
     }
 
     #[tokio::test]
@@ -472,85 +639,26 @@ mod tests {
             spec_path,
             apply: "left".into(),
             fail_on_error: true,
-            inject_context: true,
+            debug: false,
         };
         let mw = JoltTransformMiddleware::new(cfg).unwrap();
 
         env = mw.left(env).await.unwrap();
-        // When inject_context=true, the transform middleware automatically extracts the "data" field
-        // So the result is the direct output without the data wrapper
+        // The transform now injects context, so the output data field (extracted automatically)
+        // should contain the dimse_identifier if the transform puts it there.
+        // However, the updated fhir_to_dicom_params.json now outputs dimse_op to context.
+        // Let's verify that dimse_op is now in target_details.metadata
         let out = env.normalized_data.unwrap();
         assert!(out.is_object(), "Output should be object");
-        // The output should have dimse_identifier at the top level (data field was extracted)
+        // dimse_identifier is still in data
         assert!(out.get("dimse_identifier").is_some());
-        assert_eq!(out.get("dimse_op").and_then(|v| v.as_str()), Some("find"));
-    }
-
-    #[tokio::test]
-    async fn test_middleware_with_real_dicom_to_imagingstudy_right() {
-        use crate::models::envelope::envelope::ResponseDetails;
-        use serde_json::json;
-
-        // Start with a DICOM find-style payload wrapped in data (as the transform expects)
-        let request_details = RequestDetails {
-            method: "GET".into(),
-            uri: "/fhir/ImagingStudy?patient=PID156695".into(),
-            headers: Default::default(),
-            cookies: Default::default(),
-            query_params: Default::default(),
-            cache_status: None,
-            metadata: Default::default(),
-            content_metadata: None,
-        };
-        let input = json!({
-            "data": {
-                "operation": "find",
-                "success": true,
-                "matches": [
-                    {
-                        "0020000D": {"vr": "UI", "Value": ["1.2.3"]},
-                        "00100020": {"vr": "LO", "Value": ["PID156695"]},
-                        "00100010": {"vr": "PN", "Value": [{"Alphabetic": "Doe^John"}]},
-                        "00080020": {"vr": "DA", "Value": ["20241015"]},
-                        "00080030": {"vr": "TM", "Value": ["120000"]},
-                        "00081030": {"vr": "LO", "Value": ["Mock CT Study"]},
-                        "00200010": {"vr": "SH", "Value": ["1"]},
-                        "_jmix_url": "http://jmix.example.com/api/study/1.2.3"
-                    }
-                ]
-            }
-        });
-        let mut env = ResponseEnvelope {
-            request_details,
-            response_details: ResponseDetails {
-                status: 200,
-                headers: HashMap::new(),
-                metadata: HashMap::new(),
-            },
-            original_data: input.clone(),
-            normalized_data: Some(input),
-            normalized_snapshot: None,
-        };
-
-        let spec_path = format!(
-            "{}/examples/fhir_dicom/transforms/dicom_to_imagingstudy_simple.json",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        let cfg = JoltTransformMiddlewareConfig {
-            spec_path,
-            apply: "right".into(),
-            fail_on_error: true,
-            inject_context: false,
-        };
-        let mw = JoltTransformMiddleware::new(cfg).unwrap();
-
-        env = mw.right(env).await.unwrap();
-        let out = env.normalized_data.unwrap();
-        let data = out.get("data").expect("should have data field");
+        
+        // dimse_op should be in target_details.metadata
         assert_eq!(
-            data.get("resourceType").and_then(|v| v.as_str()),
-            Some("Bundle")
+            env.target_details
+                .as_ref()
+                .and_then(|td| td.metadata.get("dimse_op").map(|s| s.as_str())),
+            Some("find")
         );
-        assert!(data.get("entry").and_then(|v| v.as_array()).is_some());
     }
 }

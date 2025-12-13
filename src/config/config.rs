@@ -1,3 +1,4 @@
+use crate::config::env_substitution::substitute_env_vars;
 use crate::config::logging_config::LoggingConfig;
 use crate::config::proxy_config::ProxyConfig;
 use crate::config::resolution::resolve_references;
@@ -219,7 +220,7 @@ impl Config {
                     networks: vec![network],
                     endpoints: vec!["management".to_string()],
                     backends: vec!["management".to_string()],
-                    middleware: Vec::new(),
+                    middleware: crate::models::pipelines::config::PipelineMiddleware::default(),
                 },
             );
         }
@@ -250,7 +251,10 @@ impl Config {
         // Load the base configuration file
         let contents =
             std::fs::read_to_string(&cli.config_path).expect("Failed to read config file");
-        let mut config: Config = toml::from_str(&contents).expect("Failed to parse config");
+        
+        // Apply environment variable substitution
+        let (contents_substituted, _audit) = substitute_env_vars(&contents);
+        let mut config: Config = toml::from_str(&contents_substituted).expect("Failed to parse config");
 
         // Resolve transforms_path relative to config file directory
         let base_dir = config_path
@@ -330,10 +334,14 @@ impl Config {
             let path = entry.path();
             if path.is_file() && path.extension().is_some_and(|ext| ext == "toml") {
                 match fs::read_to_string(&path) {
-                    Ok(contents) => match toml::from_str(&contents) {
-                        Ok(config) => configs.push(config),
-                        Err(e) => {
-                            tracing::error!("Failed to parse config file {:?}: {}", path, e);
+                    Ok(contents) => {
+                        // Apply environment variable substitution
+                        let (contents_substituted, _audit) = substitute_env_vars(&contents);
+                        match toml::from_str(&contents_substituted) {
+                            Ok(config) => configs.push(config),
+                            Err(e) => {
+                                tracing::error!("Failed to parse config file {:?}: {}", path, e);
+                            }
                         }
                     },
                     Err(e) => {
@@ -353,6 +361,15 @@ impl Config {
             base.network.extend(config.network);
             base.endpoints.extend(config.endpoints);
             base.backends.extend(config.backends);
+            // Debug log pipelines being merged
+            for (name, pipeline) in &config.pipelines {
+                tracing::debug!(
+                    "Merging pipeline '{}': left_chain={:?}, right_chain={:?}",
+                    name,
+                    pipeline.middleware.left_chain(),
+                    pipeline.middleware.right_chain()
+                );
+            }
             base.pipelines.extend(config.pipelines);
             // base.transforms.extend(config.transforms);
             base.targets.extend(config.targets);
@@ -389,12 +406,24 @@ impl Config {
     }
 
     fn validate_proxy(&self) -> Result<(), ConfigError> {
+        // Validate basic proxy config
         self.proxy
             .validate()
             .map_err(|e| ConfigError::InvalidProxy {
                 name: self.proxy.id.clone(),
                 reason: e,
-            })
+            })?;
+
+        // Enforce required environment variables (Harmony DSL 1.9.0)
+        for var in &self.proxy.required_env_vars {
+            if std::env::var(var).is_err() {
+                return Err(ConfigError::InvalidProxy {
+                    name: self.proxy.id.clone(),
+                    reason: format!("Missing required environment variable: {}", var),
+                });
+            }
+        }
+        Ok(())
     }
 
     fn validate_logging(&self) -> Result<(), ConfigError> {
@@ -475,7 +504,7 @@ impl Config {
             // Warn if middleware is empty
             if pipeline.middleware.is_empty() {
                 tracing::warn!(
-                    "Pipeline '{}' has an empty middleware of middleware/services",
+                    "Pipeline '{}' has no middleware configured",
                     name
                 );
             }
@@ -604,8 +633,8 @@ impl Config {
                 // Built-in middleware, validate that it exists
                 match name.as_str() {
                     "jwtauth" | "basic_auth" | "connect" | "passthru" | "json_extractor"
-                    | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "transform"
-                    | "metadata_transform" | "path_filter" | "policies" => {}
+                    | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "dicom_flatten"
+                    | "dicom_unflatten" | "transform" | "metadata_transform" | "path_filter" | "policies" | "log_dump" => {}
                     _ => {
                         return Err(ConfigError::InvalidMiddleware {
                             name: name.clone(),

@@ -1,0 +1,100 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "data": {
+        "matches": {
+          "*": {
+            "0020000D": ["data.entry.&(1).resource.identifiers.study.value", "data.entry.&(1).resource.id"],
+            "00080050": "data.entry.&(1).resource.identifiers.accession.value",
+            "00100020": "data.entry.&(1).resource.subject.value",
+            "00080020": "data.entry.&(1).resource.started"
+          }
+        }
+      }
+    }
+  },
+  {
+    "operation": "shift",
+    "spec": {
+      "data": {
+        "entry": {
+          "*": {
+            "resource": {
+              "identifiers": {
+                "study": {
+                  "value": "temp.entry.&(4).resource.identifiers.study.value",
+                  "#urn:dicom:uid": "temp.entry.&(4).resource.identifier[0].system",
+                  "#official": "temp.entry.&(4).resource.identifier[0].use"
+                },
+                "accession": {
+                  "value": "temp.entry.&(4).resource.identifier[1].value",
+                  "#http://hospital\\.example\\.org/accession": "temp.entry.&(4).resource.identifier[1].system",
+                  "#usual": "temp.entry.&(4).resource.identifier[1].use"
+                }
+              },
+              "id": "temp.entry.&(2).resource.id",
+              "subject": {
+                "value": "temp.entry.&(3).resource.subject.identifier.value",
+                "#http://hospital\\.example\\.org/patients": "temp.entry.&(3).resource.subject.identifier.system"
+              },
+              "started": "temp.entry.&(2).resource.started",
+              "#ImagingStudy": "temp.entry.&(2).resource.resourceType",
+              "#available": "temp.entry.&(2).resource.status"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "operation": "modify-overwrite-beta",
+    "spec": {
+      "temp": {
+        "entry": {
+          "*": {
+            "resource": {
+              "identifiers": {
+                "study": {
+                  "value": "=concat('urn:oid:',@(1,value))"
+                }
+              },
+              "started": "=concat(=substring(@(1,started),0,4),'-',=substring(@(1,started),4,6),'-',=substring(@(1,started),6,8))"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "operation": "shift",
+    "spec": {
+      "temp": {
+        "entry": {
+          "*": {
+            "resource": {
+              "identifiers": {
+                "study": {
+                  "value": "entry[&(4)].resource.identifier[0].value"
+                }
+              },
+              "id": "entry[&(2)].resource.id",
+              "identifier": "entry[&(2)].resource.identifier",
+              "subject": "entry[&(2)].resource.subject",
+              "started": "entry[&(2)].resource.started",
+              "resourceType": "entry[&(2)].resource.resourceType",
+              "status": "entry[&(2)].resource.status"
+            }
+          }
+        }
+      }
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "resourceType": "Bundle",
+      "type": "collection"
+    }
+  }
+]

@@ -46,10 +46,11 @@ impl HttpAdapter {
             .unwrap_or("");
 
         let path_only = req.uri().path().to_string();
+        // Clean trailing semicolons from query strings (some clients/middleware add them)
         let full_path_with_query = req
             .uri()
             .path_and_query()
-            .map(|pq| pq.as_str().to_string())
+            .map(|pq| pq.as_str().trim_end_matches(';').to_string())
             .unwrap_or_else(|| path_only.clone());
 
         // Strip prefix from path and remove leading slash
@@ -65,6 +66,7 @@ impl HttpAdapter {
         let subpath_with_query = full_path_with_query
             .strip_prefix(path_prefix)
             .unwrap_or(&full_path_with_query)
+            .trim_end_matches(';')
             .to_string();
 
         // Headers
@@ -108,15 +110,18 @@ impl HttpAdapter {
         };
 
         // Query params
+        // Note: Semicolons in query strings can be alternative separators (RFC 3986)
+        // or trailing artifacts from some clients. We strip trailing semicolons from values.
         let query_obj: serde_json::Value = {
             let mut root = serde_json::Map::new();
             if let Some(q) = req.uri().query() {
                 for (k, v) in url::form_urlencoded::parse(q.as_bytes()) {
+                    let clean_value = v.trim_end_matches(';').to_string();
                     root.entry(k.to_string())
                         .or_insert_with(|| serde_json::Value::Array(vec![]))
                         .as_array_mut()
                         .unwrap()
-                        .push(serde_json::Value::String(v.to_string()));
+                        .push(serde_json::Value::String(clean_value));
                 }
             }
             serde_json::Value::Object(root)

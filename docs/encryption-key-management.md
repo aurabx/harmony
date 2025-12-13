@@ -16,18 +16,11 @@ Machine tokens issued by Runbeam Cloud are sensitive credentials that grant auto
 2. **runbeam-cli** - User-facing CLI that can manage keys for Harmony instances
 3. **harmony** - Gateway that uses SDK storage for machine tokens
 
-### Storage Backends (runbeam-sdk)
+### Storage Backend (runbeam-sdk)
 
-The SDK provides two automatic storage backends:
+The SDK provides an encrypted storage backend:
 
-#### 1. KeyringStorage (Preferred)
-- Uses OS-native credential stores
-- **macOS**: Keychain
-- **Linux**: Secret Service API (freedesktop.org)
-- **Windows**: Credential Manager
-- No encryption needed - OS handles security
-
-#### 2. EncryptedFilesystemStorage (Fallback)
+#### EncryptedFilesystemStorage
 - Stores encrypted files at `~/.runbeam/<instance_id>/auth.json`
 - Uses age X25519 encryption
 - Encryption key sources (priority order):
@@ -42,11 +35,10 @@ The SDK provides two automatic storage backends:
 
 **How It Works:**
 
-1. CLI stores encryption keys in its own OS keyring under service `runbeam-harmony`
-2. CLI sends keys to Harmony during authorization via `/admin/authorize` endpoint
-3. SDK's `save_token_with_key()` function uses the provided key directly
-4. No environment variable manipulation - key is passed explicitly to SDK
-5. Each instance can have its own encryption key for isolation
+1. CLI sends keys to Harmony during authorization via `/admin/authorize` endpoint
+2. SDK's `save_token_with_key()` function uses the provided key directly
+3. No environment variable manipulation - key is passed explicitly to SDK
+4. Each instance can have its own encryption key for isolation
 
 **CLI Commands:**
 
@@ -150,7 +142,7 @@ spec:
 **Critical Limitations:**
 
 - **Key loss = connectivity loss**: If the auto-generated key file is deleted, corrupted, or inaccessible, the encrypted machine token cannot be decrypted
-- **No key recovery**: Unlike CLI-managed keys (stored in OS keyring with backup options), auto-generated keys have no recovery mechanism
+- **No key recovery**: Auto-generated keys have no recovery mechanism
 - **Restart risk**: Container restarts without persistent volumes will lose the key file
 - **Migration impossible**: Cannot move Harmony instance to another machine without re-authorization
 - **Requires re-authorization**: Any key loss scenario requires calling `/admin/authorize` again to get a new machine token
@@ -245,12 +237,6 @@ When saving machine tokens, the SDK resolves encryption keys in this order:
 
 ### Key Storage
 
-**CLI Keys (runbeam-harmony keyring):**
-- Stored in OS keyring under service `runbeam-harmony`
-- Account format: `<instance_id>-encryption-key`
-- Protected by OS-level access controls
-- Requires user authentication to access
-
 **Auto-Generated Keys:**
 - File permissions: 0600 (owner read/write only)
 - Location: `~/.runbeam/<instance_id>/encryption.key`
@@ -330,12 +316,7 @@ pub async fn handle_authorize(/* ... */) -> Result<serde_json::Value, (u16, Stri
 // runbeam-sdk/src/runbeam_api/token_storage.rs
 
 async fn get_storage_backend(instance_id: &str) -> Result<StorageBackendType, StorageError> {
-    // Try OS keyring first
-    if keyring_available() {
-        return Ok(StorageBackendType::Keyring(KeyringStorage::new("runbeam")));
-    }
-    
-    // Fall back to encrypted filesystem
+    // Use encrypted filesystem storage
     // (uses RUNBEAM_ENCRYPTION_KEY or auto-generates)
     let encrypted = EncryptedFilesystemStorage::new_with_instance(instance_id).await?;
     Ok(StorageBackendType::Encrypted(encrypted))

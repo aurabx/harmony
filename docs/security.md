@@ -21,17 +21,17 @@ The Management API `/authorize` endpoint uses a different JWT flow for authorizi
 2. **Token Validation**: Harmony validates the JWT locally using HS256 with shared secret
 3. **API Base URL Extraction**: The JWT's `iss` (issuer) claim contains the Runbeam Cloud API base URL
 4. **Token Exchange**: Harmony calls Runbeam Cloud API to exchange user JWT for machine-scoped token
-5. **Token Storage**: Machine token (30-day expiry) is stored locally at `./tmp/runbeam/auth.json`
+5. **Token Storage**: Machine token (30-day expiry) is stored locally at `~/.runbeam/<proxy_id>/auth.json` (encrypted)
 
 ### Security Configuration
 - **JWT Secret**: Set via `RUNBEAM_JWT_SECRET` environment variable
   - Must match the secret Runbeam Cloud uses to sign JWTs (HS256)
   - Falls back to development default if not set (logs warning)
   - Never hardcode secrets in configuration files
-- **Token Storage**: Machine tokens stored in JSON format with file permissions
-  - Default path: `./tmp/runbeam/auth.json` (configurable via storage backend)
-  - Contains: machine_token, expires_at, gateway_id, gateway_code, abilities
-  - Consider restricting file permissions to owner-only (chmod 600)
+- **Token Storage**: Machine tokens stored encrypted in JSON format
+  - Default path: `~/.runbeam/<proxy_id>/auth.json` (configurable via storage backend)
+  - Contains: machine_token, expires_at, gateway_id, gateway_code, abilities (encrypted with age X25519)
+  - File permissions: 0600 (owner read/write only, enforced automatically)
 
 ### Machine Token Lifecycle
 - **Expiry**: Machine tokens expire after 30 days (configured server-side)
@@ -59,12 +59,12 @@ Harmony uses environment variables for security-sensitive configuration and runt
 
 ### RUNBEAM_ENCRYPTION_KEY
 
-**Purpose**: Provides encryption key for secure token storage when OS keyring is unavailable (typical in containers and headless environments).
+**Purpose**: Provides encryption key for secure token storage (encrypted filesystem storage).
 
 **When Used**: 
-- Automatically used when OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager) is unavailable
 - Recommended for all production container deployments to ensure consistent encryption across restarts
-- Required for headless/CI environments where keyring access is not available
+- Required for headless/CI environments where persistent token storage is needed
+- Optional for local development (auto-generates key if not set)
 
 **Format**: Base64-encoded age X25519 identity key
 
@@ -90,9 +90,8 @@ export RUNBEAM_ENCRYPTION_KEY=$(cat .secrets/encryption.key)
 - Store in secret management systems (see Production Deployment Examples below)
 
 **Token Storage Behavior**:
-1. **Keyring Available**: Tokens stored in OS keyring (most secure, automatic)
-2. **Keyring Unavailable + RUNBEAM_ENCRYPTION_KEY Set**: Encrypted filesystem storage with provided key
-3. **Keyring Unavailable + No Environment Variable**: Encrypted filesystem storage with auto-generated key
+1. **RUNBEAM_ENCRYPTION_KEY Set**: Encrypted filesystem storage with provided key
+2. **No Environment Variable**: Encrypted filesystem storage with auto-generated key
 
 See [runbeam-sdk documentation](https://github.com/runbeam/runbeam-sdk) for technical details on the encryption implementation (age X25519 with AES-256-GCM).
 
@@ -145,23 +144,6 @@ export RUST_LOG=harmony::router=trace,harmony=debug
 ```
 
 **Security Note**: Avoid trace-level logging in production as it may expose sensitive request/response data.
-
-### RUNBEAM_DISABLE_KEYRING
-
-**Purpose**: Forces use of encrypted filesystem storage instead of OS keyring.
-
-**When Used**:
-- Testing encrypted filesystem storage behavior
-- Debugging keyring-related issues
-- Environments where keyring is available but not desired
-
-**Format**: Any value (presence enables it)
-
-```bash
-export RUNBEAM_DISABLE_KEYRING=1
-```
-
-**Note**: This is primarily for testing. In production containers, keyring is typically unavailable anyway.
 
 ## Environment Variable Best Practices
 

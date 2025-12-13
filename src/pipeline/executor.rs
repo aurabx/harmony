@@ -1,5 +1,5 @@
 use crate::config::config::Config;
-use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
+use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope, TargetDetails};
 use crate::models::middleware::chain::MiddlewareChain;
 use crate::models::middleware::middleware::build_middleware_instances_for_pipeline;
 use crate::models::pipelines::config::Pipeline;
@@ -51,11 +51,12 @@ impl PipelineExecutor {
     ///
     /// # Flow
     /// 1. Endpoint service preprocessing
-    /// 2. Incoming middleware chain (left)
-    /// 3. Backend invocation
-    /// 4. Outgoing middleware chain (right)
-    /// 5. Endpoint service post-processing (protocol-aware)
-    /// 6. Return ResponseEnvelope
+    /// 2. Resolve target_details from backend config
+    /// 3. Incoming middleware chain (left)
+    /// 4. Backend invocation
+    /// 5. Outgoing middleware chain (right)
+    /// 6. Endpoint service post-processing (protocol-aware)
+    /// 7. Return ResponseEnvelope
     ///
     /// # Arguments
     /// * `envelope` - The request envelope to process
@@ -80,20 +81,86 @@ impl PipelineExecutor {
         // 1. Endpoint service preprocessing
         let envelope = Self::process_endpoint_incoming(envelope, pipeline, config).await?;
 
-        // 2. Incoming middleware chain (left)
+        // 2. Resolve target_details from backend config (so middleware has access)
+        let envelope = Self::resolve_target_details(envelope, pipeline, config).await?;
+
+        // 3. Incoming middleware chain (left)
         let envelope = Self::process_incoming_middleware(envelope, pipeline, config).await?;
 
-        // 3. Backend invocation
+        // 4. Backend invocation
         let response = Self::process_backends(envelope, pipeline, config).await?;
 
-        // 4. Outgoing middleware chain (right)
+        // 5. Outgoing middleware chain (right)
         let mut response = Self::process_outgoing_middleware(response, pipeline, config).await?;
 
-        // 5. Endpoint service post-processing (protocol-aware)
+        // 6. Endpoint service post-processing (protocol-aware)
         Self::process_endpoint_outgoing(&mut response, pipeline, config, ctx).await?;
 
         tracing::info!("Pipeline execution completed successfully");
         Ok(response)
+    }
+
+    /// Resolve target_details from backend configuration
+    ///
+    /// This populates target_details early so middleware has access to target info.
+    /// The backend will use these details if present, or create its own if not.
+    async fn resolve_target_details(
+        mut envelope: RequestEnvelope<Vec<u8>>,
+        pipeline: &Pipeline,
+        config: &Config,
+    ) -> Result<RequestEnvelope<Vec<u8>>, PipelineError> {
+        // Skip if target_details already set (e.g., by endpoint)
+        if envelope.target_details.is_some() {
+            return Ok(envelope);
+        }
+
+        // Get first backend from pipeline
+        let backend_name = match pipeline.backends.first() {
+            Some(name) => name,
+            None => return Ok(envelope), // No backends, leave target_details as None
+        };
+
+        let backend = match config.backends.get(backend_name) {
+            Some(b) => b,
+            None => return Ok(envelope), // Backend not found, leave as None
+        };
+
+        // Build base_url from backend's resolved connection
+        let base_url = backend
+            .connection
+            .as_ref()
+            .map(|c| c.to_base_url())
+            .or_else(|| {
+                backend
+                    .options
+                    .as_ref()
+                    .and_then(|opts| opts.get("base_url"))
+                    .and_then(|v| v.as_str())
+                    .map(|s| s.to_string())
+            })
+            .unwrap_or_default();
+
+        if base_url.is_empty() {
+            tracing::debug!("No base_url available for target_details resolution");
+            return Ok(envelope);
+        }
+
+        // Extract path without query string
+        let path = crate::models::services::path_utils::extract_path(&envelope);
+
+        // Create TargetDetails
+        let mut target =
+            TargetDetails::from_request_details(base_url, &envelope.request_details);
+        target.uri = path;
+
+        tracing::debug!(
+            "Resolved target_details: {} {}",
+            target.method,
+            target.full_url().unwrap_or_else(|_| "<invalid>".to_string())
+        );
+
+        envelope.target_details = Some(target);
+        Ok(envelope)
     }
 
     /// Process endpoint incoming request
@@ -131,9 +198,16 @@ impl PipelineExecutor {
         pipeline: &Pipeline,
         config: &Config,
     ) -> Result<RequestEnvelope<Vec<u8>>, PipelineError> {
+        let left_chain = pipeline.middleware.left_chain();
         tracing::debug!(
-            "Processing incoming middleware for {} middlewares",
-            pipeline.middleware.len()
+            "Pipeline '{}' middleware config: {:?}",
+            pipeline.description,
+            pipeline.middleware
+        );
+        tracing::debug!(
+            "Processing incoming middleware for {} middlewares: {:?}",
+            left_chain.len(),
+            left_chain
         );
 
         // Convert to JSON envelope for middleware processing
@@ -160,7 +234,7 @@ impl PipelineExecutor {
 
         // Build middleware instances
         let middleware_instances =
-            build_middleware_instances_for_pipeline(&pipeline.middleware, config).map_err(
+            build_middleware_instances_for_pipeline(&left_chain, config).map_err(
                 |err| {
                     PipelineError::MiddlewareError(Box::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
@@ -310,9 +384,10 @@ impl PipelineExecutor {
         pipeline: &Pipeline,
         config: &Config,
     ) -> Result<ResponseEnvelope<Vec<u8>>, PipelineError> {
+        let right_chain = pipeline.middleware.right_chain();
         tracing::debug!(
             "Processing outgoing middleware for {} middlewares",
-            pipeline.middleware.len()
+            right_chain.len()
         );
 
         // Convert to JSON envelope for middleware processing
@@ -325,7 +400,7 @@ impl PipelineExecutor {
 
         // Build middleware instances
         let middleware_instances =
-            build_middleware_instances_for_pipeline(&pipeline.middleware, config).map_err(
+            build_middleware_instances_for_pipeline(&right_chain, config).map_err(
                 |err| {
                     PipelineError::MiddlewareError(Box::new(std::io::Error::new(
                         std::io::ErrorKind::InvalidInput,
@@ -336,9 +411,14 @@ impl PipelineExecutor {
 
         let middleware_chain = MiddlewareChain::new(middleware_instances);
 
+        // Determine if we should reverse the chain
+        // For List format: reverse to mirror left chain
+        // For Split format: use exact order specified by user
+        let should_reverse = pipeline.middleware.should_reverse_right();
+
         // Process through middleware chain (right side)
         let processed_json_envelope = middleware_chain
-            .right(json_envelope)
+            .right(json_envelope, should_reverse)
             .await
             .map_err(PipelineError::MiddlewareError)?;
 
@@ -392,6 +472,10 @@ impl PipelineExecutor {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::models::backends::backends::Backend;
+    use crate::models::connection::ConnectionConfig;
+    use crate::models::envelope::envelope::RequestEnvelope;
+    use crate::models::pipelines::config::PipelineMiddleware;
 
     #[test]
     fn test_pipeline_error_display() {
@@ -406,5 +490,138 @@ mod tests {
     fn test_pipeline_error_from_string() {
         let err: PipelineError = "test".into();
         assert_eq!(err.to_string(), "Service error: test");
+    }
+
+    #[tokio::test]
+    async fn test_resolve_target_details_from_backend_connection() {
+        let mut config = Config::default();
+
+        // Add a backend with connection config
+        config.backends.insert(
+            "test_backend".to_string(),
+            Backend {
+                service: "http".to_string(),
+                target_ref: None,
+                connection: Some(ConnectionConfig {
+                    host: "api.example.com".to_string(),
+                    port: Some(443),
+                    protocol: Some("https".to_string()),
+                    base_path: Some("/v1".to_string()),
+                }),
+                authentication: None,
+                timeout_secs: None,
+                max_retries: None,
+                options: None,
+            },
+        );
+
+        let pipeline = Pipeline {
+            description: "test pipeline".to_string(),
+            networks: vec![],
+            endpoints: vec![],
+            backends: vec!["test_backend".to_string()],
+            middleware: PipelineMiddleware::default(),
+        };
+
+        // Create envelope with request details
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/users?id=123")
+            .query_params(HashMap::from([(
+                "id".to_string(),
+                vec!["123".to_string()],
+            )]))
+            .original_data(vec![])
+            .build()
+            .unwrap();
+
+        // Should have no target_details initially
+        assert!(envelope.target_details.is_none());
+
+        // Resolve target details
+        let result = PipelineExecutor::resolve_target_details(envelope, &pipeline, &config).await;
+        assert!(result.is_ok());
+
+        let envelope = result.unwrap();
+        assert!(envelope.target_details.is_some());
+
+        let target = envelope.target_details.unwrap();
+        assert_eq!(target.base_url, "https://api.example.com:443/v1");
+        assert_eq!(target.method, "GET");
+        assert_eq!(target.uri, "/users"); // Path without query string
+        assert_eq!(
+            target.query_params.get("id"),
+            Some(&vec!["123".to_string()])
+        );
+    }
+
+    #[tokio::test]
+    async fn test_resolve_target_details_no_backend() {
+        let config = Config::default();
+
+        let pipeline = Pipeline {
+            description: "test pipeline".to_string(),
+            networks: vec![],
+            endpoints: vec![],
+            backends: vec![], // No backends
+            middleware: PipelineMiddleware::default(),
+        };
+
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .original_data(vec![])
+            .build()
+            .unwrap();
+
+        let result = PipelineExecutor::resolve_target_details(envelope, &pipeline, &config).await;
+        assert!(result.is_ok());
+
+        // Should return envelope unchanged (no target_details)
+        let envelope = result.unwrap();
+        assert!(envelope.target_details.is_none());
+    }
+
+    #[tokio::test]
+    async fn test_resolve_target_details_preserves_existing() {
+        let config = Config::default();
+
+        let pipeline = Pipeline {
+            description: "test pipeline".to_string(),
+            networks: vec![],
+            endpoints: vec![],
+            backends: vec![],
+            middleware: PipelineMiddleware::default(),
+        };
+
+        // Create envelope with existing target_details
+        let existing_target = TargetDetails {
+            base_url: "https://existing.com".to_string(),
+            method: "POST".to_string(),
+            uri: "/existing".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            metadata: HashMap::new(),
+        };
+
+        let envelope = RequestEnvelope::builder()
+            .method("GET")
+            .uri("/test")
+            .target_details(Some(existing_target.clone()))
+            .original_data(vec![])
+            .build()
+            .unwrap();
+
+        let result = PipelineExecutor::resolve_target_details(envelope, &pipeline, &config).await;
+        assert!(result.is_ok());
+
+        let envelope = result.unwrap();
+        let target = envelope.target_details.unwrap();
+
+        // Should preserve existing target_details
+        assert_eq!(target.base_url, "https://existing.com");
+        assert_eq!(target.method, "POST");
+        assert_eq!(target.uri, "/existing");
     }
 }

@@ -2,9 +2,11 @@
   {
     "operation": "shift",
     "spec": {
-      "name": "data.user.fullName",
-      "id": "data.user.userId",
-      "*": "data.original.&"
+      "data": {
+        "name": "data.user.fullName",
+        "id": "data.user.userId",
+        "*": "data.original.&"
+      }
     }
   },
   {

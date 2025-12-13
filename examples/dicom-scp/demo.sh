@@ -282,14 +282,14 @@ else
 fi
 echo ""
 
-# Test 6: C-STORE (should fail - not implemented)
-echo -e "${YELLOW}Test 6: C-STORE (Expected to fail - NOT IMPLEMENTED)${NC}"
+# Test 6: C-STORE (should succeed)
+echo -e "${YELLOW}Test 6: C-STORE${NC}"
 if [ -f "$TEST_DCM" ]; then
     echo "  Command: storescu -aec $HARMONY_AET 127.0.0.1 $HARMONY_PORT test.dcm"
     if storescu -aec $HARMONY_AET 127.0.0.1 $HARMONY_PORT "$TEST_DCM" > "$TMP_DIR/store_output.txt" 2>&1; then
-        echo -e "${RED}  ✗ C-STORE succeeded (unexpected - should not be implemented yet!)${NC}"
+        echo -e "${GREEN}  ✓ C-STORE succeeded${NC}"
     else
-        echo -e "${GREEN}  ✓ C-STORE rejected as expected (not yet implemented)${NC}"
+        echo -e "${RED}  ✗ C-STORE failed${NC}"
     fi
 else
     echo -e "${YELLOW}  ⚠ Skipped (no test data)${NC}"
@@ -303,7 +303,7 @@ echo "  ✅ C-ECHO  - Verification working"
 echo "  ✅ C-FIND  - Query working"
 echo "  ✅ C-GET   - Retrieve working"
 echo "  ✅ C-MOVE  - Move working"
-echo "  ⏳ C-STORE - Not yet implemented"
+echo "  ✅ C-STORE - Store working"
 echo ""
 echo "Logs available at:"
 echo "  Harmony:  $TMP_DIR/harmony.log"

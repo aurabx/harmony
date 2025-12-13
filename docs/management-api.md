@@ -265,9 +265,8 @@ curl -X POST http://localhost:9090/admin/authorize \
 - The JWT token is obtained via the `runbeam login` CLI command or as a Laravel Sanctum API token
 - Both JWT and Sanctum tokens are supported for authorization
 - Machine tokens are securely stored using:
-  - **OS Keyring** (macOS Keychain, Linux Secret Service, Windows Credential Manager) when available
-  - **Encrypted Filesystem** (`~/.runbeam/<gateway_code>/auth.json`) as fallback with age X25519 encryption
-  - Storage selection is automatic - no configuration needed
+  - **Encrypted Filesystem** (`~/.runbeam/<gateway_code>/auth.json`) with age X25519 encryption
+  - Storage is automatic - no configuration needed
 - **Encryption Key Management:**
   - If `encryption_key` is provided in the request, it will be used for token encryption
   - If not provided, Harmony uses the `RUNBEAM_ENCRYPTION_KEY` environment variable
@@ -348,7 +347,6 @@ curl -X POST http://localhost:9090/admin/token \
 - This endpoint is called automatically by the `runbeam harmony:authorize` CLI command
 - If `encryption_key` is provided, it will be used to encrypt the token (via `RUNBEAM_ENCRYPTION_KEY` environment variable)
 - If no `encryption_key` is provided, Harmony will auto-generate one
-- The CLI manages encryption keys in the OS keyring for convenience
 - For manual authorization without the CLI, you can generate an age encryption key:
   ```bash
   # Generate a new encryption key

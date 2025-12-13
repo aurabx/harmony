@@ -3,16 +3,14 @@
 **Last Updated**: 2025-11-30
 
 Harmony integrates DIMSE via:
-- **DimseAdapter**: Protocol adapter for DICOM DIMSE network operations (SCP)
-- **DICOM Backend**: Service Class User (SCU) for outbound DIMSE operations
-- **DCMTK CLI orchestration**: Current implementation uses DCMTK tools; native DIMSE networking is planned
-
-This enables both DICOM endpoint operations (SCP - Service Class Provider) and backend operations (SCU - Service Class User).
+- **DimseAdapter**: Native DICOM DIMSE network operations (SCP) using `dicom-ul` Rust library
+- **DICOM Backend**: Native Service Class User (SCU) for outbound DIMSE operations using `dicom-ul`
 
 ## Prerequisites
 
-- DCMTK must be installed and available on PATH when using DICOM DIMSE features
-  - Tools used: `echoscu`, `findscu`, `movescu`, `getscu`, and a persistent `storescp`
+- **DCMTK is required** for DICOM SCU operations (C-GET and C-MOVE commands)
+- **Native Rust SCP**: The SCP (endpoint listener) is implemented natively in Rust
+- **DCMTK tools**: Install for backend SCU functionality and integration testing
   - macOS (Homebrew): `brew install dcmtk`
   - Debian/Ubuntu: `sudo apt-get install dcmtk`
 
@@ -160,21 +158,19 @@ curl -X POST http://localhost:8080/dicom/find \
 ## Implementation Status
 
 ### ✅ Completed
-- **DIMSE Orchestration via DCMTK**: SCU operations (C-ECHO, C-FIND, C-GET, C-MOVE) use `echoscu`/`findscu`/`getscu`/`movescu`
-- **Persistent Store SCP**: By default Harmony launches a persistent `storescp` for C-STORE delivery when using a DICOM backend in persistent mode
+- **Native DIMSE SCP**: Endpoint (SCP) implementation uses `dicom-ul` Rust library (no external dependencies)
+- **DCMTK-based SCU**: Backend (SCU) operations (C-ECHO, C-FIND, C-GET, C-MOVE) use DCMTK CLI tools
+- **SCP Operations**: C-ECHO, C-FIND, C-STORE supported via native Rust implementation
+- **Persistent Store SCP**: Supports persistent Store SCP mode for C-STORE delivery
 - **Dual Service Support**: Single service type supports both backend and endpoint usage
 - **Configuration Integration**: Seamlessly integrated with existing service architecture
-- **C-FIND Dataset Extraction/Streaming**: Responses extracted (`-X`) and streamed back as datasets; artifacts preserved under `./tmp`
-- **C-GET/C-MOVE Streaming**: All files written by DCMTK receivers in the operation output directory are streamed back (DCMTK may produce files without `.dcm` extensions, e.g. `SC.<SOPInstanceUID>`) 
+- **Streaming**: All operations support streaming datasets/results
 - **Validation**: Proper configuration validation for both usage patterns
 
-### 🚧 Stub / Scaffold
-- Native DIMSE (non-DCMTK) networking (planned)
-
 ### 📋 Planned Enhancements
-1. **Native DIMSE Protocol**: Implement SCU/SCP with `dicom-ul` (replace DCMTK CLI usage)
-2. **TLS Support**: Secure DICOM connections for SCU/SCP
-3. **Hardening & Observability**: Robust error handling, metrics, and logs across DIMSE flows
+1. **TLS Support**: Secure DICOM connections for SCU/SCP
+2. **Hardening & Observability**: Enhanced error handling, metrics, and logs across DIMSE flows
+3. **Performance Optimization**: Connection pooling and association reuse
 
 ## Configuration Examples
 
