@@ -2,6 +2,11 @@
 
 ## [Unreleased]
 
+## [0.10.1] - 2025-12-14
+
+### Fixed
+- Target details are now constructed correctly in the pipeline executor, fixing issues with target configuration propagation
+
 ## [0.10.0] - 2025-12-11
 
 ### Added
@@ -405,6 +410,7 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.10.1]: https://github.com/aurabx/harmony/compare/0.10.0...0.10.1
 [0.10.0]: https://github.com/aurabx/harmony/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/aurabx/harmony/compare/0.8.0...0.9.0
 [0.8.0]: https://github.com/aurabx/harmony/compare/0.7.1...0.8.0
