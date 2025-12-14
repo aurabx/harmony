@@ -102,8 +102,11 @@ impl PipelineExecutor {
 
     /// Resolve target_details from backend configuration
     ///
-    /// This populates target_details early so middleware has access to target info.
-    /// The backend will use these details if present, or create its own if not.
+    /// Creates TargetDetails by:
+    /// 1. Starting with request_details as the base (method, uri, headers, etc.)
+    /// 2. Overlaying any target configuration from the backend (base_url, base_path, etc.)
+    ///
+    /// This ensures middleware always has complete target info to work with.
     async fn resolve_target_details(
         mut envelope: RequestEnvelope<Vec<u8>>,
         pipeline: &Pipeline,
@@ -114,49 +117,69 @@ impl PipelineExecutor {
             return Ok(envelope);
         }
 
-        // Get first backend from pipeline
+        // Start with request_details as the base
+        let path = crate::models::services::path_utils::extract_path(&envelope);
+        let mut target = TargetDetails {
+            base_url: String::new(),
+            method: envelope.request_details.method.clone(),
+            uri: path,
+            headers: envelope.request_details.headers.clone(),
+            cookies: envelope.request_details.cookies.clone(),
+            query_params: envelope.request_details.query_params.clone(),
+            metadata: envelope.request_details.metadata.clone(),
+        };
+
+        // Get first backend from pipeline to overlay target config
         let backend_name = match pipeline.backends.first() {
             Some(name) => name,
-            None => return Ok(envelope), // No backends, leave target_details as None
+            None => {
+                // No backends - use request-based target_details
+                envelope.target_details = Some(target);
+                return Ok(envelope);
+            }
         };
 
         let backend = match config.backends.get(backend_name) {
             Some(b) => b,
-            None => return Ok(envelope), // Backend not found, leave as None
+            None => {
+                // Backend not found - use request-based target_details
+                envelope.target_details = Some(target);
+                return Ok(envelope);
+            }
         };
 
-        // Build base_url from backend's resolved connection
-        let base_url = backend
-            .connection
-            .as_ref()
-            .map(|c| c.to_base_url())
-            .or_else(|| {
-                backend
-                    .options
-                    .as_ref()
-                    .and_then(|opts| opts.get("base_url"))
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
-            .unwrap_or_default();
+        // Overlay backend's connection config (resolved from target_ref if present)
+        if let Some(conn) = &backend.connection {
+            target.base_url = conn.to_base_url();
 
-        if base_url.is_empty() {
-            tracing::debug!("No base_url available for target_details resolution");
-            return Ok(envelope);
+            // Add protocol to metadata if available
+            if let Some(protocol) = &conn.protocol {
+                target.metadata.insert("protocol".to_string(), protocol.clone());
+            }
+        } else if let Some(base_url) = backend
+            .options
+            .as_ref()
+            .and_then(|opts| opts.get("base_url"))
+            .and_then(|v| v.as_str())
+        {
+            // Fallback to base_url in options (legacy configuration)
+            target.base_url = base_url.to_string();
         }
 
-        // Extract path without query string
-        let path = crate::models::services::path_utils::extract_path(&envelope);
-
-        // Create TargetDetails
-        let mut target =
-            TargetDetails::from_request_details(base_url, &envelope.request_details);
-        target.uri = path;
+        // Add reliability settings to metadata
+        if let Some(timeout) = backend.timeout_secs {
+            target.metadata.insert("timeout_secs".to_string(), timeout.to_string());
+        }
+        if let Some(retries) = backend.max_retries {
+            target.metadata.insert("max_retries".to_string(), retries.to_string());
+        }
 
         tracing::debug!(
-            "Resolved target_details: {} {}",
+            "Resolved target_details from backend '{}': base_url='{}', method='{}', uri='{}'",
+            backend_name,
+            target.base_url,
             target.method,
-            target.full_url().unwrap_or_else(|_| "<invalid>".to_string())
+            target.uri
         );
 
         envelope.target_details = Some(target);
@@ -496,7 +519,7 @@ mod tests {
     async fn test_resolve_target_details_from_backend_connection() {
         let mut config = Config::default();
 
-        // Add a backend with connection config
+        // Add a backend with connection config (simulates resolved target_ref)
         config.backends.insert(
             "test_backend".to_string(),
             Backend {
@@ -509,8 +532,8 @@ mod tests {
                     base_path: Some("/v1".to_string()),
                 }),
                 authentication: None,
-                timeout_secs: None,
-                max_retries: None,
+                timeout_secs: Some(60),
+                max_retries: Some(3),
                 options: None,
             },
         );
@@ -531,6 +554,7 @@ mod tests {
                 "id".to_string(),
                 vec!["123".to_string()],
             )]))
+            .header("x-custom", "value")
             .original_data(vec![])
             .build()
             .unwrap();
@@ -545,14 +569,22 @@ mod tests {
         let envelope = result.unwrap();
         assert!(envelope.target_details.is_some());
 
+        // TargetDetails starts from request_details, with backend config overlaid
         let target = envelope.target_details.unwrap();
+        // base_url comes from backend connection
         assert_eq!(target.base_url, "https://api.example.com:443/v1");
+        // method, uri, headers, query_params come from request_details
         assert_eq!(target.method, "GET");
         assert_eq!(target.uri, "/users"); // Path without query string
         assert_eq!(
             target.query_params.get("id"),
             Some(&vec!["123".to_string()])
         );
+        assert_eq!(target.headers.get("x-custom"), Some(&"value".to_string()));
+        // Metadata includes protocol and reliability settings from target
+        assert_eq!(target.metadata.get("protocol"), Some(&"https".to_string()));
+        assert_eq!(target.metadata.get("timeout_secs"), Some(&"60".to_string()));
+        assert_eq!(target.metadata.get("max_retries"), Some(&"3".to_string()));
     }
 
     #[tokio::test]
@@ -577,9 +609,13 @@ mod tests {
         let result = PipelineExecutor::resolve_target_details(envelope, &pipeline, &config).await;
         assert!(result.is_ok());
 
-        // Should return envelope unchanged (no target_details)
+        // Should return envelope with target_details built from request_details
         let envelope = result.unwrap();
-        assert!(envelope.target_details.is_none());
+        assert!(envelope.target_details.is_some());
+        let target = envelope.target_details.unwrap();
+        assert_eq!(target.base_url, ""); // No backend, so no base_url
+        assert_eq!(target.method, "GET"); // From request_details
+        assert_eq!(target.uri, "/test"); // From request_details
     }
 
     #[tokio::test]
