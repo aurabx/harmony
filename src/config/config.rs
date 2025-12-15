@@ -631,10 +631,10 @@ impl Config {
             // Basic validation - could be extended
             if middleware_config.module.is_empty() {
                 // Built-in middleware, validate that it exists
-                match name.as_str() {
+match name.as_str() {
                     "jwtauth" | "basic_auth" | "connect" | "passthru" | "json_extractor"
                     | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "dicom_flatten"
-                    | "dicom_unflatten" | "transform" | "metadata_transform" | "path_filter" | "policies" | "log_dump" => {}
+                    | "dicom_unflatten" | "transform" | "metadata_transform" | "path_filter" | "policies" | "log_dump" | "webhook" => {}
                     _ => {
                         return Err(ConfigError::InvalidMiddleware {
                             name: name.clone(),

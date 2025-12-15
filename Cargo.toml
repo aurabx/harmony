@@ -192,6 +192,10 @@ path = "tests/cloud_poller_integration.rs"
 name = "adapter_registry_integration"
 path = "tests/adapter_registry_integration.rs"
 
+[[test]]
+name = "webhook_middleware_integration"
+path = "tests/webhook_middleware_integration.rs"
+
 [profile.profiling]
 inherits = "release"
 debug = true
