@@ -54,14 +54,20 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigDiff {
     }
 
     // Check for changes in existing networks
-    for network_name in old_networks.intersection(&new_networks) {
+        for network_name in old_networks.intersection(&new_networks) {
         let old_net = &old.network[*network_name];
         let new_net = &new.network[*network_name];
 
-        // Check if bind address or port changed
-        if old_net.tcp_config.bind_address != new_net.tcp_config.bind_address
-            || old_net.tcp_config.bind_port != new_net.tcp_config.bind_port
-        {
+        // Check if bind address or port changed (treat missing tcp_config as default)
+        let old_tcp = old_net
+            .tcp_config
+            .clone()
+            .unwrap_or_default();
+        let new_tcp = new_net
+            .tcp_config
+            .clone()
+            .unwrap_or_default();
+        if old_tcp.bind_address != new_tcp.bind_address || old_tcp.bind_port != new_tcp.bind_port {
             diff.adapter_restarts_required.push((*network_name).clone());
             continue;
         }
@@ -155,16 +161,24 @@ mod tests {
 
     #[test]
     fn test_network_port_change() {
+        use crate::models::network::config::{NetworkConfig, TcpConfig};
+
         let mut old_config = Config::default();
         let mut new_config = Config::default();
 
         // Add same network to both, but with different ports
-        let mut old_net = crate::models::network::config::NetworkConfig::default();
-        old_net.tcp_config.bind_port = 8080;
+        let mut old_net = NetworkConfig::default();
+        old_net.tcp_config = Some(TcpConfig {
+            bind_address: "127.0.0.1".to_string(),
+            bind_port: 8080,
+        });
         old_config.network.insert("default".to_string(), old_net);
 
-        let mut new_net = crate::models::network::config::NetworkConfig::default();
-        new_net.tcp_config.bind_port = 8081;
+        let mut new_net = NetworkConfig::default();
+        new_net.tcp_config = Some(TcpConfig {
+            bind_address: "127.0.0.1".to_string(),
+            bind_port: 8081,
+        });
         new_config.network.insert("default".to_string(), new_net);
 
         let diff = compute_diff(&old_config, &new_config);

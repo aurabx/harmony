@@ -12,10 +12,10 @@ fn create_test_config_with_backends(backends: Vec<(&str, &str, serde_json::Value
 
     // Create a test network
     let mut network = NetworkConfig::default();
-    network.tcp_config = TcpConfig {
+    network.tcp_config = Some(TcpConfig {
         bind_address: "127.0.0.1".to_string(),
         bind_port: 8080,
-    };
+    });
     config.network.insert("test_network".to_string(), network);
 
     let mut backend_names = Vec::new();
@@ -67,10 +67,10 @@ fn create_test_config_with_endpoints(endpoints: Vec<(&str, &str, serde_json::Val
 
     // Create a test network
     let mut network = NetworkConfig::default();
-    network.tcp_config = TcpConfig {
+    network.tcp_config = Some(TcpConfig {
         bind_address: "127.0.0.1".to_string(),
         bind_port: 8080,
-    };
+    });
     config.network.insert("test_network".to_string(), network);
 
     let mut endpoint_names = Vec::new();

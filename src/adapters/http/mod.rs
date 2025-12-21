@@ -205,19 +205,21 @@ impl ProtocolAdapter for HttpAdapter {
         network_name: String,
         network_config: &crate::models::network::config::NetworkConfig,
     ) -> Box<dyn ProtocolAdapter> {
-        let bind_addr = format!(
-            "{}:{}",
-            network_config.tcp_config.bind_address, network_config.tcp_config.bind_port
-        )
-        .parse::<SocketAddr>()
-        .unwrap_or_else(|_| {
+        let tcp = network_config.tcp_config.as_ref().unwrap_or_else(|| {
             panic!(
-                "Invalid TCP bind address or port for network '{}': {}:{}",
-                network_name,
-                network_config.tcp_config.bind_address,
-                network_config.tcp_config.bind_port
+                "HttpAdapter requested for network '{}' but no TCP HTTP config (network.<name>.http / tcp_config) was provided",
+                network_name
             )
         });
+
+        let bind_addr = format!("{}:{}", tcp.bind_address, tcp.bind_port)
+            .parse::<SocketAddr>()
+            .unwrap_or_else(|_| {
+                panic!(
+                    "Invalid TCP bind address or port for network '{}': {}:{}",
+                    network_name, tcp.bind_address, tcp.bind_port
+                )
+            });
         Box::new(HttpAdapter::new(network_name, bind_addr))
     }
 

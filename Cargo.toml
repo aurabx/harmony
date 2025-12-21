@@ -75,6 +75,12 @@ lazy_static = "1.4"
 bytes = "1.5"
 dirs = "5.0"
 object_store = { version = "0.12.4", features = ["aws", "http"] }
+# HTTP/3 (QUIC) stack
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls"] }
+h3 = { version = "0.0.8", default-features = false, features = ["quinn"] }
+h3-quinn = "0.0.10"
+rustls = "0.23"
+rustls-pemfile = "2"
 
 [features]
 default = []

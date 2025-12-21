@@ -7,10 +7,15 @@ pub struct NetworkConfig {
     pub enable_wireguard: bool,
     #[serde(default = "default_interface")]
     pub interface: String,
-    /// TCP network bind settings - used by all protocol adapters (HTTP, DIMSE, etc.)
-    /// Accepts both 'tcp_config' and 'http' (alias) in TOML for backward compatibility
+    /// Optional TCP network bind settings - used by TCP-based protocol adapters (HTTP/1.x, DIMSE, etc.)
+    /// Accepts both 'tcp_config' and 'http' (alias) in TOML for backward compatibility.
+    /// When omitted, no TCP HTTP listener will be started for this network.
     #[serde(default, alias = "http")]
-    pub tcp_config: TcpConfig,
+    pub tcp_config: Option<TcpConfig>,
+    /// Optional HTTP/3 (QUIC) listener configuration.
+    /// When present, an Http3Adapter may be started for this network.
+    #[serde(default)]
+    pub http3: Option<Http3Config>,
 }
 
 fn default_enable_wireguard() -> bool {
@@ -24,7 +29,7 @@ fn default_interface() -> String {
 /// TCP network bind configuration
 ///
 /// Can be configured as either `[network.name.tcp_config]` or `[network.name.http]` in TOML.
-/// These are TCP network settings used by all protocol adapters, not just HTTP.
+/// These are TCP network settings used by all TCP-based protocol adapters, not just HTTP.
 #[derive(Debug, Deserialize, Clone, PartialEq)]
 #[serde(default)]
 pub struct TcpConfig {
@@ -49,6 +54,22 @@ impl Default for TcpConfig {
             bind_port: default_bind_port(),
         }
     }
+}
+
+/// HTTP/3 (QUIC) network bind configuration
+///
+/// Configured under `[network.name.http3]` in TOML.
+#[derive(Debug, Deserialize, Clone, PartialEq, Default)]
+#[serde(default)]
+pub struct Http3Config {
+    /// UDP bind address for HTTP/3 listener
+    pub bind_address: String,
+    /// UDP port for HTTP/3 listener
+    pub bind_port: u16,
+    /// Path to PEM-encoded certificate chain
+    pub cert_path: String,
+    /// Path to PEM-encoded private key
+    pub key_path: String,
 }
 
 // #[derive(Debug, Deserialize)]

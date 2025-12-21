@@ -50,11 +50,18 @@ pub async fn handle_config_status(
     // Build network status map
     let mut current_networks = HashMap::new();
     for (network_name, network_config) in &config.network {
+        // Use TCP config if present; otherwise, fall back to empty/zero values for status
+        let (bind_address, bind_port) = if let Some(tcp) = &network_config.tcp_config {
+            (tcp.bind_address.clone(), tcp.bind_port)
+        } else {
+            ("".to_string(), 0)
+        };
+
         current_networks.insert(
             network_name.clone(),
             NetworkStatus {
-                bind_address: network_config.tcp_config.bind_address.clone(),
-                bind_port: network_config.tcp_config.bind_port,
+                bind_address,
+                bind_port,
                 interface: network_config.interface.clone(),
                 wireguard_enabled: network_config.enable_wireguard,
             },

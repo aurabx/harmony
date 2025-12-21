@@ -1,5 +1,6 @@
 pub mod dimse;
 pub mod http;
+pub mod http3;
 pub mod registry;
 
 use crate::config::config::Config;

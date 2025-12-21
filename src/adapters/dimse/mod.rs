@@ -223,8 +223,8 @@ impl DimseAdapter {
             .and_then(|s| s.parse::<IpAddr>().ok())
             .or_else(|| {
                 network_config
-                    .map(|nc| nc.tcp_config.bind_address.parse::<IpAddr>().ok())
-                    .flatten()
+                    .and_then(|nc| nc.tcp_config.as_ref())
+                    .and_then(|tcp| tcp.bind_address.parse::<IpAddr>().ok())
             })
             .unwrap_or_else(|| IpAddr::from(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
@@ -235,7 +235,11 @@ impl DimseAdapter {
             .or_else(|| options.get("port"))
             .and_then(|v| v.as_u64())
             .map(|p| p as u16)
-            .or_else(|| network_config.map(|nc| nc.tcp_config.bind_port))
+            .or_else(|| {
+                network_config
+                    .and_then(|nc| nc.tcp_config.as_ref())
+                    .map(|tcp| tcp.bind_port)
+            })
             .unwrap_or(DEFAULT_DIMSE_PORT);
 
         let key = format!("{}@{}:{}#{}", local_aet, bind_addr, port, endpoint_name);

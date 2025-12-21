@@ -201,7 +201,14 @@ async fn test_load_and_validate_config_success() {
     assert_eq!(config.proxy.id, "test-proxy");
     assert!(config.network.contains_key("default"));
     assert_eq!(
-        config.network.get("default").unwrap().tcp_config.bind_port,
+        config
+            .network
+            .get("default")
+            .unwrap()
+            .tcp_config
+            .as_ref()
+            .expect("tcp_config should be present")
+            .bind_port,
         8080
     );
 }

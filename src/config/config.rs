@@ -445,6 +445,8 @@ impl Config {
     }
 
     fn validate_networks(&self) -> Result<(), ConfigError> {
+        use crate::models::network::config::TcpConfig;
+
         for (name, network) in &self.network {
             if network.interface.trim().is_empty() {
                 return Err(ConfigError::InvalidNetwork {
@@ -452,11 +454,44 @@ impl Config {
                     reason: "interface is empty".to_string(),
                 });
             }
-            if network.enable_wireguard && network.tcp_config.bind_port == 0 {
-                return Err(ConfigError::InvalidNetwork {
-                    name: name.clone(),
-                    reason: "invalid bind port for Wireguard".to_string(),
-                });
+
+            // When WireGuard is enabled, ensure there is a valid TCP bind port configured.
+            if network.enable_wireguard {
+                let effective_tcp: TcpConfig = network.tcp_config.clone().unwrap_or_default();
+                if effective_tcp.bind_port == 0 {
+                    return Err(ConfigError::InvalidNetwork {
+                        name: name.clone(),
+                        reason: "invalid bind port for Wireguard".to_string(),
+                    });
+                }
+            }
+
+            // Basic sanity checks for HTTP/3 configuration, if present.
+            if let Some(http3) = &network.http3 {
+                if http3.bind_address.trim().is_empty() {
+                    return Err(ConfigError::InvalidNetwork {
+                        name: name.clone(),
+                        reason: "http3.bind_address is empty".to_string(),
+                    });
+                }
+                if http3.bind_port == 0 {
+                    return Err(ConfigError::InvalidNetwork {
+                        name: name.clone(),
+                        reason: "http3.bind_port must be non-zero".to_string(),
+                    });
+                }
+                if http3.cert_path.trim().is_empty() {
+                    return Err(ConfigError::InvalidNetwork {
+                        name: name.clone(),
+                        reason: "http3.cert_path is empty".to_string(),
+                    });
+                }
+                if http3.key_path.trim().is_empty() {
+                    return Err(ConfigError::InvalidNetwork {
+                        name: name.clone(),
+                        reason: "http3.key_path is empty".to_string(),
+                    });
+                }
             }
         }
         Ok(())

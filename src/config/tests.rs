@@ -70,7 +70,11 @@ fn test_basic_config() {
     // Network fields
     assert_eq!(config.network["default"].interface, "wg0");
     assert_eq!(
-        config.network["default"].tcp_config.bind_address,
+        config.network["default"]
+            .tcp_config
+            .as_ref()
+            .expect("tcp_config should be present")
+            .bind_address,
         "127.0.0.1"
     );
 }
