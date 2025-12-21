@@ -239,7 +239,7 @@ async fn handle_request(
 }
 
 /// Map pipeline errors to HTTP status codes
-fn map_pipeline_error_to_status(err: &PipelineError) -> StatusCode {
+pub(crate) fn map_pipeline_error_to_status(err: &PipelineError) -> StatusCode {
     match err {
         PipelineError::MiddlewareError(middleware_err) => {
             // Check for specific middleware error types and map to appropriate status codes

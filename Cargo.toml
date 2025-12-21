@@ -77,7 +77,7 @@ dirs = "5.0"
 object_store = { version = "0.12.4", features = ["aws", "http"] }
 # HTTP/3 (QUIC) stack
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls"] }
-h3 = { version = "0.0.8", default-features = false, features = ["quinn"] }
+h3 = { version = "0.0.8", default-features = false }
 h3-quinn = "0.0.10"
 rustls = "0.23"
 rustls-pemfile = "2"
@@ -94,6 +94,8 @@ dicom-core = "0.9"
 tempfile = "3.10"
 serial_test = "3.0"
 dimse = { path = "crates/dimse" }
+rcgen = "0.12"
+futures-util = "0.3"
 
 # Test organization
 
@@ -201,6 +203,10 @@ path = "tests/adapter_registry_integration.rs"
 [[test]]
 name = "webhook_middleware_integration"
 path = "tests/webhook_middleware_integration.rs"
+
+[[test]]
+name = "http3_e2e"
+path = "tests/http3_e2e.rs"
 
 [profile.profiling]
 inherits = "release"

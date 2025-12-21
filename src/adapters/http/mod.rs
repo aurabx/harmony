@@ -14,6 +14,7 @@ use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+pub mod common;
 pub mod content_type;
 pub mod router;
 
@@ -35,146 +36,32 @@ impl HttpAdapter {
     }
 
     /// Convert Axum HTTP Request to ProtocolCtx
+    ///
+    /// This method extracts the request body and delegates to the shared
+    /// `common::build_protocol_ctx` helper for building the context.
     pub async fn http_request_to_protocol_ctx(
         req: &mut Request,
         options: &HashMap<String, serde_json::Value>,
     ) -> Result<ProtocolCtx, Error> {
-        // Compute subpath using path_prefix option
-        let path_prefix = options
-            .get("path_prefix")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        let path_only = req.uri().path().to_string();
-        // Clean trailing semicolons from query strings (some clients/middleware add them)
-        let full_path_with_query = req
-            .uri()
-            .path_and_query()
-            .map(|pq| pq.as_str().trim_end_matches(';').to_string())
-            .unwrap_or_else(|| path_only.clone());
-
-        // Strip prefix from path and remove leading slash
-        let mut subpath = path_only
-            .strip_prefix(path_prefix)
-            .unwrap_or(&path_only)
-            .to_string();
-        if subpath.starts_with('/') {
-            subpath = subpath.trim_start_matches('/').to_string();
-        }
-
-        // Also create subpath with query string (stripped prefix but includes query)
-        let subpath_with_query = full_path_with_query
-            .strip_prefix(path_prefix)
-            .unwrap_or(&full_path_with_query)
-            .trim_end_matches(';')
-            .to_string();
-
-        // Headers
-        let headers_obj: serde_json::Value = {
-            let map: serde_json::Map<String, serde_json::Value> = req
-                .headers()
-                .iter()
-                .map(|(k, v)| {
-                    (
-                        k.to_string(),
-                        serde_json::Value::String(v.to_str().unwrap_or_default().to_string()),
-                    )
-                })
-                .collect();
-            serde_json::Value::Object(map)
-        };
-
-        // Cookies
-        let cookies_obj: serde_json::Value = {
-            let mut map = serde_json::Map::new();
-            for val in req.headers().get_all(http::header::COOKIE).iter() {
-                if let Ok(s) = val.to_str() {
-                    for part in s.split(';') {
-                        let kv = part.trim();
-                        if kv.is_empty() {
-                            continue;
-                        }
-                        let mut split = kv.splitn(2, '=');
-                        let name = split.next().unwrap_or("").trim();
-                        let value = split.next().unwrap_or("").trim();
-                        if !name.is_empty() {
-                            map.insert(
-                                name.to_string(),
-                                serde_json::Value::String(value.to_string()),
-                            );
-                        }
-                    }
-                }
-            }
-            serde_json::Value::Object(map)
-        };
-
-        // Query params
-        // Note: Semicolons in query strings can be alternative separators (RFC 3986)
-        // or trailing artifacts from some clients. We strip trailing semicolons from values.
-        let query_obj: serde_json::Value = {
-            let mut root = serde_json::Map::new();
-            if let Some(q) = req.uri().query() {
-                for (k, v) in url::form_urlencoded::parse(q.as_bytes()) {
-                    let clean_value = v.trim_end_matches(';').to_string();
-                    root.entry(k.to_string())
-                        .or_insert_with(|| serde_json::Value::Array(vec![]))
-                        .as_array_mut()
-                        .unwrap()
-                        .push(serde_json::Value::String(clean_value));
-                }
-            }
-            serde_json::Value::Object(root)
-        };
-
-        // Cache status
-        let cache_status = req
-            .headers()
-            .get("Cache-Status")
-            .or_else(|| req.headers().get("X-Cache"))
-            .or_else(|| req.headers().get("CF-Cache-Status"))
-            .and_then(|v| v.to_str().ok())
-            .map(|s| s.to_string())
-            .unwrap_or_default();
-
-        // Metadata
-        let mut meta_map = HashMap::new();
-        meta_map.insert("protocol".to_string(), "http".to_string());
-        meta_map.insert("path".to_string(), subpath);
-        meta_map.insert("path_with_query".to_string(), subpath_with_query);
-        meta_map.insert("full_path".to_string(), full_path_with_query);
-
-        // attrs object
-        let mut attrs = serde_json::Map::new();
-        attrs.insert(
-            "method".to_string(),
-            serde_json::Value::String(req.method().to_string()),
-        );
-        attrs.insert(
-            "uri".to_string(),
-            serde_json::Value::String(req.uri().to_string()),
-        );
-        attrs.insert("headers".to_string(), headers_obj);
-        attrs.insert("cookies".to_string(), cookies_obj);
-        attrs.insert("query_params".to_string(), query_obj);
-        attrs.insert(
-            "cache_status".to_string(),
-            serde_json::Value::String(cache_status),
-        );
-
-        // Body bytes
+        // Read body bytes from the Axum request
         let body_bytes =
             axum::body::to_bytes(std::mem::replace(req.body_mut(), Body::empty()), usize::MAX)
                 .await
                 .map_err(|_| Error::from("Failed to read request body"))?
                 .to_vec();
 
-        Ok(ProtocolCtx {
-            protocol: Protocol::Http,
-            payload: body_bytes,
-            meta: meta_map,
-            attrs: serde_json::Value::Object(attrs),
-        })
+        // Get path prefix from options
+        let path_prefix = common::get_path_prefix(options);
+
+        // Use shared helper to build the ProtocolCtx
+        Ok(common::build_protocol_ctx(
+            req.method(),
+            req.uri(),
+            req.headers(),
+            body_bytes,
+            path_prefix,
+            "http",
+        ))
     }
 
     /// Convert ResponseEnvelope to Axum HTTP Response

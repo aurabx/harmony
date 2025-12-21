@@ -72,6 +72,40 @@ pub struct Http3Config {
     pub key_path: String,
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn http3_config_deserializes_from_toml() {
+        let toml = r#"
+            [network.test]
+            interface = "wg0"
+            enable_wireguard = false
+
+            [network.test.http3]
+            bind_address = "127.0.0.1"
+            bind_port = 4433
+            cert_path = "./certs/test-cert.pem"
+            key_path = "./certs/test-key.pem"
+        "#;
+
+        #[derive(Deserialize)]
+        struct Wrapper {
+            #[serde(default)]
+            network: std::collections::HashMap<String, NetworkConfig>,
+        }
+
+        let wrapper: Wrapper = toml::from_str(toml).expect("valid http3 toml");
+        let net = wrapper.network.get("test").expect("network.test present");
+        let http3 = net.http3.as_ref().expect("http3 config present");
+        assert_eq!(http3.bind_address, "127.0.0.1");
+        assert_eq!(http3.bind_port, 4433);
+        assert_eq!(http3.cert_path, "./certs/test-cert.pem");
+        assert_eq!(http3.key_path, "./certs/test-key.pem");
+    }
+}
+
 // #[derive(Debug, Deserialize)]
 // pub struct PeerConfig {
 //     pub id: String,

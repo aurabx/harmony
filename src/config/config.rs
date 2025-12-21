@@ -199,10 +199,11 @@ impl Config {
                     let default_network = NetworkConfig {
                         enable_wireguard: false,
                         interface: "wg0".to_string(),
-                        tcp_config: crate::models::network::config::TcpConfig {
+                        tcp_config: Some(crate::models::network::config::TcpConfig {
                             bind_address: "127.0.0.1".to_string(),
                             bind_port: 9090,
-                        },
+                        }),
+                        http3: None,
                     };
 
                     self.network
