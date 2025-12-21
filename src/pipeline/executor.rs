@@ -530,6 +530,7 @@ mod tests {
                     port: Some(443),
                     protocol: Some("https".to_string()),
                     base_path: Some("/v1".to_string()),
+                    ca_cert_path: None,
                 }),
                 authentication: None,
                 timeout_secs: Some(60),

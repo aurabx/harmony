@@ -493,6 +493,36 @@ impl Config {
                         reason: "http3.key_path is empty".to_string(),
                     });
                 }
+
+                // Validate cert file exists and is readable
+                let cert_path = std::path::Path::new(&http3.cert_path);
+                if !cert_path.exists() {
+                    return Err(ConfigError::InvalidNetwork {
+                        name: name.clone(),
+                        reason: format!("http3.cert_path '{}' does not exist", http3.cert_path),
+                    });
+                }
+                if !cert_path.is_file() {
+                    return Err(ConfigError::InvalidNetwork {
+                        name: name.clone(),
+                        reason: format!("http3.cert_path '{}' is not a file", http3.cert_path),
+                    });
+                }
+
+                // Validate key file exists and is readable
+                let key_path = std::path::Path::new(&http3.key_path);
+                if !key_path.exists() {
+                    return Err(ConfigError::InvalidNetwork {
+                        name: name.clone(),
+                        reason: format!("http3.key_path '{}' does not exist", http3.key_path),
+                    });
+                }
+                if !key_path.is_file() {
+                    return Err(ConfigError::InvalidNetwork {
+                        name: name.clone(),
+                        reason: format!("http3.key_path '{}' is not a file", http3.key_path),
+                    });
+                }
             }
         }
         Ok(())

@@ -1,4 +1,5 @@
 pub mod adapters;
+pub mod clients;
 pub mod config;
 mod file;
 pub mod globals;
@@ -23,6 +24,12 @@ pub async fn run(config: Config) {
 }
 
 pub async fn run_with_reload(config: Config, config_path: Option<String>) {
+    // Install the rustls crypto provider. This is required because multiple crypto
+    // providers (ring, aws-lc-rs) are present in the dependency tree via different
+    // crates, so rustls cannot auto-select one. We use aws-lc-rs as it's already
+    // a transitive dependency and avoids pulling in BoringSSL via ring.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
     let config = Arc::new(config);
     crate::globals::set_config(config.clone());
 

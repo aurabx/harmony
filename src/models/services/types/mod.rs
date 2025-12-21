@@ -6,6 +6,7 @@ pub mod storage;
 pub mod echo;
 pub mod fhir;
 pub mod http;
+pub mod http3;
 pub mod jmix;
 pub mod management;
 pub mod mock_dicom;

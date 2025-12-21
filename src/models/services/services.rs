@@ -114,6 +114,9 @@ fn create_builtin_service(
         "disk" | "storage" => Ok(Box::new(
             crate::models::services::types::storage::StorageBackend::default(),
         )),
+        "http3" | "h3" => Ok(Box::new(
+            crate::models::services::types::http3::Http3Backend::default(),
+        )),
         _ => Err(format!(
             "Unsupported built-in service type: {}",
             service_type

@@ -17,6 +17,13 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 
+/// Install the rustls crypto provider. Must be called before any TLS operations.
+/// This is needed because multiple crypto providers (ring, aws-lc-rs) are present
+/// in the dependency tree, so rustls cannot auto-select one.
+fn install_crypto_provider() {
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+}
+
 /// Generate a self-signed certificate and private key for testing.
 /// Returns (cert_pem, key_pem) as strings.
 fn generate_self_signed_cert() -> (String, String) {
@@ -125,10 +132,11 @@ fn build_client_config(cert_pem: &str) -> quinn::ClientConfig {
         roots.add(cert.clone()).expect("failed to add cert to roots");
     }
 
-    // Build rustls client config
-    let tls_config = rustls::ClientConfig::builder()
+    // Build rustls client config with ALPN set to h3
+    let mut tls_config = rustls::ClientConfig::builder()
         .with_root_certificates(roots)
         .with_no_client_auth();
+    tls_config.alpn_protocols = vec![b"h3".to_vec()];
 
     // Build quinn client config
     quinn::ClientConfig::new(Arc::new(
@@ -248,8 +256,9 @@ async fn http3_post(
 }
 
 #[tokio::test]
-#[ignore] // Run with: cargo test http3_e2e -- --ignored
 async fn test_http3_get_request() {
+    install_crypto_provider();
+
     // Generate self-signed cert
     let (cert_pem, key_pem) = generate_self_signed_cert();
 
@@ -306,8 +315,9 @@ async fn test_http3_get_request() {
 }
 
 #[tokio::test]
-#[ignore] // Run with: cargo test http3_e2e -- --ignored
 async fn test_http3_post_request_with_body() {
+    install_crypto_provider();
+
     // Generate self-signed cert
     let (cert_pem, key_pem) = generate_self_signed_cert();
 
@@ -370,8 +380,9 @@ async fn test_http3_post_request_with_body() {
 }
 
 #[tokio::test]
-#[ignore] // Run with: cargo test http3_e2e -- --ignored
 async fn test_http3_not_found() {
+    install_crypto_provider();
+
     // Generate self-signed cert
     let (cert_pem, key_pem) = generate_self_signed_cert();
 
