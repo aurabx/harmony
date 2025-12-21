@@ -187,7 +187,8 @@ Top-level config (examples/default/config.toml)
 - [runbeam]: Runbeam Cloud integration settings (enabled, API URL, poll interval)
 - [management]: Management API settings (enabled, base path, network)
 - [network.<name>]: network interfaces and options
-  - [network.<name>.http]: bind_address and bind_port
+  - [network.<name>.http]: TCP listener settings (bind_address and bind_port)
+  - [network.<name>.http3]: HTTP/3 (QUIC) listener settings (bind_address, bind_port, cert_path, key_path)
 - pipelines_path: directory containing pipeline files
 - transforms_path: directory for custom transforms (if used)
 - [logging]: file logging options and log level
@@ -207,12 +208,14 @@ Pipeline files (examples/default/pipelines/*.toml)
 - `[endpoint_types.*]`, `[service_types.*]`: register built-in or custom types
 
 **Protocol adapters** are spawned automatically:
-- **HttpAdapter**: Started for pipelines with HTTP/FHIR/JMIX/DICOMweb endpoints
+- **HttpAdapter**: Started for pipelines with HTTP/FHIR/JMIX/DICOMweb endpoints (TCP-based HTTP/1.x and HTTP/2)
+- **Http3Adapter**: Started for networks with `[network.<name>.http3]` configuration (QUIC-based HTTP/3)
 - **DimseAdapter**: Started for pipelines with DICOM DIMSE endpoints
 - See `src/lib.rs::run()` for orchestration logic
 
 Validation expectations
-- Networks must define valid HTTP bind_address and non-zero bind_port
+- Networks must define valid HTTP bind_address and non-zero bind_port (for TCP listeners)
+- HTTP/3 networks must specify valid cert_path and key_path for TLS certificates
 - Each pipeline should reference at least one network, endpoint, and backend
 - Unknown middleware names cause validation failure
 - Middleware config is parsed by the middleware modules themselves
@@ -310,6 +313,18 @@ bind_port = 8082
 ```
 
 Result: New adapters started for "secondary" network. Existing "default" network unaffected.
+
+**Example 4: Adding HTTP/3 to a Network**
+```toml
+# Add HTTP/3 listener alongside existing HTTP
+[network.default.http3]
+bind_address = "0.0.0.0"
+bind_port = 443
+cert_path = "/etc/harmony/certs/fullchain.pem"
+key_path = "/etc/harmony/certs/privkey.pem"
+```
+
+Result: Http3Adapter started on UDP port 443. Existing HTTP adapter on TCP port 8080 continues running. Both adapters serve the same pipelines.
 
 ### Error Handling
 

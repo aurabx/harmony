@@ -12,7 +12,7 @@ Welcome to Harmony Proxy's documentation. Harmony is a general-purpose data mesh
 ## Core Architecture & Concepts
 - **[system-description.md](system-description.md)** - High-level system overview and Runbeam architecture
 - **[router.md](router.md)** - Pipeline architecture and request flow (Protocol Adapter → PipelineExecutor → Protocol Adapter)
-- **[adapters.md](adapters.md)** - Protocol adapter guide (HTTP, DIMSE, how to implement new protocols)
+- **[adapters.md](adapters.md)** - Protocol adapter guide (HTTP, HTTP/3, DIMSE, how to implement new protocols)
 - **[envelope.md](envelope.md)** - Core Envelope struct for data exchange
 
 ## Configuration Reference

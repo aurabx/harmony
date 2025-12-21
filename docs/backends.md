@@ -141,6 +141,73 @@ service = "dicomweb"
 base_url = "https://pacs.example.com/dicomweb"
 ``` path=null start=null
 
+### HTTP/3 (QUIC)
+
+An HTTP/3 backend for connecting to targets over QUIC with TLS 1.3.
+
+**Service behavior**:
+- Connects to backends using HTTP/3 over QUIC (UDP transport)
+- Built-in TLS 1.3 encryption (always enabled)
+- Multiplexed streams without head-of-line blocking
+- Supports custom CA certificates for self-signed servers
+
+**Configuration**:
+```toml
+[backends.<name>]
+service = "http3"
+[backends.<name>.options]
+host = "api.example.com"
+port = 443
+base_path = "/api/v1"
+ca_cert_path = "/path/to/ca.pem"  # Optional: for self-signed certs
+timeout_secs = 30                  # Optional: request timeout
+``` path=null start=null
+
+Alternatively, use the connection config format:
+```toml
+[backends.<name>]
+service = "http3"
+[backends.<name>.options.connection]
+host = "api.example.com"
+port = 443
+protocol = "h3"
+base_path = "/api/v1"
+ca_cert_path = "/path/to/ca.pem"
+``` path=null start=null
+
+**Configuration Options**:
+- `host` (string, required): Target hostname
+- `port` (integer, optional): Target port (default: 443)
+- `base_path` (string, optional): Base URL path prefix
+- `ca_cert_path` (string, optional): Path to PEM-encoded CA certificate for validating self-signed or custom CA certificates
+- `timeout_secs` (integer, optional): Request timeout in seconds (default: 30)
+
+**Example**: HTTP/3 API backend
+```toml
+[backends.h3_api]
+service = "http3"
+[backends.h3_api.options]
+host = "fast-api.example.com"
+port = 443
+base_path = "/v2"
+``` path=null start=null
+
+**Example**: HTTP/3 with custom CA
+```toml
+[backends.internal_h3]
+service = "http3"
+[backends.internal_h3.options]
+host = "internal.corp.local"
+port = 8443
+ca_cert_path = "./certs/internal-ca.pem"
+``` path=null start=null
+
+**When to use HTTP/3**:
+- High-latency or unreliable networks (mobile, satellite)
+- Backend servers that support HTTP/3
+- When you need connection migration (e.g., mobile clients changing networks)
+- To avoid TCP head-of-line blocking on multiplexed connections
+
 ### DICOM SCU (Service Class User)
 
 A DICOM DIMSE backend for connecting to remote DICOM PACS via C-ECHO/C-FIND/C-MOVE/C-GET operations.
