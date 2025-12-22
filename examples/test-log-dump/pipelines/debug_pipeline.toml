@@ -1,8 +1,0 @@
-# Pipeline definition that uses the log_dump middleware
-
-[pipeline]
-description = "A pipeline that dumps request/response data"
-networks = ["http_network"]
-endpoints = ["passthrough_endpoint"]
-backends = ["http_backend"]
-middleware = ["debug_dump"]
