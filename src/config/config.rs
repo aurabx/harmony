@@ -104,6 +104,9 @@ pub struct Config {
     /// Resolved absolute path to transforms directory (not serialized)
     #[serde(skip)]
     pub resolved_transforms_path: Option<String>,
+    /// Backends that could not be resolved due to missing targets (not serialized)
+    #[serde(skip)]
+    pub unresolved_backends: std::collections::HashSet<String>,
 }
 
 impl Config {
@@ -274,8 +277,13 @@ impl Config {
         }
 
         // Resolve references (targets/peers)
-        if let Err(e) = resolve_references(&mut config) {
-            panic!("Configuration reference resolution failed: {}", e);
+        match resolve_references(&mut config) {
+            Ok(unresolved) => {
+                config.unresolved_backends = unresolved;
+            }
+            Err(e) => {
+                panic!("Configuration reference resolution failed: {}", e);
+            }
         }
 
         // Inject management service if enabled
@@ -484,6 +492,20 @@ impl Config {
                 continue;
             }
 
+            // Warn and skip if backends are unresolved
+            let unresolved_pipeline_backends: Vec<&String> = pipeline.backends
+                .iter()
+                .filter(|b| self.unresolved_backends.contains(*b))
+                .collect();
+            if !unresolved_pipeline_backends.is_empty() {
+                tracing::warn!(
+                    "Pipeline '{}' references unresolved backends {:?}, skipping pipeline",
+                    name,
+                    unresolved_pipeline_backends
+                );
+                continue;
+            }
+
             // Warn and skip if endpoints are empty or do not match
             if pipeline.endpoints.is_empty() {
                 tracing::warn!(
@@ -554,6 +576,12 @@ impl Config {
 
     fn validate_backends(&self) -> Result<(), ConfigError> {
         for (name, backend) in &self.backends {
+            // Skip validation for backends with unresolved targets
+            if self.unresolved_backends.contains(name) {
+                tracing::debug!("Skipping validation for unresolved backend '{}'", name);
+                continue;
+            }
+
             // Check if service type is allowed as backend
             match backend.service.to_lowercase().as_str() {
                 "dicom_scp" => {

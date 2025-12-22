@@ -3,7 +3,10 @@ use harmony::config::resolution::resolve_references;
 use harmony::models::backends::backends::Backend;
 use harmony::models::connection::ConnectionConfig;
 use harmony::models::endpoints::endpoint::Endpoint;
+use harmony::models::network::config::{NetworkConfig, TcpConfig};
 use harmony::models::peers::config::PeerConfig;
+use harmony::models::pipelines::config::{Pipeline, PipelineMiddleware};
+use harmony::models::services::services::ServiceConfig;
 use harmony::models::targets::config::TargetConfig;
 
 #[test]
@@ -162,4 +165,88 @@ fn test_override_precedence() {
     assert_eq!(conn.host, "override.com");
     assert_eq!(conn.port, Some(80)); // Inherited
     assert_eq!(conn.protocol, Some("http".to_string())); // Inherited
+}
+
+#[test]
+fn test_missing_target_returns_unresolved_backend() {
+    let mut config = Config::default();
+
+    // Define a backend referencing a non-existent target
+    let backend = Backend {
+        service: "http".to_string(),
+        options: None,
+        target_ref: Some("missing_target".to_string()),
+        connection: None,
+        authentication: None,
+        timeout_secs: None,
+        max_retries: None,
+    };
+    config.backends.insert("backend1".to_string(), backend);
+
+    // Resolve references - should not panic, but return unresolved backend
+    let unresolved = resolve_references(&mut config).expect("Resolution should not fail on missing target");
+
+    // Verify that the backend was marked as unresolved
+    assert!(unresolved.contains("backend1"), "Backend should be in unresolved set");
+    assert_eq!(unresolved.len(), 1, "Only one backend should be unresolved");
+}
+
+#[test]
+fn test_unresolved_backend_skipped_in_validation() {
+    let mut config = Config::default();
+
+    // Set up a network (required for pipelines)
+    config.network.insert(
+        "default".to_string(),
+        NetworkConfig {
+            enable_wireguard: false,
+            interface: "wg0".to_string(),
+            tcp_config: TcpConfig {
+                bind_address: "127.0.0.1".to_string(),
+                bind_port: 8080,
+            },
+        },
+    );
+
+    // Define a backend referencing a non-existent target
+    let backend = Backend {
+        service: "http".to_string(),
+        options: None,
+        target_ref: Some("missing_target".to_string()),
+        connection: None,
+        authentication: None,
+        timeout_secs: None,
+        max_retries: None,
+    };
+    config.backends.insert("unreachable_backend".to_string(), backend);
+
+    // Create a pipeline referencing the unreachable backend
+    config.pipelines.insert(
+        "test_pipeline".to_string(),
+        Pipeline {
+            description: "Test pipeline with missing target".to_string(),
+            networks: vec!["default".to_string()],
+            endpoints: vec![],
+            backends: vec!["unreachable_backend".to_string()],
+            middleware: PipelineMiddleware::default(),
+        },
+    );
+
+    // Resolve references
+    let unresolved = resolve_references(&mut config).expect("Resolution should succeed");
+    config.unresolved_backends = unresolved;
+
+    // Set required proxy and service defaults
+    config.proxy.id = "test".to_string();
+    config.proxy.jwks_cache_duration_hours = 24;  // Set valid duration
+    config.services.insert("http".to_string(), ServiceConfig { module: "".to_string() });
+    config.management.enabled = false;
+
+    // Validation should not fail, but skip the unresolved backend and pipeline
+    match config.validate() {
+        Ok(()) => {}
+        Err(e) => {
+            panic!("Validation failed: {:?}", e);
+        }
+    }
 }
