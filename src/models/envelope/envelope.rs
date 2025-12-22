@@ -73,6 +73,20 @@ pub struct TargetDetails {
     pub metadata: HashMap<String, String>,
 }
 
+impl Default for TargetDetails {
+    fn default() -> Self {
+        Self {
+            base_url: String::new(),
+            method: String::new(),
+            uri: String::new(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            metadata: HashMap::new(),
+        }
+    }
+}
+
 impl TargetDetails {
     /// Creates TargetDetails from RequestDetails with a base_url
     pub fn from_request_details(base_url: String, request_details: &RequestDetails) -> Self {

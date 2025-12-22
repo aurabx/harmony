@@ -140,38 +140,30 @@ impl ServiceHandler<Value> for FhirEndpoint {
             ));
         }
 
-        // Check if middleware has already set target_details
-        let target_details = if let Some(existing_target) = envelope.target_details.take() {
-            // Middleware has set target_details - use it
-            // But merge base_url from backend options if not set by middleware
-            let mut target = existing_target;
+        // Use target_details from executor (already populated from request_details + backend config)
+        // Fill in base_url if not already set by executor
+        let target_details = if let Some(mut target) = envelope.target_details.take() {
             if target.base_url.is_empty() {
                 target.base_url = base_url.to_string();
             }
-            tracing::debug!("FHIR backend using middleware-provided target_details");
-            target
-        } else {
-            // No target_details set by middleware - create from request_details
-            // Use helper to extract path WITHOUT query string
-            let path = crate::models::services::path_utils::extract_path(&envelope);
-            tracing::debug!("Extracted path from envelope: '{}'", path);
-
-            // Create TargetDetails from request_details with base_url
-            let mut target = TargetDetails::from_request_details(
-                base_url.to_string(),
-                &envelope.request_details,
-            );
-
-            // Override URI with the stripped path (without query string)
-            // Query parameters are preserved in target.query_params from request_details
-            target.uri = path;
-
-            // Ensure FHIR-specific content type is set if not present
+            // Ensure FHIR-specific Accept header is set
             target
                 .headers
                 .entry("accept".to_string())
                 .or_insert_with(|| "application/fhir+json".to_string());
-
+            target
+        } else {
+            // Fallback: create from request_details (shouldn't normally happen)
+            let path = crate::models::services::path_utils::extract_path(&envelope);
+            let mut target = TargetDetails::from_request_details(
+                base_url.to_string(),
+                &envelope.request_details,
+            );
+            target.uri = path;
+            target
+                .headers
+                .entry("accept".to_string())
+                .or_insert_with(|| "application/fhir+json".to_string());
             target
         };
 

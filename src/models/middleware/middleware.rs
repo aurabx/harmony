@@ -100,9 +100,10 @@ fn create_builtin_middleware_type_with_config(
     use crate::models::middleware::types::dicom_unflatten::DicomUnflattenMiddleware;
     use crate::models::middleware::types::jwtauth::JwtAuthMiddleware;
     use crate::models::middleware::types::metadata_transform::MetadataTransformMiddleware;
-    use crate::models::middleware::types::path_filter::PathFilterMiddleware;
+use crate::models::middleware::types::path_filter::PathFilterMiddleware;
 use crate::models::middleware::types::logger::{LogDumpMiddleware, parse_config as parse_logger_config};
 use crate::models::middleware::types::transform::JoltTransformMiddleware;
+use crate::models::middleware::types::webhook::{WebhookMiddleware, parse_config as parse_webhook_config};
 
     match middleware_type.to_lowercase().as_str() {
         "jwtauth" | "jwt_auth" => {
@@ -155,6 +156,10 @@ use crate::models::middleware::types::transform::JoltTransformMiddleware;
             let config = parse_logger_config(options)?;
             Ok(Box::new(LogDumpMiddleware::new(config)))
         }
+        "webhook" => {
+            let config = parse_webhook_config(options)?;
+            Ok(Box::new(WebhookMiddleware::new(config)))
+        }
         "metadata_transform" => {
             let config = crate::models::middleware::types::metadata_transform::parse_config(
                 options,
@@ -195,10 +200,15 @@ pub fn build_middleware_instances_for_pipeline(
             let mut resolved_options = middleware_instance.options.clone();
             if let Some(auth_ref) = &middleware_instance.authentication {
                 if let Some(auth_def) = config.authentications.get(auth_ref) {
-                    // Merge authentication options into middleware options
+                    // Merge authentication options into middleware options (legacy behavior)
                     for (key, value) in &auth_def.options {
                         resolved_options.insert(key.clone(), value.clone());
                     }
+                    // Inject full authentication definition so helpers can apply headers
+                    resolved_options.insert(
+                        "authentication_def".to_string(),
+                        serde_json::to_value(auth_def).map_err(|e| format!("Failed to serialize auth def: {}", e))?,
+                    );
                 } else {
                     return Err(format!(
                         "Middleware '{}' references unknown authentication '{}'",
@@ -206,6 +216,9 @@ pub fn build_middleware_instances_for_pipeline(
                     ));
                 }
             }
+
+            // Pass instance name for metadata lookup (webhook.<instance_name>)
+            resolved_options.insert("__instance_name".to_string(), serde_json::json!(name));
 
             // Use new method that passes Config context for policies middleware
             let middleware = resolve_middleware_type_with_config(

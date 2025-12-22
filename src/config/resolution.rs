@@ -3,10 +3,11 @@ use crate::models::connection::ConnectionConfig;
 use std::collections::HashMap;
 
 /// Resolves all references in the configuration
-pub fn resolve_references(config: &mut Config) -> Result<(), String> {
+/// Returns a set of backend names that could not be resolved
+pub fn resolve_references(config: &mut Config) -> Result<std::collections::HashSet<String>, String> {
     resolve_endpoints(config)?;
-    resolve_backends(config)?;
-    Ok(())
+    let unresolved_backends = resolve_backends(config)?;
+    Ok(unresolved_backends)
 }
 
 /// Resolves an authentication reference to the actual AuthenticationDefinition
@@ -74,14 +75,20 @@ fn resolve_endpoints(config: &mut Config) -> Result<(), String> {
     Ok(())
 }
 
-fn resolve_backends(config: &mut Config) -> Result<(), String> {
+fn resolve_backends(config: &mut Config) -> Result<std::collections::HashSet<String>, String> {
     let targets = config.targets.clone();
+    let mut unresolved_backends = std::collections::HashSet::new();
 
     for (name, backend) in config.backends.iter_mut() {
         if let Some(target_ref) = &backend.target_ref {
-            let target = targets.get(target_ref).ok_or_else(|| {
-                format!("Backend '{}' references non-existent target '{}'", name, target_ref)
-            })?;
+            let target = match targets.get(target_ref) {
+                Some(t) => t,
+                None => {
+                    tracing::warn!("Backend '{}' references non-existent target '{}' - backend will be skipped", name, target_ref);
+                    unresolved_backends.insert(name.clone());
+                    continue;
+                }
+            };
 
             if !target.enabled {
                 tracing::warn!("Backend '{}' references disabled target '{}'", name, target_ref);
@@ -162,7 +169,7 @@ fn resolve_backends(config: &mut Config) -> Result<(), String> {
             }
         }
     }
-    Ok(())
+    Ok(unresolved_backends)
 }
 
 fn inject_connection_into_options(
