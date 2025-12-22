@@ -632,7 +632,7 @@ mod tests {
 
         // Use real spec file with context injection enabled
         let spec_path = format!(
-            "{}/examples/fhir_dicom/transforms/fhir_to_dicom_params.json",
+            "{}/../harmony-examples/pipelines/fhir_dicom/transforms/fhir_to_dicom_params.json",
             env!("CARGO_MANIFEST_DIR")
         );
         let cfg = JoltTransformMiddlewareConfig {
