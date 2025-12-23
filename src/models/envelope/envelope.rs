@@ -103,7 +103,12 @@ impl TargetDetails {
 
     /// Constructs the full URL by combining base_url with uri and query_params
     pub fn full_url(&self) -> Result<String, crate::utils::Error> {
-        let mut url = format!("{}{}", self.base_url, self.uri);
+        // Handle double-slash case: if base_url ends with / and uri starts with /, remove one
+        let mut url = if self.base_url.ends_with('/') && self.uri.starts_with('/') {
+            format!("{}{}", self.base_url.trim_end_matches('/'), self.uri)
+        } else {
+            format!("{}{}", self.base_url, self.uri)
+        };
 
         // Add query parameters if any exist
         if !self.query_params.is_empty() {

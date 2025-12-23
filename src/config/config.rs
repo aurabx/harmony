@@ -721,20 +721,18 @@ impl Config {
     }
 
     fn validate_middleware_types(&self) -> Result<(), ConfigError> {
+        use crate::models::middleware::middleware::builtin_middleware_types;
+
         for (name, middleware_config) in &self.middleware_types {
             // Basic validation - could be extended
             if middleware_config.module.is_empty() {
                 // Built-in middleware, validate that it exists
-match name.as_str() {
-                    "jwtauth" | "basic_auth" | "connect" | "passthru" | "json_extractor"
-                    | "json" | "jmix_builder" | "dicomweb_bridge" | "dicomweb" | "dicom_flatten"
-                    | "dicom_unflatten" | "transform" | "metadata_transform" | "path_filter" | "policies" | "log_dump" | "webhook" => {}
-                    _ => {
-                        return Err(ConfigError::InvalidMiddleware {
-                            name: name.clone(),
-                            reason: format!("Unknown built-in middleware type: {}", name),
-                        })
-                    }
+                let name_lower = name.to_lowercase();
+                if !builtin_middleware_types().contains(&name_lower.as_str()) {
+                    return Err(ConfigError::InvalidMiddleware {
+                        name: name.clone(),
+                        reason: format!("Unknown built-in middleware type: {}", name),
+                    });
                 }
             }
         }

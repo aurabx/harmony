@@ -205,10 +205,11 @@ fn test_unresolved_backend_skipped_in_validation() {
         NetworkConfig {
             enable_wireguard: false,
             interface: "wg0".to_string(),
-            tcp_config: TcpConfig {
+            tcp_config: Some(TcpConfig {
                 bind_address: "127.0.0.1".to_string(),
                 bind_port: 8080,
-            },
+            }),
+            http3: None,
         },
     );
 
