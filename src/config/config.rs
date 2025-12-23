@@ -205,6 +205,9 @@ impl Config {
                         tcp_config: Some(crate::models::network::config::TcpConfig {
                             bind_address: "127.0.0.1".to_string(),
                             bind_port: 9090,
+                            cert_path: None,
+                            key_path: None,
+                            force_https: false,
                         }),
                         http3: None,
                     };

@@ -208,6 +208,9 @@ fn test_unresolved_backend_skipped_in_validation() {
             tcp_config: Some(TcpConfig {
                 bind_address: "127.0.0.1".to_string(),
                 bind_port: 8080,
+                cert_path: None,
+                key_path: None,
+                force_https: false,
             }),
             http3: None,
         },

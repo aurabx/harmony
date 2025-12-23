@@ -82,14 +82,50 @@ This mapping is automatically applied when starting networks based on each servi
 **Protocol**: HTTP/HTTPS
 
 **Features**:
-- Axum-based web server
+- Axum-based web server with optional TLS/HTTPS support
 - Route matching and conflict detection
 - Header and body mapping to/from envelopes
 - Support for all HTTP methods (GET, POST, PUT, DELETE, etc.)
+- TLS 1.3 with HTTP/1.1 and HTTP/2 ALPN when TLS is enabled
+
+**Configuration**:
+
+**Plain HTTP** (default):
+```toml
+[network.default.http]
+bind_address = "0.0.0.0"
+bind_port = 8080
+``` path=null start=null
+
+**HTTPS with TLS**:
+```toml
+[network.secure.http]
+bind_address = "0.0.0.0"
+bind_port = 443
+cert_path = "/etc/harmony/certs/fullchain.pem"
+key_path = "/etc/harmony/certs/privkey.pem"
+``` path=null start=null
+
+When both `cert_path` and `key_path` are provided, the adapter automatically enables HTTPS. The certificate and private key must be in PEM format.
+
+**Supported Key Formats**:
+- PKCS#8 (preferred)
+- RSA PKCS#1 (legacy)
+
+**HTTP to HTTPS Redirect**:
+Use `force_https = true` to redirect all HTTP requests to HTTPS:
+```toml
+[network.redirect.http]
+bind_address = "0.0.0.0"
+bind_port = 80
+force_https = true
+``` path=null start=null
+
+This returns HTTP 301 redirects to the `https://` equivalent URL. Only works when TLS is not configured on the network (no cert/key paths).
 
 **Usage**:
 ```rust
-let adapter = HttpAdapter::new(network_name, bind_addr);
+let adapter = HttpAdapter::new(network_name, bind_addr, tls_config);
 let handle = adapter.start(config, shutdown).await?;
 ``` path=null start=null
 

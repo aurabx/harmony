@@ -11,10 +11,11 @@ Repository: harmony-proxy - Rust-based proxy/gateway for data meshes (with first
 Harmony is a proxy/gateway that handles, transforms and proxies data between systems. It provides secure communication with support for HTTP/JSON, FHIR, JMIX, DICOM, and DICOMweb protocols, featuring configurable middleware, authentication (JWT), audit logging, and WireGuard networking.
 
 **Key Features:**
-- Multi-protocol support: HTTP passthrough, FHIR, JMIX, DICOM, DICOMweb (QIDO-RS/WADO-RS endpoints)
+- Multi-protocol support: HTTP/HTTPS passthrough, FHIR, JMIX, DICOM, DICOMweb (QIDO-RS/WADO-RS endpoints)
 - Multi-content-type: Automatic parsing of JSON, XML, CSV, form data, multipart, and binary content
 - Hot configuration reload: zero-downtime updates for routes/middleware/backends, selective adapter restart for network changes
 - Configurable routing with groups, endpoints, backends, and middleware
+- TLS/HTTPS support for HTTP adapter with automatic HTTP/1.1 and HTTP/2 ALPN
 - JWT and basic authentication
 - **Request/response transformation pipeline**
 - **AES-256-GCM encryption** with ephemeral keys

@@ -12,6 +12,9 @@ async fn test_management_service_enabled() {
     network_config.tcp_config = Some(harmony::models::network::config::TcpConfig {
         bind_address: "127.0.0.1".to_string(),
         bind_port: 8080,
+        cert_path: None,
+        key_path: None,
+        force_https: false,
     });
     config.network.insert("default".to_string(), network_config);
 
@@ -98,6 +101,9 @@ async fn test_management_service_disabled() {
     network_config.tcp_config = Some(harmony::models::network::config::TcpConfig {
         bind_address: "127.0.0.1".to_string(),
         bind_port: 8080,
+        cert_path: None,
+        key_path: None,
+        force_https: false,
     });
     config.network.insert("default".to_string(), network_config);
 
@@ -161,6 +167,9 @@ async fn test_management_service_invalid_network_reference() {
     network_config.tcp_config = Some(harmony::models::network::config::TcpConfig {
         bind_address: "127.0.0.1".to_string(),
         bind_port: 8080,
+        cert_path: None,
+        key_path: None,
+        force_https: false,
     });
     config.network.insert("default".to_string(), network_config);
 

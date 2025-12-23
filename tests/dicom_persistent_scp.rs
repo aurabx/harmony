@@ -15,6 +15,9 @@ fn create_test_config_with_backends(backends: Vec<(&str, &str, serde_json::Value
     network.tcp_config = Some(TcpConfig {
         bind_address: "127.0.0.1".to_string(),
         bind_port: 8080,
+        cert_path: None,
+        key_path: None,
+        force_https: false,
     });
     config.network.insert("test_network".to_string(), network);
 
@@ -70,6 +73,9 @@ fn create_test_config_with_endpoints(endpoints: Vec<(&str, &str, serde_json::Val
     network.tcp_config = Some(TcpConfig {
         bind_address: "127.0.0.1".to_string(),
         bind_port: 8080,
+        cert_path: None,
+        key_path: None,
+        force_https: false,
     });
     config.network.insert("test_network".to_string(), network);
 

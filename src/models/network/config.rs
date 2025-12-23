@@ -37,6 +37,19 @@ pub struct TcpConfig {
     pub bind_address: String,
     #[serde(default = "default_bind_port")]
     pub bind_port: u16,
+    /// Path to PEM-encoded certificate chain for TLS/HTTPS
+    /// When both cert_path and key_path are set, HTTPS is enabled
+    #[serde(default)]
+    pub cert_path: Option<String>,
+    /// Path to PEM-encoded private key for TLS/HTTPS
+    /// When both cert_path and key_path are set, HTTPS is enabled
+    #[serde(default)]
+    pub key_path: Option<String>,
+    /// Force HTTPS redirect when true
+    /// Only applies when TLS is NOT configured (no cert/key paths)
+    /// When true, returns HTTP 301 redirect to https:// URL for all requests
+    #[serde(default)]
+    pub force_https: bool,
 }
 
 fn default_bind_address() -> String {
@@ -52,6 +65,9 @@ impl Default for TcpConfig {
         Self {
             bind_address: default_bind_address(),
             bind_port: default_bind_port(),
+            cert_path: None,
+            key_path: None,
+            force_https: false,
         }
     }
 }
@@ -103,6 +119,35 @@ mod tests {
         assert_eq!(http3.bind_port, 4433);
         assert_eq!(http3.cert_path, "./certs/test-cert.pem");
         assert_eq!(http3.key_path, "./certs/test-key.pem");
+    }
+
+    #[test]
+    fn tcp_config_with_tls_deserializes_from_toml() {
+        let toml = r#"
+            [network.test]
+            interface = "wg0"
+            enable_wireguard = false
+
+            [network.test.http]
+            bind_address = "0.0.0.0"
+            bind_port = 443
+            cert_path = "./certs/server-cert.pem"
+            key_path = "./certs/server-key.pem"
+        "#;
+
+        #[derive(Deserialize)]
+        struct Wrapper {
+            #[serde(default)]
+            network: std::collections::HashMap<String, NetworkConfig>,
+        }
+
+        let wrapper: Wrapper = toml::from_str(toml).expect("valid tcp/tls toml");
+        let net = wrapper.network.get("test").expect("network.test present");
+        let tcp = net.tcp_config.as_ref().expect("tcp config present");
+        assert_eq!(tcp.bind_address, "0.0.0.0");
+        assert_eq!(tcp.bind_port, 443);
+        assert_eq!(tcp.cert_path, Some("./certs/server-cert.pem".to_string()));
+        assert_eq!(tcp.key_path, Some("./certs/server-key.pem".to_string()));
     }
 }
 

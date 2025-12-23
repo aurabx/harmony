@@ -171,6 +171,9 @@ mod tests {
         old_net.tcp_config = Some(TcpConfig {
             bind_address: "127.0.0.1".to_string(),
             bind_port: 8080,
+            cert_path: None,
+            key_path: None,
+            force_https: false,
         });
         old_config.network.insert("default".to_string(), old_net);
 
@@ -178,6 +181,9 @@ mod tests {
         new_net.tcp_config = Some(TcpConfig {
             bind_address: "127.0.0.1".to_string(),
             bind_port: 8081,
+            cert_path: None,
+            key_path: None,
+            force_https: false,
         });
         new_config.network.insert("default".to_string(), new_net);
 
