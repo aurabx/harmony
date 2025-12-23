@@ -170,25 +170,478 @@ async fn test_left_c_move_to_wado() {
     assert_eq!(result.request_details.uri, "/studies/1.2.3.4");
 }
 
+// Helper to create a response envelope for testing
+fn create_response_envelope(
+    operation: &str,
+    status: u16,
+    headers: HashMap<String, String>,
+    original_data: Value,
+    normalized_data: Option<Value>,
+) -> ResponseEnvelope<Value> {
+    let mut request_metadata = HashMap::new();
+    request_metadata.insert("operation".to_string(), operation.to_string());
+
+    let mut request_details = harmony::models::envelope::envelope::RequestDetails::default();
+    request_details.metadata = request_metadata;
+
+    let mut envelope = ResponseEnvelope::<Value>::from_backend(
+        request_details,
+        status,
+        headers,
+        original_data,
+        None,
+    );
+    envelope.normalized_data = normalized_data;
+    envelope
+}
+
+// ==================== C-FIND Response Tests ====================
+
 #[tokio::test]
-async fn test_right_passthrough() {
+async fn test_right_cfind_response_array() {
     let middleware = DicomToDicomwebMiddleware::new();
 
-    // Construct response envelope
-    let mut metadata = HashMap::new();
-    metadata.insert("operation".to_string(), "C-FIND".to_string());
+    // QIDO-RS returns an array of study results
+    let qido_results = json!([
+        { "00100020": { "vr": "LO", "Value": ["PATIENT1"] } },
+        { "00100020": { "vr": "LO", "Value": ["PATIENT2"] } }
+    ]);
 
-    let response_envelope = ResponseEnvelope::<Value>::from_backend(
-        harmony::models::envelope::envelope::RequestDetails::default(),
+    let envelope = create_response_envelope(
+        "C-FIND",
         200,
         HashMap::new(),
         Value::Null,
-        Some(metadata)
+        Some(qido_results),
     );
 
-    // Execute RIGHT side
-    let result = middleware.right(response_envelope).await.expect("Middleware failed");
+    let result = middleware.right(envelope).await.expect("Middleware failed");
 
-    // Currently right side is passthrough, just verify status
-    assert_eq!(result.response_details.status, 200);
+    // Verify DICOM status is SUCCESS
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
+
+    // Verify result_count is 2
+    assert_eq!(
+        result.response_details.metadata.get("result_count"),
+        Some(&"2".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_right_cfind_response_single_object() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // Some QIDO-RS servers return a single object for single match
+    let qido_result = json!({
+        "00100020": { "vr": "LO", "Value": ["PATIENT1"] }
+    });
+
+    let envelope = create_response_envelope(
+        "C-FIND",
+        200,
+        HashMap::new(),
+        qido_result.clone(),
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is SUCCESS
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
+
+    // Verify result_count is 1
+    assert_eq!(
+        result.response_details.metadata.get("result_count"),
+        Some(&"1".to_string())
+    );
+
+    // Verify normalized_data is now an array
+    let nd = result.normalized_data.expect("normalized_data should exist");
+    assert!(nd.is_array());
+    assert_eq!(nd.as_array().unwrap().len(), 1);
+}
+
+#[tokio::test]
+async fn test_right_cfind_response_empty_null() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // Empty response (no matches)
+    let envelope = create_response_envelope(
+        "C-FIND",
+        200,
+        HashMap::new(),
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is SUCCESS (no matches is still success)
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
+
+    // Verify result_count is 0
+    assert_eq!(
+        result.response_details.metadata.get("result_count"),
+        Some(&"0".to_string())
+    );
+
+    // Verify normalized_data is empty array
+    let nd = result.normalized_data.expect("normalized_data should exist");
+    assert!(nd.is_array());
+    assert_eq!(nd.as_array().unwrap().len(), 0);
+}
+
+#[tokio::test]
+async fn test_right_cfind_response_404_no_matches() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // 404 for C-FIND means no matches (should map to SUCCESS)
+    let envelope = create_response_envelope(
+        "C-FIND",
+        404,
+        HashMap::new(),
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is SUCCESS (404 = no matches for QIDO)
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_right_cfind_response_500_failure() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // 500 should map to FAILURE_UNABLE_TO_PROCESS
+    let envelope = create_response_envelope(
+        "C-FIND",
+        500,
+        HashMap::new(),
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is FAILURE_UNABLE_TO_PROCESS (0xC000)
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0xC000".to_string())
+    );
+}
+
+// ==================== C-STORE Response Tests ====================
+
+#[tokio::test]
+async fn test_right_cstore_response_success() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // STOW-RS success response with ReferencedSOPSequence
+    let stow_response = json!({
+        "00081199": {
+            "vr": "SQ",
+            "Value": [{
+                "00081150": { "vr": "UI", "Value": ["1.2.840.10008.5.1.4.1.1.2"] },
+                "00081155": { "vr": "UI", "Value": ["1.2.3.4.5.6.7.8.9"] }
+            }]
+        }
+    });
+
+    let envelope = create_response_envelope(
+        "C-STORE",
+        200,
+        HashMap::new(),
+        Value::Null,
+        Some(stow_response),
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is SUCCESS
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_right_cstore_response_failure() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // STOW-RS failure (500)
+    let envelope = create_response_envelope(
+        "C-STORE",
+        500,
+        HashMap::new(),
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is FAILURE_UNABLE_TO_PROCESS
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0xC000".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_right_cstore_response_404_failure() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // 404 for C-STORE is a failure (unlike C-FIND)
+    let envelope = create_response_envelope(
+        "C-STORE",
+        404,
+        HashMap::new(),
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is FAILURE_UNABLE_TO_PROCESS (404 is failure for C-STORE)
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0xC000".to_string())
+    );
+}
+
+// ==================== C-GET/C-MOVE Response Tests ====================
+
+#[tokio::test]
+async fn test_right_cget_response_single_dicom() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // Single DICOM instance response
+    let mut headers = HashMap::new();
+    headers.insert("content-type".to_string(), "application/dicom".to_string());
+
+    let envelope = create_response_envelope(
+        "C-GET",
+        200,
+        headers,
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is SUCCESS
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
+
+    // Verify dataset_count is 1
+    assert_eq!(
+        result.response_details.metadata.get("dataset_count"),
+        Some(&"1".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_right_cget_response_multipart_with_body() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // Simulate multipart/related response with body_b64 (as would be set by to_json())
+    let boundary = "boundary123";
+    let mut headers = HashMap::new();
+    headers.insert(
+        "content-type".to_string(),
+        format!("multipart/related; type=\"application/dicom\"; boundary={}", boundary),
+    );
+
+    // Create fake multipart body
+    let multipart_body = format!(
+        "--{}\r\nContent-Type: application/dicom\r\n\r\nFAKE_DICOM_DATA_1\r\n--{}\r\nContent-Type: application/dicom\r\n\r\nFAKE_DICOM_DATA_2\r\n--{}--\r\n",
+        boundary, boundary, boundary
+    );
+
+    use base64::Engine;
+    let body_b64 = base64::engine::general_purpose::STANDARD.encode(multipart_body.as_bytes());
+
+    let normalized_data = json!({
+        "body_b64": body_b64,
+        "content_length": multipart_body.len()
+    });
+
+    let envelope = create_response_envelope(
+        "C-GET",
+        200,
+        headers,
+        Value::Null,
+        Some(normalized_data),
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is SUCCESS
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
+
+    // Verify boundary was extracted
+    assert_eq!(
+        result.response_details.metadata.get("multipart_boundary"),
+        Some(&boundary.to_string())
+    );
+
+    // Verify dataset_count is 2
+    assert_eq!(
+        result.response_details.metadata.get("dataset_count"),
+        Some(&"2".to_string())
+    );
+
+    // Verify normalized_data contains parsed datasets
+    let nd = result.normalized_data.expect("normalized_data should exist");
+    let datasets = nd.get("datasets").expect("datasets array should exist");
+    assert!(datasets.is_array());
+    assert_eq!(datasets.as_array().unwrap().len(), 2);
+}
+
+#[tokio::test]
+async fn test_right_cmove_response_multipart_with_body() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // Same as C-GET multipart but operation=C-MOVE
+    let boundary = "b-move-001";
+    let mut headers = HashMap::new();
+    headers.insert(
+        "Content-Type".to_string(), // mixed-case header key
+        format!("multipart/related; type=\"application/dicom\"; boundary=\"{}\"", boundary), // quoted boundary
+    );
+
+    let multipart_body = format!(
+        "--{}\r\nContent-Type: application/dicom\r\n\r\nMOVE_DATA_1\r\n--{}--\r\n",
+        boundary, boundary
+    );
+
+    use base64::Engine;
+    let body_b64 = base64::engine::general_purpose::STANDARD.encode(multipart_body.as_bytes());
+
+    let normalized_data = json!({
+        "body_b64": body_b64,
+        "content_length": multipart_body.len()
+    });
+
+    let envelope = create_response_envelope(
+        "C-MOVE",
+        200,
+        headers,
+        Value::Null,
+        Some(normalized_data),
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // SUCCESS and dataset_count==1
+    assert_eq!(result.response_details.metadata.get("dicom_status"), Some(&"0x0000".to_string()));
+    assert_eq!(result.response_details.metadata.get("dataset_count"), Some(&"1".to_string()));
+
+    // Boundary extracted without quotes
+    assert_eq!(result.response_details.metadata.get("multipart_boundary"), Some(&boundary.to_string()));
+}
+
+#[tokio::test]
+async fn test_right_cstore_response_409_warning() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    let envelope = create_response_envelope(
+        "C-STORE",
+        409,
+        HashMap::new(),
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Warning status 0xB000
+    assert_eq!(result.response_details.metadata.get("dicom_status"), Some(&"0xB000".to_string()));
+}
+
+#[tokio::test]
+async fn test_right_cget_response_404_failure() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // 404 for C-GET is a failure (resource not found)
+    let envelope = create_response_envelope(
+        "C-GET",
+        404,
+        HashMap::new(),
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is FAILURE_UNABLE_TO_PROCESS
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0xC000".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_right_cmove_response_404_failure() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // 404 for C-MOVE is also a failure
+    let envelope = create_response_envelope(
+        "C-MOVE",
+        404,
+        HashMap::new(),
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is FAILURE_UNABLE_TO_PROCESS
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0xC000".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_right_cget_response_dicom_json() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // WADO-RS metadata endpoint returns JSON
+    let mut headers = HashMap::new();
+    headers.insert("content-type".to_string(), "application/dicom+json".to_string());
+
+    let envelope = create_response_envelope(
+        "C-GET",
+        200,
+        headers,
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is SUCCESS
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
 }

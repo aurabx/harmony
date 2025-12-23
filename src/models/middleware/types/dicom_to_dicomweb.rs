@@ -165,6 +165,13 @@ impl DicomToDicomwebMiddleware {
             envelope.request_details.uri = "/studies".to_string();
             envelope.request_details.query_params = query_params;
 
+            // Ensure target_details reflect the rewritten method/uri/params
+            envelope.set_target_method("GET");
+            envelope.set_target_uri("/studies");
+            for (k, v) in envelope.request_details.query_params.clone() {
+                envelope.set_target_query_param(k, v);
+            }
+
             // Clear body as GET doesn't have one
             envelope.original_data = Value::Null;
             envelope.normalized_data = None;
@@ -187,14 +194,17 @@ impl DicomToDicomwebMiddleware {
             envelope.request_details.uri = "/studies".to_string();
 
             let mut headers = HashMap::new();
-            headers.insert(
-                "content-type".to_string(),
-                format!(
-                    "multipart/related; type=\"application/dicom\"; boundary={}",
-                    boundary
-                ),
+            let ct_value = format!(
+                "multipart/related; type=\"application/dicom\"; boundary={}",
+                boundary
             );
+            headers.insert("content-type".to_string(), ct_value.clone());
             envelope.request_details.headers = headers;
+
+            // Mirror method/uri/headers into target_details for backend
+            envelope.set_target_method("POST");
+            envelope.set_target_uri("/studies");
+            envelope.set_target_header("content-type", ct_value);
 
             // Encode body as Base64 in normalized_data for HttpEndpoint to pick up
             let b64 = base64::engine::general_purpose::STANDARD.encode(&body);
@@ -258,15 +268,18 @@ impl DicomToDicomwebMiddleware {
             };
 
             envelope.request_details.method = "GET".to_string();
-            envelope.request_details.uri = uri;
+            envelope.request_details.uri = uri.clone();
 
             let mut headers = HashMap::new();
             // Request multipart/related for instances
-            headers.insert(
-                "accept".to_string(),
-                "multipart/related; type=\"application/dicom\"".to_string(),
-            );
+            let accept_value = "multipart/related; type=\"application/dicom\"".to_string();
+            headers.insert("accept".to_string(), accept_value.clone());
             envelope.request_details.headers = headers;
+
+            // Mirror method/uri/headers into target_details for backend
+            envelope.set_target_method("GET");
+            envelope.set_target_uri(uri);
+            envelope.set_target_header("accept", accept_value);
 
             envelope.original_data = Value::Null;
             envelope.normalized_data = None;
@@ -284,7 +297,7 @@ impl DicomToDicomwebMiddleware {
 
         // Check for HTTP errors
         if http_status >= 400 {
-            let dicom_status = Self::http_to_dicom_status(http_status);
+            let dicom_status = Self::http_to_dicom_status(http_status, "C-FIND");
             warn!(
                 "C-FIND backend returned HTTP {}, mapping to DICOM status 0x{:04X}",
                 http_status, dicom_status
@@ -368,7 +381,7 @@ impl DicomToDicomwebMiddleware {
         let http_status = envelope.response_details.status;
 
         // Map HTTP status to DICOM status
-        let dicom_status = Self::http_to_dicom_status(http_status);
+        let dicom_status = Self::http_to_dicom_status(http_status, "C-STORE");
 
         if http_status >= 200 && http_status < 300 {
             debug!(
@@ -416,12 +429,20 @@ impl DicomToDicomwebMiddleware {
     ) -> Result<(), Error> {
         let http_status = envelope.response_details.status;
 
+        // Get the operation from request metadata
+        let op = envelope
+            .request_details
+            .metadata
+            .get("operation")
+            .map(|s| s.as_str())
+            .unwrap_or("C-GET");
+
         // Check for HTTP errors
         if http_status >= 400 {
-            let dicom_status = Self::http_to_dicom_status(http_status);
+            let dicom_status = Self::http_to_dicom_status(http_status, op);
             warn!(
-                "C-GET/C-MOVE backend returned HTTP {}, mapping to DICOM status 0x{:04X}",
-                http_status, dicom_status
+                "{} backend returned HTTP {}, mapping to DICOM status 0x{:04X}",
+                op, http_status, dicom_status
             );
             envelope.response_details.metadata.insert(
                 "dicom_status".to_string(),
@@ -507,14 +528,7 @@ impl DicomToDicomwebMiddleware {
 
         debug!("Parsing multipart WADO-RS response with boundary: {}", boundary);
 
-        // The raw bytes should be in original_data or we need to reconstruct from normalized_data
-        // For now, mark as needing multipart parsing and let PipelineQueryProvider handle it
-        // In a full implementation, we would:
-        // 1. Get raw bytes from the HTTP response
-        // 2. Split by boundary
-        // 3. Extract each DICOM part
-        // 4. Store as array of base64-encoded datasets or file references
-
+        // Store boundary in metadata for downstream consumers
         envelope
             .response_details
             .metadata
@@ -524,8 +538,52 @@ impl DicomToDicomwebMiddleware {
             .metadata
             .insert("response_format".to_string(), "multipart/dicom".to_string());
 
-        // For now, mark as successful and let PipelineQueryProvider handle parsing
-        // The raw bytes will be in original_data for it to process
+        // Try to extract body_b64 from normalized_data (set by to_json() for binary content)
+        let body_bytes = if let Some(ref nd) = envelope.normalized_data {
+            if let Some(b64) = nd.get("body_b64").and_then(|v| v.as_str()) {
+                use base64::Engine;
+                base64::engine::general_purpose::STANDARD.decode(b64).ok()
+            } else {
+                None
+            }
+        } else if let Some(b64) = envelope.original_data.get("body_b64").and_then(|v| v.as_str()) {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD.decode(b64).ok()
+        } else {
+            None
+        };
+
+        if let Some(bytes) = body_bytes {
+            // Parse multipart body into individual DICOM datasets
+            let parts = Self::parse_multipart_binary(&bytes, boundary);
+            let dataset_count = parts.len();
+
+            debug!("Parsed {} DICOM datasets from multipart response", dataset_count);
+
+            // Store parts as base64-encoded array for downstream consumption
+            use base64::Engine;
+            let parts_b64: Vec<Value> = parts
+                .iter()
+                .map(|p| {
+                    let b64 = base64::engine::general_purpose::STANDARD.encode(p);
+                    serde_json::json!({ "data_b64": b64, "size": p.len() })
+                })
+                .collect();
+
+            envelope.normalized_data = Some(serde_json::json!({
+                "datasets": parts_b64,
+                "dataset_count": dataset_count
+            }));
+
+            envelope
+                .response_details
+                .metadata
+                .insert("dataset_count".to_string(), dataset_count.to_string());
+        } else {
+            debug!("No body_b64 found in response, multipart parsing skipped");
+        }
+
+        // Mark as successful
         envelope.response_details.metadata.insert(
             "dicom_status".to_string(),
             format!("0x{:04X}", dicom_status::SUCCESS),
@@ -534,12 +592,79 @@ impl DicomToDicomwebMiddleware {
         Ok(())
     }
 
+    /// Parse multipart body into individual parts (binary-safe)
+    fn parse_multipart_binary(body: &[u8], boundary: &str) -> Vec<Vec<u8>> {
+        let delimiter = format!("--{}", boundary);
+        let delimiter_bytes = delimiter.as_bytes();
+
+        let mut parts = Vec::new();
+        let mut start = 0;
+
+        // Find first delimiter
+        while let Some(pos) = Self::find_subsequence(&body[start..], delimiter_bytes) {
+            let abs_pos = start + pos;
+            // Skip past delimiter
+            let content_start = abs_pos + delimiter_bytes.len();
+
+            // Check for terminator (--boundary--)
+            if body.get(content_start..content_start + 2) == Some(b"--") {
+                break;
+            }
+
+            // Skip CRLF after delimiter
+            let content_start = if body.get(content_start..content_start + 2) == Some(b"\r\n") {
+                content_start + 2
+            } else {
+                content_start
+            };
+
+            // Find next delimiter
+            if let Some(next_pos) = Self::find_subsequence(&body[content_start..], delimiter_bytes) {
+                let part_bytes = &body[content_start..content_start + next_pos];
+
+                // Find end of headers (double CRLF)
+                if let Some(body_start) = Self::find_subsequence(part_bytes, b"\r\n\r\n") {
+                    let actual_body = &part_bytes[body_start + 4..];
+                    // Trim trailing CRLF before next boundary
+                    let trimmed = actual_body.strip_suffix(b"\r\n").unwrap_or(actual_body);
+                    if !trimmed.is_empty() {
+                        parts.push(trimmed.to_vec());
+                    }
+                }
+                start = content_start + next_pos;
+            } else {
+                break;
+            }
+        }
+
+        parts
+    }
+
+    /// Find subsequence in byte slice
+    fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
+        if needle.is_empty() {
+            return Some(0);
+        }
+        haystack
+            .windows(needle.len())
+            .position(|window| window == needle)
+    }
+
     /// Map HTTP status code to DICOM status code
-    fn http_to_dicom_status(http_status: u16) -> u16 {
+    /// `operation` should be one of: "C-FIND", "C-STORE", "C-GET", "C-MOVE"
+    fn http_to_dicom_status(http_status: u16, operation: &str) -> u16 {
         match http_status {
             200..=299 => dicom_status::SUCCESS,
             400 => dicom_status::FAILURE_IDENTIFIER_DOES_NOT_MATCH, // Bad Request
-            404 => dicom_status::SUCCESS, // Not Found = no matches (for query)
+            404 => {
+                // For C-FIND, 404 means no matches (success with zero results)
+                // For other operations, 404 is a failure (resource not found)
+                if operation == "C-FIND" {
+                    dicom_status::SUCCESS
+                } else {
+                    dicom_status::FAILURE_UNABLE_TO_PROCESS
+                }
+            }
             409 => dicom_status::WARNING_SUBOPS_COMPLETE_WITH_FAILURES, // Conflict
             413 => dicom_status::FAILURE_OUT_OF_RESOURCES, // Payload Too Large
             500..=599 => dicom_status::FAILURE_UNABLE_TO_PROCESS,
