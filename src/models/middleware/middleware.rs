@@ -130,6 +130,9 @@ use crate::models::middleware::types::webhook::{WebhookMiddleware, parse_config 
         "dicomweb_bridge" | "dicomweb" => Ok(Box::new(
             crate::models::middleware::types::dicomweb_to_dicom::DICOMwebToDICOMMiddleware::new(),
         )),
+        "dicom_to_dicomweb" => Ok(Box::new(
+            crate::models::middleware::types::dicom_to_dicomweb::DicomToDicomwebMiddleware::new(),
+        )),
         "dicom_flatten" | "dicom_flatten_middleware" => {
             let config = crate::models::middleware::types::dicom_flatten::parse_config(options)?;
             Ok(Box::new(DicomFlattenMiddleware::new(config)))

@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// Helper to load test configuration
 fn load_test_config() -> Config {
     let config_path = format!(
-        "{}/examples/fhir_dicom/config.toml",
+        "{}/../harmony-examples/pipelines/fhir_dicom/config.toml",
         env!("CARGO_MANIFEST_DIR")
     );
 
@@ -16,7 +16,7 @@ fn load_test_config() -> Config {
 /// Helper to get transform file path
 fn get_transform_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("./../harmony-examples/pipelines/fhir_dicom/transforms")
+        .join("../harmony-examples/pipelines/fhir_dicom/transforms")
         .join(name)
 }
 
