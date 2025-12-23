@@ -9,6 +9,35 @@ use std::collections::HashMap;
 // Middleware registry similar to services
 pub static MIDDLEWARE_REGISTRY: OnceCell<HashMap<String, String>> = OnceCell::new();
 
+/// Returns all valid built-in middleware type names.
+/// This is the single source of truth for middleware type validation.
+pub fn builtin_middleware_types() -> &'static [&'static str] {
+    &[
+        "jwtauth",
+        "jwt_auth",
+        "basic_auth",
+        "connect",
+        "passthru",
+        "json_extractor",
+        "json",
+        "jmix_builder",
+        "dicomweb_bridge",
+        "dicomweb",
+        "dicom_to_dicomweb",
+        "dicom_flatten",
+        "dicom_flatten_middleware",
+        "dicom_unflatten",
+        "dicom_unflatten_middleware",
+        "transform",
+        "path_filter",
+        "log_dump",
+        "dump",
+        "webhook",
+        "metadata_transform",
+        "policies",
+    ]
+}
+
 #[derive(Debug, serde::Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct MiddlewareConfig {
