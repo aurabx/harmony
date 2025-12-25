@@ -7,6 +7,7 @@ use crate::config::Cli;
 use crate::models::backends::backends::Backend;
 use crate::models::connection::AuthenticationDefinition;
 use crate::models::endpoints::endpoint::Endpoint;
+use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress};
 use crate::models::middleware::instance::MiddlewareInstance;
 use crate::models::middleware::middleware::{initialise_middleware_registry, MiddlewareConfig};
 use crate::models::network::config::NetworkConfig;
@@ -101,9 +102,21 @@ pub struct Config {
     /// Top-level rule definitions
     #[serde(default)]
     pub rules: HashMap<String, RuleDefinition>,
+    /// Data mesh definitions
+    #[serde(default)]
+    pub mesh: HashMap<String, Mesh>,
+    /// Mesh ingress definitions
+    #[serde(default)]
+    pub ingress: HashMap<String, MeshIngress>,
+    /// Mesh egress definitions
+    #[serde(default)]
+    pub egress: HashMap<String, MeshEgress>,
     /// Resolved absolute path to transforms directory (not serialized)
     #[serde(skip)]
     pub resolved_transforms_path: Option<String>,
+    /// Resolved absolute path to mesh directory (not serialized)
+    #[serde(skip)]
+    pub resolved_mesh_path: Option<String>,
     /// Backends that could not be resolved due to missing targets (not serialized)
     #[serde(skip)]
     pub unresolved_backends: std::collections::HashSet<String>,
@@ -270,6 +283,10 @@ impl Config {
         let transforms_path = base_dir.join(&config.proxy.transforms_path);
         config.resolved_transforms_path = Some(transforms_path.to_string_lossy().to_string());
 
+        // Resolve mesh_path relative to config file directory
+        let mesh_path = base_dir.join(&config.proxy.mesh_path);
+        config.resolved_mesh_path = Some(mesh_path.to_string_lossy().to_string());
+
         // Attempt to load additional configs and merge them into the current config.
         match Self::load_additional_configs(&config, &cli.config_path) {
             Ok(additional_configs) => {
@@ -330,6 +347,10 @@ impl Config {
         // Load configurations from `transforms_path`
         let transforms_path = base_dir.join(&config.proxy.transforms_path);
         configs.extend(Self::load_from_directory(&transforms_path)?);
+
+        // Load configurations from `mesh_path`
+        let mesh_path = base_dir.join(&config.proxy.mesh_path);
+        configs.extend(Self::load_from_directory(&mesh_path)?);
 
         Ok(configs)
     }
@@ -395,6 +416,10 @@ impl Config {
             // Merge policies and rules
             base.policies.extend(config.policies);
             base.rules.extend(config.rules);
+            // Merge mesh configurations
+            base.mesh.extend(config.mesh);
+            base.ingress.extend(config.ingress);
+            base.egress.extend(config.egress);
         }
         base
     }
@@ -413,6 +438,7 @@ impl Config {
         self.validate_targets()?;
         self.validate_peers()?;
         self.validate_storage()?;
+        self.validate_mesh()?;
 
         Ok(())
     }
@@ -776,6 +802,70 @@ impl Config {
             }),
         }
     }
+
+    fn validate_mesh(&self) -> Result<(), ConfigError> {
+        // Validate mesh ingress definitions
+        for (name, ingress) in &self.ingress {
+            ingress.validate().map_err(|e| ConfigError::InvalidMeshIngress {
+                name: name.clone(),
+                reason: e,
+            })?;
+
+            // Verify ingress references a valid endpoint
+            if !self.endpoints.contains_key(&ingress.endpoint) {
+                return Err(ConfigError::InvalidMeshIngress {
+                    name: name.clone(),
+                    reason: format!("Ingress references unknown endpoint '{}'", ingress.endpoint),
+                });
+            }
+        }
+
+        // Validate mesh egress definitions
+        for (name, egress) in &self.egress {
+            egress.validate().map_err(|e| ConfigError::InvalidMeshEgress {
+                name: name.clone(),
+                reason: e,
+            })?;
+
+            // Verify egress references a valid backend
+            if !self.backends.contains_key(&egress.backend) {
+                return Err(ConfigError::InvalidMeshEgress {
+                    name: name.clone(),
+                    reason: format!("Egress references unknown backend '{}'", egress.backend),
+                });
+            }
+        }
+
+        // Validate mesh definitions
+        for (name, mesh) in &self.mesh {
+            mesh.validate().map_err(|e| ConfigError::InvalidMesh {
+                name: name.clone(),
+                reason: e,
+            })?;
+
+            // Verify all mesh ingress references exist
+            for ingress_name in &mesh.ingress {
+                if !self.ingress.contains_key(ingress_name) {
+                    return Err(ConfigError::InvalidMesh {
+                        name: name.clone(),
+                        reason: format!("Mesh references unknown ingress '{}'", ingress_name),
+                    });
+                }
+            }
+
+            // Verify all mesh egress references exist
+            for egress_name in &mesh.egress {
+                if !self.egress.contains_key(egress_name) {
+                    return Err(ConfigError::InvalidMesh {
+                        name: name.clone(),
+                        reason: format!("Mesh references unknown egress '{}'", egress_name),
+                    });
+                }
+            }
+        }
+
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -788,6 +878,9 @@ pub enum ConfigError {
     InvalidBackend { name: String, reason: String },
     InvalidNetwork { name: String, reason: String },
     InvalidPipeline { name: String, reason: String },
-    InvalidMiddleware { name: String, reason: String }, // Added for middleware validation
-    InvalidStorage { backend: String, reason: String }, // Added for storage validation
+    InvalidMiddleware { name: String, reason: String },
+    InvalidStorage { backend: String, reason: String },
+    InvalidMesh { name: String, reason: String },
+    InvalidMeshIngress { name: String, reason: String },
+    InvalidMeshEgress { name: String, reason: String },
 }
