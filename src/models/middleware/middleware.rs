@@ -35,6 +35,7 @@ pub fn builtin_middleware_types() -> &'static [&'static str] {
         "webhook",
         "metadata_transform",
         "policies",
+        "mesh_auth",
     ]
 }
 
@@ -205,6 +206,12 @@ use crate::models::middleware::types::webhook::{WebhookMiddleware, parse_config 
             )?;
             Ok(Box::new(
                 crate::models::middleware::types::policies::PoliciesMiddleware::new(config)?,
+            ))
+        }
+        "mesh_auth" => {
+            let mesh_config = crate::models::middleware::types::mesh_auth::parse_config_with_context(options, config)?;
+            Ok(Box::new(
+                crate::models::middleware::types::mesh_auth::MeshAuthMiddleware::new(mesh_config),
             ))
         }
         _ => Err(format!(

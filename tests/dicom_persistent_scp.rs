@@ -57,6 +57,7 @@ fn create_test_config_with_backends(backends: Vec<(&str, &str, serde_json::Value
                 endpoints: vec![],
                 backends: backend_names,
                 middleware: PipelineMiddleware::default(),
+                ..Default::default()
             },
         );
     }
@@ -113,6 +114,7 @@ fn create_test_config_with_endpoints(endpoints: Vec<(&str, &str, serde_json::Val
                 endpoints: endpoint_names,
                 backends: vec![],
                 middleware: PipelineMiddleware::default(),
+                ..Default::default()
             },
         );
     }

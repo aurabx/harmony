@@ -7,7 +7,7 @@ use crate::config::Cli;
 use crate::models::backends::backends::Backend;
 use crate::models::connection::AuthenticationDefinition;
 use crate::models::endpoints::endpoint::Endpoint;
-use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress};
+use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress, RemoteIngress};
 use crate::models::middleware::instance::MiddlewareInstance;
 use crate::models::middleware::middleware::{initialise_middleware_registry, MiddlewareConfig};
 use crate::models::network::config::NetworkConfig;
@@ -111,6 +111,9 @@ pub struct Config {
     /// Mesh egress definitions
     #[serde(default)]
     pub egress: HashMap<String, MeshEgress>,
+    /// Remote ingress definitions (URLs of remote mesh members)
+    #[serde(default)]
+    pub remote_ingress: HashMap<String, RemoteIngress>,
     /// Resolved absolute path to transforms directory (not serialized)
     #[serde(skip)]
     pub resolved_transforms_path: Option<String>,
@@ -241,6 +244,7 @@ impl Config {
                     endpoints: vec!["management".to_string()],
                     backends: vec!["management".to_string()],
                     middleware: crate::models::pipelines::config::PipelineMiddleware::default(),
+                    mesh: crate::models::pipelines::config::PipelineMesh::default(),
                 },
             );
         }
@@ -420,8 +424,58 @@ impl Config {
             base.mesh.extend(config.mesh);
             base.ingress.extend(config.ingress);
             base.egress.extend(config.egress);
+            base.remote_ingress.extend(config.remote_ingress);
         }
+
+        // Extract nested mesh ingress/egress from pipelines to top-level
+        base.extract_pipeline_mesh();
+
         base
+    }
+
+    /// Extract nested mesh ingress/egress definitions from pipelines to top-level config.
+    /// This allows the DSL format `[pipelines.my_pipeline.mesh.ingress.my_ingress]` to be
+    /// promoted to the top-level `ingress` and `egress` maps for validation and routing.
+    fn extract_pipeline_mesh(&mut self) {
+        for (pipeline_name, pipeline) in &self.pipelines {
+            // Extract ingress definitions
+            let extracted_ingress = pipeline.extract_ingress(pipeline_name);
+            for (name, ingress) in extracted_ingress {
+                if self.ingress.contains_key(&name) {
+                    tracing::warn!(
+                        "Ingress '{}' from pipeline '{}' conflicts with existing ingress, skipping",
+                        name,
+                        pipeline_name
+                    );
+                } else {
+                    tracing::debug!(
+                        "Extracted ingress '{}' from pipeline '{}'",
+                        name,
+                        pipeline_name
+                    );
+                    self.ingress.insert(name, ingress);
+                }
+            }
+
+            // Extract egress definitions
+            let extracted_egress = pipeline.extract_egress(pipeline_name);
+            for (name, egress) in extracted_egress {
+                if self.egress.contains_key(&name) {
+                    tracing::warn!(
+                        "Egress '{}' from pipeline '{}' conflicts with existing egress, skipping",
+                        name,
+                        pipeline_name
+                    );
+                } else {
+                    tracing::debug!(
+                        "Extracted egress '{}' from pipeline '{}'",
+                        name,
+                        pipeline_name
+                    );
+                    self.egress.insert(name, egress);
+                }
+            }
+        }
     }
 
     pub fn validate(&self) -> Result<(), ConfigError> {
@@ -811,11 +865,32 @@ impl Config {
                 reason: e,
             })?;
 
-            // Verify ingress references a valid endpoint
-            if !self.endpoints.contains_key(&ingress.endpoint) {
+            // Verify ingress references a valid pipeline
+            let pipeline = self.pipelines.get(&ingress.pipeline).ok_or_else(|| {
+                ConfigError::InvalidMeshIngress {
+                    name: name.clone(),
+                    reason: format!("Ingress references unknown pipeline '{}'", ingress.pipeline),
+                }
+            })?;
+
+            // If endpoint override is specified, verify it belongs to the pipeline
+            if let Some(ref ep) = ingress.endpoint {
+                if !pipeline.endpoints.contains(ep) {
+                    return Err(ConfigError::InvalidMeshIngress {
+                        name: name.clone(),
+                        reason: format!(
+                            "Ingress endpoint override '{}' not in pipeline '{}'",
+                            ep, ingress.pipeline
+                        ),
+                    });
+                }
+            } else if pipeline.endpoints.is_empty() {
                 return Err(ConfigError::InvalidMeshIngress {
                     name: name.clone(),
-                    reason: format!("Ingress references unknown endpoint '{}'", ingress.endpoint),
+                    reason: format!(
+                        "Pipeline '{}' has no endpoints for ingress fallback",
+                        ingress.pipeline
+                    ),
                 });
             }
         }
@@ -827,11 +902,32 @@ impl Config {
                 reason: e,
             })?;
 
-            // Verify egress references a valid backend
-            if !self.backends.contains_key(&egress.backend) {
+            // Verify egress references a valid pipeline
+            let pipeline = self.pipelines.get(&egress.pipeline).ok_or_else(|| {
+                ConfigError::InvalidMeshEgress {
+                    name: name.clone(),
+                    reason: format!("Egress references unknown pipeline '{}'", egress.pipeline),
+                }
+            })?;
+
+            // If backend override is specified, verify it belongs to the pipeline
+            if let Some(ref be) = egress.backend {
+                if !pipeline.backends.contains(be) {
+                    return Err(ConfigError::InvalidMeshEgress {
+                        name: name.clone(),
+                        reason: format!(
+                            "Egress backend override '{}' not in pipeline '{}'",
+                            be, egress.pipeline
+                        ),
+                    });
+                }
+            } else if pipeline.backends.is_empty() {
                 return Err(ConfigError::InvalidMeshEgress {
                     name: name.clone(),
-                    reason: format!("Egress references unknown backend '{}'", egress.backend),
+                    reason: format!(
+                        "Pipeline '{}' has no backends for egress fallback",
+                        egress.pipeline
+                    ),
                 });
             }
         }
@@ -843,12 +939,12 @@ impl Config {
                 reason: e,
             })?;
 
-            // Verify all mesh ingress references exist
+            // Verify all mesh ingress references exist (in either local ingress or remote_ingress)
             for ingress_name in &mesh.ingress {
-                if !self.ingress.contains_key(ingress_name) {
+                if !self.ingress.contains_key(ingress_name) && !self.remote_ingress.contains_key(ingress_name) {
                     return Err(ConfigError::InvalidMesh {
                         name: name.clone(),
-                        reason: format!("Mesh references unknown ingress '{}'", ingress_name),
+                        reason: format!("Mesh references unknown ingress '{}' (not found in ingress or remote_ingress)", ingress_name),
                     });
                 }
             }

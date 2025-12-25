@@ -237,6 +237,7 @@ fn test_unresolved_backend_skipped_in_validation() {
             endpoints: vec![],
             backends: vec!["unreachable_backend".to_string()],
             middleware: PipelineMiddleware::default(),
+            ..Default::default()
         },
     );
 

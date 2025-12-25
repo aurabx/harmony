@@ -1,5 +1,6 @@
 use crate::adapters::registry::AdapterRegistry;
 use crate::globals;
+use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress, RemoteIngress};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -22,6 +23,14 @@ pub struct ConfigStatusResponse {
     pub running_networks: Vec<String>,
     pub proxy_id: String,
     pub log_level: String,
+    /// Mesh configurations
+    pub mesh: HashMap<String, Mesh>,
+    /// Ingress definitions (extracted from pipelines)
+    pub ingress: HashMap<String, MeshIngress>,
+    /// Egress definitions (extracted from pipelines)
+    pub egress: HashMap<String, MeshEgress>,
+    /// Remote ingress definitions (URLs of remote mesh members)
+    pub remote_ingress: HashMap<String, RemoteIngress>,
 }
 
 /// Handle config status request
@@ -78,6 +87,10 @@ pub async fn handle_config_status(
         running_networks,
         proxy_id: config.proxy.id.clone(),
         log_level: config.logging.log_level.clone(),
+        mesh: config.mesh.clone(),
+        ingress: config.ingress.clone(),
+        egress: config.egress.clone(),
+        remote_ingress: config.remote_ingress.clone(),
     };
 
     serde_json::to_value(response).map_err(|_| (500, "Failed to serialize response".to_string()))

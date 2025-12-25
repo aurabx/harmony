@@ -49,6 +49,53 @@ impl fmt::Display for MeshProvider {
     }
 }
 
+/// Authentication type for mesh communication
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum MeshAuthType {
+    /// JWT-based authentication
+    Jwt,
+}
+
+impl Default for MeshAuthType {
+    fn default() -> Self {
+        MeshAuthType::Jwt
+    }
+}
+
+impl fmt::Display for MeshAuthType {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            MeshAuthType::Jwt => write!(f, "jwt"),
+        }
+    }
+}
+
+/// Mode for ingress/egress operation
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum IngressEgressMode {
+    /// Default mode: requests proceed regardless of mesh match
+    Default,
+    /// Mesh mode: only requests with valid mesh authentication are accepted
+    Mesh,
+}
+
+impl Default for IngressEgressMode {
+    fn default() -> Self {
+        IngressEgressMode::Default
+    }
+}
+
+impl fmt::Display for IngressEgressMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            IngressEgressMode::Default => write!(f, "default"),
+            IngressEgressMode::Mesh => write!(f, "mesh"),
+        }
+    }
+}
+
 /// Mesh definition linking ingress and egress points for inter-proxy communication
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Mesh {
@@ -62,6 +109,25 @@ pub struct Mesh {
 
     /// Mesh provider - local or runbeam
     pub provider: MeshProvider,
+
+    /// Authentication type for mesh members (default: jwt)
+    #[serde(default)]
+    pub auth_type: MeshAuthType,
+
+    /// JWT secret for local provider (HS256)
+    /// Used for both signing (egress) and verification (ingress)
+    #[serde(default)]
+    pub jwt_secret: Option<String>,
+
+    /// Path to RSA private key for local provider (RS256)
+    /// Used for signing JWTs on egress
+    #[serde(default)]
+    pub jwt_private_key_path: Option<String>,
+
+    /// Path to RSA public key for local provider (RS256)
+    /// Used for verifying JWTs on ingress
+    #[serde(default)]
+    pub jwt_public_key_path: Option<String>,
 
     /// List of ingress definition names that belong to this mesh
     #[serde(default)]
@@ -86,6 +152,10 @@ impl Default for Mesh {
             id: None,
             mesh_type: MeshProtocol::default(),
             provider: MeshProvider::default(),
+            auth_type: MeshAuthType::default(),
+            jwt_secret: None,
+            jwt_private_key_path: None,
+            jwt_public_key_path: None,
             ingress: Vec::new(),
             egress: Vec::new(),
             description: None,
@@ -97,12 +167,7 @@ impl Default for Mesh {
 impl Mesh {
     /// Validate the mesh configuration
     pub fn validate(&self) -> Result<(), String> {
-        if self.ingress.is_empty() {
-            return Err("Mesh must have at least one ingress".to_string());
-        }
-        if self.egress.is_empty() {
-            return Err("Mesh must have at least one egress".to_string());
-        }
+        // Empty ingress/egress is valid - the mesh simply won't match anything
         Ok(())
     }
 }
@@ -114,12 +179,22 @@ pub struct MeshIngress {
     #[serde(default)]
     pub id: Option<String>,
 
+    /// Pipeline name that owns this ingress (required)
+    pub pipeline: String,
+
     /// Protocol type for incoming mesh requests
     #[serde(rename = "type")]
     pub ingress_type: MeshProtocol,
 
-    /// Reference to an endpoint name that incoming mesh requests will be routed to
-    pub endpoint: String,
+    /// Mode for this ingress point
+    /// - default: requests proceed regardless of mesh match
+    /// - mesh: only requests with valid mesh authentication are accepted
+    #[serde(default)]
+    pub mode: IngressEgressMode,
+
+    /// Optional endpoint override. If omitted, the first endpoint in the pipeline is used.
+    #[serde(default)]
+    pub endpoint: Option<String>,
 
     /// List of URLs that map to this ingress
     #[serde(default)]
@@ -138,8 +213,10 @@ impl Default for MeshIngress {
     fn default() -> Self {
         Self {
             id: None,
+            pipeline: String::new(),
             ingress_type: MeshProtocol::default(),
-            endpoint: String::new(),
+            mode: IngressEgressMode::default(),
+            endpoint: None,
             urls: Vec::new(),
             description: None,
             enabled: true,
@@ -150,8 +227,8 @@ impl Default for MeshIngress {
 impl MeshIngress {
     /// Validate the ingress configuration
     pub fn validate(&self) -> Result<(), String> {
-        if self.endpoint.trim().is_empty() {
-            return Err("Ingress must reference an endpoint".to_string());
+        if self.pipeline.trim().is_empty() {
+            return Err("Ingress must reference a pipeline".to_string());
         }
         if self.urls.is_empty() {
             return Err("Ingress must have at least one URL".to_string());
@@ -167,12 +244,22 @@ pub struct MeshEgress {
     #[serde(default)]
     pub id: Option<String>,
 
+    /// Pipeline name that owns this egress (required)
+    pub pipeline: String,
+
     /// Protocol type for outgoing mesh requests
     #[serde(rename = "type")]
     pub egress_type: MeshProtocol,
 
-    /// Reference to a backend name that outgoing mesh requests will be routed through
-    pub backend: String,
+    /// Mode for this egress point
+    /// - default: requests proceed regardless of mesh match
+    /// - mesh: only requests to mesh destinations are allowed
+    #[serde(default)]
+    pub mode: IngressEgressMode,
+
+    /// Optional backend override. If omitted, the first backend in the pipeline is used.
+    #[serde(default)]
+    pub backend: Option<String>,
 
     /// Human-readable description of this egress point
     #[serde(default)]
@@ -187,8 +274,10 @@ impl Default for MeshEgress {
     fn default() -> Self {
         Self {
             id: None,
+            pipeline: String::new(),
             egress_type: MeshProtocol::default(),
-            backend: String::new(),
+            mode: IngressEgressMode::default(),
+            backend: None,
             description: None,
             enabled: true,
         }
@@ -198,8 +287,8 @@ impl Default for MeshEgress {
 impl MeshEgress {
     /// Validate the egress configuration
     pub fn validate(&self) -> Result<(), String> {
-        if self.backend.trim().is_empty() {
-            return Err("Egress must reference a backend".to_string());
+        if self.pipeline.trim().is_empty() {
+            return Err("Egress must reference a pipeline".to_string());
         }
         Ok(())
     }
@@ -207,6 +296,23 @@ impl MeshEgress {
 
 fn default_enabled() -> bool {
     true
+}
+
+/// Remote ingress definition - URLs of remote mesh members that this proxy can send to
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RemoteIngress {
+    /// List of URLs served by the remote ingress
+    pub urls: Vec<String>,
+}
+
+impl RemoteIngress {
+    /// Validate the remote ingress configuration
+    pub fn validate(&self) -> Result<(), String> {
+        if self.urls.is_empty() {
+            return Err("Remote ingress must have at least one URL".to_string());
+        }
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -233,23 +339,33 @@ mod tests {
 
     #[test]
     fn test_mesh_validation() {
-        let mut mesh = Mesh::default();
-        assert!(mesh.validate().is_err());
-
-        mesh.ingress.push("ingress1".to_string());
-        assert!(mesh.validate().is_err());
-
-        mesh.egress.push("egress1".to_string());
+        // Empty mesh is now valid - it simply won't match anything
+        let mesh = Mesh::default();
         assert!(mesh.validate().is_ok());
+
+        // Mesh with ingress only is valid
+        let mesh_with_ingress = Mesh {
+            ingress: vec!["ingress1".to_string()],
+            ..Default::default()
+        };
+        assert!(mesh_with_ingress.validate().is_ok());
+
+        // Mesh with both ingress and egress is valid
+        let mesh_with_both = Mesh {
+            ingress: vec!["ingress1".to_string()],
+            egress: vec!["egress1".to_string()],
+            ..Default::default()
+        };
+        assert!(mesh_with_both.validate().is_ok());
     }
 
     #[test]
     fn test_ingress_validation() {
         let mut ingress = MeshIngress::default();
-        assert!(ingress.validate().is_err());
+        assert!(ingress.validate().is_err()); // missing pipeline
 
-        ingress.endpoint = "my-endpoint".to_string();
-        assert!(ingress.validate().is_err());
+        ingress.pipeline = "my-pipeline".to_string();
+        assert!(ingress.validate().is_err()); // missing urls
 
         ingress.urls.push("https://example.com".to_string());
         assert!(ingress.validate().is_ok());
@@ -258,9 +374,9 @@ mod tests {
     #[test]
     fn test_egress_validation() {
         let mut egress = MeshEgress::default();
-        assert!(egress.validate().is_err());
+        assert!(egress.validate().is_err()); // missing pipeline
 
-        egress.backend = "my-backend".to_string();
+        egress.pipeline = "my-pipeline".to_string();
         assert!(egress.validate().is_ok());
     }
 
@@ -282,33 +398,85 @@ mod tests {
         assert_eq!(mesh.egress.len(), 1);
         assert_eq!(mesh.description, Some("Test mesh".to_string()));
         assert!(mesh.enabled);
+        // Default auth fields
+        assert_eq!(mesh.auth_type, MeshAuthType::Jwt);
+        assert!(mesh.jwt_secret.is_none());
+    }
+
+    #[test]
+    fn test_mesh_auth_type_serialization() {
+        let jwt = MeshAuthType::Jwt;
+        assert_eq!(serde_json::to_string(&jwt).unwrap(), "\"jwt\"");
+        assert_eq!(jwt.to_string(), "jwt");
+    }
+
+    #[test]
+    fn test_mesh_deserialization_with_jwt_secret() {
+        let toml_str = r#"
+            type = "http"
+            provider = "local"
+            auth_type = "jwt"
+            jwt_secret = "my-super-secret-key"
+            ingress = ["ingress1"]
+            egress = ["egress1"]
+            enabled = true
+        "#;
+
+        let mesh: Mesh = toml::from_str(toml_str).unwrap();
+        assert_eq!(mesh.mesh_type, MeshProtocol::Http);
+        assert_eq!(mesh.provider, MeshProvider::Local);
+        assert_eq!(mesh.auth_type, MeshAuthType::Jwt);
+        assert_eq!(mesh.jwt_secret, Some("my-super-secret-key".to_string()));
+        assert!(mesh.jwt_private_key_path.is_none());
+        assert!(mesh.jwt_public_key_path.is_none());
+    }
+
+    #[test]
+    fn test_mesh_deserialization_with_rsa_keys() {
+        let toml_str = r#"
+            type = "http"
+            provider = "local"
+            jwt_private_key_path = "/path/to/private.pem"
+            jwt_public_key_path = "/path/to/public.pem"
+            ingress = ["ingress1"]
+            egress = ["egress1"]
+        "#;
+
+        let mesh: Mesh = toml::from_str(toml_str).unwrap();
+        assert_eq!(mesh.jwt_private_key_path, Some("/path/to/private.pem".to_string()));
+        assert_eq!(mesh.jwt_public_key_path, Some("/path/to/public.pem".to_string()));
+        assert!(mesh.jwt_secret.is_none());
     }
 
     #[test]
     fn test_ingress_deserialization() {
         let toml_str = r#"
+            pipeline = "fhir_pipeline"
             type = "http"
             endpoint = "api-endpoint"
             urls = ["https://api.example.com", "https://api2.example.com"]
         "#;
 
         let ingress: MeshIngress = toml::from_str(toml_str).unwrap();
+        assert_eq!(ingress.pipeline, "fhir_pipeline");
         assert_eq!(ingress.ingress_type, MeshProtocol::Http);
-        assert_eq!(ingress.endpoint, "api-endpoint");
+        assert_eq!(ingress.endpoint, Some("api-endpoint".to_string()));
         assert_eq!(ingress.urls.len(), 2);
     }
 
     #[test]
     fn test_egress_deserialization() {
         let toml_str = r#"
+            pipeline = "outbound_pipeline"
             type = "http3"
             backend = "remote-backend"
             description = "Egress to remote service"
         "#;
 
         let egress: MeshEgress = toml::from_str(toml_str).unwrap();
+        assert_eq!(egress.pipeline, "outbound_pipeline");
         assert_eq!(egress.egress_type, MeshProtocol::Http3);
-        assert_eq!(egress.backend, "remote-backend");
+        assert_eq!(egress.backend, Some("remote-backend".to_string()));
         assert_eq!(egress.description, Some("Egress to remote service".to_string()));
     }
 }

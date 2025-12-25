@@ -10,6 +10,7 @@ pub mod jmix_builder;
 pub mod jmix_index;
 pub mod json_extractor;
 pub mod jwtauth;
+pub mod mesh_auth;
 pub mod metadata_transform;
 pub mod passthru;
 pub mod path_filter;

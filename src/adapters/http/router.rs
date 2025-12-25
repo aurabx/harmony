@@ -213,11 +213,33 @@ async fn mesh_routing_layer(
     config: Arc<Config>,
     mesh_registry: Arc<MeshRegistry>,
 ) -> Response<Body> {
+    use crate::models::mesh::config::IngressEgressMode;
+
     // Extract URL components for mesh matching
     let (scheme, host, port, path) = extract_request_url_parts(&req);
 
     // Check mesh registry for a match
     if let Some(route_match) = mesh_registry.resolve(&scheme, &host, port, &path) {
+        // Check if ingress mode=mesh but no mesh was matched
+        // (mesh_name is empty when ingress isn't part of any enabled mesh)
+        if route_match.context.ingress.mode == IngressEgressMode::Mesh 
+            && route_match.context.mesh_name.is_empty() 
+        {
+            tracing::warn!(
+                "🚫 Mesh route rejected: ingress '{}' requires mesh auth but no mesh matched",
+                route_match.context.ingress_name
+            );
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::empty())
+                .unwrap_or_else(|_| {
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::empty())
+                        .unwrap()
+                });
+        }
+
         tracing::info!(
             "🔗 Mesh route: {}://{}{} -> endpoint '{}' (mesh '{}')",
             scheme,
@@ -353,7 +375,7 @@ async fn handle_request_with_mesh(
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
     // 3. Execute pipeline (NEW: using PipelineExecutor!)
-    let response_envelope = PipelineExecutor::execute(envelope, pipeline, &config, &ctx)
+    let response_envelope = PipelineExecutor::execute(envelope, &pipeline_name, pipeline, &config, &ctx)
         .await
         .map_err(|err| {
             tracing::error!("Pipeline execution failed: {}", err);

@@ -35,19 +35,17 @@ pub struct MeshRouteMatch {
     pub context: MeshContext,
 }
 
-/// Registry for mesh URL-to-ingress routing.
+/// Registry for URL-to-ingress routing.
 ///
 /// Built from config at startup, provides O(n) URL matching where n is the
 /// number of ingress URLs (could be optimized with a trie if needed).
 pub struct MeshRegistry {
-    /// Map of parsed ingress URLs to (ingress_name, mesh_name)
-    url_index: Vec<(UrlPattern, String, String)>,
+    /// Map of parsed ingress URLs to (ingress_name, optional mesh_name)
+    url_index: Vec<(UrlPattern, String, Option<String>)>,
     /// Reference to ingress definitions
     ingress: HashMap<String, MeshIngress>,
     /// Reference to mesh definitions  
     mesh: HashMap<String, Mesh>,
-    /// Reverse lookup: endpoint_name -> pipeline_name
-    endpoint_to_pipeline: HashMap<String, String>,
 }
 
 /// Parsed URL pattern for matching.
@@ -101,36 +99,25 @@ impl MeshRegistry {
     pub fn from_config(config: &Config) -> Self {
         let mut url_index = Vec::new();
 
-        // Build URL index from all ingress definitions
+        // Build URL index from all ingress definitions (mesh membership optional)
         for (ingress_name, ingress) in &config.ingress {
             if !ingress.enabled {
                 continue;
             }
 
-            // Find which mesh this ingress belongs to
+            // Find which mesh this ingress belongs to (optional)
             let mesh_name = config
                 .mesh
                 .iter()
                 .find(|(_, m)| m.enabled && m.ingress.contains(ingress_name))
                 .map(|(name, _)| name.clone());
 
-            let mesh_name = match mesh_name {
-                Some(name) => name,
-                None => {
-                    tracing::warn!(
-                        "Ingress '{}' is not referenced by any enabled mesh, skipping",
-                        ingress_name
-                    );
-                    continue;
-                }
-            };
-
             // Parse and index each URL
             for url_str in &ingress.urls {
                 match UrlPattern::from_url_str(url_str) {
                     Some(pattern) => {
                         tracing::debug!(
-                            "Indexed mesh URL '{}' -> ingress '{}' (mesh '{}')",
+                            "Indexed ingress URL '{}' -> ingress '{}' (mesh {:?})",
                             url_str,
                             ingress_name,
                             mesh_name
@@ -148,14 +135,6 @@ impl MeshRegistry {
             }
         }
 
-        // Build endpoint -> pipeline reverse lookup
-        let mut endpoint_to_pipeline = HashMap::new();
-        for (pipeline_name, pipeline) in &config.pipelines {
-            for endpoint_name in &pipeline.endpoints {
-                endpoint_to_pipeline.insert(endpoint_name.clone(), pipeline_name.clone());
-            }
-        }
-
         if !url_index.is_empty() {
             tracing::info!(
                 "MeshRegistry initialized with {} URL patterns",
@@ -167,36 +146,65 @@ impl MeshRegistry {
             url_index,
             ingress: config.ingress.clone(),
             mesh: config.mesh.clone(),
-            endpoint_to_pipeline,
         }
     }
 
-    /// Check if a request URL matches any mesh ingress.
+    /// Check if a request URL matches any ingress.
     ///
     /// Returns the routing information if matched, None otherwise.
+    /// Ingress can work without mesh membership for simple URL→pipeline binding.
     pub fn resolve(&self, scheme: &str, host: &str, port: Option<u16>, path: &str) -> Option<MeshRouteMatch> {
-        for (pattern, ingress_name, mesh_name) in &self.url_index {
+        self.resolve_with_config(scheme, host, port, path, None)
+    }
+
+    /// Check if a request URL matches any ingress, using Config for endpoint fallback.
+    pub fn resolve_with_config(
+        &self,
+        scheme: &str,
+        host: &str,
+        port: Option<u16>,
+        path: &str,
+        config: Option<&Config>,
+    ) -> Option<MeshRouteMatch> {
+        for (pattern, ingress_name, mesh_name_opt) in &self.url_index {
             if pattern.matches(scheme, host, port, path) {
                 let ingress = self.ingress.get(ingress_name)?;
-                let mesh = self.mesh.get(mesh_name)?;
-                let pipeline_name = self.endpoint_to_pipeline.get(&ingress.endpoint)?;
+
+                // Pipeline comes directly from ingress.pipeline
+                let pipeline_name = &ingress.pipeline;
+
+                // Resolve effective endpoint (override or first in pipeline)
+                let endpoint_name = if let Some(ref ep) = ingress.endpoint {
+                    ep.clone()
+                } else {
+                    // Fallback to first endpoint in pipeline
+                    config
+                        .and_then(|c| c.pipelines.get(pipeline_name))
+                        .and_then(|p| p.endpoints.first())
+                        .cloned()?
+                };
+
+                // Get mesh context if ingress belongs to a mesh
+                let mesh = mesh_name_opt
+                    .as_ref()
+                    .and_then(|mn| self.mesh.get(mn));
 
                 tracing::debug!(
-                    "Mesh route match: {}://{}{}  -> ingress '{}' -> endpoint '{}' (pipeline '{}')",
+                    "Ingress route match: {}://{}{}  -> ingress '{}' -> endpoint '{}' (pipeline '{}')",
                     scheme,
                     host,
                     path,
                     ingress_name,
-                    ingress.endpoint,
+                    endpoint_name,
                     pipeline_name
                 );
 
                 return Some(MeshRouteMatch {
-                    endpoint_name: ingress.endpoint.clone(),
+                    endpoint_name,
                     pipeline_name: pipeline_name.clone(),
                     context: MeshContext {
-                        mesh_name: mesh_name.clone(),
-                        mesh: mesh.clone(),
+                        mesh_name: mesh_name_opt.clone().unwrap_or_default(),
+                        mesh: mesh.cloned().unwrap_or_default(),
                         ingress_name: ingress_name.clone(),
                         ingress: ingress.clone(),
                         pipeline_name: pipeline_name.clone(),
@@ -247,7 +255,8 @@ mod tests {
             "fhir_ingress".to_string(),
             MeshIngress {
                 ingress_type: MeshProtocol::Http,
-                endpoint: "fhir_endpoint".to_string(),
+                pipeline: "fhir_pipeline".to_string(),
+                endpoint: Some("fhir_endpoint".to_string()),
                 urls: vec![
                     "https://fhir.example.com/r4".to_string(),
                     "https://fhir-backup.example.com/r4".to_string(),
@@ -354,11 +363,20 @@ mod tests {
     }
 
     #[test]
-    fn test_disabled_mesh_not_indexed() {
+    fn test_disabled_mesh_allows_ingress_indexing() {
+        // Ingresses now work independently of meshes.
+        // A disabled mesh shouldn't prevent the ingress from being indexed.
         let mut config = make_test_config();
         config.mesh.get_mut("healthcare").unwrap().enabled = false;
 
         let registry = MeshRegistry::from_config(&config);
-        assert!(registry.is_empty());
+        // Ingress should still be indexed even without an active mesh
+        assert!(!registry.is_empty());
+
+        // The route should match, but mesh context will be empty
+        let result = registry.resolve("https", "fhir.example.com", None, "/r4");
+        assert!(result.is_some());
+        let route = result.unwrap();
+        assert_eq!(route.context.mesh_name, ""); // No mesh since it's disabled
     }
 }

@@ -137,7 +137,7 @@ impl PipelineQueryProvider {
 
         // Execute pipeline using PipelineExecutor
         let response_envelope =
-            PipelineExecutor::execute(request_envelope, pipeline_cfg, &config, &ctx)
+            PipelineExecutor::execute(request_envelope, &self.pipeline, pipeline_cfg, &config, &ctx)
                 .await
                 .map_err(|e| {
                     DimseError::operation_failed(format!("Pipeline execution failed: {}", e))

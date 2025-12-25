@@ -381,7 +381,7 @@ pub async fn handle_connection(
                 };
 
                 // Execute pipeline
-                let response_envelope = match PipelineExecutor::execute(envelope, pipeline, &config, &ctx).await {
+                let response_envelope = match PipelineExecutor::execute(envelope, &pipeline_name, pipeline, &config, &ctx).await {
                     Ok(env) => env,
                     Err(err) => {
                         tracing::error!(
