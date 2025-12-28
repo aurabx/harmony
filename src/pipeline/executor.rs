@@ -1087,6 +1087,7 @@ mod tests {
     #[test]
     fn test_find_mesh_for_egress_matching() {
         use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider};
+        use crate::models::pipelines::config::Pipeline;
 
         let mut config = Config::default();
 
@@ -1127,9 +1128,16 @@ mod tests {
             },
         );
 
+        // Minimal pipeline with a backend so egress without explicit backend still matches
+        let pipeline = Pipeline {
+            backends: vec!["backend-a".to_string()],
+            ..Default::default()
+        };
+
         // Should match: pipeline has egress in mesh AND destination matches ingress URL
         let result = PipelineExecutor::find_mesh_for_egress(
             "my-pipeline",
+            &pipeline,
             "https://partner.example.com/api/users",
             &config,
         );
@@ -1141,6 +1149,7 @@ mod tests {
     #[test]
     fn test_find_mesh_for_egress_no_match_wrong_destination() {
         use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider};
+        use crate::models::pipelines::config::Pipeline;
 
         let mut config = Config::default();
 
@@ -1177,9 +1186,15 @@ mod tests {
             },
         );
 
+        let pipeline = Pipeline {
+            backends: vec!["backend-a".to_string()],
+            ..Default::default()
+        };
+
         // Should NOT match: destination URL doesn't match ingress
         let result = PipelineExecutor::find_mesh_for_egress(
             "my-pipeline",
+            &pipeline,
             "https://other.example.com/api/users",
             &config,
         );
@@ -1189,6 +1204,7 @@ mod tests {
     #[test]
     fn test_find_mesh_for_egress_no_match_pipeline_not_in_mesh() {
         use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider};
+        use crate::models::pipelines::config::Pipeline;
 
         let mut config = Config::default();
 
@@ -1226,9 +1242,15 @@ mod tests {
             },
         );
 
+        let pipeline = Pipeline {
+            backends: vec!["backend-a".to_string()],
+            ..Default::default()
+        };
+
         // Should NOT match: our pipeline doesn't have an egress in this mesh
         let result = PipelineExecutor::find_mesh_for_egress(
             "my-pipeline",
+            &pipeline,
             "https://partner.example.com/api/users",
             &config,
         );
@@ -1238,6 +1260,7 @@ mod tests {
     #[test]
     fn test_find_mesh_for_egress_disabled_mesh_ignored() {
         use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider};
+        use crate::models::pipelines::config::Pipeline;
 
         let mut config = Config::default();
 
@@ -1274,9 +1297,15 @@ mod tests {
             },
         );
 
+        let pipeline = Pipeline {
+            backends: vec!["backend-a".to_string()],
+            ..Default::default()
+        };
+
         // Should NOT match: mesh is disabled
         let result = PipelineExecutor::find_mesh_for_egress(
             "my-pipeline",
+            &pipeline,
             "https://partner.example.com/api/users",
             &config,
         );
