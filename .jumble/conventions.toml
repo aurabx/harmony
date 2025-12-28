@@ -1,0 +1,58 @@
+# Harmony Proxy Conventions and Gotchas
+# These are project-specific patterns and common pitfalls
+
+[conventions]
+envelope_pattern = """
+All data flows through RequestEnvelope/ResponseEnvelope structs. Never access raw request/response 
+data directly in middleware or transforms. The envelope carries metadata, routing context, and 
+the actual payload - always work with the envelope."""
+
+adapter_io_only = """
+Protocol adapters (DICOM, DICOMweb, FHIR, HTTP) handle I/O and protocol translation ONLY. 
+All business logic, routing, and transforms run in PipelineExecutor. Adapters convert 
+protocol-specific formats to/from envelopes and hand off to the pipeline."""
+
+service_pattern = """
+Services are defined in src/services/ and registered in the ServiceRegistry. Each service 
+has a clear interface trait and at least one implementation. Use dependency injection via 
+the registry - never instantiate services directly in business logic."""
+
+middleware_composable = """
+Middleware is composable and stateless. Each middleware receives an envelope, can modify it, 
+and passes to the next. Use the middleware chain pattern - don't create middleware that 
+depends on specific ordering unless absolutely necessary (and document it if so)."""
+
+config_driven = """
+All behavior should be configurable via harmony.toml. Avoid hardcoded values. If you add 
+a new feature, add corresponding configuration options with sensible defaults. Use the 
+existing config module patterns for validation."""
+
+[gotchas]
+middleware_order = """
+Middleware executes in the order listed in harmony.toml. Put authentication BEFORE 
+authorization, and both BEFORE any transforms. Rate limiting typically goes first. 
+Getting this wrong causes subtle security bugs that don't show in basic testing."""
+
+async_in_transforms = """
+JOLT transforms run synchronously. If you need async operations (DB lookups, external calls), 
+do them in middleware BEFORE the transform stage. The transform receives a fully-hydrated 
+envelope with all data it needs."""
+
+error_propagation = """
+Errors in the pipeline must be wrapped in PipelineError with appropriate context. Don't use 
+.unwrap() or .expect() in pipeline code - always propagate errors with ?. The error type 
+carries enough context for debugging without exposing internals to clients."""
+
+backend_timeout = """
+Backend connection timeouts default to 30s but this is often too long for health checks 
+and too short for large DICOM transfers. Always configure timeouts explicitly for each 
+backend based on expected payload sizes."""
+
+envelope_cloning = """
+Envelopes can be large (especially with DICOM payloads). Avoid cloning envelopes unless 
+necessary. Use references and the envelope's internal Arc<> for payload data when possible."""
+
+test_pipeline_isolation = """
+Integration tests must use isolated pipeline instances. The test helpers in tests/common/ 
+provide TestPipeline which resets state between tests. Don't share pipeline state between 
+test cases - it causes flaky tests."""

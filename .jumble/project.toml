@@ -1,0 +1,61 @@
+[project]
+name = "harmony"
+description = "Healthcare data proxy supporting DICOM, DICOMweb, FHIR, and HTTP with transformation pipelines"
+language = "rust"
+version = "0.11.0"
+
+[commands]
+build = "cargo build --release"
+test = "cargo test"
+lint = "cargo clippy && cargo fmt --check"
+run = "cargo run"
+
+[entry_points]
+main = "src/main.rs"
+lib = "src/lib.rs"
+config = "src/config"
+router = "src/router"
+
+[dependencies]
+internal = ["harmony-dsl", "jolt-rs", "runbeam-sdk"]
+external = ["tokio", "axum", "serde", "tracing", "dicom-object", "reqwest"]
+
+[related_projects]
+upstream = ["harmony-dsl", "jolt-rs", "runbeam-sdk"]
+downstream = ["harmony-examples"]
+
+[api]
+base_url = "/api"
+endpoints = [
+    "GET /health",
+    "GET /api/config",
+    "POST /api/reload"
+]
+
+[concepts.dicom]
+files = ["src/adapters/dicom", "crates/dimse", "tests/dicom"]
+summary = "DICOM protocol support via DIMSE (C-FIND, C-MOVE, C-STORE, C-GET)"
+
+[concepts.dicomweb]
+files = ["src/adapters/dicomweb", "tests/dicomweb"]
+summary = "DICOMweb REST API (WADO-RS, STOW-RS, QIDO-RS)"
+
+[concepts.fhir]
+files = ["src/adapters/fhir", "tests/fhir"]
+summary = "FHIR R4 resource routing and transformation"
+
+[concepts.pipeline]
+files = ["src/pipeline"]
+summary = "Request transformation pipeline with middleware chain and JOLT transforms"
+
+[concepts.routing]
+files = ["src/router"]
+summary = "Dynamic request routing to backends based on TOML configuration"
+
+[concepts.configuration]
+files = ["src/config", "config"]
+summary = "TOML-based configuration with hot reload support via file watcher"
+
+[concepts.authentication]
+files = ["src/integrations/jwt.rs", "src/router/middleware"]
+summary = "JWT validation via Runbeam SDK, middleware-based auth"
