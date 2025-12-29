@@ -35,9 +35,9 @@ struct JwkKey {
     kty: String,
     /// Key ID - used to match with JWT header's kid
     kid: String,
-    /// Algorithm (e.g., "RS256")
+    /// Algorithm (e.g., "RS256") - present in JWKS but not used for validation
     #[serde(default)]
-    alg: Option<String>,
+    _alg: Option<String>,
     /// RSA modulus (base64url encoded)
     #[serde(default)]
     n: Option<String>,
