@@ -32,9 +32,43 @@ impl DicomFlattenMiddleware {
 impl Middleware for DicomFlattenMiddleware {
     async fn left(
         &self,
-        envelope: RequestEnvelope<Value>,
+        mut envelope: RequestEnvelope<Value>,
     ) -> Result<RequestEnvelope<Value>, Error> {
-        // Flatten is typically used on responses, not requests
+        // Flatten DICOM JSON in requests (e.g., C-STORE dataset)
+        if let Some(ref data) = envelope.normalized_data {
+            // Store snapshot before transformation if not already present
+            if envelope.normalized_snapshot.is_none() {
+                envelope.normalized_snapshot = Some(data.clone());
+            }
+
+            tracing::debug!("Flatten middleware (left) input: {}", serde_json::to_string_pretty(data).unwrap_or_default());
+
+            // Check for dataset field (C-STORE) or identifier field (C-FIND/etc)
+            let dicom_data = data.get("dataset").or_else(|| data.get("identifier"));
+            
+            if let Some(dicom_json) = dicom_data {
+                match flatten_dicom_json(dicom_json) {
+                    Ok(flat) => {
+                        // Replace the dataset/identifier with flattened version
+                        let mut result = data.clone();
+                        if let Some(obj) = result.as_object_mut() {
+                            if data.get("dataset").is_some() {
+                                obj.insert("dataset".to_string(), flat);
+                            } else {
+                                obj.insert("identifier".to_string(), flat);
+                            }
+                        }
+                        envelope.normalized_data = Some(result);
+                        tracing::debug!("Applied DICOM flatten on request");
+                    }
+                    Err(e) => {
+                        tracing::warn!("DICOM flatten failed on request: {}", e);
+                        // Don't fail - just leave data as-is
+                    }
+                }
+            }
+        }
+
         Ok(envelope)
     }
 
@@ -81,8 +115,8 @@ impl Middleware for DicomFlattenMiddleware {
                     tracing::debug!("Applied DICOM flatten on response");
                 }
                 Err(e) => {
-                    tracing::error!("DICOM flatten failed: {}", e);
-                    return Err(Error::from(format!("DICOM flatten failed: {}", e)));
+                    // Don't fail on non-DICOM JSON responses - just pass through
+                    tracing::debug!("Skipping DICOM flatten on response (not DICOM JSON): {}", e);
                 }
             }
         }
