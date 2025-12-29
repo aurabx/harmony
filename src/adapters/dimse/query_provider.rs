@@ -353,18 +353,55 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             dir
         };
 
+        // Convert first instance to DICOM JSON for pipeline metadata
+        // This allows middleware and storage backends to access DICOM tags
+        let dicom_json = match dataset.to_object().await {
+            Ok(obj) => match tool::identifier_to_json_value(&obj) {
+                Ok(json) => Some(json),
+                Err(e) => {
+                    tracing::warn!("Failed to convert DICOM to JSON: {}", e);
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!("Failed to parse DICOM object: {}", e);
+                None
+            }
+        };
+
         let _temp = dataset
             .to_temp_file(&target_dir)
             .await
             .map_err(|e| DimseError::operation_failed(format!("store dataset: {}", e)))?;
 
-        // Also emit a pipeline event for observability (optional)
+        // Build metadata from DICOM tags for path resolution
         let mut meta = HashMap::new();
         meta.insert("dicom.operation".into(), "C-STORE".into());
+        
+        // Extract key UIDs from dataset metadata for path templating
+        let ds_meta = dataset.metadata();
+        if let Some(ref uid) = ds_meta.study_instance_uid {
+            meta.insert("StudyInstanceUID".into(), uid.clone());
+        }
+        if let Some(ref uid) = ds_meta.series_instance_uid {
+            meta.insert("SeriesInstanceUID".into(), uid.clone());
+        }
+        if let Some(ref uid) = ds_meta.sop_instance_uid {
+            meta.insert("SOPInstanceUID".into(), uid.clone());
+        }
+        if let Some(ref id) = ds_meta.patient_id {
+            meta.insert("PatientID".into(), id.clone());
+        }
+
+        // Build body with command metadata and dataset (not identifier - that's for queries)
         let body = serde_json::json!({
-            "operation": "store",
-            "dir": target_dir.to_string_lossy(),
-            "file": _temp.to_string_lossy(), // Include specific file path
+            "command": {
+                "message_id": 1,
+                "sop_class_uid": ds_meta.sop_class_uid,
+                "priority": "MEDIUM",
+                "direction": "REQUEST"
+            },
+            "dataset": dicom_json
         });
         
         // Execute pipeline - propagate error if pipeline fails
