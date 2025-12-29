@@ -191,6 +191,24 @@ impl DatasetStream {
             }
         }
 
+        if let Ok(study_instance) = object.element_by_name("StudyInstanceUID") {
+            if let Ok(value) = study_instance.to_str() {
+                metadata.study_instance_uid = Some(value.to_string());
+            }
+        }
+
+        if let Ok(series_instance) = object.element_by_name("SeriesInstanceUID") {
+            if let Ok(value) = series_instance.to_str() {
+                metadata.series_instance_uid = Some(value.to_string());
+            }
+        }
+
+        if let Ok(patient_id) = object.element_by_name("PatientID") {
+            if let Ok(value) = patient_id.to_str() {
+                metadata.patient_id = Some(value.to_string());
+            }
+        }
+
         Self::Object { object, metadata }
     }
 
