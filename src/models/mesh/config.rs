@@ -99,7 +99,8 @@ impl fmt::Display for IngressEgressMode {
 /// Mesh definition linking ingress and egress points for inter-proxy communication
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Mesh {
-    /// Optional unique identifier for this mesh
+    /// Unique identifier for this mesh (required for Runbeam provider)
+    /// This is the mesh ID from Runbeam Cloud, used for API calls
     #[serde(default)]
     pub id: Option<String>,
 
@@ -129,6 +130,11 @@ pub struct Mesh {
     #[serde(default)]
     pub jwt_public_key_path: Option<String>,
 
+    /// JWKS endpoint URL for Runbeam provider (RS256 validation)
+    /// If not specified, derived from runbeam.cloud_api_base_url + /.well-known/jwks.json
+    #[serde(default)]
+    pub jwks_url: Option<String>,
+
     /// List of ingress definition names that belong to this mesh
     #[serde(default)]
     pub ingress: Vec<String>,
@@ -156,6 +162,7 @@ impl Default for Mesh {
             jwt_secret: None,
             jwt_private_key_path: None,
             jwt_public_key_path: None,
+            jwks_url: None,
             ingress: Vec::new(),
             egress: Vec::new(),
             description: None,

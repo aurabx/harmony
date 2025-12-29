@@ -601,9 +601,11 @@ impl PipelineExecutor {
     ) -> Result<MeshAuthMiddleware, PipelineError> {
         MeshAuthMiddleware::for_ingress(
             mesh_name.to_string(),
+            mesh.id.clone(),
             mesh.provider.clone(),
             mesh.jwt_secret.clone(),
             mesh.jwt_public_key_path.clone(),
+            mesh.jwks_url.clone(),
         )
         .map_err(|e| {
             PipelineError::ConfigError(format!(
@@ -614,15 +616,20 @@ impl PipelineExecutor {
     }
 
     /// Create MeshAuth middleware for egress (JWT generation)
+    ///
+    /// Note: destination_url is not passed here because it's extracted from the envelope
+    /// at runtime in the middleware's left() method.
     fn create_mesh_auth_egress(
         mesh_name: &str,
         mesh: &Mesh,
     ) -> Result<MeshAuthMiddleware, PipelineError> {
         MeshAuthMiddleware::for_egress(
             mesh_name.to_string(),
+            mesh.id.clone(),
             mesh.provider.clone(),
             mesh.jwt_secret.clone(),
             mesh.jwt_private_key_path.clone(),
+            None, // destination_url is extracted at runtime from envelope
         )
         .map_err(|e| {
             PipelineError::ConfigError(format!(

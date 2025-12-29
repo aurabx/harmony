@@ -134,6 +134,7 @@ fn make_test_config() -> Config {
             jwt_secret: Some("test-mesh-secret".to_string()),
             jwt_private_key_path: None,
             jwt_public_key_path: None,
+            jwks_url: None,
             ingress: vec!["fhir_ingress".to_string()],
             egress: vec![],
             description: None,

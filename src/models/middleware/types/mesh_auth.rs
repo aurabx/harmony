@@ -14,11 +14,50 @@ use crate::models::mesh::config::{MeshAuthType, MeshProvider};
 use crate::models::middleware::middleware::Middleware;
 use crate::models::middleware::AuthFailure;
 use crate::utils::Error;
-use jsonwebtoken::{decode, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
-use std::sync::Arc;
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::collections::HashMap;
+use std::sync::{Arc, RwLock};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
+
+/// JWKS response structure from /.well-known/jwks.json
+#[derive(Debug, Clone, Deserialize)]
+struct JwksResponse {
+    keys: Vec<JwkKey>,
+}
+
+/// Individual JWK key from JWKS response
+#[derive(Debug, Clone, Deserialize)]
+struct JwkKey {
+    /// Key type (e.g., "RSA")
+    kty: String,
+    /// Key ID - used to match with JWT header's kid
+    kid: String,
+    /// Algorithm (e.g., "RS256")
+    #[serde(default)]
+    alg: Option<String>,
+    /// RSA modulus (base64url encoded)
+    #[serde(default)]
+    n: Option<String>,
+    /// RSA exponent (base64url encoded)
+    #[serde(default)]
+    e: Option<String>,
+}
+
+/// Cached JWKS entry with expiry
+struct CachedJwks {
+    keys: Vec<JwkKey>,
+    fetched_at: Instant,
+}
+
+/// Global JWKS cache - keyed by JWKS URL
+static JWKS_CACHE: Lazy<RwLock<HashMap<String, CachedJwks>>> =
+    Lazy::new(|| RwLock::new(HashMap::new()));
+
+/// JWKS cache duration (24 hours)
+const JWKS_CACHE_DURATION: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Configuration for MeshAuth middleware
 #[derive(Clone)]
@@ -29,6 +68,8 @@ pub struct MeshAuthConfig {
     pub auth_type: MeshAuthType,
     /// Name of the mesh
     pub mesh_name: String,
+    /// Mesh ID (required for Runbeam provider)
+    pub mesh_id: Option<String>,
     /// JWT secret for HS256 (local provider)
     pub jwt_secret: Option<String>,
     /// Encoding key for signing JWTs
@@ -39,6 +80,10 @@ pub struct MeshAuthConfig {
     pub algorithm: Algorithm,
     /// Whether this is for ingress (validation) or egress (generation)
     pub direction: MeshAuthDirection,
+    /// JWKS URL for Runbeam provider validation (derived or explicit)
+    pub jwks_url: Option<String>,
+    /// Destination URL for egress (used to request Runbeam mesh tokens)
+    pub destination_url: Option<String>,
 }
 
 impl std::fmt::Debug for MeshAuthConfig {
@@ -47,11 +92,14 @@ impl std::fmt::Debug for MeshAuthConfig {
             .field("provider", &self.provider)
             .field("auth_type", &self.auth_type)
             .field("mesh_name", &self.mesh_name)
+            .field("mesh_id", &self.mesh_id)
             .field("jwt_secret", &self.jwt_secret.as_ref().map(|_| "[REDACTED]"))
             .field("encoding_key", &self.encoding_key.as_ref().map(|_| "[KEY]"))
             .field("decoding_key", &self.decoding_key.as_ref().map(|_| "[KEY]"))
             .field("algorithm", &self.algorithm)
             .field("direction", &self.direction)
+            .field("jwks_url", &self.jwks_url)
+            .field("destination_url", &self.destination_url.as_ref().map(|_| "[URL]"))
             .finish()
     }
 }
@@ -97,11 +145,15 @@ impl MeshAuthMiddleware {
     }
 
     /// Create MeshAuthMiddleware for egress (JWT generation)
+    ///
+    /// For Runbeam provider, mesh_id and destination_url are required.
     pub fn for_egress(
         mesh_name: String,
+        mesh_id: Option<String>,
         provider: MeshProvider,
         jwt_secret: Option<String>,
         jwt_private_key_path: Option<String>,
+        destination_url: Option<String>,
     ) -> Result<Self, String> {
         let (encoding_key, decoding_key, algorithm) = match provider {
             MeshProvider::Local => {
@@ -122,9 +174,13 @@ impl MeshAuthMiddleware {
                 }
             }
             MeshProvider::Runbeam => {
-                // Runbeam provider - JWT will be fetched from API (stubbed)
-                // No local keys needed for egress
-                (None, None, Algorithm::HS256)
+                // Runbeam provider - JWT will be fetched from API
+                // Validate that we have required fields
+                if mesh_id.is_none() {
+                    return Err("Runbeam mesh provider requires mesh id".to_string());
+                }
+                // No local keys needed for egress - tokens come from Runbeam API
+                (None, None, Algorithm::RS256)
             }
         };
 
@@ -133,21 +189,29 @@ impl MeshAuthMiddleware {
                 provider,
                 auth_type: MeshAuthType::Jwt,
                 mesh_name,
+                mesh_id,
                 jwt_secret,
                 encoding_key,
                 decoding_key,
                 algorithm,
                 direction: MeshAuthDirection::Egress,
+                jwks_url: None,
+                destination_url,
             },
         })
     }
 
     /// Create MeshAuthMiddleware for ingress (JWT validation)
+    ///
+    /// For Runbeam provider, mesh_id is required. jwks_url can be provided or
+    /// will be derived from the global runbeam config.
     pub fn for_ingress(
         mesh_name: String,
+        mesh_id: Option<String>,
         provider: MeshProvider,
         jwt_secret: Option<String>,
         jwt_public_key_path: Option<String>,
+        jwks_url: Option<String>,
     ) -> Result<Self, String> {
         let (encoding_key, decoding_key, algorithm) = match provider {
             MeshProvider::Local => {
@@ -168,9 +232,13 @@ impl MeshAuthMiddleware {
                 }
             }
             MeshProvider::Runbeam => {
-                // Runbeam provider - JWT will be verified via API (stubbed)
-                // No local keys needed for ingress
-                (None, None, Algorithm::HS256)
+                // Runbeam provider - JWT will be verified via JWKS
+                // Validate that we have required fields
+                if mesh_id.is_none() {
+                    return Err("Runbeam mesh provider requires mesh id".to_string());
+                }
+                // No local keys needed - validation uses JWKS
+                (None, None, Algorithm::RS256)
             }
         };
 
@@ -179,20 +247,23 @@ impl MeshAuthMiddleware {
                 provider,
                 auth_type: MeshAuthType::Jwt,
                 mesh_name,
+                mesh_id,
                 jwt_secret,
                 encoding_key,
                 decoding_key,
                 algorithm,
                 direction: MeshAuthDirection::Ingress,
+                jwks_url,
+                destination_url: None,
             },
         })
     }
 
     /// Generate a JWT for egress requests
-    fn generate_jwt(&self) -> Result<String, Error> {
+    async fn generate_jwt(&self, destination_url: Option<&str>) -> Result<String, Error> {
         match self.config.provider {
             MeshProvider::Local => self.generate_local_jwt(),
-            MeshProvider::Runbeam => self.fetch_runbeam_jwt(),
+            MeshProvider::Runbeam => self.fetch_runbeam_jwt(destination_url).await,
         }
     }
 
@@ -212,7 +283,7 @@ impl MeshAuthMiddleware {
             aud: None,
             iat: now,
             exp: now + 300, // 5 minute expiry
-            mesh_id: self.config.mesh_name.clone(),
+            mesh_id: self.config.mesh_id.clone().unwrap_or_else(|| self.config.mesh_name.clone()),
         };
 
         let header = Header::new(self.config.algorithm);
@@ -220,24 +291,66 @@ impl MeshAuthMiddleware {
             .map_err(|e| Error::from(format!("Failed to generate JWT: {}", e)))
     }
 
-    /// Fetch JWT from Runbeam API (stubbed)
-    fn fetch_runbeam_jwt(&self) -> Result<String, Error> {
-        // TODO: Implement actual Runbeam API call
-        // For now, return a placeholder that indicates this is a stubbed response
-        tracing::warn!(
-            "Runbeam mesh JWT fetch is stubbed - mesh: {}",
-            self.config.mesh_name
+    /// Fetch JWT from Runbeam API
+    async fn fetch_runbeam_jwt(&self, destination_url: Option<&str>) -> Result<String, Error> {
+        let mesh_id = self.config.mesh_id.as_ref()
+            .ok_or_else(|| Error::from("Mesh ID required for Runbeam provider"))?;
+
+        // Get destination URL from parameter or config
+        let dest_url = destination_url
+            .map(|s| s.to_string())
+            .or_else(|| self.config.destination_url.clone())
+            .ok_or_else(|| Error::from("Destination URL required for Runbeam mesh token"))?;
+
+        // Get machine token from secure storage
+        let proxy_id = crate::globals::get_config()
+            .map(|c| c.proxy.id.clone())
+            .unwrap_or_else(|| "harmony".to_string());
+
+        let machine_token = runbeam_sdk::load_token::<runbeam_sdk::MachineToken>(&proxy_id, "auth")
+            .await
+            .map_err(|e| Error::from(format!("Failed to load machine token: {}", e)))?
+            .ok_or_else(|| Error::from("No machine token found - gateway must be authorized"))?;
+
+        if !machine_token.is_valid() {
+            return Err(Error::from("Machine token has expired - re-authorization required"));
+        }
+
+        // Get Runbeam API base URL
+        let base_url = crate::globals::get_config()
+            .map(|c| c.runbeam.effective_cloud_api_base_url())
+            .unwrap_or_else(|| "https://api.runbeam.cloud".to_string());
+
+        let client = runbeam_sdk::RunbeamClient::new(&base_url);
+
+        tracing::debug!(
+            "Requesting mesh token: mesh_id={}, destination={}",
+            mesh_id,
+            dest_url
         );
-        
-        // Return a stub JWT (this won't validate but allows the flow to continue for testing)
-        Ok("runbeam-stub-jwt-token".to_string())
+
+        let response = client
+            .request_mesh_token(&machine_token.machine_token, mesh_id, &dest_url)
+            .await
+            .map_err(|e| {
+                tracing::error!("Failed to request mesh token: {}", e);
+                Error::from(format!("Failed to request mesh token: {}", e))
+            })?;
+
+        tracing::info!(
+            "Obtained mesh token for mesh '{}', expires at {}",
+            mesh_id,
+            response.expires_at
+        );
+
+        Ok(response.token)
     }
 
     /// Validate an incoming JWT
-    fn validate_jwt(&self, token: &str) -> Result<MeshClaims, Error> {
+    async fn validate_jwt(&self, token: &str) -> Result<MeshClaims, Error> {
         match self.config.provider {
             MeshProvider::Local => self.validate_local_jwt(token),
-            MeshProvider::Runbeam => self.validate_runbeam_jwt(token),
+            MeshProvider::Runbeam => self.validate_runbeam_jwt(token).await,
         }
     }
 
@@ -256,11 +369,12 @@ impl MeshAuthMiddleware {
                 AuthFailure("Invalid mesh JWT")
             })?;
 
-        // Verify mesh_id matches expected mesh
-        if token_data.claims.mesh_id != self.config.mesh_name {
+        // Verify mesh_id matches expected mesh (use mesh_id if set, otherwise mesh_name)
+        let expected_mesh_id = self.config.mesh_id.as_ref().unwrap_or(&self.config.mesh_name);
+        if &token_data.claims.mesh_id != expected_mesh_id {
             tracing::warn!(
                 "Mesh JWT mesh_id mismatch: expected '{}', got '{}'",
-                self.config.mesh_name,
+                expected_mesh_id,
                 token_data.claims.mesh_id
             );
             return Err(AuthFailure("Mesh JWT mesh_id mismatch").into());
@@ -269,32 +383,136 @@ impl MeshAuthMiddleware {
         Ok(token_data.claims)
     }
 
-    /// Validate JWT via Runbeam API (stubbed)
-    fn validate_runbeam_jwt(&self, token: &str) -> Result<MeshClaims, Error> {
-        // TODO: Implement actual Runbeam API call for JWT validation
-        tracing::warn!(
-            "Runbeam mesh JWT validation is stubbed - mesh: {}",
-            self.config.mesh_name
-        );
+    /// Validate JWT via JWKS (Runbeam provider)
+    async fn validate_runbeam_jwt(&self, token: &str) -> Result<MeshClaims, Error> {
+        // Determine JWKS URL
+        let jwks_url = self.config.jwks_url.clone().unwrap_or_else(|| {
+            let base_url = crate::globals::get_config()
+                .map(|c| c.runbeam.effective_cloud_api_base_url())
+                .unwrap_or_else(|| "https://api.runbeam.cloud".to_string());
+            format!("{}/.well-known/jwks.json", base_url)
+        });
 
-        // For stubbed implementation, accept the stub token
-        if token == "runbeam-stub-jwt-token" {
-            let now = SystemTime::now()
-                .duration_since(UNIX_EPOCH)
-                .unwrap_or_default()
-                .as_secs() as i64;
+        // Decode the JWT header to get the key ID (kid)
+        let header = decode_header(token).map_err(|e| {
+            tracing::warn!("Failed to decode JWT header: {}", e);
+            AuthFailure("Invalid JWT header")
+        })?;
 
-            return Ok(MeshClaims {
-                sub: Some("stubbed-source".to_string()),
-                iss: self.config.mesh_name.clone(),
-                aud: None,
-                iat: now,
-                exp: now + 300,
-                mesh_id: self.config.mesh_name.clone(),
-            });
+        let kid = header.kid.ok_or_else(|| {
+            tracing::warn!("JWT header missing kid");
+            AuthFailure("JWT missing key ID")
+        })?;
+
+        // Get the public key from JWKS (with caching)
+        let decoding_key = self.get_jwks_key(&jwks_url, &kid).await?;
+
+        // Validate the token
+        let mut validation = Validation::new(Algorithm::RS256);
+        validation.validate_exp = true;
+        validation.leeway = 60; // 60 second leeway
+        // Runbeam tokens include mesh_id as the issuer, so we don't validate iss here
+        validation.set_issuer::<String>(&[]);
+
+        let token_data = decode::<MeshClaims>(token, &decoding_key, &validation)
+            .map_err(|e| {
+                tracing::warn!("Mesh JWT validation failed: {}", e);
+                AuthFailure("Invalid mesh JWT")
+            })?;
+
+        // Verify mesh_id matches expected mesh (use mesh_id if set, otherwise mesh_name)
+        let expected_mesh_id = self.config.mesh_id.as_ref().unwrap_or(&self.config.mesh_name);
+        if &token_data.claims.mesh_id != expected_mesh_id {
+            tracing::warn!(
+                "Mesh JWT mesh_id mismatch: expected '{}', got '{}'",
+                expected_mesh_id,
+                token_data.claims.mesh_id
+            );
+            return Err(AuthFailure("Mesh JWT mesh_id mismatch").into());
         }
 
-        Err(AuthFailure("Runbeam JWT validation not implemented").into())
+        tracing::debug!(
+            "Validated Runbeam mesh JWT: mesh_id={}, sub={:?}",
+            token_data.claims.mesh_id,
+            token_data.claims.sub
+        );
+
+        Ok(token_data.claims)
+    }
+
+    /// Get a decoding key from JWKS, using cache if available
+    async fn get_jwks_key(&self, jwks_url: &str, kid: &str) -> Result<DecodingKey, Error> {
+        // Check cache first
+        {
+            let cache = JWKS_CACHE.read().unwrap();
+            if let Some(cached) = cache.get(jwks_url) {
+                if cached.fetched_at.elapsed() < JWKS_CACHE_DURATION {
+                    if let Some(key) = Self::find_key_in_jwks(&cached.keys, kid) {
+                        return Self::jwk_to_decoding_key(&key);
+                    }
+                }
+            }
+        }
+
+        // Fetch fresh JWKS
+        tracing::debug!("Fetching JWKS from {}", jwks_url);
+        let client = reqwest::Client::new();
+        let response = client
+            .get(jwks_url)
+            .send()
+            .await
+            .map_err(|e| Error::from(format!("Failed to fetch JWKS: {}", e)))?;
+
+        if !response.status().is_success() {
+            return Err(Error::from(format!(
+                "JWKS fetch failed with status: {}",
+                response.status()
+            )));
+        }
+
+        let jwks: JwksResponse = response
+            .json()
+            .await
+            .map_err(|e| Error::from(format!("Failed to parse JWKS: {}", e)))?;
+
+        // Cache the keys
+        {
+            let mut cache = JWKS_CACHE.write().unwrap();
+            cache.insert(
+                jwks_url.to_string(),
+                CachedJwks {
+                    keys: jwks.keys.clone(),
+                    fetched_at: Instant::now(),
+                },
+            );
+        }
+
+        // Find the key
+        let key = Self::find_key_in_jwks(&jwks.keys, kid)
+            .ok_or_else(|| {
+                tracing::warn!("Key ID '{}' not found in JWKS", kid);
+                AuthFailure("Key not found in JWKS")
+            })?;
+
+        Self::jwk_to_decoding_key(&key)
+    }
+
+    /// Find a key by kid in JWKS keys
+    fn find_key_in_jwks(keys: &[JwkKey], kid: &str) -> Option<JwkKey> {
+        keys.iter().find(|k| k.kid == kid).cloned()
+    }
+
+    /// Convert a JWK to a DecodingKey
+    fn jwk_to_decoding_key(jwk: &JwkKey) -> Result<DecodingKey, Error> {
+        if jwk.kty != "RSA" {
+            return Err(Error::from(format!("Unsupported key type: {}", jwk.kty)));
+        }
+
+        let n = jwk.n.as_ref().ok_or_else(|| Error::from("JWK missing 'n' parameter"))?;
+        let e = jwk.e.as_ref().ok_or_else(|| Error::from("JWK missing 'e' parameter"))?;
+
+        DecodingKey::from_rsa_components(n, e)
+            .map_err(|e| Error::from(format!("Failed to create decoding key: {}", e)))
     }
 
     /// Extract JWT from Authorization header
@@ -328,8 +546,14 @@ impl Middleware for MeshAuthMiddleware {
             self.config.mesh_name
         );
 
-        // Generate JWT
-        let jwt = self.generate_jwt()?;
+        // Extract destination URL from target_details if available
+        let destination_url = envelope
+            .target_details
+            .as_ref()
+            .and_then(|td| td.full_url().ok());
+
+        // Generate JWT (async for Runbeam provider)
+        let jwt = self.generate_jwt(destination_url.as_deref()).await?;
 
         // Add JWT to target_details headers (for backend request)
         envelope.set_target_header("Authorization", format!("Bearer {}", jwt));
@@ -366,8 +590,8 @@ impl Middleware for MeshAuthMiddleware {
         let token = self.extract_token(&envelope.request_details.headers)
             .ok_or_else(|| AuthFailure("Missing mesh Authorization header"))?;
 
-        // Validate the token
-        let claims = self.validate_jwt(&token)?;
+        // Validate the token (async for Runbeam provider)
+        let claims = self.validate_jwt(&token).await?;
 
         // Add validated claims to response metadata
         envelope.response_details.metadata.insert(
@@ -491,14 +715,48 @@ pub fn parse_config_with_context(
             })
         });
 
+    // Get mesh_id - prefer options, fall back to mesh config
+    let mesh_id = options
+        .get("mesh_id")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| inferred_mesh.and_then(|m| m.id.clone()));
+
+    // Get JWKS URL - prefer options, fall back to mesh config
+    let jwks_url = options
+        .get("jwks_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
+        .or_else(|| inferred_mesh.and_then(|m| m.jwks_url.clone()));
+
+    // Get destination URL from options (mainly for egress)
+    let destination_url = options
+        .get("destination_url")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string());
+
     // Build the middleware based on direction
     match direction {
         MeshAuthDirection::Egress => {
-            let mw = MeshAuthMiddleware::for_egress(mesh_name, provider, jwt_secret, jwt_key_path)?;
+            let mw = MeshAuthMiddleware::for_egress(
+                mesh_name,
+                mesh_id,
+                provider,
+                jwt_secret,
+                jwt_key_path,
+                destination_url,
+            )?;
             Ok(mw.config)
         }
         MeshAuthDirection::Ingress => {
-            let mw = MeshAuthMiddleware::for_ingress(mesh_name, provider, jwt_secret, jwt_key_path)?;
+            let mw = MeshAuthMiddleware::for_ingress(
+                mesh_name,
+                mesh_id,
+                provider,
+                jwt_secret,
+                jwt_key_path,
+                jwks_url,
+            )?;
             Ok(mw.config)
         }
     }
@@ -554,9 +812,11 @@ mod tests {
     fn test_mesh_auth_config_creation_local_hs256() {
         let result = MeshAuthMiddleware::for_egress(
             "test-mesh".to_string(),
+            None, // mesh_id
             MeshProvider::Local,
             Some("test-secret".to_string()),
             None,
+            None, // destination_url
         );
         assert!(result.is_ok());
         let mw = result.unwrap();
@@ -568,9 +828,11 @@ mod tests {
     fn test_mesh_auth_config_creation_local_no_secret() {
         let result = MeshAuthMiddleware::for_egress(
             "test-mesh".to_string(),
+            None, // mesh_id
             MeshProvider::Local,
             None,
             None,
+            None, // destination_url
         );
         assert!(result.is_err());
         assert!(result.unwrap_err().contains("jwt_secret or jwt_private_key_path"));
@@ -578,22 +840,42 @@ mod tests {
 
     #[test]
     fn test_mesh_auth_config_creation_runbeam() {
+        // Runbeam provider now requires mesh_id
         let result = MeshAuthMiddleware::for_egress(
             "test-mesh".to_string(),
+            Some("mesh-123".to_string()), // mesh_id required for Runbeam
             MeshProvider::Runbeam,
             None,
             None,
+            None, // destination_url
         );
         assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_mesh_auth_config_creation_runbeam_requires_mesh_id() {
+        // Runbeam provider without mesh_id should fail
+        let result = MeshAuthMiddleware::for_egress(
+            "test-mesh".to_string(),
+            None, // no mesh_id
+            MeshProvider::Runbeam,
+            None,
+            None,
+            None,
+        );
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("mesh id"));
     }
 
     #[tokio::test]
     async fn test_egress_generates_jwt() {
         let mw = MeshAuthMiddleware::for_egress(
             "test-mesh".to_string(),
+            None, // mesh_id
             MeshProvider::Local,
             Some("test-secret-key-for-jwt".to_string()),
             None,
+            None, // destination_url
         )
         .unwrap();
 
@@ -621,20 +903,24 @@ mod tests {
         // Generate a valid JWT first
         let egress_mw = MeshAuthMiddleware::for_egress(
             "test-mesh".to_string(),
+            None, // mesh_id
             MeshProvider::Local,
             Some(secret.to_string()),
             None,
+            None, // destination_url
         )
         .unwrap();
 
-        let jwt = egress_mw.generate_jwt().unwrap();
+        let jwt = egress_mw.generate_jwt(None).await.unwrap();
 
         // Now validate it with ingress middleware
         let ingress_mw = MeshAuthMiddleware::for_ingress(
             "test-mesh".to_string(),
+            None, // mesh_id
             MeshProvider::Local,
             Some(secret.to_string()),
             None,
+            None, // jwks_url
         )
         .unwrap();
 
@@ -653,9 +939,11 @@ mod tests {
     async fn test_ingress_rejects_invalid_jwt() {
         let ingress_mw = MeshAuthMiddleware::for_ingress(
             "test-mesh".to_string(),
+            None, // mesh_id
             MeshProvider::Local,
             Some("test-secret".to_string()),
             None,
+            None, // jwks_url
         )
         .unwrap();
 
@@ -668,9 +956,11 @@ mod tests {
     async fn test_ingress_rejects_missing_auth() {
         let ingress_mw = MeshAuthMiddleware::for_ingress(
             "test-mesh".to_string(),
+            None, // mesh_id
             MeshProvider::Local,
             Some("test-secret".to_string()),
             None,
+            None, // jwks_url
         )
         .unwrap();
 
@@ -683,9 +973,11 @@ mod tests {
     async fn test_egress_passthrough_for_ingress_direction() {
         let mw = MeshAuthMiddleware::for_ingress(
             "test-mesh".to_string(),
+            None, // mesh_id
             MeshProvider::Local,
             Some("test-secret".to_string()),
             None,
+            None, // jwks_url
         )
         .unwrap();
 
@@ -697,20 +989,6 @@ mod tests {
         let processed = result.unwrap();
         assert!(processed.target_details.is_none() || 
             !processed.target_details.as_ref().unwrap().headers.contains_key("Authorization"));
-    }
-
-    #[tokio::test]
-    async fn test_runbeam_stub_jwt() {
-        let egress_mw = MeshAuthMiddleware::for_egress(
-            "test-mesh".to_string(),
-            MeshProvider::Runbeam,
-            None,
-            None,
-        )
-        .unwrap();
-
-        let jwt = egress_mw.generate_jwt().unwrap();
-        assert_eq!(jwt, "runbeam-stub-jwt-token");
     }
 
     #[test]
