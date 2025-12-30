@@ -14,7 +14,7 @@ use crate::adapters::registry::AdapterRegistry;
 use crate::config::config::Config;
 use crate::config::watcher::ConfigWatcher;
 use crate::storage::create_storage_backend;
-use runbeam_sdk::load_token;
+use runbeam_sdk::{load_token, save_token};
 use std::path::Path;
 use std::sync::Arc;
 use tracing_subscriber::{self, prelude::*};
@@ -135,8 +135,12 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
         });
 
         // Try environment variable first, then fall back to secure storage
-        let token_result = if let Some(token) = token_from_env {
-            Ok(Some(token))
+        let token_result = if let Some(ref token) = token_from_env {
+            // Save env token to storage so management API handlers can access it
+            if let Err(e) = save_token(&proxy_id, "auth", token).await {
+                tracing::warn!("Failed to save env token to storage: {}", e);
+            }
+            Ok(Some(token.clone()))
         } else {
             // Try to load existing machine token from secure storage (SDK manages keyring/encrypted filesystem)
             load_token(&proxy_id, "auth").await
