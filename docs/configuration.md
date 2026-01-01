@@ -177,54 +177,80 @@ This validates that:
 ## Overview
 
 Harmony uses a two-layer configuration model:
-- **Top-level config**: Networks, storage, logging, service registrations
-- **Pipeline files**: Endpoints, middleware, backends, and routing rules
+- **Top-level config**: Networks, providers, logging, service registrations
+- **Pipeline files**: Endpoints, middleware, backends, routing rules, and ingress/egress definitions
+- **Mesh files**: Mesh definitions that group ingress/egress for inter-proxy communication
 
 **Protocol adapters** (HTTP, DIMSE, etc.) are automatically spawned based on pipeline configurations. See [adapters.md](adapters.md) for details.
 
-Top-level config (examples/default/config.toml)
-- [proxy]: service identity, paths, and JWKS cache duration
-- [runbeam]: Runbeam Cloud integration settings (enabled, API URL, poll interval)
-- [management]: Management API settings (enabled, base path, network)
-- [network.<name>]: network interfaces and options
-  - [network.<name>.http]: TCP listener settings (bind_address, bind_port, optional cert_path and key_path for HTTPS)
-  - [network.<name>.http3]: HTTP/3 (QUIC) listener settings (bind_address, bind_port, cert_path, key_path)
-- pipelines_path: directory containing pipeline files
-- transforms_path: directory for custom transforms (if used)
-- [logging]: file logging options and log level
-- [services.*]: built-in or custom service types
-- [middleware_types.*]: built-in or custom middleware types
+### Configuration Schemas
 
-Pipeline files (examples/default/pipelines/*.toml)
-- `[pipelines.<name>]`: binds a set of endpoints, middleware, and backends to one or more networks
-  - `networks`: list of network names from the top-level config
-  - `endpoints`: list of endpoint names defined in this file
-  - `middleware`: ordered list of middleware names (applied in sequence)
-  - `backends`: list of backend names defined in this file
-- `[middleware.<name>]`: middleware instances and their config
-- `[endpoints.<name>]`: endpoint instances with service type and options
-- `[backends.<name>]`: backend instances with service type and target configuration
-- `[targets.<name>]`: concrete destinations that a backend selects from
-- `[endpoint_types.*]`, `[service_types.*]`: register built-in or custom types
+All configuration is validated against formal schemas defined in `harmony-dsl`. For detailed technical reference, see:
 
-**Protocol adapters** are spawned automatically:
-- **HttpAdapter**: Started for pipelines with HTTP/FHIR/JMIX/DICOMweb endpoints (TCP-based HTTP/1.x and HTTP/2, with optional TLS for HTTPS)
-- **Http3Adapter**: Started for networks with `[network.<name>.http3]` configuration (QUIC-based HTTP/3)
-- **DimseAdapter**: Started for pipelines with DICOM DIMSE endpoints
+- **[Configuration Schemas](./schema.md)** - Overview of all harmony configuration schemas
+- **[Mesh Configuration](./mesh.md)** - Data mesh networking and ingress/egress definitions
+- **[Providers](./providers.md)** - Provider configuration for resource resolution and cloud polling
+- **[Resource References](./resource-references.md)** - Reference syntax for cross-provider resources
+
+### Top-Level Configuration Structure
+
+Top-level config (typically `config.toml`):
+- `[proxy]`: Service identity, paths (pipelines, transforms, mesh), limits, and cloud polling
+- `[provider.*]`: Provider configurations for resource resolution and polling
+- `[management]`: Management API settings
+- `[network.<name>]`: Network interface configurations
+  - `[network.<name>.http]`: HTTP/1.x and HTTP/2 listener settings
+  - `[network.<name>.http3]`: HTTP/3 (QUIC) listener settings
+- `[logging]`: File logging and log level configuration
+- `[runbeam]`: [DEPRECATED] Legacy Runbeam Cloud settings (use `[provider.runbeam]` instead)
+
+### Pipeline Configuration Structure
+
+Pipeline files (typically in `pipelines/` directory):
+- `[pipelines.<name>]`: Pipeline definition grouping endpoints, middleware, backends
+  - `networks`: List of network names to bind this pipeline to
+  - `endpoints`: Endpoints this pipeline handles
+  - `middleware`: Ordered middleware chain
+  - `backends`: Backend targets
+- `[pipelines.<name>.mesh.ingress.*]`: Ingress definitions (URLs → endpoints)
+- `[pipelines.<name>.mesh.egress.*]`: Egress definitions (backends → mesh targets)
+- `[middleware.<name>]`: Middleware configuration
+- `[endpoints.<name>]`: Endpoint configuration
+- `[backends.<name>]`: Backend configuration
+- `[targets.<name>]`: Concrete destinations for backends
+
+### Mesh Configuration Structure
+
+Mesh files (typically in `mesh/` directory):
+- `[mesh.<name>]`: Mesh definition grouping ingress/egress with authentication
+
+Ingress and egress are **nested within pipeline files**, while mesh definitions **group them** in separate mesh files. See [Mesh Configuration](./mesh.md) for complete documentation.
+
+### Protocol Adapters
+
+Adapters are started automatically based on configuration:
+- **HttpAdapter**: For HTTP/FHIR/JMIX/DICOMweb endpoints (TCP: HTTP/1.x, HTTP/2, optional TLS)
+- **Http3Adapter**: For networks with HTTP/3 configuration (QUIC-based, requires TLS)
+- **DimseAdapter**: For DICOM DIMSE endpoints
 - See `src/lib.rs::run()` for orchestration logic
 
-Validation expectations
-- Networks must define valid HTTP bind_address and non-zero bind_port (for TCP listeners)
-- HTTP/3 networks must specify valid cert_path and key_path for TLS certificates
-- HTTPS networks (HTTP adapter with TLS) must specify both cert_path and key_path
-- Each pipeline should reference at least one network, endpoint, and backend
-- Unknown middleware names cause validation failure
-- Middleware config is parsed by the middleware modules themselves
+### Validation Expectations
 
-Examples
+- Networks must define valid HTTP bind_address and non-zero bind_port
+- HTTP/3 networks must specify valid cert_path and key_path for TLS
+- HTTPS networks must specify both cert_path and key_path
+- Each pipeline should reference at least one network, endpoint, and backend
+- Mesh definitions must reference valid ingress/egress definitions
+- If ingress/egress specify endpoint/backend overrides, those must exist in the pipeline
+- All referenced providers must be configured
+- Unknown middleware names cause validation failure
+
+### Examples
+
 - Minimal passthrough: examples/default/pipelines/default.toml
 - FHIR passthrough: examples/default/pipelines/fhir.toml
 - FHIR to DICOM flow: examples/default/pipelines/fhir-dicom.toml
+- Data mesh: examples/default/pipelines/data-mesh/ (includes mesh/, pipelines/, config.toml)
 
 ## Network Configuration
 
