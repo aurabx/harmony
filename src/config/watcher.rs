@@ -126,6 +126,11 @@ impl ConfigWatcher {
             }
         };
 
+        // Update provider resolver with new provider config
+        if let Some(resolver) = globals::get_provider_resolver() {
+            resolver.update_providers(new_config.provider.clone()).await;
+        }
+
         // Get current config
         let old_config =
             globals::get_config().ok_or_else(|| anyhow::anyhow!("No config currently loaded"))?;

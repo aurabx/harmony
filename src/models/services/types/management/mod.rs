@@ -208,13 +208,14 @@ impl ServiceHandler<Value> for ManagementEndpoint {
                         .as_ref()
                         .map(|cfg| cfg.proxy.jwks_cache_duration_hours)
                         .unwrap_or(24);
+                    // Use primary provider settings for polling
                     let poll_interval = config
                         .as_ref()
-                        .map(|cfg| cfg.runbeam.poll_interval())
+                        .and_then(|cfg| cfg.primary_poll_interval())
                         .unwrap_or_else(|| std::time::Duration::from_secs(30));
                     let api_base_url = config
                         .as_ref()
-                        .map(|cfg| cfg.runbeam.effective_cloud_api_base_url())
+                        .map(|cfg| cfg.primary_api_base_url())
                         .unwrap_or_else(|| "https://api.runbeam.cloud".to_string());
 
                     // Get adapter registry for cloud polling

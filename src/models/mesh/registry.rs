@@ -4,9 +4,12 @@
 //! URL (scheme + host + path) matches an ingress URL, the request is routed to
 //! the ingress's endpoint instead of following normal routing rules.
 
-use super::config::{Mesh, MeshIngress};
+use super::config::{Mesh, MeshIngress, RemoteIngress};
 use crate::config::config::Config;
+use crate::config::resource_reference::ParsedReference;
+use crate::integrations::provider_resolver::ProviderResolver;
 use std::collections::HashMap;
+use std::sync::Arc;
 use url::Url;
 
 /// Context attached to requests that match a mesh ingress.
@@ -94,23 +97,131 @@ impl UrlPattern {
     }
 }
 
+/// Find which mesh contains a given ingress reference.
+fn find_mesh_for_ingress(config: &Config, ingress_ref: &str) -> Option<String> {
+    config
+        .mesh
+        .iter()
+        .find(|(_, m)| m.enabled && m.ingress.contains(&ingress_ref.to_string()))
+        .map(|(name, _)| name.clone())
+}
+
 impl MeshRegistry {
     /// Build a new MeshRegistry from configuration.
+    /// 
+    /// This synchronous version only indexes local ingress definitions.
+    /// Use `from_config_with_resolver` to also resolve remote references.
     pub fn from_config(config: &Config) -> Self {
+        Self::build_from_config(config, &HashMap::new())
+    }
+
+    /// Build a new MeshRegistry with remote reference resolution.
+    ///
+    /// This async version resolves remote ingress references via the provider API
+    /// and includes their URLs in the registry.
+    pub async fn from_config_with_resolver(
+        config: &Config,
+        resolver: Option<Arc<ProviderResolver>>,
+    ) -> Self {
+        let mut resolved_remote: HashMap<String, RemoteIngress> = HashMap::new();
+
+        // Only resolve if we have a resolver
+        if let Some(resolver) = resolver {
+            // Collect all remote ingress references from meshes
+            for (mesh_name, mesh) in &config.mesh {
+                if !mesh.enabled {
+                    continue;
+                }
+
+                for ingress_ref in &mesh.ingress {
+                    // Parse the reference
+                    let parsed = match ParsedReference::parse(ingress_ref) {
+                        Ok(p) => p,
+                        Err(e) => {
+                            tracing::warn!(
+                                "Mesh '{}': Failed to parse ingress reference '{}': {}",
+                                mesh_name, ingress_ref, e
+                            );
+                            continue;
+                        }
+                    };
+
+                    // Skip local references - they're in config.ingress already
+                    if parsed.is_local() {
+                        continue;
+                    }
+
+                    // Skip if already resolved
+                    let key = format!("resolved:{}", ingress_ref);
+                    if resolved_remote.contains_key(&key) {
+                        continue;
+                    }
+
+                    // Resolve remote reference
+                    tracing::debug!(
+                        "Mesh '{}': Resolving remote ingress reference '{}'",
+                        mesh_name, ingress_ref
+                    );
+
+                    match resolver.resolve_parsed(&parsed).await {
+                        Ok(resolved) => {
+                            // Verify it's an ingress type
+                            if resolved.resource_type != "ingress" {
+                                tracing::warn!(
+                                    "Mesh '{}': Reference '{}' resolved to type '{}', expected 'ingress'",
+                                    mesh_name, ingress_ref, resolved.resource_type
+                                );
+                                continue;
+                            }
+
+                            if resolved.urls.is_empty() {
+                                tracing::warn!(
+                                    "Mesh '{}': Resolved ingress '{}' has no URLs",
+                                    mesh_name, ingress_ref
+                                );
+                                continue;
+                            }
+
+                            tracing::info!(
+                                "Mesh '{}': Resolved remote ingress '{}' -> {} URLs",
+                                mesh_name, ingress_ref, resolved.urls.len()
+                            );
+
+                            resolved_remote.insert(
+                                key,
+                                RemoteIngress {
+                                    urls: resolved.urls,
+                                },
+                            );
+                        }
+                        Err(e) => {
+                            tracing::warn!(
+                                "Mesh '{}': Failed to resolve ingress reference '{}': {}",
+                                mesh_name, ingress_ref, e
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        Self::build_from_config(config, &resolved_remote)
+    }
+
+    /// Internal builder that indexes both local and resolved remote ingress definitions.
+    fn build_from_config(
+        config: &Config,
+        resolved_remote: &HashMap<String, RemoteIngress>,
+    ) -> Self {
         let mut url_index = Vec::new();
 
-        // Build URL index from all ingress definitions (mesh membership optional)
+        // Build URL index from all local ingress definitions
         for (ingress_name, ingress) in &config.ingress {
             if !ingress.enabled {
                 continue;
             }
 
-            // Find which mesh this ingress belongs to (optional)
-            let mesh_name = config
-                .mesh
-                .iter()
-                .find(|(_, m)| m.enabled && m.ingress.contains(ingress_name))
-                .map(|(name, _)| name.clone());
+            let mesh_name = find_mesh_for_ingress(config, ingress_name);
 
             // Parse and index each URL
             for url_str in &ingress.urls {
@@ -131,6 +242,38 @@ impl MeshRegistry {
                             ingress_name
                         );
                     }
+                }
+            }
+        }
+
+        // Also index URLs from config.remote_ingress
+        for (ingress_name, remote_ingress) in &config.remote_ingress {
+            let mesh_name = find_mesh_for_ingress(config, ingress_name);
+
+            for url_str in &remote_ingress.urls {
+                if let Some(pattern) = UrlPattern::from_url_str(url_str) {
+                    tracing::debug!(
+                        "Indexed remote ingress URL '{}' -> '{}' (mesh {:?})",
+                        url_str, ingress_name, mesh_name
+                    );
+                    url_index.push((pattern, ingress_name.clone(), mesh_name.clone()));
+                }
+            }
+        }
+
+        // Index URLs from resolved remote references
+        for (key, remote_ingress) in resolved_remote {
+            // The key is "resolved:<original_ref>", extract original ref to find mesh
+            let original_ref = key.strip_prefix("resolved:").unwrap_or(key);
+            let mesh_name = find_mesh_for_ingress(config, original_ref);
+
+            for url_str in &remote_ingress.urls {
+                if let Some(pattern) = UrlPattern::from_url_str(url_str) {
+                    tracing::debug!(
+                        "Indexed resolved remote URL '{}' -> '{}' (mesh {:?})",
+                        url_str, key, mesh_name
+                    );
+                    url_index.push((pattern, key.clone(), mesh_name.clone()));
                 }
             }
         }

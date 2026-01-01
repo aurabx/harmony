@@ -22,8 +22,11 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
     let mut app = Router::new();
     let mut route_registry: HashSet<(Method, String)> = HashSet::new();
 
-    // Build mesh registry for priority routing
-    let mesh_registry = Arc::new(MeshRegistry::from_config(&config));
+    // Build mesh registry for priority routing (with remote reference resolution)
+    let resolver = crate::globals::get_provider_resolver();
+    let mesh_registry = Arc::new(
+        MeshRegistry::from_config_with_resolver(&config, resolver).await
+    );
     let mesh_config = config.clone();
 
     tracing::info!(

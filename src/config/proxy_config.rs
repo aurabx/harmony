@@ -33,7 +33,7 @@ impl Default for ContentLimits {
 }
 
 /// Represents the configuration for the proxy
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ProxyConfig {
     pub id: String,
     #[serde(default = "default_pipelines_path")]
@@ -54,6 +54,25 @@ pub struct ProxyConfig {
     /// Field name patterns to treat as sensitive in logs (e.g., "*_key", "secret")
     #[serde(default)]
     pub sensitive_field_patterns: Vec<String>,
+    /// Primary provider for cloud polling settings (defaults to "runbeam")
+    #[serde(default = "default_primary_provider")]
+    pub primary_provider: String,
+}
+
+impl Default for ProxyConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            pipelines_path: default_pipelines_path(),
+            transforms_path: default_transforms_path(),
+            mesh_path: default_mesh_path(),
+            jwks_cache_duration_hours: default_jwks_cache_duration_hours(),
+            content_limits: ContentLimits::default(),
+            required_env_vars: Vec::new(),
+            sensitive_field_patterns: Vec::new(),
+            primary_provider: default_primary_provider(),
+        }
+    }
 }
 
 /// Default pipelines path for the proxy configuration
@@ -104,6 +123,11 @@ fn default_max_form_fields() -> usize {
     1_000
 }
 
+/// Default primary provider
+fn default_primary_provider() -> String {
+    "runbeam".to_string()
+}
+
 impl ProxyConfig {
     pub fn validate(&self) -> Result<(), String> {
         if self.id.trim().is_empty() {
@@ -141,5 +165,36 @@ impl ProxyConfig {
         }
 
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_primary_provider_default() {
+        let config: ProxyConfig = toml::from_str(r#"
+            id = "test-proxy"
+        "#).unwrap();
+        assert_eq!(config.primary_provider, "runbeam");
+    }
+
+    #[test]
+    fn test_primary_provider_custom() {
+        let config: ProxyConfig = toml::from_str(r#"
+            id = "test-proxy"
+            primary_provider = "custom_provider"
+        "#).unwrap();
+        assert_eq!(config.primary_provider, "custom_provider");
+    }
+
+    #[test]
+    fn test_primary_provider_local() {
+        let config: ProxyConfig = toml::from_str(r#"
+            id = "test-proxy"
+            primary_provider = "local"
+        "#).unwrap();
+        assert_eq!(config.primary_provider, "local");
     }
 }

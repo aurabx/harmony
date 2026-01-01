@@ -1,5 +1,6 @@
 use crate::adapters::registry::AdapterRegistry;
 use crate::config::config::Config;
+use crate::integrations::provider_resolver::ProviderResolver;
 use crate::storage::StorageBackend;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
@@ -14,6 +15,8 @@ static ADAPTER_REGISTRY: Lazy<RwLock<Option<Arc<AdapterRegistry>>>> =
     Lazy::new(|| RwLock::new(None));
 static CONFIG_PATH: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(None));
 static CLOUD_POLLING_TOKEN: Lazy<RwLock<Option<CancellationToken>>> =
+    Lazy::new(|| RwLock::new(None));
+static PROVIDER_RESOLVER: Lazy<RwLock<Option<Arc<ProviderResolver>>>> =
     Lazy::new(|| RwLock::new(None));
 
 /// Set the global configuration (initial setup or reload)
@@ -88,6 +91,17 @@ pub fn stop_cloud_polling() {
         token.cancel();
         tracing::info!("Cloud polling stopped");
     }
+}
+
+/// Set the global provider resolver
+pub fn set_provider_resolver(resolver: Arc<ProviderResolver>) {
+    let mut cell = PROVIDER_RESOLVER.write().unwrap();
+    *cell = Some(resolver);
+}
+
+/// Get the global provider resolver
+pub fn get_provider_resolver() -> Option<Arc<ProviderResolver>> {
+    PROVIDER_RESOLVER.read().unwrap().clone()
 }
 
 #[cfg(test)]

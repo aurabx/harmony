@@ -1,5 +1,6 @@
 use crate::config::env_substitution::substitute_env_vars;
 use crate::config::logging_config::LoggingConfig;
+use crate::config::provider_config::ProviderConfig;
 use crate::config::proxy_config::ProxyConfig;
 use crate::config::resolution::resolve_references;
 use crate::config::runbeam_config::RunbeamConfig;
@@ -65,6 +66,10 @@ fn default_weight() -> i64 {
 pub struct Config {
     #[serde(default)]
     pub proxy: ProxyConfig,
+    /// Provider configurations for resource resolution
+    #[serde(default)]
+    pub provider: HashMap<String, ProviderConfig>,
+    /// [DEPRECATED] Use provider.runbeam instead
     #[serde(default)]
     pub runbeam: RunbeamConfig,
     #[serde(default)]
@@ -262,6 +267,71 @@ impl Config {
         Ok(())
     }
 
+    /// Get provider configuration by name.
+    /// Falls back to legacy [runbeam] config if name is "runbeam" and no explicit provider exists.
+    pub fn get_provider(&self, name: &str) -> Option<ProviderConfig> {
+        // Check explicit provider first
+        if let Some(provider) = self.provider.get(name) {
+            return Some(provider.clone());
+        }
+
+        // Fallback for "runbeam" to legacy config (only if enabled)
+        if name == "runbeam" && self.runbeam.enabled {
+            return Some(ProviderConfig {
+                api: self.runbeam.cloud_api_base_url.clone(),
+                poll_interval_secs: self.runbeam.poll_interval_secs,
+            });
+        }
+
+        // Local provider is always available (implicitly, no polling)
+        if name == "local" {
+            return Some(ProviderConfig {
+                api: None,
+                poll_interval_secs: 0,
+            });
+        }
+
+        None
+    }
+
+    /// Get the primary provider configuration.
+    /// Defaults to "runbeam" if not specified.
+    pub fn get_primary_provider(&self) -> Option<ProviderConfig> {
+        self.get_provider(&self.proxy.primary_provider)
+    }
+
+    /// Get the poll interval from the primary provider.
+    /// Returns None if the primary provider doesn't exist or polling is disabled.
+    pub fn primary_poll_interval(&self) -> Option<std::time::Duration> {
+        self.get_primary_provider().and_then(|p| {
+            if p.polling_enabled() {
+                Some(std::time::Duration::from_secs(p.poll_interval_secs))
+            } else {
+                None
+            }
+        })
+    }
+
+    /// Get the API base URL from the primary provider.
+    /// Falls back to the default Runbeam Cloud URL if not specified.
+    pub fn primary_api_base_url(&self) -> String {
+        self.get_primary_provider()
+            .and_then(|p| p.api)
+            .unwrap_or_else(|| "https://api.runbeam.cloud".to_string())
+    }
+
+    /// Check if the primary provider is enabled and has cloud polling configured.
+    pub fn is_cloud_enabled(&self) -> bool {
+        // For backward compatibility: check legacy [runbeam] section first
+        if self.runbeam.enabled {
+            return true;
+        }
+        // Then check primary provider
+        self.get_primary_provider()
+            .map(|p| p.is_remote() && p.polling_enabled())
+            .unwrap_or(false)
+    }
+
     pub fn from_args(cli: Cli) -> Self {
         // Verify the config file has a .toml extension
         let config_path = Path::new(&cli.config_path);
@@ -395,6 +465,7 @@ impl Config {
     fn merge_configs(mut base: Config, additional: Vec<Config>) -> Config {
         for config in additional {
             // Extend fields loaded from per-file configs
+            base.provider.extend(config.provider);
             base.network.extend(config.network);
             base.endpoints.extend(config.endpoints);
             base.backends.extend(config.backends);
@@ -481,6 +552,7 @@ impl Config {
     pub fn validate(&self) -> Result<(), ConfigError> {
         self.validate_proxy()?;
         self.validate_logging()?;
+        self.validate_providers()?;
         self.validate_runbeam()?;
         self.validate_networks()?;
         self.validate_management()?;
@@ -527,7 +599,24 @@ impl Config {
             })
     }
 
+    fn validate_providers(&self) -> Result<(), ConfigError> {
+        for (name, provider) in &self.provider {
+            provider.validate(name).map_err(|e| ConfigError::InvalidProvider {
+                name: name.clone(),
+                reason: e,
+            })?;
+        }
+        Ok(())
+    }
+
     fn validate_runbeam(&self) -> Result<(), ConfigError> {
+        // Log deprecation warning if legacy [runbeam] section is used
+        if self.runbeam.enabled && !self.provider.contains_key("runbeam") {
+            tracing::warn!(
+                "Deprecated [runbeam] section in config. Migrate to [provider.runbeam] format."
+            );
+        }
+
         self.runbeam
             .validate()
             .map_err(|e| ConfigError::InvalidProxy {
@@ -939,25 +1028,103 @@ impl Config {
                 reason: e,
             })?;
 
-            // Verify all mesh ingress references exist (in either local ingress or remote_ingress)
-            for ingress_name in &mesh.ingress {
-                if !self.ingress.contains_key(ingress_name) && !self.remote_ingress.contains_key(ingress_name) {
-                    return Err(ConfigError::InvalidMesh {
-                        name: name.clone(),
-                        reason: format!("Mesh references unknown ingress '{}' (not found in ingress or remote_ingress)", ingress_name),
-                    });
-                }
+            // Verify all mesh ingress references
+            for ingress_ref in &mesh.ingress {
+                self.validate_mesh_ingress_reference(name, ingress_ref)?;
             }
 
-            // Verify all mesh egress references exist
-            for egress_name in &mesh.egress {
-                if !self.egress.contains_key(egress_name) {
+            // Verify all mesh egress references
+            for egress_ref in &mesh.egress {
+                self.validate_mesh_egress_reference(name, egress_ref)?;
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Validate a mesh ingress reference.
+    /// Supports both local names and provider-based references.
+    fn validate_mesh_ingress_reference(&self, mesh_name: &str, reference: &str) -> Result<(), ConfigError> {
+        use crate::config::resource_reference::ParsedReference;
+
+        // Parse the reference
+        let parsed = ParsedReference::parse(reference).map_err(|e| ConfigError::InvalidMesh {
+            name: mesh_name.to_string(),
+            reason: format!("Invalid ingress reference '{}': {}", reference, e),
+        })?;
+
+        // For local references, verify the resource exists locally
+        if parsed.is_local() {
+            if let Some(local_name) = parsed.local_name() {
+                // Check local ingress and remote_ingress maps
+                if !self.ingress.contains_key(local_name) && !self.remote_ingress.contains_key(local_name) {
                     return Err(ConfigError::InvalidMesh {
-                        name: name.clone(),
-                        reason: format!("Mesh references unknown egress '{}'", egress_name),
+                        name: mesh_name.to_string(),
+                        reason: format!(
+                            "Mesh references unknown local ingress '{}' (not found in ingress or remote_ingress)",
+                            local_name
+                        ),
                     });
                 }
             }
+        } else {
+            // Remote reference - verify the provider exists
+            if self.get_provider(&parsed.provider).is_none() {
+                return Err(ConfigError::InvalidMesh {
+                    name: mesh_name.to_string(),
+                    reason: format!(
+                        "Mesh ingress reference '{}' uses unknown provider '{}'",
+                        reference, parsed.provider
+                    ),
+                });
+            }
+            // Remote references will be resolved at runtime
+            tracing::debug!(
+                "Mesh '{}' has remote ingress reference '{}' (provider: {})",
+                mesh_name, reference, parsed.provider
+            );
+        }
+
+        Ok(())
+    }
+
+    /// Validate a mesh egress reference.
+    /// Supports both local names and provider-based references.
+    fn validate_mesh_egress_reference(&self, mesh_name: &str, reference: &str) -> Result<(), ConfigError> {
+        use crate::config::resource_reference::ParsedReference;
+
+        // Parse the reference
+        let parsed = ParsedReference::parse(reference).map_err(|e| ConfigError::InvalidMesh {
+            name: mesh_name.to_string(),
+            reason: format!("Invalid egress reference '{}': {}", reference, e),
+        })?;
+
+        // For local references, verify the resource exists locally
+        if parsed.is_local() {
+            if let Some(local_name) = parsed.local_name() {
+                if !self.egress.contains_key(local_name) {
+                    return Err(ConfigError::InvalidMesh {
+                        name: mesh_name.to_string(),
+                        reason: format!("Mesh references unknown local egress '{}'", local_name),
+                    });
+                }
+            }
+        } else {
+            // Remote reference - verify the provider exists
+            if self.get_provider(&parsed.provider).is_none() {
+                return Err(ConfigError::InvalidMesh {
+                    name: mesh_name.to_string(),
+                    reason: format!(
+                        "Mesh egress reference '{}' uses unknown provider '{}'",
+                        reference, parsed.provider
+                    ),
+                });
+            }
+            // Remote references will be resolved at runtime
+            tracing::debug!(
+                "Mesh '{}' has remote egress reference '{}' (provider: {})",
+                mesh_name, reference, parsed.provider
+            );
         }
 
         Ok(())
@@ -967,6 +1134,7 @@ impl Config {
 #[derive(Debug)]
 pub enum ConfigError {
     InvalidProxy { name: String, reason: String },
+    InvalidProvider { name: String, reason: String },
     InvalidTarget { name: String, reason: String },
     InvalidPeer { name: String, reason: String },
     InvalidManagement { reason: String },
@@ -979,4 +1147,163 @@ pub enum ConfigError {
     InvalidMesh { name: String, reason: String },
     InvalidMeshIngress { name: String, reason: String },
     InvalidMeshEgress { name: String, reason: String },
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_get_primary_provider_default() {
+        // Default config has primary_provider = "runbeam"
+        // but without explicit provider config, it falls back to legacy runbeam check
+        let config = Config::default();
+        assert_eq!(config.proxy.primary_provider, "runbeam");
+
+        // Legacy runbeam is disabled by default, so get_primary_provider returns None
+        // unless runbeam.enabled is true or explicit provider.runbeam exists
+        let primary = config.get_primary_provider();
+        assert!(primary.is_none());
+    }
+
+    #[test]
+    fn test_get_primary_provider_with_explicit_provider() {
+        let mut config = Config::default();
+        config.provider.insert(
+            "runbeam".to_string(),
+            ProviderConfig {
+                api: Some("https://api.runbeam.cloud".to_string()),
+                poll_interval_secs: 60,
+            },
+        );
+
+        let primary = config.get_primary_provider();
+        assert!(primary.is_some());
+        let p = primary.unwrap();
+        assert_eq!(p.api, Some("https://api.runbeam.cloud".to_string()));
+        assert_eq!(p.poll_interval_secs, 60);
+    }
+
+    #[test]
+    fn test_get_primary_provider_local() {
+        let mut config = Config::default();
+        config.proxy.primary_provider = "local".to_string();
+
+        // "local" is always available implicitly
+        let primary = config.get_primary_provider();
+        assert!(primary.is_some());
+        let p = primary.unwrap();
+        assert!(p.api.is_none());
+        assert_eq!(p.poll_interval_secs, 0); // Local has no polling
+    }
+
+    #[test]
+    fn test_primary_poll_interval() {
+        let mut config = Config::default();
+        config.provider.insert(
+            "runbeam".to_string(),
+            ProviderConfig {
+                api: Some("https://api.runbeam.cloud".to_string()),
+                poll_interval_secs: 45,
+            },
+        );
+
+        let interval = config.primary_poll_interval();
+        assert!(interval.is_some());
+        assert_eq!(interval.unwrap(), std::time::Duration::from_secs(45));
+    }
+
+    #[test]
+    fn test_primary_poll_interval_disabled() {
+        let mut config = Config::default();
+        config.provider.insert(
+            "runbeam".to_string(),
+            ProviderConfig {
+                api: Some("https://api.runbeam.cloud".to_string()),
+                poll_interval_secs: 0, // Polling disabled
+            },
+        );
+
+        let interval = config.primary_poll_interval();
+        assert!(interval.is_none());
+    }
+
+    #[test]
+    fn test_primary_poll_interval_local() {
+        let mut config = Config::default();
+        config.proxy.primary_provider = "local".to_string();
+
+        // Local provider has poll_interval_secs = 0
+        let interval = config.primary_poll_interval();
+        assert!(interval.is_none());
+    }
+
+    #[test]
+    fn test_primary_api_base_url() {
+        let mut config = Config::default();
+        config.provider.insert(
+            "runbeam".to_string(),
+            ProviderConfig {
+                api: Some("https://custom.api.com".to_string()),
+                poll_interval_secs: 30,
+            },
+        );
+
+        let url = config.primary_api_base_url();
+        assert_eq!(url, "https://custom.api.com");
+    }
+
+    #[test]
+    fn test_primary_api_base_url_fallback() {
+        let config = Config::default();
+        // No provider configured, falls back to default
+        let url = config.primary_api_base_url();
+        assert_eq!(url, "https://api.runbeam.cloud");
+    }
+
+    #[test]
+    fn test_is_cloud_enabled_with_legacy_runbeam() {
+        let mut config = Config::default();
+        config.runbeam.enabled = true;
+
+        assert!(config.is_cloud_enabled());
+    }
+
+    #[test]
+    fn test_is_cloud_enabled_with_provider() {
+        let mut config = Config::default();
+        config.provider.insert(
+            "runbeam".to_string(),
+            ProviderConfig {
+                api: Some("https://api.runbeam.cloud".to_string()),
+                poll_interval_secs: 30,
+            },
+        );
+
+        assert!(config.is_cloud_enabled());
+    }
+
+    #[test]
+    fn test_is_cloud_enabled_local() {
+        let mut config = Config::default();
+        config.proxy.primary_provider = "local".to_string();
+
+        // Local provider is not remote, so cloud is not enabled
+        assert!(!config.is_cloud_enabled());
+    }
+
+    #[test]
+    fn test_is_cloud_enabled_disabled_polling() {
+        let mut config = Config::default();
+        config.provider.insert(
+            "runbeam".to_string(),
+            ProviderConfig {
+                api: Some("https://api.runbeam.cloud".to_string()),
+                poll_interval_secs: 0, // Polling disabled
+            },
+        );
+
+        // Has remote API but polling is disabled
+        assert!(!config.is_cloud_enabled());
+    }
 }

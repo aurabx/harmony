@@ -3,6 +3,7 @@ pub mod clients;
 pub mod config;
 mod file;
 pub mod globals;
+pub mod integrations;
 pub mod models;
 pub mod pipeline;
 pub mod router;
@@ -13,6 +14,7 @@ mod utils;
 use crate::adapters::registry::AdapterRegistry;
 use crate::config::config::Config;
 use crate::config::watcher::ConfigWatcher;
+use crate::integrations::provider_resolver::ProviderResolver;
 use crate::storage::create_storage_backend;
 use runbeam_sdk::{load_token, save_token};
 use std::path::Path;
@@ -29,6 +31,11 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
     // crates, so rustls cannot auto-select one. We use aws-lc-rs as it's already
     // a transitive dependency and avoids pulling in BoringSSL via ring.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Initialize provider resolver from config providers
+    // MeshRegistry will use this to resolve remote references when building
+    let resolver = Arc::new(ProviderResolver::new(config.provider.clone()));
+    crate::globals::set_provider_resolver(resolver);
 
     let config = Arc::new(config);
     crate::globals::set_config(config.clone());
@@ -114,8 +121,8 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
         });
     }
 
-    // Check for Runbeam Cloud integration configuration
-    if config.runbeam.enabled {
+    // Check for cloud integration via primary provider
+    if config.is_cloud_enabled() {
         // Get proxy ID for instance isolation
         let proxy_id = config.proxy.id.clone();
 
@@ -148,9 +155,10 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
 
         match token_result {
             Ok(Some(token)) if token.is_valid() => {
-                // Valid token found - start cloud polling
-                let poll_interval = config.runbeam.poll_interval();
-                let base_url = config.runbeam.effective_cloud_api_base_url();
+                // Valid token found - start cloud polling using primary provider settings
+                let poll_interval = config.primary_poll_interval()
+                    .unwrap_or_else(|| std::time::Duration::from_secs(30));
+                let base_url = config.primary_api_base_url();
 
                 tracing::info!(
                     "🌥️  Found valid stored token (gateway: {}), starting cloud polling",
@@ -205,7 +213,10 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
             }
         }
     } else {
-        tracing::info!("Runbeam Cloud integration is disabled (runbeam.enabled = false)");
+        tracing::info!(
+            "Cloud integration is disabled (primary_provider: {}, not enabled or no API configured)",
+            config.proxy.primary_provider
+        );
     }
 
     // Wait for ctrl-c signal
