@@ -377,14 +377,12 @@ fn test_machine_token_structure() {
         "test_machine_token_abc123".to_string(),
         "2025-12-31T23:59:59Z".to_string(),
         "gateway-123".to_string(),
-        "test-gateway".to_string(),
         vec!["gateway:read".to_string(), "gateway:write".to_string()],
     );
 
     assert_eq!(token.machine_token, "test_machine_token_abc123");
     assert_eq!(token.expires_at, "2025-12-31T23:59:59Z");
     assert_eq!(token.gateway_id, "gateway-123");
-    assert_eq!(token.gateway_code, "test-gateway");
     assert_eq!(token.abilities.len(), 2);
 }
 

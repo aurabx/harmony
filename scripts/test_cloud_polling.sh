@@ -23,10 +23,10 @@ if [ -f "$TOKEN_FILE" ]; then
     echo -e "${GREEN}✓${NC} Token file exists: $TOKEN_FILE"
     
     # Display token info
-    GATEWAY_CODE=$(jq -r '.gateway_code' "$TOKEN_FILE" 2>/dev/null || echo "unknown")
+    GATEWAY_ID=$(jq -r '.gateway_id' "$TOKEN_FILE" 2>/dev/null || echo "unknown")
     EXPIRES_AT=$(jq -r '.expires_at' "$TOKEN_FILE" 2>/dev/null || echo "unknown")
     
-    echo "  Gateway Code: $GATEWAY_CODE"
+    echo "  Gateway ID:   $GATEWAY_ID"
     echo "  Expires At:   $EXPIRES_AT"
     
     # Check if token is expired
@@ -128,7 +128,7 @@ else
     echo "  2. Call: curl -X POST http://localhost:9090/admin/authorize \\"
     echo "              -H 'Authorization: Bearer YOUR_JWT_TOKEN' \\"
     echo "              -H 'Content-Type: application/json' \\"
-    echo "              -d '{\"gateway_code\":\"your-gateway-code\"}'"
+    echo "              -d '{\"gateway_id\":\"your-gateway-id\"}'"
     echo ""
     echo "After authorization, cloud polling will start automatically!"
 fi

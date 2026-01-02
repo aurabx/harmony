@@ -13,6 +13,21 @@
   </p>
 </div>
 
+---
+
+<div align="center">
+
+### 🛠️ This project was built by [Aurabox](https://github.com/aurabx)
+
+*Some of our other projects...*
+
+[![Runbeam](https://img.shields.io/badge/Runbeam-Data_Mesh_Platform-purple?style=flat-square)](https://runbeam.io)
+[![JMIX](https://img.shields.io/badge/Aurabox-Medical_Imaging_Exchange-blue?style=flat-square)](https://aurabox.cloud)
+
+</div>
+
+---
+
 ## Overview
 
 Harmony Proxy is a production-ready, extensible data mesh proxy/gateway for heterogeneous systems. It routes requests through configurable endpoints, middleware, and services/backends to connect systems that speak HTTP/JSON, FHIR, DICOM/DICOMweb, and JMIX.
@@ -407,3 +422,19 @@ Important: You may freely download, use, and modify Harmony Proxy for internal u
 ## Support
 - General questions and support: hello@aurabox.cloud
 - Security or conduct concerns: hello@aurabox.cloud
+
+---
+
+<div align="center">
+
+### 🛠️ This project was built by [Aurabox](https://github.com/aurabx)
+
+*Some of our other projects...*
+
+[![Harmony](https://img.shields.io/badge/Harmony-API_Gateway-purple?style=flat-square)](https://github.com/aurabox/harmony-proxy)
+[![Runbeam](https://img.shields.io/badge/Runbeam-Data_Mesh_Platform-purple?style=flat-square)](https://runbeam.io)
+[![JMIX](https://img.shields.io/badge/Aurabox-Medical_Imaging_Exchange-blue?style=flat-square)](https://aurabox.cloud)
+
+</div>
+
+---

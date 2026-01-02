@@ -11,8 +11,6 @@ pub struct TokenRequest {
     pub expires_at: String,
     /// Gateway ID
     pub gateway_id: String,
-    /// Gateway code
-    pub gateway_code: String,
     /// Token abilities/scopes
     #[serde(default)]
     pub abilities: Vec<String>,
@@ -64,8 +62,7 @@ pub async fn handle_token_post(body: &[u8]) -> Result<JsonValue, (u16, String)> 
     }
 
     tracing::info!(
-        "Saving machine token for gateway: {} ({})",
-        request.gateway_code,
+        "Saving machine token for gateway: {}",
         request.gateway_id
     );
 
@@ -106,7 +103,6 @@ pub async fn handle_token_post(body: &[u8]) -> Result<JsonValue, (u16, String)> 
         request.machine_token,
         request.expires_at,
         request.gateway_id,
-        request.gateway_code,
         request.abilities,
     );
 
@@ -141,15 +137,13 @@ mod tests {
         let json = r#"{
             "machine_token": "mt_abc123",
             "expires_at": "2025-11-30T00:00:00Z",
-            "gateway_id": "gw_123",
-            "gateway_code": "test-gateway"
+            "gateway_id": "gw_123"
         }"#;
 
         let request: TokenRequest = serde_json::from_str(json).unwrap();
         assert_eq!(request.machine_token, "mt_abc123");
         assert_eq!(request.expires_at, "2025-11-30T00:00:00Z");
         assert_eq!(request.gateway_id, "gw_123");
-        assert_eq!(request.gateway_code, "test-gateway");
         assert!(request.abilities.is_empty());
     }
 
@@ -159,7 +153,6 @@ mod tests {
             "machine_token": "mt_abc123",
             "expires_at": "2025-11-30T00:00:00Z",
             "gateway_id": "gw_123",
-            "gateway_code": "test-gateway",
             "abilities": ["gateway:read", "gateway:write"]
         }"#;
 

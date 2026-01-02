@@ -12,8 +12,8 @@ use std::time::Duration;
 /// Request body for gateway authorization
 #[derive(Debug, Deserialize)]
 pub struct AuthorizeRequest {
-    /// Gateway code (instance ID)
-    pub gateway_code: String,
+    /// Gateway ID
+    pub gateway_id: String,
     /// Optional machine public key for secure communication
     #[serde(default)]
     pub machine_public_key: Option<String>,
@@ -93,7 +93,7 @@ pub async fn handle_authorize(
         (400, format!("Invalid request body: {}", e))
     })?;
 
-    tracing::info!("Authorizing gateway: {}", request.gateway_code);
+    tracing::info!("Authorizing gateway: {}", request.gateway_id);
 
     // Validate JWT using RS256 with JWKS
     let _claims = validate_jwt_token(
@@ -121,7 +121,7 @@ pub async fn handle_authorize(
     let auth_response = client
         .authorize_gateway(
             user_token,
-            &request.gateway_code,
+            &request.gateway_id,
             request.machine_public_key.clone(),
             request
                 .metadata
@@ -155,7 +155,6 @@ pub async fn handle_authorize(
         auth_response.machine_token.clone(),
         auth_response.expires_at.clone(),
         auth_response.gateway.id.clone(),
-        auth_response.gateway.code.clone(),
         auth_response.abilities.clone(),
     );
 
@@ -219,11 +218,11 @@ mod tests {
     #[test]
     fn test_authorize_request_deserialization() {
         let json = r#"{
-            "gateway_code": "test-gateway-123"
+            "gateway_id": "test-gateway-123"
         }"#;
 
         let request: AuthorizeRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(request.gateway_code, "test-gateway-123");
+        assert_eq!(request.gateway_id, "test-gateway-123");
         assert!(request.machine_public_key.is_none());
         assert!(request.metadata.is_none());
         assert!(request.encryption_key.is_none());
@@ -232,7 +231,7 @@ mod tests {
     #[test]
     fn test_authorize_request_with_optional_fields() {
         let json = r#"{
-            "gateway_code": "test-gateway-123",
+            "gateway_id": "test-gateway-123",
             "machine_public_key": "pubkey123",
             "metadata": {
                 "version": "0.4.0",
@@ -242,7 +241,7 @@ mod tests {
         }"#;
 
         let request: AuthorizeRequest = serde_json::from_str(json).unwrap();
-        assert_eq!(request.gateway_code, "test-gateway-123");
+        assert_eq!(request.gateway_id, "test-gateway-123");
         assert_eq!(request.machine_public_key.as_deref(), Some("pubkey123"));
         assert!(request.metadata.is_some());
         assert_eq!(
