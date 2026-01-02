@@ -162,7 +162,7 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
 
                 tracing::info!(
                     "🌥️  Found valid stored token (gateway: {}), starting cloud polling",
-                    token.gateway_code
+                    token.gateway_id
                 );
 
                 let cloud_shutdown = tokio_util::sync::CancellationToken::new();
@@ -198,7 +198,7 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
             Ok(Some(token)) => {
                 tracing::warn!(
                         "Stored token for gateway '{}' has expired (expired at: {}). Waiting for re-authorization.",
-                        token.gateway_code,
+                        token.gateway_id,
                         token.expires_at
                     );
             }

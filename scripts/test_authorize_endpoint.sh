@@ -70,7 +70,7 @@ echo ""
 RESPONSE=$(curl -s -w "\n%{http_code}" -X POST http://localhost:9090/admin/authorize \
   -H "Authorization: Bearer $USER_TOKEN" \
   -H "Content-Type: application/json" \
-  -d "{\"gateway_code\":\"$GATEWAY_CODE\"}")
+  -d "{\"gateway_id\":\"$GATEWAY_CODE\"}")
 
 HTTP_CODE=$(echo "$RESPONSE" | tail -1)
 BODY=$(echo "$RESPONSE" | sed '$d')
@@ -89,7 +89,7 @@ if [ "$HTTP_CODE" = "201" ]; then
         
         # Display token info
         echo "Token Details:"
-        jq -r '"  Gateway Code: " + .gateway_code, "  Gateway ID:   " + .gateway_id, "  Expires At:   " + .expires_at' "$TOKEN_FILE"
+        jq -r '"  Gateway ID:   " + .gateway_id, "  Expires At:   " + .expires_at' "$TOKEN_FILE"
         echo ""
         
         # Check logs for cloud polling start

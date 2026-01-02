@@ -173,7 +173,7 @@ curl -X POST http://localhost:9090/admin/authorize \
   -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
   -H "Content-Type: application/json" \
   -d '{
-    "gateway_code": "harmony-prod-01",
+    "gateway_id": "harmony-prod-01",
     "machine_public_key": "ssh-rsa AAAAB3...",
     "metadata": {
       "version": "0.4.0",
@@ -186,7 +186,7 @@ curl -X POST http://localhost:9090/admin/authorize \
 **Request Body:**
 ```json
 {
-  "gateway_code": "harmony-prod-01",
+  "gateway_id": "harmony-prod-01",
   "machine_public_key": "optional-public-key",
   "metadata": {
     "version": "0.4.0",
@@ -197,7 +197,7 @@ curl -X POST http://localhost:9090/admin/authorize \
 ```
 
 **Request Fields:**
-- `gateway_code` (required): Gateway instance ID or code
+- `gateway_id` (required): Gateway instance ID
 - `machine_public_key` (optional): Public key for secure communication
 - `metadata` (optional): Additional gateway metadata (version, OS, etc.)
 - `encryption_key` (optional): Base64-encoded age X25519 encryption key for token storage
@@ -233,7 +233,7 @@ curl -X POST http://localhost:9090/admin/authorize \
 ```json
 {
   "error": "Bad Request",
-  "message": "Invalid request body: missing field `gateway_code`"
+  "message": "Invalid request body: missing field `gateway_id`"
 }
 ```
 
@@ -265,7 +265,7 @@ curl -X POST http://localhost:9090/admin/authorize \
 - The JWT token is obtained via the `runbeam login` CLI command or as a Laravel Sanctum API token
 - Both JWT and Sanctum tokens are supported for authorization
 - Machine tokens are securely stored using:
-  - **Encrypted Filesystem** (`~/.runbeam/<gateway_code>/auth.json`) with age X25519 encryption
+  - **Encrypted Filesystem** (`~/.runbeam/<proxy_id>/auth.json`) with age X25519 encryption
   - Storage is automatic - no configuration needed
 - **Encryption Key Management:**
   - If `encryption_key` is provided in the request, it will be used for token encryption
@@ -274,7 +274,7 @@ curl -X POST http://localhost:9090/admin/authorize \
   - CLI-managed keys allow centralized encryption key management across Harmony instances
 - Machine tokens expire after 30 days and must be renewed
 - The Runbeam API base URL is extracted from the JWT's `iss` (issuer) claim (JWT tokens) or configured directly (Sanctum tokens)
-- Each gateway instance uses its `gateway_code` as the storage `instance_id` for isolated token storage
+- Each gateway instance uses its `proxy.id` from the configuration as the storage `instance_id` for isolated token storage
 
 ### POST /{base_path}/token
 
@@ -291,7 +291,6 @@ curl -X POST http://localhost:9090/admin/token \
     "machine_token": "mt_abc123...",
     "expires_at": "2025-11-24T12:48:46Z",
     "gateway_id": "550e8400-e29b-41d4-a716-446655440000",
-    "gateway_code": "harmony-prod-01",
     "abilities": ["gateway:read", "gateway:write"],
     "encryption_key": "AGE-SECRET-KEY-1ABC..."
   }'
@@ -303,7 +302,6 @@ curl -X POST http://localhost:9090/admin/token \
   "machine_token": "mt_abc123...",
   "expires_at": "2025-11-24T12:48:46Z",
   "gateway_id": "550e8400-e29b-41d4-a716-446655440000",
-  "gateway_code": "harmony-prod-01",
   "abilities": ["gateway:read", "gateway:write"],
   "encryption_key": "AGE-SECRET-KEY-1ABC..."
 }
@@ -313,7 +311,6 @@ curl -X POST http://localhost:9090/admin/token \
 - `machine_token` (required): Machine token from Runbeam Cloud
 - `expires_at` (required): ISO 8601 timestamp when token expires
 - `gateway_id` (required): Gateway UUID from Runbeam Cloud
-- `gateway_code` (required): Gateway code/instance ID
 - `abilities` (optional): Token abilities/scopes
 - `encryption_key` (optional): Base64-encoded age encryption key for token storage
 
