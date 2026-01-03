@@ -16,7 +16,7 @@ use crate::models::peers::config::PeerConfig;
 use crate::models::pipelines::config::Pipeline;
 use crate::models::services::services::initialise_service_registry;
 use crate::models::services::services::ServiceConfig;
-use crate::models::services::types::management::ManagementConfig;
+use crate::management::ManagementConfig;
 use crate::models::targets::config::TargetConfig;
 use crate::storage::StorageConfig;
 use once_cell::sync::Lazy;

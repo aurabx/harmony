@@ -322,7 +322,7 @@ async fn test_update_endpoint_with_missing_proxy_id() {
 
 #[tokio::test]
 async fn test_update_response_structure() {
-    use harmony::models::services::types::management::update::UpdateResponse;
+    use harmony::management::update::UpdateResponse;
 
     // Test UpdateResponse serialization
     let response = UpdateResponse {

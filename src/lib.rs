@@ -10,6 +10,7 @@ pub mod router;
 pub mod storage;
 pub mod storage_adapter;
 mod utils;
+pub mod management;
 
 use crate::adapters::registry::AdapterRegistry;
 use crate::config::config::Config;
@@ -192,7 +193,7 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
 
                     // Push config on startup if enabled
                     if push_config_on_startup {
-                        if let Err(e) = crate::models::services::types::management::cloud_poller::push_config_on_startup(
+                        if let Err(e) = management::cloud_poller::push_config_on_startup(
                             &client,
                             &machine_token,
                         ).await {
@@ -200,7 +201,7 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
                         }
                     }
 
-                    crate::models::services::types::management::cloud_poller::start_cloud_polling(
+                    management::cloud_poller::start_cloud_polling(
                         client,
                         machine_token,
                         poll_interval,

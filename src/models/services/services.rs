@@ -106,7 +106,7 @@ fn create_builtin_service(
             crate::models::services::types::echo::EchoEndpoint {},
         )),
         "management" => Ok(Box::new(
-            crate::models::services::types::management::ManagementEndpoint {},
+            crate::management::ManagementEndpoint {},
         )),
         "mock_dicom" => Ok(Box::new(
             crate::models::services::types::mock_dicom::MockDicomEndpoint {},
