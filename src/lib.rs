@@ -172,6 +172,11 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
                 let registry_clone = registry.clone();
                 let machine_token = token.machine_token.clone();
 
+                // Check if push-on-startup is enabled (default: off)
+                let push_config_on_startup = std::env::var("RUNBEAM_PUSH_CONFIG_ON_STARTUP")
+                    .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                    .unwrap_or(false);
+
                 tokio::spawn(async move {
                     // Discover actual API base URL before starting poller
                     let client = match initial_client.discover_base_url(&machine_token).await {
@@ -184,6 +189,16 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
                             initial_client
                         }
                     };
+
+                    // Push config on startup if enabled
+                    if push_config_on_startup {
+                        if let Err(e) = crate::models::services::types::management::cloud_poller::push_config_on_startup(
+                            &client,
+                            &machine_token,
+                        ).await {
+                            tracing::warn!("Push config on startup failed: {}. Continuing with polling.", e);
+                        }
+                    }
 
                     crate::models::services::types::management::cloud_poller::start_cloud_polling(
                         client,

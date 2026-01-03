@@ -440,6 +440,198 @@ async fn fetch_and_write_transforms(
     Ok(())
 }
 
+/// Push current configuration to Runbeam Cloud on startup
+///
+/// This function reads the current local configuration (gateway, pipelines,
+/// transforms, and meshes) and pushes it to Runbeam Cloud, ensuring the cloud
+/// has an accurate view of what the gateway is currently running.
+///
+/// # Arguments
+///
+/// * `client` - Runbeam API client
+/// * `gateway_token` - Machine token for authentication
+///
+/// # Returns
+///
+/// * `Ok(())` - Config pushed successfully
+/// * `Err(String)` - Error message if push fails
+pub async fn push_config_on_startup(
+    client: &RunbeamClient,
+    gateway_token: &str,
+) -> Result<(), String> {
+    use std::path::Path;
+
+    // Get current config path
+    let config_path = globals::get_config_path()
+        .ok_or_else(|| "No config path set - cannot push config".to_string())?;
+
+    // Read the current config file
+    let config_content = std::fs::read_to_string(&config_path)
+        .map_err(|e| format!("Failed to read config file {}: {}", config_path, e))?;
+
+    let config_dir = Path::new(&config_path).parent().unwrap_or(Path::new("."));
+
+    tracing::info!("📤 Pushing local configuration to Runbeam Cloud...");
+
+    // Step 1: Push the gateway configuration
+    match client
+        .store_config(gateway_token, "gateway", None::<String>, &config_content)
+        .await
+    {
+        Ok(response) => {
+            tracing::info!(
+                "✓ Gateway configuration pushed to cloud (id: {})",
+                response.data.id
+            );
+        }
+        Err(e) => {
+            let error_msg = format!("Failed to push gateway config to cloud: {}", e);
+            tracing::error!("{}", error_msg);
+            return Err(error_msg);
+        }
+    }
+
+    // Step 2: Push pipeline configurations from pipelines/ directory
+    let pipelines_path = globals::get_config()
+        .map(|cfg| cfg.proxy.pipelines_path.clone())
+        .unwrap_or_else(|| "pipelines".to_string());
+    let pipelines_dir = config_dir.join(&pipelines_path);
+
+    if pipelines_dir.exists() && pipelines_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&pipelines_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "toml") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let filename = path.file_name()
+                            .unwrap_or_default()
+                            .to_str()
+                            .unwrap_or("")
+                            .to_string();
+
+                        match client
+                            .store_config(gateway_token, "pipeline", None::<String>, &content)
+                            .await
+                        {
+                            Ok(response) => {
+                                tracing::info!(
+                                    "✓ Pipeline configuration pushed: {} (id: {})",
+                                    filename,
+                                    response.data.id
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to push pipeline config {}: {}",
+                                    filename, e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 3: Push transform configurations from transforms/ directory
+    let transforms_path = globals::get_config()
+        .map(|cfg| cfg.proxy.transforms_path.clone())
+        .unwrap_or_else(|| "transforms".to_string());
+    let transforms_dir = config_dir.join(&transforms_path);
+
+    if transforms_dir.exists() && transforms_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&transforms_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                // Transforms are .json files (JOLT specs) - wrap in TOML format
+                if path.extension().map_or(false, |ext| ext == "json") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let filename = path.file_name()
+                            .unwrap_or_default()
+                            .to_str()
+                            .unwrap_or("")
+                            .to_string();
+                        let name = path.file_stem()
+                            .unwrap_or_default()
+                            .to_str()
+                            .unwrap_or("")
+                            .to_string();
+                        // Wrap JSON spec in TOML format for the API
+                        let toml_content = format!(
+                            "[transform.{}]\nname = \"{}\"\ninstructions = '''\n{}\n'''",
+                            name, name, content
+                        );
+
+                        match client
+                            .store_config(gateway_token, "transform", None::<String>, &toml_content)
+                            .await
+                        {
+                            Ok(response) => {
+                                tracing::info!(
+                                    "✓ Transform configuration pushed: {} (id: {})",
+                                    filename,
+                                    response.data.id
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to push transform config {}: {}",
+                                    filename, e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Step 4: Push mesh configurations from mesh/ directory
+    let mesh_path = globals::get_config()
+        .map(|cfg| cfg.proxy.mesh_path.clone())
+        .unwrap_or_else(|| "mesh".to_string());
+    let mesh_dir = config_dir.join(&mesh_path);
+
+    if mesh_dir.exists() && mesh_dir.is_dir() {
+        if let Ok(entries) = std::fs::read_dir(&mesh_dir) {
+            for entry in entries.flatten() {
+                let path = entry.path();
+                if path.extension().map_or(false, |ext| ext == "toml") {
+                    if let Ok(content) = std::fs::read_to_string(&path) {
+                        let filename = path.file_name()
+                            .unwrap_or_default()
+                            .to_str()
+                            .unwrap_or("")
+                            .to_string();
+
+                        match client
+                            .store_config(gateway_token, "mesh", None::<String>, &content)
+                            .await
+                        {
+                            Ok(response) => {
+                                tracing::info!(
+                                    "✓ Mesh configuration pushed: {} (id: {})",
+                                    filename,
+                                    response.data.id
+                                );
+                            }
+                            Err(e) => {
+                                tracing::warn!(
+                                    "Failed to push mesh config {}: {}",
+                                    filename, e
+                                );
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    tracing::info!("✓ Full configuration push to cloud completed");
+    Ok(())
+}
+
 /// Check if the stored token is still valid
 async fn check_token_validity(gateway_token: &str) -> Result<(), String> {
     // Get proxy ID for instance isolation
