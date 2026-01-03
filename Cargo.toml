@@ -1,3 +1,6 @@
+[workspace]
+members = ["crates/*"]
+
 [package]
 name = "harmony"
 version = "0.11.0"
@@ -16,8 +19,8 @@ harmony-database = { path = "crates/database" }
 
 #jmix-rs = { path = "../jmix/jmix-rust" }
 jmix-rs = "0.3"
-#runbeam-sdk = { path = "../runbeam-sdk" }
-runbeam-sdk = "0.10.0"
+runbeam-sdk = { path = "../runbeam-sdk" }
+#runbeam-sdk = "0.10.0"
 
 dicom-object = "0.9"
 dicom-pixeldata = { version = "0.9", features = ["image", "rle", "jpeg"] }
@@ -77,9 +80,6 @@ h3-quinn = "0.0.10"
 rustls = { version = "0.23", features = ["ring"] }
 rustls-pemfile = "2"
 webpki-roots = "0.26"
-
-[features]
-default = []
 
 [dev-dependencies]
 tokio-test = "0.4"
