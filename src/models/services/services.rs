@@ -13,6 +13,8 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct ServiceConfig {
+    /// Optional unique identifier (ULID) for this service type
+    pub id: Option<String>,
     pub module: String, // Path to the module or metadata
 }
 

@@ -42,6 +42,7 @@ fn make_test_config() -> Config {
     config.services.insert(
         "echo".to_string(),
         ServiceConfig {
+            id: None,
             module: "".to_string(),
         },
     );
@@ -288,6 +289,7 @@ async fn test_empty_mesh_config_normal_routing_works() {
     config.services.insert(
         "echo".to_string(),
         ServiceConfig {
+            id: None,
             module: "".to_string(),
         },
     );

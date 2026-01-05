@@ -248,7 +248,7 @@ fn test_unresolved_backend_skipped_in_validation() {
     // Set required proxy and service defaults
     config.proxy.id = "test".to_string();
     config.proxy.jwks_cache_duration_hours = 24;  // Set valid duration
-    config.services.insert("http".to_string(), ServiceConfig { module: "".to_string() });
+    config.services.insert("http".to_string(), ServiceConfig { id: None, module: "".to_string() });
     config.management.enabled = false;
 
     // Validation should not fail, but skip the unresolved backend and pipeline

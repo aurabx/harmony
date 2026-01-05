@@ -259,6 +259,7 @@ impl Config {
             self.services.insert(
                 "management".to_string(),
                 ServiceConfig {
+                    id: None,
                     module: "".to_string(),
                 },
             );
