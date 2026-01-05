@@ -1028,6 +1028,14 @@ impl Config {
                 reason: e,
             })?;
 
+            // For Runbeam provider, mesh id should be explicitly set
+            if mesh.provider == crate::models::mesh::config::MeshProvider::Runbeam && mesh.id.is_none() {
+                tracing::warn!(
+                    "Runbeam mesh '{}' does not have 'id' field set. Sync config from Runbeam Cloud to populate the id.",
+                    name
+                );
+            }
+
             // Verify all mesh ingress references
             for ingress_ref in &mesh.ingress {
                 self.validate_mesh_ingress_reference(name, ingress_ref)?;

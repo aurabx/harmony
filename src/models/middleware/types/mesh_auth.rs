@@ -146,7 +146,7 @@ impl MeshAuthMiddleware {
 
     /// Create MeshAuthMiddleware for egress (JWT generation)
     ///
-    /// For Runbeam provider, mesh_id and destination_url are required.
+    /// For Runbeam provider, mesh_id is required.
     pub fn for_egress(
         mesh_name: String,
         mesh_id: Option<String>,
@@ -175,9 +175,9 @@ impl MeshAuthMiddleware {
             }
             MeshProvider::Runbeam => {
                 // Runbeam provider - JWT will be fetched from API
-                // Validate that we have required fields
+                // Validate that we have required mesh_id
                 if mesh_id.is_none() {
-                    return Err("Runbeam mesh provider requires mesh id".to_string());
+                    return Err("Runbeam mesh provider requires mesh id to be set in configuration".to_string());
                 }
                 // No local keys needed for egress - tokens come from Runbeam API
                 (None, None, Algorithm::RS256)
@@ -203,8 +203,8 @@ impl MeshAuthMiddleware {
 
     /// Create MeshAuthMiddleware for ingress (JWT validation)
     ///
-    /// For Runbeam provider, mesh_id is required. jwks_url can be provided or
-    /// will be derived from the global runbeam config.
+    /// For Runbeam provider, mesh_id is required.
+    /// jwks_url can be provided or will be derived from the global runbeam config.
     pub fn for_ingress(
         mesh_name: String,
         mesh_id: Option<String>,
@@ -233,9 +233,9 @@ impl MeshAuthMiddleware {
             }
             MeshProvider::Runbeam => {
                 // Runbeam provider - JWT will be verified via JWKS
-                // Validate that we have required fields
+                // Validate that we have required mesh_id
                 if mesh_id.is_none() {
-                    return Err("Runbeam mesh provider requires mesh id".to_string());
+                    return Err("Runbeam mesh provider requires mesh id to be set in configuration".to_string());
                 }
                 // No local keys needed - validation uses JWKS
                 (None, None, Algorithm::RS256)

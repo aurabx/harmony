@@ -446,6 +446,10 @@ async fn fetch_and_write_transforms(
 /// transforms, and meshes) and pushes it to Runbeam Cloud, ensuring the cloud
 /// has an accurate view of what the gateway is currently running.
 ///
+/// After push completes, Runbeam Cloud MUST create Change records for the pushed
+/// configs so that the normal polling loop will retrieve them with cloud-assigned IDs.
+/// This ensures the gateway gets synchronized with the cloud-stored configurations.
+///
 /// # Arguments
 ///
 /// * `client` - Runbeam API client

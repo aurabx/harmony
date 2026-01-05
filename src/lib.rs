@@ -192,6 +192,9 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
                     };
 
                     // Push config on startup if enabled
+                    // Note: After push completes, Runbeam Cloud should create Change records for the
+                    // pushed configs, which will then be picked up by the normal polling loop.
+                    // This ensures the gateway gets cloud-assigned IDs and stays in sync.
                     if push_config_on_startup {
                         if let Err(e) = management::cloud_poller::push_config_on_startup(
                             &client,
