@@ -230,11 +230,13 @@ async fn poll_and_apply_changes(
         }
 
         // Write config file (file watcher will detect and apply)
-        match write_cloud_config(&detail.id, toml_config).await {
-            Ok(()) => {
+        match write_cloud_config(&detail.id, &detail.resource_type, toml_config, config_dir).await
+        {
+            Ok(path) => {
                 tracing::info!(
-                    "✓ Wrote config change {} (file watcher will apply)",
-                    detail.id
+                    "✓ Wrote config change {} to {} (file watcher will apply)",
+                    detail.id,
+                    path
                 );
 
                 // Note: We report success immediately after writing the file.
@@ -269,17 +271,84 @@ async fn poll_and_apply_changes(
 
 /// Write a config change from the cloud to disk
 ///
+/// Routes different config types to appropriate file locations:
+/// - `gateway` → main config file (e.g., /etc/harmony/config.toml)
+/// - `pipeline` → pipelines directory (e.g., /etc/harmony/pipelines/{name}.toml)
+/// - `transform` → transforms directory (e.g., /etc/harmony/transforms/{name}.json)
+/// - `mesh` → mesh directory (e.g., /etc/harmony/mesh/{name}.toml)
+///
 /// The file watcher will detect the change and apply it automatically.
 /// This separation of concerns ensures:
 /// - Single source of truth for config reloading (file watcher)
 /// - No race conditions between cloud poller and file watcher
 /// - Consistent behavior for both manual edits and cloud changes
-async fn write_cloud_config(change_id: &str, config_content: &str) -> Result<(), String> {
-    // Get the current config path (where file watcher is watching)
-    let target_path =
-        globals::get_config_path().unwrap_or_else(|| "./config/config.toml".to_string());
+pub async fn write_cloud_config(
+    change_id: &str,
+    resource_type: &str,
+    config_content: &str,
+    config_dir: &std::path::Path,
+) -> Result<String, String> {
+    // Determine target path based on resource type
+    let target_path = match resource_type {
+        "gateway" => {
+            // Gateway configs go to the main config file
+            globals::get_config_path().unwrap_or_else(|| "./config/config.toml".to_string())
+        }
+        "pipeline" => {
+            // Extract pipeline name from TOML content
+            let name = extract_resource_name(config_content, "pipelines")
+                .ok_or_else(|| "Failed to extract pipeline name from config".to_string())?;
+            let pipelines_path = globals::get_config()
+                .map(|c| c.proxy.pipelines_path.clone())
+                .unwrap_or_else(|| "pipelines".to_string());
+            config_dir
+                .join(pipelines_path)
+                .join(format!("{}.toml", name))
+                .to_string_lossy()
+                .to_string()
+        }
+        "transform" => {
+            // Extract transform name from TOML content
+            let name = extract_resource_name(config_content, "transforms")
+                .ok_or_else(|| "Failed to extract transform name from config".to_string())?;
+            let transforms_path = globals::get_config()
+                .map(|c| c.proxy.transforms_path.clone())
+                .unwrap_or_else(|| "transforms".to_string());
+            config_dir
+                .join(transforms_path)
+                .join(format!("{}.json", name))
+                .to_string_lossy()
+                .to_string()
+        }
+        "mesh" => {
+            // Extract mesh name from TOML content
+            let name = extract_resource_name(config_content, "mesh")
+                .ok_or_else(|| "Failed to extract mesh name from config".to_string())?;
+            let mesh_path = globals::get_config()
+                .map(|c| c.proxy.mesh_path.clone())
+                .unwrap_or_else(|| "mesh".to_string());
+            config_dir
+                .join(mesh_path)
+                .join(format!("{}.toml", name))
+                .to_string_lossy()
+                .to_string()
+        }
+        _ => {
+            // Unknown type - log warning and write to main config as fallback
+            tracing::warn!(
+                "Unknown resource type '{}' for change {}, writing to main config",
+                resource_type,
+                change_id
+            );
+            globals::get_config_path().unwrap_or_else(|| "./config/config.toml".to_string())
+        }
+    };
 
-    tracing::info!("Writing cloud config to {}", target_path);
+    tracing::info!(
+        "Writing cloud config (type={}) to {}",
+        resource_type,
+        target_path
+    );
 
     // Ensure parent directory exists
     if let Some(parent) = std::path::Path::new(&target_path).parent() {
@@ -296,14 +365,41 @@ async fn write_cloud_config(change_id: &str, config_content: &str) -> Result<(),
     // Also save a backup copy for debugging/audit trail
     let backup_dir = "./tmp/cloud_configs";
     std::fs::create_dir_all(backup_dir).ok();
-    let backup_path = format!("{}/config_{}.toml", backup_dir, change_id);
+    let ext = if resource_type == "transform" {
+        "json"
+    } else {
+        "toml"
+    };
+    let backup_path = format!("{}/{}_{}.{}", backup_dir, resource_type, change_id, ext);
     if let Err(e) = std::fs::write(&backup_path, config_content) {
         tracing::warn!("Failed to write backup config to {}: {}", backup_path, e);
     } else {
         tracing::debug!("Backup saved to {}", backup_path);
     }
 
-    Ok(())
+    Ok(target_path)
+}
+
+/// Extract the resource name from TOML configuration content
+///
+/// Looks for the first key under the specified section and returns its name.
+/// For example, for pipelines, looks for `[pipelines.{name}]` sections.
+///
+/// # Arguments
+/// * `toml_content` - The TOML configuration string
+/// * `section` - The section to look for (e.g., "pipelines", "mesh", "transforms")
+///
+/// # Returns
+/// The name of the first resource found in the section, or None if not found
+fn extract_resource_name(toml_content: &str, section: &str) -> Option<String> {
+    // Parse the TOML content
+    let config: toml::Value = toml::from_str(toml_content).ok()?;
+
+    // Look for the section (e.g., "pipelines", "mesh")
+    let section_table = config.get(section)?.as_table()?;
+
+    // Get the first key in the section (the resource name)
+    section_table.keys().next().map(|s| s.to_string())
 }
 
 /// Extract transform IDs from TOML configuration
@@ -663,4 +759,85 @@ async fn check_token_validity(gateway_token: &str) -> Result<(), String> {
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_extract_resource_name_pipeline() {
+        let toml_content = r#"
+[pipelines.my_pipeline]
+description = "Test pipeline"
+networks = ["default"]
+endpoints = ["api"]
+backends = ["backend1"]
+"#;
+        let name = extract_resource_name(toml_content, "pipelines");
+        assert_eq!(name, Some("my_pipeline".to_string()));
+    }
+
+    #[test]
+    fn test_extract_resource_name_mesh() {
+        let toml_content = r#"
+[mesh.healthcare_mesh]
+name = "Healthcare Data Mesh"
+mesh_id = "01JGXYZ123"
+"#;
+        let name = extract_resource_name(toml_content, "mesh");
+        assert_eq!(name, Some("healthcare_mesh".to_string()));
+    }
+
+    #[test]
+    fn test_extract_resource_name_transforms() {
+        let toml_content = r#"
+[transforms.patient_to_fhir]
+type = "jolt"
+spec_path = "transforms/patient_to_fhir.json"
+"#;
+        let name = extract_resource_name(toml_content, "transforms");
+        assert_eq!(name, Some("patient_to_fhir".to_string()));
+    }
+
+    #[test]
+    fn test_extract_resource_name_missing_section() {
+        let toml_content = r#"
+[proxy]
+id = "test"
+"#;
+        let name = extract_resource_name(toml_content, "pipelines");
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn test_extract_resource_name_empty_section() {
+        let toml_content = r#"
+[pipelines]
+"#;
+        let name = extract_resource_name(toml_content, "pipelines");
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn test_extract_resource_name_invalid_toml() {
+        let toml_content = "not valid toml {{{";
+        let name = extract_resource_name(toml_content, "pipelines");
+        assert_eq!(name, None);
+    }
+
+    #[test]
+    fn test_extract_resource_name_multiple_resources() {
+        // When multiple resources exist, returns the first one (alphabetically due to BTreeMap)
+        let toml_content = r#"
+[pipelines.alpha_pipeline]
+description = "Alpha"
+
+[pipelines.beta_pipeline]
+description = "Beta"
+"#;
+        let name = extract_resource_name(toml_content, "pipelines");
+        // BTreeMap iterates in sorted order, so "alpha_pipeline" comes first
+        assert_eq!(name, Some("alpha_pipeline".to_string()));
+    }
 }

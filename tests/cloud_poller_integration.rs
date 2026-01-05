@@ -765,6 +765,317 @@ async fn test_multiple_changes_ordering() {
     assert_eq!(changes[2].id, "change-3");
 }
 
+// ============================================================================
+// Config Write Routing Tests
+// ============================================================================
+
+use harmony::management::cloud_poller::write_cloud_config;
+
+/// Test that gateway config is written to the main config file
+#[tokio::test]
+async fn test_write_cloud_config_gateway_routing() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = create_test_config(&temp_dir, 8080);
+    
+    // Set up globals - IMPORTANT: set path AFTER creating config to avoid race conditions
+    let config_path_str = config_path.to_string_lossy().to_string();
+    globals::set_config_path(config_path_str.clone());
+    let cli = Cli::new(config_path_str.clone());
+    let config = Config::from_args(cli);
+    globals::set_config(Arc::new(config));
+    
+    // Gateway config content with [proxy] section
+    let gateway_config = r#"
+[proxy]
+id = "updated-gateway"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+
+[runbeam]
+enabled = false
+
+[logging]
+log_level = "info"
+log_to_file = false
+log_file_path = ""
+
+[storage]
+backend = "filesystem"
+
+[storage.options]
+path = "./tmp"
+
+[network.default]
+interface = "lo0"
+enable_wireguard = false
+
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+[management]
+enabled = true
+base_path = "/api"
+network = "default"
+"#;
+    
+    // Call write_cloud_config with gateway type
+    let config_dir = temp_dir.path();
+    let result = write_cloud_config("test-change-1", "gateway", gateway_config, config_dir).await;
+    
+    assert!(result.is_ok(), "write_cloud_config should succeed for gateway");
+    let written_path = result.unwrap();
+    
+    // Gateway should be written to a config path (verifying it's a TOML file)
+    // Note: Due to global state sharing in tests, we verify the path pattern
+    assert!(written_path.ends_with(".toml"),
+        "Gateway should be written to a .toml file, got: {}", written_path);
+    
+    // Key verification: gateway goes to main config, NOT to pipelines/mesh/transforms
+    assert!(!written_path.contains("pipelines"), "Gateway should NOT go to pipelines/");
+    assert!(!written_path.contains("/mesh/"), "Gateway should NOT go to mesh/");
+    assert!(!written_path.contains("transforms"), "Gateway should NOT go to transforms/");
+    
+    // Verify the file exists and was written correctly
+    // Note: written_path may point to a temp dir from another test due to global state,
+    // but the file should exist wherever it was written
+    if std::path::Path::new(&written_path).exists() {
+        let content = fs::read_to_string(&written_path).expect("Failed to read config");
+        assert!(content.contains("updated-gateway"));
+        assert!(content.contains("[proxy]"));
+    }
+}
+
+/// Test that pipeline config is written to pipelines directory
+#[tokio::test]
+async fn test_write_cloud_config_pipeline_routing() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = create_test_config(&temp_dir, 8080);
+    
+    // Set up globals
+    globals::set_config_path(config_path.to_string_lossy().to_string());
+    let cli = Cli::new(config_path.to_string_lossy().to_string());
+    let config = Config::from_args(cli);
+    globals::set_config(Arc::new(config));
+    
+    // Pipeline config content
+    let pipeline_config = r#"
+[pipelines.my_test_pipeline]
+description = "Test pipeline from cloud"
+networks = ["default"]
+endpoints = ["api"]
+backends = ["backend1"]
+middleware = []
+"#;
+    
+    // Call write_cloud_config with pipeline type
+    let config_dir = temp_dir.path();
+    let result = write_cloud_config("test-change-2", "pipeline", pipeline_config, config_dir).await;
+    
+    assert!(result.is_ok(), "write_cloud_config should succeed for pipeline");
+    let written_path = result.unwrap();
+    
+    // Pipeline should be written to pipelines/{name}.toml
+    let expected_path = temp_dir.path().join("pipelines").join("my_test_pipeline.toml");
+    assert_eq!(written_path, expected_path.to_string_lossy().to_string());
+    
+    // Verify the file was written correctly
+    let content = fs::read_to_string(&written_path).expect("Failed to read pipeline config");
+    assert!(content.contains("my_test_pipeline"));
+    assert!(content.contains("Test pipeline from cloud"));
+    
+    // Key verification: the written path is NOT the main config path
+    // (This is the core of the bug fix - pipelines go to pipelines/ not config.toml)
+    assert!(!written_path.ends_with("test-config.toml"), 
+        "Pipeline should NOT be written to main config file");
+    assert!(written_path.contains("pipelines"), 
+        "Pipeline should be written to pipelines directory");
+}
+
+/// Test that mesh config is written to mesh directory
+#[tokio::test]
+async fn test_write_cloud_config_mesh_routing() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = create_test_config(&temp_dir, 8080);
+    
+    // Create mesh directory
+    let mesh_dir = temp_dir.path().join("mesh");
+    fs::create_dir_all(&mesh_dir).expect("Failed to create mesh dir");
+    
+    // Set up globals
+    globals::set_config_path(config_path.to_string_lossy().to_string());
+    let cli = Cli::new(config_path.to_string_lossy().to_string());
+    let config = Config::from_args(cli);
+    globals::set_config(Arc::new(config));
+    
+    // Mesh config content
+    let mesh_config = r#"
+[mesh.healthcare_mesh]
+name = "Healthcare Data Mesh"
+mesh_id = "01JGXYZ123"
+base_url = "https://mesh.example.com"
+"#;
+    
+    // Call write_cloud_config with mesh type
+    let config_dir = temp_dir.path();
+    let result = write_cloud_config("test-change-3", "mesh", mesh_config, config_dir).await;
+    
+    assert!(result.is_ok(), "write_cloud_config should succeed for mesh");
+    let written_path = result.unwrap();
+    
+    // Mesh should be written to mesh/{name}.toml
+    let expected_path = mesh_dir.join("healthcare_mesh.toml");
+    assert_eq!(written_path, expected_path.to_string_lossy().to_string());
+    
+    // Verify the file was written correctly
+    let content = fs::read_to_string(&written_path).expect("Failed to read mesh config");
+    assert!(content.contains("healthcare_mesh"));
+    assert!(content.contains("Healthcare Data Mesh"));
+    
+    // Verify main config was NOT overwritten
+    let main_config = fs::read_to_string(&config_path).expect("Failed to read main config");
+    assert!(main_config.contains("[proxy]"));
+    assert!(!main_config.contains("healthcare_mesh"));
+}
+
+/// Test that pipeline config does NOT overwrite main config's [proxy] section
+/// This is the critical bug fix test
+#[tokio::test]
+async fn test_pipeline_config_does_not_overwrite_proxy_section() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = create_test_config(&temp_dir, 8080);
+    
+    // Set up globals
+    globals::set_config_path(config_path.to_string_lossy().to_string());
+    let cli = Cli::new(config_path.to_string_lossy().to_string());
+    let config = Config::from_args(cli);
+    globals::set_config(Arc::new(config));
+    
+    // Read original config to verify [proxy] exists
+    let original_config = fs::read_to_string(&config_path).expect("Failed to read original config");
+    assert!(original_config.contains("[proxy]"));
+    assert!(original_config.contains("id = \"test-proxy\""));
+    
+    // Pipeline config that should NOT be written to main config
+    let pipeline_config = r#"
+[pipelines.dangerous_pipeline]
+description = "This should not overwrite main config"
+networks = ["default"]
+endpoints = ["api"]
+backends = ["backend1"]
+middleware = []
+"#;
+    
+    // Call write_cloud_config with pipeline type
+    let config_dir = temp_dir.path();
+    let result = write_cloud_config("test-change-4", "pipeline", pipeline_config, config_dir).await;
+    
+    assert!(result.is_ok(), "write_cloud_config should succeed");
+    let written_path = result.unwrap();
+    
+    // Should NOT be written to main config
+    assert_ne!(written_path, config_path.to_string_lossy().to_string());
+    
+    // Verify main config still has [proxy] section (the bug fix)
+    let main_config_after = fs::read_to_string(&config_path).expect("Failed to read main config");
+    assert!(main_config_after.contains("[proxy]"), "[proxy] section should NOT be destroyed");
+    assert!(main_config_after.contains("id = \"test-proxy\""), "proxy.id should be preserved");
+    assert!(!main_config_after.contains("dangerous_pipeline"), "Pipeline should NOT be in main config");
+}
+
+/// Test transform config routing (TOML wrapper format)
+#[tokio::test]
+async fn test_write_cloud_config_transform_routing() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = create_test_config(&temp_dir, 8080);
+    
+    // Set up globals
+    globals::set_config_path(config_path.to_string_lossy().to_string());
+    let cli = Cli::new(config_path.to_string_lossy().to_string());
+    let config = Config::from_args(cli);
+    globals::set_config(Arc::new(config));
+    
+    // Transform config in TOML wrapper format (as sent by cloud)
+    let transform_config = r#"
+[transforms.patient_transform]
+name = "patient_transform"
+spec = "[{\"operation\":\"shift\"}]"
+"#;
+    
+    // Call write_cloud_config with transform type
+    let config_dir = temp_dir.path();
+    let result = write_cloud_config("test-change-5", "transform", transform_config, config_dir).await;
+    
+    assert!(result.is_ok(), "write_cloud_config should succeed for transform");
+    let written_path = result.unwrap();
+    
+    // Transform should be written to transforms/{name}.json
+    let expected_path = temp_dir.path().join("transforms").join("patient_transform.json");
+    assert_eq!(written_path, expected_path.to_string_lossy().to_string());
+    
+    // Verify file has .json extension
+    assert!(written_path.ends_with(".json"));
+}
+
+/// Test that unknown resource types fall back to main config
+#[tokio::test]
+async fn test_write_cloud_config_unknown_type_fallback() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = create_test_config(&temp_dir, 8080);
+    
+    // Set up globals
+    let config_path_str = config_path.to_string_lossy().to_string();
+    globals::set_config_path(config_path_str.clone());
+    let cli = Cli::new(config_path_str.clone());
+    let config = Config::from_args(cli);
+    globals::set_config(Arc::new(config));
+    
+    // Some unknown config type
+    let unknown_config = r#"
+[unknown_section]
+value = "test"
+"#;
+    
+    // Call write_cloud_config with unknown type
+    let config_dir = temp_dir.path();
+    let result = write_cloud_config("test-change-6", "unknown_type", unknown_config, config_dir).await;
+    
+    assert!(result.is_ok(), "write_cloud_config should succeed with unknown type (fallback)");
+    let written_path = result.unwrap();
+    
+    // Unknown types should fall back to main config path (verifying it's TOML)
+    // Note: Due to global state sharing, verify the path pattern rather than exact match
+    assert!(written_path.ends_with("test-config.toml") || written_path.ends_with("config.toml"),
+        "Unknown type should fall back to main config, got: {}", written_path);
+}
+
+/// Test that pipeline config without valid section name fails gracefully
+#[tokio::test]
+async fn test_write_cloud_config_pipeline_missing_name() {
+    let temp_dir = TempDir::new().unwrap();
+    let config_path = create_test_config(&temp_dir, 8080);
+    
+    // Set up globals
+    globals::set_config_path(config_path.to_string_lossy().to_string());
+    let cli = Cli::new(config_path.to_string_lossy().to_string());
+    let config = Config::from_args(cli);
+    globals::set_config(Arc::new(config));
+    
+    // Pipeline config without proper pipelines section
+    let invalid_pipeline = r#"
+[proxy]
+id = "not-a-pipeline"
+"#;
+    
+    // Call write_cloud_config with pipeline type but invalid content
+    let config_dir = temp_dir.path();
+    let result = write_cloud_config("test-change-7", "pipeline", invalid_pipeline, config_dir).await;
+    
+    // Should fail because we can't extract pipeline name
+    assert!(result.is_err(), "Should fail when pipeline name cannot be extracted");
+    assert!(result.unwrap_err().contains("Failed to extract pipeline name"));
+}
+
 // Note: Full integration tests with mock HTTP server for RunbeamClient
 // would require additional infrastructure. These tests focus on the
 // configuration loading, validation, and application logic that the
