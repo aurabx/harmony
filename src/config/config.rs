@@ -337,24 +337,40 @@ impl Config {
         // Verify the config file has a .toml extension
         let config_path = Path::new(&cli.config_path);
         if config_path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
-            panic!(
-                "Configuration file must have a .toml extension: {}",
+            eprintln!(
+                "ERROR: Configuration file must have a .toml extension: {}",
                 cli.config_path
             );
+            std::process::exit(1);
         }
 
         // Load the base configuration file
-        let contents =
-            std::fs::read_to_string(&cli.config_path).expect("Failed to read config file");
-        
+        let contents = match std::fs::read_to_string(&cli.config_path) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("ERROR: Failed to read config file '{}': {}", cli.config_path, e);
+                std::process::exit(1);
+            }
+        };
+
         // Apply environment variable substitution
         let (contents_substituted, _audit) = substitute_env_vars(&contents);
-        let mut config: Config = toml::from_str(&contents_substituted).expect("Failed to parse config");
+        let mut config: Config = match toml::from_str(&contents_substituted) {
+            Ok(c) => c,
+            Err(e) => {
+                eprintln!("ERROR: Failed to parse config file '{}': {}", cli.config_path, e);
+                std::process::exit(1);
+            }
+        };
 
         // Resolve transforms_path relative to config file directory
-        let base_dir = config_path
-            .parent()
-            .expect("Failed to get config file directory");
+        let base_dir = match config_path.parent() {
+            Some(d) => d,
+            None => {
+                eprintln!("ERROR: Failed to get config file directory");
+                std::process::exit(1);
+            }
+        };
         let transforms_path = base_dir.join(&config.proxy.transforms_path);
         config.resolved_transforms_path = Some(transforms_path.to_string_lossy().to_string());
 
@@ -378,21 +394,26 @@ impl Config {
                 config.unresolved_backends = unresolved;
             }
             Err(e) => {
-                panic!("Configuration reference resolution failed: {}", e);
+                eprintln!("ERROR: Configuration reference resolution failed: {}", e);
+                std::process::exit(1);
             }
         }
 
         // Inject management service if enabled
-        config
-            .inject_management_service()
-            .expect("Failed to inject management service");
+        if let Err(e) = config.inject_management_service() {
+            eprintln!("ERROR: Failed to inject management service: {:?}", e);
+            std::process::exit(1);
+        }
 
         // Initialize both registries
         config.initialize_service_registry();
         config.initialize_middleware_registry();
 
         // Validate the final, merged configuration
-        config.validate().expect("Configuration validation failed");
+        if let Err(e) = config.validate() {
+            eprintln!("ERROR: Configuration validation failed: {:?}", e);
+            std::process::exit(1);
+        }
         config
     }
 
