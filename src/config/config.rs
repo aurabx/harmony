@@ -1044,45 +1044,46 @@ impl Config {
 
     /// Validate a mesh ingress reference.
     /// Supports both local names and provider-based references.
+    /// Missing ingress items are logged as warnings and do not cause validation to fail.
     fn validate_mesh_ingress_reference(&self, mesh_name: &str, reference: &str) -> Result<(), ConfigError> {
         use crate::config::resource_reference::ParsedReference;
 
         // Parse the reference
-        let parsed = ParsedReference::parse(reference).map_err(|e| ConfigError::InvalidMesh {
-            name: mesh_name.to_string(),
-            reason: format!("Invalid ingress reference '{}': {}", reference, e),
-        })?;
+        let parsed = match ParsedReference::parse(reference) {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(ConfigError::InvalidMesh {
+                    name: mesh_name.to_string(),
+                    reason: format!("Invalid ingress reference '{}': {}", reference, e),
+                });
+            }
+        };
 
         // For local references, verify the resource exists locally
         if parsed.is_local() {
             if let Some(local_name) = parsed.local_name() {
                 // Check local ingress and remote_ingress maps
                 if !self.ingress.contains_key(local_name) && !self.remote_ingress.contains_key(local_name) {
-                    return Err(ConfigError::InvalidMesh {
-                        name: mesh_name.to_string(),
-                        reason: format!(
-                            "Mesh references unknown local ingress '{}' (not found in ingress or remote_ingress)",
-                            local_name
-                        ),
-                    });
+                    tracing::warn!(
+                        "Mesh '{}' references missing local ingress '{}' (not found in ingress or remote_ingress)",
+                        mesh_name, local_name
+                    );
                 }
             }
         } else {
             // Remote reference - verify the provider exists
             if self.get_provider(&parsed.provider).is_none() {
-                return Err(ConfigError::InvalidMesh {
-                    name: mesh_name.to_string(),
-                    reason: format!(
-                        "Mesh ingress reference '{}' uses unknown provider '{}'",
-                        reference, parsed.provider
-                    ),
-                });
+                tracing::warn!(
+                    "Mesh '{}' references missing remote ingress '{}' with unknown provider '{}'",
+                    mesh_name, reference, parsed.provider
+                );
+            } else {
+                // Remote references will be resolved at runtime
+                tracing::debug!(
+                    "Mesh '{}' has remote ingress reference '{}' (provider: {})",
+                    mesh_name, reference, parsed.provider
+                );
             }
-            // Remote references will be resolved at runtime
-            tracing::debug!(
-                "Mesh '{}' has remote ingress reference '{}' (provider: {})",
-                mesh_name, reference, parsed.provider
-            );
         }
 
         Ok(())
@@ -1090,41 +1091,45 @@ impl Config {
 
     /// Validate a mesh egress reference.
     /// Supports both local names and provider-based references.
+    /// Missing egress items are logged as warnings and do not cause validation to fail.
     fn validate_mesh_egress_reference(&self, mesh_name: &str, reference: &str) -> Result<(), ConfigError> {
         use crate::config::resource_reference::ParsedReference;
 
         // Parse the reference
-        let parsed = ParsedReference::parse(reference).map_err(|e| ConfigError::InvalidMesh {
-            name: mesh_name.to_string(),
-            reason: format!("Invalid egress reference '{}': {}", reference, e),
-        })?;
+        let parsed = match ParsedReference::parse(reference) {
+            Ok(p) => p,
+            Err(e) => {
+                return Err(ConfigError::InvalidMesh {
+                    name: mesh_name.to_string(),
+                    reason: format!("Invalid egress reference '{}': {}", reference, e),
+                });
+            }
+        };
 
         // For local references, verify the resource exists locally
         if parsed.is_local() {
             if let Some(local_name) = parsed.local_name() {
                 if !self.egress.contains_key(local_name) {
-                    return Err(ConfigError::InvalidMesh {
-                        name: mesh_name.to_string(),
-                        reason: format!("Mesh references unknown local egress '{}'", local_name),
-                    });
+                    tracing::warn!(
+                        "Mesh '{}' references missing local egress '{}'",
+                        mesh_name, local_name
+                    );
                 }
             }
         } else {
             // Remote reference - verify the provider exists
             if self.get_provider(&parsed.provider).is_none() {
-                return Err(ConfigError::InvalidMesh {
-                    name: mesh_name.to_string(),
-                    reason: format!(
-                        "Mesh egress reference '{}' uses unknown provider '{}'",
-                        reference, parsed.provider
-                    ),
-                });
+                tracing::warn!(
+                    "Mesh '{}' references missing remote egress '{}' with unknown provider '{}'",
+                    mesh_name, reference, parsed.provider
+                );
+            } else {
+                // Remote references will be resolved at runtime
+                tracing::debug!(
+                    "Mesh '{}' has remote egress reference '{}' (provider: {})",
+                    mesh_name, reference, parsed.provider
+                );
             }
-            // Remote references will be resolved at runtime
-            tracing::debug!(
-                "Mesh '{}' has remote egress reference '{}' (provider: {})",
-                mesh_name, reference, parsed.provider
-            );
         }
 
         Ok(())
