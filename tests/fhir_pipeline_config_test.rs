@@ -25,7 +25,7 @@ fn test_configuration_loads_successfully() {
     // Test that the FHIR-DICOM configuration loads without errors
     let config = load_test_config();
 
-    assert_eq!(config.proxy.id, "harmony-fhir-dicom");
+    assert_eq!(config.proxy.effective_id(), "harmony-fhir-dicom");
     assert!(config.network.contains_key("default"));
     assert!(config.network.contains_key("management"));
 }

@@ -574,7 +574,7 @@ impl Config {
         self.proxy
             .validate()
             .map_err(|e| ConfigError::InvalidProxy {
-                name: self.proxy.id.clone(),
+                name: self.proxy.effective_id().to_string(),
                 reason: e,
             })?;
 
@@ -582,7 +582,7 @@ impl Config {
         for var in &self.proxy.required_env_vars {
             if std::env::var(var).is_err() {
                 return Err(ConfigError::InvalidProxy {
-                    name: self.proxy.id.clone(),
+                    name: self.proxy.effective_id().to_string(),
                     reason: format!("Missing required environment variable: {}", var),
                 });
             }

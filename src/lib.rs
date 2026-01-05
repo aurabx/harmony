@@ -74,7 +74,7 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
             .try_init();
     }
 
-    tracing::info!("🔧 Starting Harmony '{}'", config.proxy.id);
+    tracing::info!("🔧 Starting Harmony '{}'", config.proxy.effective_id());
 
     // Create adapter registry
     let registry = Arc::new(AdapterRegistry::new());
@@ -125,7 +125,7 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
     // Check for cloud integration via primary provider
     if config.is_cloud_enabled() {
         // Get proxy ID for instance isolation
-        let proxy_id = config.proxy.id.clone();
+        let proxy_id = config.proxy.effective_id().to_string();
 
         // Check for machine token from environment variable first (for headless/pre-provisioned deployments)
         let token_from_env = std::env::var("RUNBEAM_MACHINE_TOKEN").ok().and_then(|token_str| {

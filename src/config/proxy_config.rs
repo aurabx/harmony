@@ -35,7 +35,12 @@ impl Default for ContentLimits {
 /// Represents the configuration for the proxy
 #[derive(Debug, Deserialize, Clone)]
 pub struct ProxyConfig {
+    /// Unique identifier for this proxy instance (required if name not provided)
+    #[serde(default)]
     pub id: String,
+    /// Human-readable name for this proxy instance (required if id not provided)
+    #[serde(default)]
+    pub name: String,
     #[serde(default = "default_pipelines_path")]
     pub pipelines_path: String,
     #[serde(default = "default_transforms_path")]
@@ -63,6 +68,7 @@ impl Default for ProxyConfig {
     fn default() -> Self {
         Self {
             id: String::new(),
+            name: String::new(),
             pipelines_path: default_pipelines_path(),
             transforms_path: default_transforms_path(),
             mesh_path: default_mesh_path(),
@@ -130,8 +136,11 @@ fn default_primary_provider() -> String {
 
 impl ProxyConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if self.id.trim().is_empty() {
-            return Err("proxy.id cannot be empty".to_string());
+        let has_id = !self.id.trim().is_empty();
+        let has_name = !self.name.trim().is_empty();
+
+        if !has_id && !has_name {
+            return Err("proxy.id or proxy.name must be provided".to_string());
         }
 
         if self.jwks_cache_duration_hours < 1 || self.jwks_cache_duration_hours > 168 {
@@ -168,6 +177,28 @@ impl ProxyConfig {
     }
 }
 
+impl ProxyConfig {
+    /// Returns the effective identifier for this proxy.
+    /// If id is set, returns id. Otherwise returns name.
+    pub fn effective_id(&self) -> &str {
+        if !self.id.trim().is_empty() {
+            &self.id
+        } else {
+            &self.name
+        }
+    }
+
+    /// Returns the effective name for this proxy.
+    /// If name is set, returns name. Otherwise returns id.
+    pub fn effective_name(&self) -> &str {
+        if !self.name.trim().is_empty() {
+            &self.name
+        } else {
+            &self.id
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -196,5 +227,44 @@ mod tests {
             primary_provider = "local"
         "#).unwrap();
         assert_eq!(config.primary_provider, "local");
+    }
+
+    #[test]
+    fn test_id_only() {
+        let config: ProxyConfig = toml::from_str(r#"
+            id = "my-proxy"
+        "#).unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.effective_id(), "my-proxy");
+        assert_eq!(config.effective_name(), "my-proxy");
+    }
+
+    #[test]
+    fn test_name_only() {
+        let config: ProxyConfig = toml::from_str(r#"
+            name = "My Proxy"
+        "#).unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.effective_id(), "My Proxy");
+        assert_eq!(config.effective_name(), "My Proxy");
+    }
+
+    #[test]
+    fn test_both_id_and_name() {
+        let config: ProxyConfig = toml::from_str(r#"
+            id = "my-proxy"
+            name = "My Proxy"
+        "#).unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.effective_id(), "my-proxy");
+        assert_eq!(config.effective_name(), "My Proxy");
+    }
+
+    #[test]
+    fn test_neither_id_nor_name() {
+        let config: ProxyConfig = toml::from_str(r#"
+            pipelines_path = "pipelines"
+        "#).unwrap();
+        assert!(config.validate().is_err());
     }
 }

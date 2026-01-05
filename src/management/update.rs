@@ -40,7 +40,7 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
 
     // Get proxy ID for instance isolation
     let proxy_id = crate::globals::get_config()
-        .map(|config| config.proxy.id.clone())
+        .map(|config| config.proxy.effective_id().to_string())
         .unwrap_or_else(|| "harmony".to_string());
 
     // Load machine token from secure storage

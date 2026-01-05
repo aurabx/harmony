@@ -160,7 +160,7 @@ pub async fn handle_authorize(
 
     // Get proxy ID for instance isolation
     let proxy_id = crate::globals::get_config()
-        .map(|config| config.proxy.id.clone())
+        .map(|config| config.proxy.effective_id().to_string())
         .unwrap_or_else(|| "harmony".to_string());
 
     // Save machine token using appropriate method based on whether encryption key was provided

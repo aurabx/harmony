@@ -304,7 +304,7 @@ impl MeshAuthMiddleware {
 
         // Get machine token from secure storage
         let proxy_id = crate::globals::get_config()
-            .map(|c| c.proxy.id.clone())
+            .map(|c| c.proxy.effective_id().to_string())
             .unwrap_or_else(|| "harmony".to_string());
 
         let machine_token = runbeam_sdk::load_token::<runbeam_sdk::MachineToken>(&proxy_id, "auth")

@@ -98,7 +98,7 @@ async fn poll_and_apply_changes(
     // Extract gateway_id from the stored machine token
     // The gateway_id is a ULID that was received during authorization
     let proxy_id = globals::get_config()
-        .map(|config| config.proxy.id.clone())
+        .map(|config| config.proxy.effective_id().to_string())
         .unwrap_or_else(|| "harmony".to_string());
 
     let machine_token: MachineToken = load_token(&proxy_id, "auth")
@@ -736,7 +736,7 @@ pub async fn push_config_on_startup(
 async fn check_token_validity(gateway_token: &str) -> Result<(), String> {
     // Get proxy ID for instance isolation
     let proxy_id = globals::get_config()
-        .map(|config| config.proxy.id.clone())
+        .map(|config| config.proxy.effective_id().to_string())
         .unwrap_or_else(|| "harmony".to_string());
 
     // Load token from secure storage (SDK manages keyring/encrypted filesystem automatically)

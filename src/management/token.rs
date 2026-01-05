@@ -68,7 +68,7 @@ pub async fn handle_token_post(body: &[u8]) -> Result<JsonValue, (u16, String)> 
 
     // Get proxy ID for instance isolation (needed for both API URL and token storage)
     let proxy_id = crate::globals::get_config()
-        .map(|config| config.proxy.id.clone())
+        .map(|config| config.proxy.effective_id().to_string())
         .unwrap_or_else(|| "harmony".to_string());
 
     // If encryption key is provided, set it as environment variable

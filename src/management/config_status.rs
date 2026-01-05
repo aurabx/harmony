@@ -85,7 +85,7 @@ pub async fn handle_config_status(
         config_last_modified,
         current_networks,
         running_networks,
-        proxy_id: config.proxy.id.clone(),
+        proxy_id: config.proxy.effective_id().to_string(),
         log_level: config.logging.log_level.clone(),
         mesh: config.mesh.clone(),
         ingress: config.ingress.clone(),

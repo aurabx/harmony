@@ -22,7 +22,7 @@ fn load_and_validate_example(config_path: &str) -> Config {
 #[ignore = "Requires echo service to be loaded"]
 fn test_basic_echo_example_loads() {
     let config = load_and_validate_example("../harmony-examples/pipelines/basic-echo/config.toml");
-    assert_eq!(config.proxy.id, "harmony-basic-echo");
+    assert_eq!(config.proxy.effective_id(), "harmony-basic-echo");
 
     // Check that pipelines loaded
     assert!(config.pipelines.contains_key("echo_basic"));
@@ -42,7 +42,7 @@ fn test_basic_echo_example_loads() {
 #[test]
 fn test_content_types_example_loads() {
     let config = load_and_validate_example("../harmony-examples/pipelines/content-types/config.toml");
-    assert_eq!(config.proxy.id, "content-types-example");
+    assert_eq!(config.proxy.effective_id(), "content-types-example");
 
     // Check that pipelines loaded
     assert!(config.pipelines.contains_key("multi_content"));
@@ -60,7 +60,7 @@ fn test_content_types_example_loads() {
 #[test]
 fn test_http_backend_example_loads() {
     let config = load_and_validate_example("../harmony-examples/pipelines/http-http/config.toml");
-    assert_eq!(config.proxy.id, "harmony-http-backend");
+    assert_eq!(config.proxy.effective_id(), "harmony-http-backend");
 
     // Check that pipelines loaded
     assert!(config.pipelines.contains_key("http_proxy"));
@@ -74,7 +74,7 @@ fn test_http_backend_example_loads() {
 #[ignore = "Requires FHIR service to be loaded"]
 fn test_fhir_example_loads() {
     let config = load_and_validate_example("../harmony-examples/pipelines/fhir/config.toml");
-    assert_eq!(config.proxy.id, "harmony-fhir");
+    assert_eq!(config.proxy.effective_id(), "harmony-fhir");
 
     // Check that pipelines loaded
     assert!(config.pipelines.contains_key("fhir"));
@@ -95,7 +95,7 @@ fn test_fhir_example_loads() {
 #[ignore = "Requires DICOMweb service to be loaded"]
 fn test_dicomweb_example_loads() {
     let config = load_and_validate_example("../harmony-examples/pipelines/dicomweb/config.toml");
-    assert_eq!(config.proxy.id, "harmony-dicomweb");
+    assert_eq!(config.proxy.effective_id(), "harmony-dicomweb");
 
     // Check that pipelines loaded
     assert!(config.pipelines.contains_key("dicomweb_demo"));
@@ -114,7 +114,7 @@ fn test_dicomweb_example_loads() {
 #[ignore = "Requires JMIX service to be loaded"]
 fn test_jmix_example_loads() {
     let config = load_and_validate_example("../harmony-examples/pipelines/jmix/config.toml");
-    assert_eq!(config.proxy.id, "harmony-jmix");
+    assert_eq!(config.proxy.effective_id(), "harmony-jmix");
 
     // Check that pipelines loaded
     assert!(config.pipelines.contains_key("jmix_performance"));
@@ -132,7 +132,7 @@ fn test_jmix_example_loads() {
 #[test]
 fn test_transform_example_loads() {
     let config = load_and_validate_example("../harmony-examples/pipelines/transform/config.toml");
-    assert_eq!(config.proxy.id, "harmony-transform");
+    assert_eq!(config.proxy.effective_id(), "harmony-transform");
 
     // Check that pipelines loaded
     assert!(config.pipelines.contains_key("transform_demo"));
