@@ -316,6 +316,14 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
         mesh_count,
     };
 
+    // Trigger immediate poll to fetch the config back from cloud
+    // This minimizes the window of inconsistent state between push and pull
+    if crate::globals::trigger_cloud_poll() {
+        tracing::info!("Triggered immediate cloud poll to retrieve pushed configuration");
+    } else {
+        tracing::debug!("Cloud polling not active, skipping immediate poll trigger");
+    }
+
     let value = serde_json::to_value(&response).map_err(|e| {
         tracing::error!("Failed to serialize response: {}", e);
         (500, "Internal server error".to_string())

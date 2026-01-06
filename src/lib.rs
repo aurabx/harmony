@@ -191,27 +191,44 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
                         }
                     };
 
-                    // Push config on startup if enabled
-                    // Note: After push completes, Runbeam Cloud should create Change records for the
-                    // pushed configs, which will then be picked up by the normal polling loop.
-                    // This ensures the gateway gets cloud-assigned IDs and stays in sync.
+                    // Check if push-on-startup is enabled (default: off)
                     if push_config_on_startup {
+                        // Start polling with ready signal to prevent race conditions
+                        let ready_signal = management::cloud_poller::start_cloud_polling_when_ready(
+                            client.clone(),
+                            machine_token.clone(),
+                            poll_interval,
+                            registry_clone.clone(),
+                            cloud_shutdown.clone(),
+                        ).await;
+
+                        // Push config while polling is waiting
+                        // Note: After push completes, Runbeam Cloud should create Change records for the
+                        // pushed configs, which will then be picked up by the normal polling loop.
+                        // This ensures the gateway gets cloud-assigned IDs and stays in sync.
                         if let Err(e) = management::cloud_poller::push_config_on_startup(
                             &client,
                             &machine_token,
                         ).await {
                             tracing::warn!("Push config on startup failed: {}. Continuing with polling.", e);
                         }
-                    }
 
-                    management::cloud_poller::start_cloud_polling(
-                        client,
-                        machine_token,
-                        poll_interval,
-                        registry_clone,
-                        cloud_shutdown,
-                    )
-                    .await;
+                        // Signal polling to start and trigger immediate poll
+                        let _ = ready_signal.send(());
+                        if crate::globals::trigger_cloud_poll() {
+                            tracing::info!("Triggered immediate cloud poll after startup config push");
+                        }
+                    } else {
+                        // Start polling immediately if no startup push
+                        management::cloud_poller::start_cloud_polling(
+                            client,
+                            machine_token,
+                            poll_interval,
+                            registry_clone,
+                            cloud_shutdown,
+                        )
+                        .await;
+                    }
                 });
             }
             Ok(Some(token)) => {

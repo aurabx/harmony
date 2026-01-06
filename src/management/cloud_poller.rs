@@ -5,6 +5,7 @@ use std::collections::HashSet;
 use std::path::Path;
 use std::sync::Arc;
 use std::time::Duration;
+use tokio::sync::mpsc;
 use tokio::time::sleep;
 use tokio_util::sync::CancellationToken;
 
@@ -19,10 +20,82 @@ pub async fn start_cloud_polling(
     registry: Arc<AdapterRegistry>,
     shutdown: CancellationToken,
 ) {
+    start_cloud_polling_with_ready(
+        client,
+        gateway_token,
+        poll_interval,
+        registry,
+        shutdown,
+        None,
+    )
+    .await;
+}
+
+/// Start cloud config polling with a ready signal
+///
+/// This function returns a sender that can be used to signal when polling should begin.
+/// This is useful during startup to allow initial config push to complete before polling.
+///
+/// # Returns
+///
+/// Returns a sender that must be signaled (by sending `()`) to start polling.
+pub async fn start_cloud_polling_when_ready(
+    client: RunbeamClient,
+    gateway_token: String,
+    poll_interval: Duration,
+    registry: Arc<AdapterRegistry>,
+    shutdown: CancellationToken,
+) -> mpsc::UnboundedSender<()> {
+    let (ready_tx, ready_rx) = mpsc::unbounded_channel();
+    
+    tokio::spawn(async move {
+        start_cloud_polling_with_ready(
+            client,
+            gateway_token,
+            poll_interval,
+            registry,
+            shutdown,
+            Some(ready_rx),
+        )
+        .await;
+    });
+    
+    ready_tx
+}
+
+/// Start cloud config polling with optional ready signal
+///
+/// This internal function allows passing a ready signal that must be received
+/// before polling begins. This prevents race conditions during startup.
+async fn start_cloud_polling_with_ready(
+    client: RunbeamClient,
+    gateway_token: String,
+    poll_interval: Duration,
+    registry: Arc<AdapterRegistry>,
+    shutdown: CancellationToken,
+    mut ready_rx: Option<mpsc::UnboundedReceiver<()>>,
+) {
     tracing::info!(
         "🌥️  Starting cloud config polling (interval: {:?})",
         poll_interval
     );
+
+    // Create channel for immediate poll triggers
+    let (trigger_tx, mut trigger_rx) = mpsc::unbounded_channel();
+    globals::set_cloud_poll_trigger(trigger_tx);
+
+    // Wait for ready signal if provided (used during startup)
+    if let Some(ref mut rx) = ready_rx {
+        tokio::select! {
+            _ = shutdown.cancelled() => {
+                tracing::info!("Cloud config polling stopped before ready");
+                return;
+            }
+            _ = rx.recv() => {
+                tracing::info!("Cloud polling ready signal received, starting polls");
+            }
+        }
+    }
 
     let mut consecutive_errors = 0u32;
     let max_backoff = Duration::from_secs(300); // 5 minutes
@@ -34,51 +107,58 @@ pub async fn start_cloud_polling(
             break;
         }
 
-        tokio::select! {
+        // Wait for either a trigger, timer, or shutdown
+        let _poll_reason = tokio::select! {
             _ = shutdown.cancelled() => {
                 tracing::info!("Cloud config polling stopped");
                 break;
             }
-            _ = sleep(poll_interval) => {
-                match poll_and_apply_changes(&client, &gateway_token, &registry).await {
-                    Ok(()) => {
-                        // Reset error counter on success
-                        if consecutive_errors > 0 {
-                            tracing::info!("Cloud polling recovered after {} errors", consecutive_errors);
-                            consecutive_errors = 0;
-                        }
-                    }
-                    Err(e) => {
-                        // Check if it's an authorization error or missing token
-                        if e.contains("401") || e.contains("403") || e.contains("Unauthorized") || e.contains("Forbidden") {
-                            tracing::error!("Authorization failed: {}. Stopping cloud polling.", e);
-                            break;
-                        }
+            // Immediate poll trigger
+            Some(_) = trigger_rx.recv() => {
+                tracing::info!("Immediate poll triggered");
+                "triggered"
+            }
+            _ = sleep(poll_interval) => "scheduled",
+        };
 
-                        // Check if machine token is missing (gateway not authorized)
-                        if e.contains("No machine token found") || e.contains("Failed to load machine token") {
-                            tracing::warn!("Machine token not found. Gateway needs to be authorized. Stopping cloud polling.");
-                            break;
-                        }
+        // Execute the poll (happens for both triggered and scheduled polls)
+        match poll_and_apply_changes(&client, &gateway_token, &registry).await {
+            Ok(()) => {
+                // Reset error counter on success
+                if consecutive_errors > 0 {
+                    tracing::info!("Cloud polling recovered after {} errors", consecutive_errors);
+                    consecutive_errors = 0;
+                }
+            }
+            Err(e) => {
+                // Check if it's an authorization error or missing token
+                if e.contains("401") || e.contains("403") || e.contains("Unauthorized") || e.contains("Forbidden") {
+                    tracing::error!("Authorization failed: {}. Stopping cloud polling.", e);
+                    break;
+                }
 
-                        consecutive_errors += 1;
-                        tracing::error!(
-                            "Cloud polling error (attempt {}): {}",
-                            consecutive_errors,
-                            e
-                        );
+                // Check if machine token is missing (gateway not authorized)
+                if e.contains("No machine token found") || e.contains("Failed to load machine token") {
+                    tracing::warn!("Machine token not found. Gateway needs to be authorized. Stopping cloud polling.");
+                    break;
+                }
 
-                        // Exponential backoff on consecutive errors
-                        if consecutive_errors > 1 {
-                            let backoff = Duration::from_secs(2u64.pow(consecutive_errors.min(8)));
-                            let backoff = backoff.min(max_backoff);
-                            tracing::warn!("Backing off for {:?} before next poll", backoff);
+                consecutive_errors += 1;
+                tracing::error!(
+                    "Cloud polling error (attempt {}): {}",
+                    consecutive_errors,
+                    e
+                );
 
-                            tokio::select! {
-                                _ = shutdown.cancelled() => break,
-                                _ = sleep(backoff) => {}
-                            }
-                        }
+                // Exponential backoff on consecutive errors
+                if consecutive_errors > 1 {
+                    let backoff = Duration::from_secs(2u64.pow(consecutive_errors.min(8)));
+                    let backoff = backoff.min(max_backoff);
+                    tracing::warn!("Backing off for {:?} before next poll", backoff);
+
+                    tokio::select! {
+                        _ = shutdown.cancelled() => break,
+                        _ = sleep(backoff) => {}
                     }
                 }
             }
