@@ -111,7 +111,8 @@ impl PipelineExecutor {
     /// 2. Overlaying any target configuration from the backend (base_url, base_path, etc.)
     ///
     /// This ensures middleware always has complete target info to work with.
-    async fn resolve_target_details(
+    #[cfg_attr(test, allow(dead_code))]
+    pub(crate) async fn resolve_target_details(
         mut envelope: RequestEnvelope<Vec<u8>>,
         pipeline: &Pipeline,
         config: &Config,
@@ -166,9 +167,13 @@ impl PipelineExecutor {
             .and_then(|opts| opts.get("base_url"))
             .and_then(|v| v.as_str())
         {
-            // Fallback to base_url in options (legacy configuration)
+        // Fallback to base_url in options (legacy configuration)
             target.base_url = base_url.to_string();
         }
+
+        // Note: path_prefix is a service-specific option and should be handled
+        // by individual service implementations in their backend_outgoing_request() method,
+        // not here in the executor. Each service knows best how to apply its own path prefix.
 
         // Add reliability settings to metadata
         if let Some(timeout) = backend.timeout_secs {

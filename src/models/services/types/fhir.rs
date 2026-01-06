@@ -16,33 +16,11 @@ pub struct FhirEndpoint {}
 
 #[async_trait]
 impl ServiceType for FhirEndpoint {
-    fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
-        // Check connection.base_path first
-        let has_connection_path = options
-            .get("connection")
-            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok())
-            .and_then(|c| c.base_path)
-            .is_some_and(|s| !s.trim().is_empty());
-
-        if has_connection_path {
-            return Ok(());
-        }
-
-        // Ensure 'path_prefix' exists and is valid
-        let path_prefix = options
-            .get("path_prefix")
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
-
-        if path_prefix.trim().is_empty() {
-            return Err(ConfigError::InvalidEndpoint {
-                name: "fhir".to_string(),
-                reason: "FHIR endpoint requires a non-empty 'path_prefix' or 'connection.base_path'"
-                    .to_string(),
-            });
-        }
-
-        // Optionally validate other fields from `options` as needed
+    fn validate(&self, _options: &HashMap<String, Value>) -> Result<(), ConfigError> {
+        // All path configuration options are optional per the DSL schema:
+        // - options.path_prefix (optional)
+        // - connection.base_path (optional)
+        // If none are provided, the service will default to "/fhir" in build_router()
         Ok(())
     }
 
@@ -130,7 +108,7 @@ impl ServiceHandler<Value> for FhirEndpoint {
 
         // Use target_details from executor (already populated from request_details + backend config)
         // Fill in base_url if not already set by executor
-        let target_details = if let Some(mut target) = envelope.target_details.take() {
+        let mut target_details = if let Some(mut target) = envelope.target_details.take() {
             if target.base_url.is_empty() {
                 target.base_url = base_url.to_string();
             }
@@ -154,6 +132,25 @@ impl ServiceHandler<Value> for FhirEndpoint {
                 .or_insert_with(|| "application/fhir+json".to_string());
             target
         };
+
+        // Apply path_prefix from backend options if present
+        // This prepends a path to the request URI (e.g., "/fhir" + "/Patient" = "/fhir/Patient")
+        if let Some(path_prefix) = options
+            .get("path_prefix")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
+            let prefix = path_prefix.trim_end_matches('/');
+            let uri = if target_details.uri.starts_with('/') {
+                &target_details.uri
+            } else {
+                // Ensure uri has leading slash
+                target_details.uri = format!("/{}", target_details.uri);
+                &target_details.uri
+            };
+            target_details.uri = format!("{}{}", prefix, uri);
+            tracing::debug!("FHIR backend applied path_prefix '{}' to URI: {}", prefix, target_details.uri);
+        }
 
         tracing::debug!(
             "FHIR backend targeting: {} {}",
@@ -506,9 +503,11 @@ mod tests {
 
     #[test]
     fn test_validate_missing_both() {
+        // path_prefix and connection.base_path are OPTIONAL per DSL schema
+        // Services should default to a reasonable path if not provided
         let endpoint = FhirEndpoint {};
         let options = HashMap::new();
-        assert!(endpoint.validate(&options).is_err());
+        assert!(endpoint.validate(&options).is_ok());
     }
 
     #[test]

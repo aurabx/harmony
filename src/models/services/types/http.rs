@@ -15,30 +15,12 @@ pub struct HttpEndpoint {}
 
 #[async_trait]
 impl ServiceType for HttpEndpoint {
-    fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
-        // Check connection.base_path first
-        let has_connection_path = options
-            .get("connection")
-            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok())
-            .and_then(|c| c.base_path)
-            .is_some_and(|s| !s.trim().is_empty());
-
-        if has_connection_path {
-            return Ok(());
-        }
-
-        // Ensure 'path_prefix' exists and is not empty
-        if options
-            .get("path_prefix")
-            .and_then(|v| v.as_str())
-            .is_none_or(|s| s.trim().is_empty())
-        {
-            return Err(ConfigError::InvalidEndpoint {
-                name: "basic".to_string(),
-                reason: "Basic endpoint requires a non-empty 'path_prefix' or 'connection.base_path'"
-                    .to_string(),
-            });
-        }
+    fn validate(&self, _options: &HashMap<String, Value>) -> Result<(), ConfigError> {
+        // All path configuration options are optional per the DSL schema:
+        // - options.path_prefix (optional)
+        // - options.base_url (optional, for backends)
+        // - connection.base_path (optional)
+        // If none are provided, the service will default to "/" in build_router()
         Ok(())
     }
 
@@ -366,7 +348,7 @@ impl ServiceHandler<Value> for HttpEndpoint {
 
         // Use target_details from executor (already populated from request_details + backend config)
         // Fill in base_url if not already set by executor
-        let target_details = if let Some(mut target) = envelope.target_details.take() {
+        let mut target_details = if let Some(mut target) = envelope.target_details.take() {
             if target.base_url.is_empty() {
                 target.base_url = base_url.to_string();
             }
@@ -381,6 +363,25 @@ impl ServiceHandler<Value> for HttpEndpoint {
             target.uri = path;
             target
         };
+
+        // Apply path_prefix from backend options if present
+        // This prepends a path to the request URI (e.g., "/api" + "/users" = "/api/users")
+        if let Some(path_prefix) = options
+            .get("path_prefix")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
+            let prefix = path_prefix.trim_end_matches('/');
+            let uri = if target_details.uri.starts_with('/') {
+                &target_details.uri
+            } else {
+                // Ensure uri has leading slash
+                target_details.uri = format!("/{}", target_details.uri);
+                &target_details.uri
+            };
+            target_details.uri = format!("{}{}", prefix, uri);
+            tracing::debug!("HTTP backend applied path_prefix '{}' to URI: {}", prefix, target_details.uri);
+        }
 
         tracing::debug!(
             "HTTP backend targeting: {} {}",
