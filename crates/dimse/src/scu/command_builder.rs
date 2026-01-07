@@ -11,7 +11,7 @@ use tokio::net::TcpStream;
 
 use crate::common::{
     build_request, build_response, create_command_pdata, create_data_pdata, encode_command,
-    encode_dataset, query_utils,
+    query_utils,
 };
 use crate::types::QueryLevel;
 use crate::{DimseError, Result};
@@ -32,6 +32,9 @@ pub fn build_command_request(
 }
 
 /// Encode and send a command request with optional dataset
+/// 
+/// This function properly fragments large datasets according to the negotiated
+/// maximum PDU size.
 pub async fn encode_and_send_request(
     association: &mut ClientAssociation<TcpStream>,
     request: InMemDicomObject<StandardDataDictionary>,
@@ -40,9 +43,9 @@ pub async fn encode_and_send_request(
 ) -> Result<()> {
     let command_bytes = encode_command(&request)?;
 
+    // Commands are typically small, send in one PDU
     let command_pdata = create_command_pdata(presentation_context_id, command_bytes, true);
 
-    // Send command PDU
     association
         .send(&Pdu::PData {
             data: vec![command_pdata],
@@ -50,17 +53,50 @@ pub async fn encode_and_send_request(
         .await
         .map_err(|e| DimseError::network(format!("Failed to send command request: {}", e)))?;
 
-    // If we have a dataset, send it as well
+    // If we have a dataset, encode and send it (possibly fragmented)
     if let Some(ds) = dataset {
-        let dataset_bytes = encode_dataset(ds)?;
-        let data_pdata = create_data_pdata(presentation_context_id, dataset_bytes, true);
+        // Encode dataset with the negotiated transfer syntax
+        let ts_uid = association
+            .presentation_contexts()
+            .iter()
+            .find(|pc| pc.id == presentation_context_id)
+            .map(|pc| pc.transfer_syntax.as_str())
+            .ok_or_else(|| DimseError::operation_failed("Presentation context not found"))?;
+        
+        let ts = TransferSyntaxRegistry
+            .get(ts_uid)
+            .ok_or_else(|| DimseError::operation_failed(format!("Transfer syntax not found: {}", ts_uid)))?;
+        
+        let mut dataset_bytes = Vec::new();
+        ds.write_dataset_with_ts(&mut dataset_bytes, ts)
+            .map_err(|e| DimseError::operation_failed(format!("Failed to encode dataset: {}", e)))?;
 
-        association
-            .send(&Pdu::PData {
-                data: vec![data_pdata],
-            })
-            .await
-            .map_err(|e| DimseError::network(format!("Failed to send dataset: {}", e)))?;
+        // Fragment dataset if larger than max PDU size
+        // The max PDU size includes headers, so use a conservative data size
+        // PDU header (6 bytes) + P-DATA-TF item header (4 bytes) + PDV header (6 bytes) = 16 bytes overhead
+        const PDU_OVERHEAD: usize = 16;
+        let max_pdu = association.acceptor_max_pdu_length() as usize;
+        let max_data_per_pdu = if max_pdu > PDU_OVERHEAD {
+            max_pdu - PDU_OVERHEAD
+        } else {
+            // Fallback to small chunks if max_pdu is too small
+            4096
+        };
+
+        let chunks: Vec<&[u8]> = dataset_bytes.chunks(max_data_per_pdu).collect();
+        let num_chunks = chunks.len();
+
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            let is_last = i == num_chunks - 1;
+            let data_pdata = create_data_pdata(presentation_context_id, chunk.to_vec(), is_last);
+
+            association
+                .send(&Pdu::PData {
+                    data: vec![data_pdata],
+                })
+                .await
+                .map_err(|e| DimseError::network(format!("Failed to send dataset fragment {}/{}: {}", i + 1, num_chunks, e)))?;
+        }
     }
 
     Ok(())
