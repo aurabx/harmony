@@ -45,6 +45,11 @@ echo "📦 Installing ${BINARY_NAME} to ${INSTALL_DIR}..."
 cp "${BINARY_PATH}" "${INSTALL_DIR}/${BINARY_NAME}"
 chmod +x "${INSTALL_DIR}/${BINARY_NAME}"
 
+# On macOS, remove extended attributes that trigger Gatekeeper
+if [[ "$(uname)" == "Darwin" ]]; then
+  xattr -c "${INSTALL_DIR}/${BINARY_NAME}" 2>/dev/null || true
+fi
+
 # Verify installation
 INSTALLED_PATH="$(which ${BINARY_NAME} 2>/dev/null || echo '')"
 if [[ -z "${INSTALLED_PATH}" ]]; then
