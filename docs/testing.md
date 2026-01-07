@@ -15,6 +15,26 @@ Commands
 - Focused test: cargo test <name>
 - With logging: RUST_LOG=harmony=debug cargo test -- --nocapture
 
+## Installing Development Build to PATH
+
+For testing the built binary in your PATH (useful for integration testing and manual verification):
+
+```bash
+# Build and install to ~/.local/bin (release mode)
+./install-dev.sh
+
+# Build and install with profiling symbols
+./install-dev.sh --profile profiling
+```
+
+The script:
+- Builds harmony using the specified profile (default: release)
+- Installs the binary to `~/.local/bin/harmony`
+- Verifies the installation and warns if PATH issues are detected
+- Makes the binary executable
+
+This replaces any existing harmony binary in your PATH, allowing you to test the current development version system-wide.
+
 Environment variables (tests)
 - HARMONY_TEST_VERBOSE_DCMTK=1: Enable verbose DCMTK logs in DIMSE-related integration tests (show child stdout/stderr and add `-d` to dcmqrscp). Default is quiet.
 - HARMONY_TEST_DEBUG=1: Enable additional debug behavior in some tests (e.g., attach movescu args/stdout/stderr to responses).

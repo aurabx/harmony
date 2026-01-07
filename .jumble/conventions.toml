@@ -27,6 +27,11 @@ All behavior should be configurable via harmony.toml. Avoid hardcoded values. If
 a new feature, add corresponding configuration options with sensible defaults. Use the 
 existing config module patterns for validation."""
 
+dev_testing = """
+Use ./install-dev.sh to build and install the current development version to your PATH 
+(~/.local/bin). This is essential for integration testing and manual verification of the 
+full binary behavior. Use --profile profiling for builds with debug symbols."""
+
 [gotchas]
 middleware_order = """
 Middleware executes in the order listed in harmony.toml. Put authentication BEFORE 

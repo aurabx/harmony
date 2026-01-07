@@ -9,6 +9,7 @@ build = "cargo build --release"
 test = "cargo test"
 lint = "cargo clippy && cargo fmt --check"
 run = "cargo run"
+install-dev = "./install-dev.sh"
 
 [entry_points]
 main = "src/main.rs"
