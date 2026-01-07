@@ -322,21 +322,27 @@ async fn test_update_endpoint_with_missing_proxy_id() {
 
 #[tokio::test]
 async fn test_update_response_structure() {
-    use harmony::models::services::types::management::update::UpdateResponse;
+    use harmony::management::update::UpdateResponse;
 
     // Test UpdateResponse serialization
     let response = UpdateResponse {
         success: true,
         message: "Configuration uploaded successfully".to_string(),
         config_size: 2048,
+        pipeline_count: 3,
+        transform_count: 2,
+        mesh_count: 1,
     };
 
     let json = serde_json::to_value(&response).unwrap();
     assert_eq!(json["success"], true);
     assert_eq!(json["message"], "Configuration uploaded successfully");
     assert_eq!(json["config_size"], 2048);
+    assert_eq!(json["pipeline_count"], 3);
+    assert_eq!(json["transform_count"], 2);
+    assert_eq!(json["mesh_count"], 1);
 
-    // Test deserialization
+    // Test deserialization (with defaults for optional fields)
     let json_str = r#"{
         "success": true,
         "message": "Configuration uploaded successfully",
@@ -347,6 +353,10 @@ async fn test_update_response_structure() {
     assert_eq!(parsed.success, true);
     assert_eq!(parsed.message, "Configuration uploaded successfully");
     assert_eq!(parsed.config_size, 1234);
+    // These should default to 0 when not present
+    assert_eq!(parsed.pipeline_count, 0);
+    assert_eq!(parsed.transform_count, 0);
+    assert_eq!(parsed.mesh_count, 0);
 }
 
 #[tokio::test]

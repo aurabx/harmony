@@ -1,19 +1,23 @@
 pub mod adapters;
+pub mod clients;
 pub mod config;
 mod file;
 pub mod globals;
+pub mod integrations;
 pub mod models;
 pub mod pipeline;
 pub mod router;
 pub mod storage;
 pub mod storage_adapter;
 mod utils;
+pub mod management;
 
 use crate::adapters::registry::AdapterRegistry;
 use crate::config::config::Config;
 use crate::config::watcher::ConfigWatcher;
+use crate::integrations::provider_resolver::ProviderResolver;
 use crate::storage::create_storage_backend;
-use runbeam_sdk::load_token;
+use runbeam_sdk::{load_token, save_token};
 use std::path::Path;
 use std::sync::Arc;
 use tracing_subscriber::{self, prelude::*};
@@ -23,6 +27,17 @@ pub async fn run(config: Config) {
 }
 
 pub async fn run_with_reload(config: Config, config_path: Option<String>) {
+    // Install the rustls crypto provider. This is required because multiple crypto
+    // providers (ring, aws-lc-rs) are present in the dependency tree via different
+    // crates, so rustls cannot auto-select one. We use aws-lc-rs as it's already
+    // a transitive dependency and avoids pulling in BoringSSL via ring.
+    let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Initialize provider resolver from config providers
+    // MeshRegistry will use this to resolve remote references when building
+    let resolver = Arc::new(ProviderResolver::new(config.provider.clone()));
+    crate::globals::set_provider_resolver(resolver);
+
     let config = Arc::new(config);
     crate::globals::set_config(config.clone());
 
@@ -59,7 +74,7 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
             .try_init();
     }
 
-    tracing::info!("🔧 Starting Harmony '{}'", config.proxy.id);
+    tracing::info!("🔧 Starting Harmony '{}'", config.proxy.effective_id());
 
     // Create adapter registry
     let registry = Arc::new(AdapterRegistry::new());
@@ -107,10 +122,10 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
         });
     }
 
-    // Check for Runbeam Cloud integration configuration
-    if config.runbeam.enabled {
+    // Check for cloud integration via primary provider
+    if config.is_cloud_enabled() {
         // Get proxy ID for instance isolation
-        let proxy_id = config.proxy.id.clone();
+        let proxy_id = config.proxy.effective_id().to_string();
 
         // Check for machine token from environment variable first (for headless/pre-provisioned deployments)
         let token_from_env = std::env::var("RUNBEAM_MACHINE_TOKEN").ok().and_then(|token_str| {
@@ -128,8 +143,12 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
         });
 
         // Try environment variable first, then fall back to secure storage
-        let token_result = if let Some(token) = token_from_env {
-            Ok(Some(token))
+        let token_result = if let Some(ref token) = token_from_env {
+            // Save env token to storage so management API handlers can access it
+            if let Err(e) = save_token(&proxy_id, "auth", token).await {
+                tracing::warn!("Failed to save env token to storage: {}", e);
+            }
+            Ok(Some(token.clone()))
         } else {
             // Try to load existing machine token from secure storage (SDK manages keyring/encrypted filesystem)
             load_token(&proxy_id, "auth").await
@@ -137,9 +156,10 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
 
         match token_result {
             Ok(Some(token)) if token.is_valid() => {
-                // Valid token found - start cloud polling
-                let poll_interval = config.runbeam.poll_interval();
-                let base_url = config.runbeam.effective_cloud_api_base_url();
+                // Valid token found - start cloud polling using primary provider settings
+                let poll_interval = config.primary_poll_interval()
+                    .unwrap_or_else(|| std::time::Duration::from_secs(30));
+                let base_url = config.primary_api_base_url();
 
                 tracing::info!(
                     "🌥️  Found valid stored token (gateway: {}), starting cloud polling",
@@ -152,6 +172,11 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
                 let initial_client = runbeam_sdk::RunbeamClient::new(base_url);
                 let registry_clone = registry.clone();
                 let machine_token = token.machine_token.clone();
+
+                // Check if push-on-startup is enabled (default: off)
+                let push_config_on_startup = std::env::var("RUNBEAM_PUSH_CONFIG_ON_STARTUP")
+                    .map(|v| v.eq_ignore_ascii_case("true") || v == "1")
+                    .unwrap_or(false);
 
                 tokio::spawn(async move {
                     // Discover actual API base URL before starting poller
@@ -166,14 +191,44 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
                         }
                     };
 
-                    crate::models::services::types::management::cloud_poller::start_cloud_polling(
-                        client,
-                        machine_token,
-                        poll_interval,
-                        registry_clone,
-                        cloud_shutdown,
-                    )
-                    .await;
+                    // Check if push-on-startup is enabled (default: off)
+                    if push_config_on_startup {
+                        // Start polling with ready signal to prevent race conditions
+                        let ready_signal = management::cloud_poller::start_cloud_polling_when_ready(
+                            client.clone(),
+                            machine_token.clone(),
+                            poll_interval,
+                            registry_clone.clone(),
+                            cloud_shutdown.clone(),
+                        ).await;
+
+                        // Push config while polling is waiting
+                        // Note: After push completes, Runbeam Cloud should create Change records for the
+                        // pushed configs, which will then be picked up by the normal polling loop.
+                        // This ensures the gateway gets cloud-assigned IDs and stays in sync.
+                        if let Err(e) = management::cloud_poller::push_config_on_startup(
+                            &client,
+                            &machine_token,
+                        ).await {
+                            tracing::warn!("Push config on startup failed: {}. Continuing with polling.", e);
+                        }
+
+                        // Signal polling to start and trigger immediate poll
+                        let _ = ready_signal.send(());
+                        if crate::globals::trigger_cloud_poll() {
+                            tracing::info!("Triggered immediate cloud poll after startup config push");
+                        }
+                    } else {
+                        // Start polling immediately if no startup push
+                        management::cloud_poller::start_cloud_polling(
+                            client,
+                            machine_token,
+                            poll_interval,
+                            registry_clone,
+                            cloud_shutdown,
+                        )
+                        .await;
+                    }
                 });
             }
             Ok(Some(token)) => {
@@ -194,7 +249,10 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
             }
         }
     } else {
-        tracing::info!("Runbeam Cloud integration is disabled (runbeam.enabled = false)");
+        tracing::info!(
+            "Cloud integration is disabled (primary_provider: {}, not enabled or no API configured)",
+            config.proxy.primary_provider
+        );
     }
 
     // Wait for ctrl-c signal

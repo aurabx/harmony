@@ -316,7 +316,7 @@ mod tests {
     #[ignore] // Broken: test input does not match spec structure - needs fixing
     fn test_parse_real_fhir_to_dicom_params_spec() {
         let spec_path = format!(
-            "{}/../../examples/fhir_dicom/transforms/fhir_to_dicom_params.json",
+            "{}/../../../harmony-examples/pipelines/fhir_dicom/transforms/fhir_to_dicom_params.json",
             env!("CARGO_MANIFEST_DIR")
         );
         let engine = JoltTransformEngine::from_spec_path(&spec_path)
@@ -337,7 +337,7 @@ mod tests {
     #[test]
     fn test_parse_real_dicom_to_imagingstudy_spec() {
         let spec_path = format!(
-            "{}/../../examples/fhir_dicom/transforms/dicom_to_imagingstudy_simple.json",
+            "{}/../../../harmony-examples/pipelines/fhir_dicom/transforms/dicom_to_imagingstudy_simple.json",
             env!("CARGO_MANIFEST_DIR")
         );
         let engine = JoltTransformEngine::from_spec_path(&spec_path)

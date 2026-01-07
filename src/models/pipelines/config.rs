@@ -1,5 +1,7 @@
-use serde::{Deserialize, Serialize};
+use crate::models::mesh::config::{MeshEgress, MeshIngress};
 use serde::de::{self, Deserializer};
+use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 
 /// Middleware configuration for a pipeline.
 /// Can be either a simple list (both left and right use same list)
@@ -140,6 +142,51 @@ impl<'de> Deserialize<'de> for PipelineMiddleware {
     }
 }
 
+/// Nested mesh definitions within a pipeline
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq, Default)]
+pub struct PipelineMesh {
+    #[serde(default)]
+    pub ingress: HashMap<String, PipelineIngress>,
+    #[serde(default)]
+    pub egress: HashMap<String, PipelineEgress>,
+}
+
+/// Ingress definition nested under a pipeline (omits pipeline field since it's implicit)
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct PipelineIngress {
+    #[serde(rename = "type")]
+    pub ingress_type: crate::models::mesh::config::MeshProtocol,
+    #[serde(default)]
+    pub mode: crate::models::mesh::config::IngressEgressMode,
+    #[serde(default)]
+    pub endpoint: Option<String>,
+    #[serde(default)]
+    pub urls: Vec<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+/// Egress definition nested under a pipeline (omits pipeline field since it's implicit)
+#[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
+pub struct PipelineEgress {
+    #[serde(rename = "type")]
+    pub egress_type: crate::models::mesh::config::MeshProtocol,
+    #[serde(default)]
+    pub mode: crate::models::mesh::config::IngressEgressMode,
+    #[serde(default)]
+    pub backend: Option<String>,
+    #[serde(default)]
+    pub description: Option<String>,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
 #[derive(Debug, Deserialize, Serialize, Clone, PartialEq)]
 #[serde(default)]
 pub struct Pipeline {
@@ -153,6 +200,8 @@ pub struct Pipeline {
     pub backends: Vec<String>, // Backends linked to the pipeline
     #[serde(default)]
     pub middleware: PipelineMiddleware, // Middleware configuration (list or split)
+    #[serde(default)]
+    pub mesh: PipelineMesh, // Nested mesh ingress/egress definitions
 }
 
 impl Default for Pipeline {
@@ -163,7 +212,55 @@ impl Default for Pipeline {
             endpoints: Vec::new(),
             backends: Vec::new(),
             middleware: PipelineMiddleware::default(),
+            mesh: PipelineMesh::default(),
         }
+    }
+}
+
+impl Pipeline {
+    /// Extract nested ingress definitions to top-level MeshIngress structs
+    pub fn extract_ingress(&self, pipeline_name: &str) -> HashMap<String, MeshIngress> {
+        self.mesh
+            .ingress
+            .iter()
+            .map(|(name, pi)| {
+                (
+                    name.clone(),
+                    MeshIngress {
+                        id: None,
+                        pipeline: pipeline_name.to_string(),
+                        ingress_type: pi.ingress_type.clone(),
+                        mode: pi.mode.clone(),
+                        endpoint: pi.endpoint.clone(),
+                        urls: pi.urls.clone(),
+                        description: pi.description.clone(),
+                        enabled: pi.enabled,
+                    },
+                )
+            })
+            .collect()
+    }
+
+    /// Extract nested egress definitions to top-level MeshEgress structs
+    pub fn extract_egress(&self, pipeline_name: &str) -> HashMap<String, MeshEgress> {
+        self.mesh
+            .egress
+            .iter()
+            .map(|(name, pe)| {
+                (
+                    name.clone(),
+                    MeshEgress {
+                        id: None,
+                        pipeline: pipeline_name.to_string(),
+                        egress_type: pe.egress_type.clone(),
+                        mode: pe.mode.clone(),
+                        backend: pe.backend.clone(),
+                        description: pe.description.clone(),
+                        enabled: pe.enabled,
+                    },
+                )
+            })
+            .collect()
     }
 }
 

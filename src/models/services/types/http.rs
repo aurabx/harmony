@@ -15,30 +15,12 @@ pub struct HttpEndpoint {}
 
 #[async_trait]
 impl ServiceType for HttpEndpoint {
-    fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
-        // Check connection.base_path first
-        let has_connection_path = options
-            .get("connection")
-            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok())
-            .and_then(|c| c.base_path)
-            .is_some_and(|s| !s.trim().is_empty());
-
-        if has_connection_path {
-            return Ok(());
-        }
-
-        // Ensure 'path_prefix' exists and is not empty
-        if options
-            .get("path_prefix")
-            .and_then(|v| v.as_str())
-            .is_none_or(|s| s.trim().is_empty())
-        {
-            return Err(ConfigError::InvalidEndpoint {
-                name: "basic".to_string(),
-                reason: "Basic endpoint requires a non-empty 'path_prefix' or 'connection.base_path'"
-                    .to_string(),
-            });
-        }
+    fn validate(&self, _options: &HashMap<String, Value>) -> Result<(), ConfigError> {
+        // All path configuration options are optional per the DSL schema:
+        // - options.path_prefix (optional)
+        // - options.base_url (optional, for backends)
+        // - connection.base_path (optional)
+        // If none are provided, the service will default to "/" in build_router()
         Ok(())
     }
 
@@ -342,26 +324,14 @@ impl ServiceHandler<Value> for HttpEndpoint {
     ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
         use crate::models::envelope::envelope::TargetDetails;
 
+        // Parse connection config if available
+        let connection_config = options
+            .get("connection")
+            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok());
+
         // Extract base_url from backend options or connection config
-        let base_url = if let Some(conn_json) = options.get("connection") {
-            if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
-                let protocol = conn.protocol.unwrap_or_else(|| "http".to_string());
-                let host = conn.host;
-                let port = conn.port.map(|p| format!(":{}", p)).unwrap_or_default();
-                let path = conn.base_path.unwrap_or_default();
-                let path = if !path.is_empty() && !path.starts_with('/') {
-                    format!("/{}", path)
-                } else {
-                    path
-                };
-                format!("{}://{}{}{}", protocol, host, port, path)
-            } else {
-                options
-                    .get("base_url")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-                    .unwrap_or_default()
-            }
+        let base_url = if let Some(ref conn) = connection_config {
+            conn.to_base_url()
         } else {
             options
                 .get("base_url")
@@ -378,7 +348,7 @@ impl ServiceHandler<Value> for HttpEndpoint {
 
         // Use target_details from executor (already populated from request_details + backend config)
         // Fill in base_url if not already set by executor
-        let target_details = if let Some(mut target) = envelope.target_details.take() {
+        let mut target_details = if let Some(mut target) = envelope.target_details.take() {
             if target.base_url.is_empty() {
                 target.base_url = base_url.to_string();
             }
@@ -394,6 +364,25 @@ impl ServiceHandler<Value> for HttpEndpoint {
             target
         };
 
+        // Apply path_prefix from backend options if present
+        // This prepends a path to the request URI (e.g., "/api" + "/users" = "/api/users")
+        if let Some(path_prefix) = options
+            .get("path_prefix")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.trim().is_empty())
+        {
+            let prefix = path_prefix.trim_end_matches('/');
+            let uri = if target_details.uri.starts_with('/') {
+                &target_details.uri
+            } else {
+                // Ensure uri has leading slash
+                target_details.uri = format!("/{}", target_details.uri);
+                &target_details.uri
+            };
+            target_details.uri = format!("{}{}", prefix, uri);
+            tracing::debug!("HTTP backend applied path_prefix '{}' to URI: {}", prefix, target_details.uri);
+        }
+
         tracing::debug!(
             "HTTP backend targeting: {} {}",
             target_details.method,
@@ -405,83 +394,18 @@ impl ServiceHandler<Value> for HttpEndpoint {
         // Store target_details in envelope for future use (Targets model, etc.)
         envelope.target_details = Some(target_details.clone());
 
-        // Make the actual HTTP request
-        let client = reqwest::Client::builder()
-            .timeout(std::time::Duration::from_secs(30))
-            .build()
-            .map_err(|e| Error::from(format!("Failed to create HTTP client: {}", e)))?;
+        // Check if HTTP/3 (QUIC) is requested
+        let use_http3 = connection_config
+            .as_ref()
+            .is_some_and(|c| c.is_http3());
 
-        let full_url = target_details.full_url()?;
-
-        // Build the request
-        let mut request_builder = match target_details.method.as_str() {
-            "GET" => client.get(&full_url),
-            "POST" => client.post(&full_url),
-            "PUT" => client.put(&full_url),
-            "DELETE" => client.delete(&full_url),
-            "PATCH" => client.patch(&full_url),
-            "HEAD" => client.head(&full_url),
-            method => {
-                return Err(Error::from(format!("Unsupported HTTP method: {}", method)));
-            }
+        let (status, response_headers, body_bytes) = if use_http3 {
+            self.make_http3_request(&connection_config.unwrap(), &target_details, &envelope, options)
+                .await?
+        } else {
+            self.make_http_request(&target_details, &envelope, options)
+                .await?
         };
-
-        // Apply authentication if present in backend options
-        request_builder =
-            crate::models::services::backend_auth::apply_backend_authentication(
-                request_builder,
-                options,
-                "HTTP",
-            );
-
-        // Add headers from target_details, but drop hop-by-hop and Host headers
-        for (key, value) in &target_details.headers {
-            let k = key.to_ascii_lowercase();
-            if matches!(
-                k.as_str(),
-                "host"
-                    | "connection"
-                    | "keep-alive"
-                    | "proxy-connection"
-                    | "transfer-encoding"
-                    | "upgrade"
-                    | "content-length"
-            ) {
-                continue; // let reqwest set correct values from URL/body
-            }
-            request_builder = request_builder.header(key, value);
-        }
-
-        // Add request body if present
-        if !envelope.original_data.is_empty() {
-            request_builder = request_builder.body(envelope.original_data.clone());
-        }
-
-        tracing::debug!("Sending HTTP request to: {}", full_url);
-
-        // Execute the request
-        let response = request_builder
-            .send()
-            .await
-            .map_err(|e| Error::from(format!("HTTP request failed: {}", e)))?;
-
-        let status = response.status().as_u16();
-        tracing::debug!("HTTP backend response status: {}", status);
-
-        // Extract response headers
-        let mut response_headers = HashMap::new();
-        for (key, value) in response.headers() {
-            if let Ok(value_str) = value.to_str() {
-                response_headers.insert(key.to_string(), value_str.to_string());
-            }
-        }
-
-        // Get response body
-        let body_bytes = response
-            .bytes()
-            .await
-            .map_err(|e| Error::from(format!("Failed to read response body: {}", e)))?
-            .to_vec();
 
         tracing::debug!(
             "HTTP backend response body size: {} bytes",
@@ -580,5 +504,188 @@ impl ServiceHandler<Value> for HttpEndpoint {
         builder
             .body(body)
             .map_err(|_| Error::from("Failed to construct HTTP response"))
+    }
+}
+
+/// HTTP/1.1/2 and HTTP/3 request helpers for HttpEndpoint
+impl HttpEndpoint {
+    /// Make an HTTP/1.1 or HTTP/2 request using reqwest
+    async fn make_http_request(
+        &self,
+        target_details: &crate::models::envelope::envelope::TargetDetails,
+        envelope: &RequestEnvelope<Vec<u8>>,
+        options: &HashMap<String, Value>,
+    ) -> Result<(u16, HashMap<String, String>, Vec<u8>), Error> {
+        let client = reqwest::Client::builder()
+            .timeout(std::time::Duration::from_secs(30))
+            .build()
+            .map_err(|e| Error::from(format!("Failed to create HTTP client: {}", e)))?;
+
+        let full_url = target_details.full_url()?;
+
+        // Build the request
+        let mut request_builder = match target_details.method.as_str() {
+            "GET" => client.get(&full_url),
+            "POST" => client.post(&full_url),
+            "PUT" => client.put(&full_url),
+            "DELETE" => client.delete(&full_url),
+            "PATCH" => client.patch(&full_url),
+            "HEAD" => client.head(&full_url),
+            method => {
+                return Err(Error::from(format!("Unsupported HTTP method: {}", method)));
+            }
+        };
+
+        // Apply authentication if present in backend options
+        request_builder = crate::models::services::backend_auth::apply_backend_authentication(
+            request_builder,
+            options,
+            "HTTP",
+        );
+
+        // Add headers from target_details, but drop hop-by-hop and Host headers
+        for (key, value) in &target_details.headers {
+            let k = key.to_ascii_lowercase();
+            if matches!(
+                k.as_str(),
+                "host"
+                    | "connection"
+                    | "keep-alive"
+                    | "proxy-connection"
+                    | "transfer-encoding"
+                    | "upgrade"
+                    | "content-length"
+            ) {
+                continue; // let reqwest set correct values from URL/body
+            }
+            request_builder = request_builder.header(key, value);
+        }
+
+        // Add request body if present
+        if !envelope.original_data.is_empty() {
+            request_builder = request_builder.body(envelope.original_data.clone());
+        }
+
+        tracing::debug!("Sending HTTP request to: {}", full_url);
+
+        // Execute the request
+        let response = request_builder
+            .send()
+            .await
+            .map_err(|e| Error::from(format!("HTTP request failed: {}", e)))?;
+
+        let status = response.status().as_u16();
+        tracing::debug!("HTTP backend response status: {}", status);
+
+        // Extract response headers
+        let mut response_headers = HashMap::new();
+        for (key, value) in response.headers() {
+            if let Ok(value_str) = value.to_str() {
+                response_headers.insert(key.to_string(), value_str.to_string());
+            }
+        }
+
+        // Get response body
+        let body_bytes = response
+            .bytes()
+            .await
+            .map_err(|e| Error::from(format!("Failed to read response body: {}", e)))?
+            .to_vec();
+
+        Ok((status, response_headers, body_bytes))
+    }
+
+    /// Make an HTTP/3 request using QUIC transport
+    async fn make_http3_request(
+        &self,
+        conn: &ConnectionConfig,
+        target_details: &crate::models::envelope::envelope::TargetDetails,
+        envelope: &RequestEnvelope<Vec<u8>>,
+        _options: &HashMap<String, Value>,
+    ) -> Result<(u16, HashMap<String, String>, Vec<u8>), Error> {
+        use crate::clients::http3::Http3Client;
+
+        // Create HTTP/3 client - with custom CA if provided
+        let client = if let Some(ref ca_path) = conn.ca_cert_path {
+            let ca_pem = std::fs::read_to_string(ca_path)
+                .map_err(|e| Error::from(format!("Failed to read CA cert at {}: {}", ca_path, e)))?;
+            Http3Client::with_ca_cert(&ca_pem)
+                .map_err(|e| Error::from(format!("Failed to create HTTP/3 client with CA: {}", e)))?
+        } else {
+            Http3Client::new()
+                .map_err(|e| Error::from(format!("Failed to create HTTP/3 client: {}", e)))?
+        };
+
+        let port = conn.port.unwrap_or(443);
+
+        // Parse method
+        let method = target_details
+            .method
+            .parse::<http::Method>()
+            .map_err(|_| Error::from(format!("Invalid HTTP method: {}", target_details.method)))?;
+
+        // Build path with query string from query_params
+        let path = if target_details.query_params.is_empty() {
+            target_details.uri.clone()
+        } else {
+            let query_string: String = target_details
+                .query_params
+                .iter()
+                .flat_map(|(key, values)| {
+                    values.iter().map(move |value| {
+                        format!(
+                            "{}={}",
+                            urlencoding::encode(key),
+                            urlencoding::encode(value)
+                        )
+                    })
+                })
+                .collect::<Vec<_>>()
+                .join("&");
+            format!("{}?{}", target_details.uri, query_string)
+        };
+
+        // Filter headers (drop hop-by-hop headers)
+        let mut headers = HashMap::new();
+        for (key, value) in &target_details.headers {
+            let k = key.to_ascii_lowercase();
+            if matches!(
+                k.as_str(),
+                "host"
+                    | "connection"
+                    | "keep-alive"
+                    | "proxy-connection"
+                    | "transfer-encoding"
+                    | "upgrade"
+                    | "content-length"
+            ) {
+                continue;
+            }
+            headers.insert(key.clone(), value.clone());
+        }
+
+        tracing::debug!(
+            "Sending HTTP/3 request to: {}:{}{}",
+            conn.host,
+            port,
+            path
+        );
+
+        let response = client
+            .request(
+                method,
+                &conn.host,
+                port,
+                &path,
+                &headers,
+                envelope.original_data.clone(),
+            )
+            .await
+            .map_err(|e| Error::from(format!("HTTP/3 request failed: {}", e)))?;
+
+        let status = response.status.as_u16();
+        tracing::debug!("HTTP/3 backend response status: {}", status);
+
+        Ok((status, response.headers, response.body))
     }
 }

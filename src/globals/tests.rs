@@ -118,4 +118,39 @@ mod tests {
         let retrieved = get_storage();
         assert!(retrieved.is_some());
     }
+
+    #[tokio::test]
+    #[serial]
+    async fn test_cloud_poll_trigger() {
+        use tokio::sync::mpsc;
+
+        // Create a channel for testing
+        let (tx, mut rx) = mpsc::unbounded_channel();
+        set_cloud_poll_trigger(tx);
+
+        // Trigger a poll
+        let result = trigger_cloud_poll();
+        assert!(result, "Should successfully trigger poll");
+
+        // Verify the message was received
+        let received = tokio::time::timeout(
+            tokio::time::Duration::from_millis(100),
+            rx.recv()
+        ).await;
+        assert!(received.is_ok(), "Should receive trigger message");
+        assert!(received.unwrap().is_some(), "Message should not be None");
+    }
+
+    #[test]
+    #[serial]
+    fn test_cloud_poll_trigger_without_sender() {
+        // Clear the trigger (simulate no polling active)
+        let mut cell = CLOUD_POLL_TRIGGER.write().unwrap();
+        *cell = None;
+        drop(cell);
+
+        // Try to trigger without a sender set
+        let result = trigger_cloud_poll();
+        assert!(!result, "Should return false when no polling is active");
+    }
 }

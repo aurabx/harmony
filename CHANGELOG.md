@@ -2,6 +2,28 @@
 
 ## [Unreleased]
 
+## [0.11.0] - 2025-12-23
+
+### Highlights
+- HTTP/3 (QUIC) support for both inbound listeners and outbound backends
+- New middleware for DICOM to DICOMweb protocol translation
+- Enhanced webhook middleware for event integration and audit logging
+- Improved middleware type validation
+
+### Added
+- HTTP/3 (QUIC) protocol support
+  - HTTP/3 inbound listeners with TLS configuration
+  - HTTP/3 backend connectivity for outbound requests
+  - Coexistence with HTTP/1.x and HTTP/2 on same network
+- DICOM to DICOMweb middleware for protocol translation
+  - Enables DICOM SCP endpoints to proxy to DICOMweb-compatible backends
+- Webhook middleware for event integration
+  - Integration with external event systems
+
+### Fixed
+- Fixed validation failures for `jwt_auth` middleware
+- Missing targets no longer cause crashes during configuration validation
+
 ## [0.10.1] - 2025-12-14
 
 ### Fixed

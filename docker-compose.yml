@@ -24,8 +24,16 @@ services:
       # Generate: age-keygen | base64 | tr -d '\n' (macOS) or base64 -w 0 (Linux)
       # - RUNBEAM_ENCRYPTION_KEY=${RUNBEAM_ENCRYPTION_KEY}
       
-      # JWT secret for Runbeam Cloud authentication
-      # Required for production use with Runbeam Cloud integration
-      # Must match the secret configured in Runbeam Cloud
-      # Generate: openssl rand -base64 32
-      # - RUNBEAM_JWT_SECRET=${RUNBEAM_JWT_SECRET}
+      # Machine token for pre-provisioned deployments
+      # JSON format: '{"machine_token":"mt_...","gateway_id":"...","expires_at":"..."}'
+      # Obtain via CLI: runbeam gateway register
+      # - RUNBEAM_MACHINE_TOKEN=${RUNBEAM_MACHINE_TOKEN}
+      
+      # Push local config to Runbeam Cloud on startup (default: false)
+      # Enable for GitOps/pre-provisioned deployments
+      # This will ALWAYS push config when the container starts, which is good for drift, but might
+      # overwrite config on runbeam.
+      # - RUNBEAM_PUSH_CONFIG_ON_STARTUP=true
+      
+      # Accept invalid SSL certificates (development only - DO NOT use in production)
+      # - RUNBEAM_ACCEPT_INVALID_CERTS=true

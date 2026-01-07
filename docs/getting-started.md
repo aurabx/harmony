@@ -6,7 +6,7 @@
 
 ## Architecture Overview
 
-Harmony uses a **protocol adapter architecture** where each protocol (HTTP, DIMSE, HL7, etc.) has a dedicated adapter that feeds into a unified pipeline. See [adapters.md](adapters.md) for details.
+Harmony uses a **protocol adapter architecture** where each protocol (HTTP, HTTP/3, DIMSE, HL7, etc.) has a dedicated adapter that feeds into a unified pipeline. See [adapters.md](adapters.md) for details.
 
 Prerequisites
 - Rust (stable; repository currently targets recent stable toolchains)

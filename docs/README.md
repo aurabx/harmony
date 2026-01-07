@@ -12,10 +12,14 @@ Welcome to Harmony Proxy's documentation. Harmony is a general-purpose data mesh
 ## Core Architecture & Concepts
 - **[system-description.md](system-description.md)** - High-level system overview and Runbeam architecture
 - **[router.md](router.md)** - Pipeline architecture and request flow (Protocol Adapter → PipelineExecutor → Protocol Adapter)
-- **[adapters.md](adapters.md)** - Protocol adapter guide (HTTP, DIMSE, how to implement new protocols)
+- **[adapters.md](adapters.md)** - Protocol adapter guide (HTTP, HTTP/3, DIMSE, how to implement new protocols)
 - **[envelope.md](envelope.md)** - Core Envelope struct for data exchange
 
 ## Configuration Reference
+- **[schema.md](schema.md)** - Configuration schemas (mesh, config, pipeline, remote-ingress)
+- **[mesh.md](mesh.md)** - Data mesh networking and ingress/egress definitions
+- **[providers.md](providers.md)** - Provider configuration for resource resolution and cloud polling
+- **[resource-references.md](resource-references.md)** - Reference syntax for cross-provider resources
 - **[endpoints.md](endpoints.md)** - Endpoint types (HTTP, FHIR, JMIX, DICOMweb)
 - **[backends.md](backends.md)** - Backend types and target communication
 - **[middleware.md](middleware.md)** - Middleware reference (authentication, transforms, path filtering)

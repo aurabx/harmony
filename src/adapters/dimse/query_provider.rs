@@ -137,7 +137,7 @@ impl PipelineQueryProvider {
 
         // Execute pipeline using PipelineExecutor
         let response_envelope =
-            PipelineExecutor::execute(request_envelope, pipeline_cfg, &config, &ctx)
+            PipelineExecutor::execute(request_envelope, &self.pipeline, pipeline_cfg, &config, &ctx)
                 .await
                 .map_err(|e| {
                     DimseError::operation_failed(format!("Pipeline execution failed: {}", e))
@@ -403,10 +403,30 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             },
             "dataset": dicom_json
         });
-        
-        // Execute pipeline - propagate error if pipeline fails
-        self.run("C-STORE", body, meta).await?;
-        
+
+        // Execute pipeline and check for DICOM status in response
+        let response = self.run("C-STORE", body, meta).await?;
+
+        // Check for DICOM status in response metadata (set by dicom_to_dicomweb middleware)
+        if let Some(status_str) = response.response_details.metadata.get("dicom_status") {
+            // Parse "0x0000" or "0xC000" format
+            if let Some(hex) = status_str.strip_prefix("0x") {
+                if let Ok(status) = u16::from_str_radix(hex, 16) {
+                    // Check for failure status (0xC000 range indicates failure)
+                    if status >= 0xC000 {
+                        return Err(DimseError::operation_failed(format!(
+                            "C-STORE failed with DICOM status: {}",
+                            status_str
+                        )));
+                    }
+                    // Warning status (0xB000 range) - log but don't fail
+                    if status >= 0xB000 && status < 0xC000 {
+                        tracing::warn!("C-STORE completed with warning status: {}", status_str);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }

@@ -33,13 +33,20 @@ impl Default for ContentLimits {
 }
 
 /// Represents the configuration for the proxy
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Clone)]
 pub struct ProxyConfig {
+    /// Unique identifier for this proxy instance (required if name not provided)
+    #[serde(default)]
     pub id: String,
+    /// Human-readable name for this proxy instance (required if id not provided)
+    #[serde(default)]
+    pub name: String,
     #[serde(default = "default_pipelines_path")]
     pub pipelines_path: String,
     #[serde(default = "default_transforms_path")]
     pub transforms_path: String,
+    #[serde(default = "default_mesh_path")]
+    pub mesh_path: String,
     /// Duration (in hours) to cache JWKS keys fetched from Runbeam Cloud
     #[serde(default = "default_jwks_cache_duration_hours")]
     pub jwks_cache_duration_hours: u64,
@@ -52,6 +59,26 @@ pub struct ProxyConfig {
     /// Field name patterns to treat as sensitive in logs (e.g., "*_key", "secret")
     #[serde(default)]
     pub sensitive_field_patterns: Vec<String>,
+    /// Primary provider for cloud polling settings (defaults to "runbeam")
+    #[serde(default = "default_primary_provider")]
+    pub primary_provider: String,
+}
+
+impl Default for ProxyConfig {
+    fn default() -> Self {
+        Self {
+            id: String::new(),
+            name: String::new(),
+            pipelines_path: default_pipelines_path(),
+            transforms_path: default_transforms_path(),
+            mesh_path: default_mesh_path(),
+            jwks_cache_duration_hours: default_jwks_cache_duration_hours(),
+            content_limits: ContentLimits::default(),
+            required_env_vars: Vec::new(),
+            sensitive_field_patterns: Vec::new(),
+            primary_provider: default_primary_provider(),
+        }
+    }
 }
 
 /// Default pipelines path for the proxy configuration
@@ -64,6 +91,12 @@ fn default_pipelines_path() -> String {
 fn default_transforms_path() -> String {
     // Resolved relative to the directory of the base config file
     "transforms".to_string()
+}
+
+/// Default mesh path for the proxy configuration
+fn default_mesh_path() -> String {
+    // Resolved relative to the directory of the base config file
+    "mesh".to_string()
 }
 
 /// Default JWKS cache duration (24 hours)
@@ -96,10 +129,18 @@ fn default_max_form_fields() -> usize {
     1_000
 }
 
+/// Default primary provider
+fn default_primary_provider() -> String {
+    "runbeam".to_string()
+}
+
 impl ProxyConfig {
     pub fn validate(&self) -> Result<(), String> {
-        if self.id.trim().is_empty() {
-            return Err("proxy.id cannot be empty".to_string());
+        let has_id = !self.id.trim().is_empty();
+        let has_name = !self.name.trim().is_empty();
+
+        if !has_id && !has_name {
+            return Err("proxy.id or proxy.name must be provided".to_string());
         }
 
         if self.jwks_cache_duration_hours < 1 || self.jwks_cache_duration_hours > 168 {
@@ -133,5 +174,97 @@ impl ProxyConfig {
         }
 
         Ok(())
+    }
+}
+
+impl ProxyConfig {
+    /// Returns the effective identifier for this proxy.
+    /// If id is set, returns id. Otherwise returns name.
+    pub fn effective_id(&self) -> &str {
+        if !self.id.trim().is_empty() {
+            &self.id
+        } else {
+            &self.name
+        }
+    }
+
+    /// Returns the effective name for this proxy.
+    /// If name is set, returns name. Otherwise returns id.
+    pub fn effective_name(&self) -> &str {
+        if !self.name.trim().is_empty() {
+            &self.name
+        } else {
+            &self.id
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_primary_provider_default() {
+        let config: ProxyConfig = toml::from_str(r#"
+            id = "test-proxy"
+        "#).unwrap();
+        assert_eq!(config.primary_provider, "runbeam");
+    }
+
+    #[test]
+    fn test_primary_provider_custom() {
+        let config: ProxyConfig = toml::from_str(r#"
+            id = "test-proxy"
+            primary_provider = "custom_provider"
+        "#).unwrap();
+        assert_eq!(config.primary_provider, "custom_provider");
+    }
+
+    #[test]
+    fn test_primary_provider_local() {
+        let config: ProxyConfig = toml::from_str(r#"
+            id = "test-proxy"
+            primary_provider = "local"
+        "#).unwrap();
+        assert_eq!(config.primary_provider, "local");
+    }
+
+    #[test]
+    fn test_id_only() {
+        let config: ProxyConfig = toml::from_str(r#"
+            id = "my-proxy"
+        "#).unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.effective_id(), "my-proxy");
+        assert_eq!(config.effective_name(), "my-proxy");
+    }
+
+    #[test]
+    fn test_name_only() {
+        let config: ProxyConfig = toml::from_str(r#"
+            name = "My Proxy"
+        "#).unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.effective_id(), "My Proxy");
+        assert_eq!(config.effective_name(), "My Proxy");
+    }
+
+    #[test]
+    fn test_both_id_and_name() {
+        let config: ProxyConfig = toml::from_str(r#"
+            id = "my-proxy"
+            name = "My Proxy"
+        "#).unwrap();
+        assert!(config.validate().is_ok());
+        assert_eq!(config.effective_id(), "my-proxy");
+        assert_eq!(config.effective_name(), "My Proxy");
+    }
+
+    #[test]
+    fn test_neither_id_nor_name() {
+        let config: ProxyConfig = toml::from_str(r#"
+            pipelines_path = "pipelines"
+        "#).unwrap();
+        assert!(config.validate().is_err());
     }
 }

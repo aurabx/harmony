@@ -1,16 +1,24 @@
 # Build stage
 FROM rust:1.87-bookworm AS builder
 
-WORKDIR /app
+WORKDIR /workspace
 
-# Copy Cargo files first for better layer caching
+# Copy workspace Cargo files (includes patch.crates-io)
 COPY Cargo.toml Cargo.lock ./
-COPY crates/ ./crates/
 
-# Copy source code
-COPY src/ ./src/
+# Copy runbeam-sdk (needed for the patch)
+COPY projects/runbeam-sdk ./projects/runbeam-sdk/
 
-# Build release binary
+# Copy harmony-dsl (workspace member)
+COPY projects/harmony-dsl ./projects/harmony-dsl/
+
+# Copy harmony-proxy project files
+COPY projects/harmony-proxy/Cargo.toml projects/harmony-proxy/Cargo.lock ./projects/harmony-proxy/
+COPY projects/harmony-proxy/crates ./projects/harmony-proxy/crates/
+COPY projects/harmony-proxy/src ./projects/harmony-proxy/src/
+
+# Build from harmony-proxy directory
+WORKDIR /workspace/projects/harmony-proxy
 RUN cargo build --release --bin harmony
 
 # Runtime stage
@@ -25,7 +33,7 @@ RUN apt-get update && \
 RUN mkdir -p /etc/harmony /var/log/harmony /tmp/harmony
 
 # Copy binary from builder
-COPY --from=builder /app/target/release/harmony /usr/local/bin/harmony
+COPY --from=builder /workspace/target/release/harmony /usr/local/bin/harmony
 
 # Expose ports
 EXPOSE 8080 9090

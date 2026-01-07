@@ -5,7 +5,7 @@ use std::path::PathBuf;
 /// Helper to load test configuration
 fn load_test_config() -> Config {
     let config_path = format!(
-        "{}/examples/fhir_dicom/config.toml",
+        "{}/../harmony-examples/pipelines/fhir_dicom/config.toml",
         env!("CARGO_MANIFEST_DIR")
     );
 
@@ -16,7 +16,7 @@ fn load_test_config() -> Config {
 /// Helper to get transform file path
 fn get_transform_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("examples/fhir_dicom/transforms")
+        .join("../harmony-examples/pipelines/fhir_dicom/transforms")
         .join(name)
 }
 
@@ -25,7 +25,7 @@ fn test_configuration_loads_successfully() {
     // Test that the FHIR-DICOM configuration loads without errors
     let config = load_test_config();
 
-    assert_eq!(config.proxy.id, "harmony-fhir-dicom");
+    assert_eq!(config.proxy.effective_id(), "harmony-fhir-dicom");
     assert!(config.network.contains_key("default"));
     assert!(config.network.contains_key("management"));
 }
@@ -203,42 +203,42 @@ fn test_no_hardcoded_patient_id() {
     );
 }
 
-#[test]
-#[ignore] // enrich_with_jmix_urls middleware and transform are currently commented out in the pipeline
-fn test_jmix_url_pattern() {
-    // Verify JMIX URL enrichment transform has correct pattern
-    let transform_path = get_transform_path("enrich_with_jmix_urls.json");
-    let content =
-        std::fs::read_to_string(&transform_path).expect("Should be able to read transform file");
-
-    let json: serde_json::Value =
-        serde_json::from_str(&content).expect("Transform should be valid JSON");
-
-    // Find the modify operation
-    let modify_op = json
-        .as_array()
-        .and_then(|arr| {
-            arr.iter()
-                .find(|op| op["operation"] == "modify-overwrite-beta")
-        })
-        .expect("Transform should contain a modify-overwrite-beta operation");
-
-    // Verify the concat expression builds the correct URL pattern
-    let jmix_expr = modify_op
-        .pointer("/spec/data/matches/*/_jmix_url")
-        .and_then(|v| v.as_str())
-        .expect("Transform should have _jmix_url expression");
-
-    assert!(
-        jmix_expr.contains("concat") && jmix_expr.contains("/api/jmix?studyInstanceUid="),
-        "Transform should use concat to build JMIX URL with correct base path"
-    );
-
-    assert!(
-        jmix_expr.contains("@(1,0020000D.Value.0)"),
-        "Transform should reference StudyInstanceUID from DICOM tag 0020000D"
-    );
-}
+// #[test]
+// #[ignore] // enrich_with_jmix_urls middleware and transform are currently commented out in the pipeline
+// fn test_jmix_url_pattern() {
+//     // Verify JMIX URL enrichment transform has correct pattern
+//     let transform_path = get_transform_path("enrich_with_jmix_urls.json");
+//     let content =
+//         std::fs::read_to_string(&transform_path).expect("Should be able to read transform file");
+//
+//     let json: serde_json::Value =
+//         serde_json::from_str(&content).expect("Transform should be valid JSON");
+//
+//     // Find the modify operation
+//     let modify_op = json
+//         .as_array()
+//         .and_then(|arr| {
+//             arr.iter()
+//                 .find(|op| op["operation"] == "modify-overwrite-beta")
+//         })
+//         .expect("Transform should contain a modify-overwrite-beta operation");
+//
+//     // Verify the concat expression builds the correct URL pattern
+//     let jmix_expr = modify_op
+//         .pointer("/spec/data/matches/*/_jmix_url")
+//         .and_then(|v| v.as_str())
+//         .expect("Transform should have _jmix_url expression");
+//
+//     assert!(
+//         jmix_expr.contains("concat") && jmix_expr.contains("/api/jmix?studyInstanceUid="),
+//         "Transform should use concat to build JMIX URL with correct base path"
+//     );
+//
+//     assert!(
+//         jmix_expr.contains("@(1,0020000D.Value.0)"),
+//         "Transform should reference StudyInstanceUID from DICOM tag 0020000D"
+//     );
+// }
 
 #[test]
 fn test_dicom_to_fhir_includes_endpoints() {

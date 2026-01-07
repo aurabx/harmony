@@ -9,6 +9,36 @@ use std::collections::HashMap;
 // Middleware registry similar to services
 pub static MIDDLEWARE_REGISTRY: OnceCell<HashMap<String, String>> = OnceCell::new();
 
+/// Returns all valid built-in middleware type names.
+/// This is the single source of truth for middleware type validation.
+pub fn builtin_middleware_types() -> &'static [&'static str] {
+    &[
+        "jwtauth",
+        "jwt_auth",
+        "basic_auth",
+        "connect",
+        "passthru",
+        "json_extractor",
+        "json",
+        "jmix_builder",
+        "dicomweb_bridge",
+        "dicomweb",
+        "dicom_to_dicomweb",
+        "dicom_flatten",
+        "dicom_flatten_middleware",
+        "dicom_unflatten",
+        "dicom_unflatten_middleware",
+        "transform",
+        "path_filter",
+        "log_dump",
+        "dump",
+        "webhook",
+        "metadata_transform",
+        "policies",
+        "mesh_auth",
+    ]
+}
+
 #[derive(Debug, serde::Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct MiddlewareConfig {
@@ -130,6 +160,9 @@ use crate::models::middleware::types::webhook::{WebhookMiddleware, parse_config 
         "dicomweb_bridge" | "dicomweb" => Ok(Box::new(
             crate::models::middleware::types::dicomweb_to_dicom::DICOMwebToDICOMMiddleware::new(),
         )),
+        "dicom_to_dicomweb" => Ok(Box::new(
+            crate::models::middleware::types::dicom_to_dicomweb::DicomToDicomwebMiddleware::new(),
+        )),
         "dicom_flatten" | "dicom_flatten_middleware" => {
             let config = crate::models::middleware::types::dicom_flatten::parse_config(options)?;
             Ok(Box::new(DicomFlattenMiddleware::new(config)))
@@ -173,6 +206,12 @@ use crate::models::middleware::types::webhook::{WebhookMiddleware, parse_config 
             )?;
             Ok(Box::new(
                 crate::models::middleware::types::policies::PoliciesMiddleware::new(config)?,
+            ))
+        }
+        "mesh_auth" => {
+            let mesh_config = crate::models::middleware::types::mesh_auth::parse_config_with_context(options, config)?;
+            Ok(Box::new(
+                crate::models::middleware::types::mesh_auth::MeshAuthMiddleware::new(mesh_config),
             ))
         }
         _ => Err(format!(

@@ -10,7 +10,7 @@ use tower::ServiceExt;
 async fn test_transform_middleware_integration() {
     // Create a config that uses the transform middleware
     let spec_path = format!(
-        "{}/examples/transform/transforms/simple_rename.json",
+        "{}/../harmony-examples/pipelines/transform/transforms/simple_rename.json",
         env!("CARGO_MANIFEST_DIR")
     );
     let config_toml = format!(
@@ -43,7 +43,7 @@ async fn test_transform_middleware_integration() {
         service = "http"
         [endpoints.http_test.options]
         path_prefix = "/transform"
-        
+
         [backends.echo_backend]
         service = "echo"
 
@@ -59,7 +59,7 @@ async fn test_transform_middleware_integration() {
 
         [services.http]
         module = ""
-        
+
         [services.echo]
         module = ""
     "#,

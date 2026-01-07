@@ -8,8 +8,9 @@ Protocol adapters are the foundation of Harmony's protocol-agnostic architecture
 
 **Dynamic Adapter Selection**: Harmony automatically determines which protocol adapters to start for each network based on the services configured in that network's pipelines. This means:
 - Networks with only HTTP-based services (http, jmix, fhir, etc.) start only the `HttpAdapter`
+- Networks with `[network.<name>.http3]` configuration also start the `Http3Adapter`
 - Networks with only DICOM SCP endpoints start only the `DimseAdapter`
-- Networks with mixed service types start both adapters
+- Networks with mixed service types start multiple adapters as needed
 - Networks with no recognized services log a warning but don't fail
 
 ## Architecture
@@ -63,8 +64,10 @@ Current protocol assignments:
 
 | Protocol | Service Types | Notes |
 |----------|---------------|-------|
-| **HTTP** | `http`, `jmix`, `fhir`, `dicomweb`, `echo`, `management`, `mock_dicom`, `dicom`, `dicom_scu` | Default for most services |
+| **HTTP** | `http`, `jmix`, `fhir`, `dicomweb`, `echo`, `management`, `mock_dicom`, `dicom`, `dicom_scu`, `http3` | Default for most services |
 | **DIMSE** | `dicom_scp` | DICOM network listener |
+
+**Note**: The `http3` backend service connects to external targets using HTTP/3, but receives requests via the standard HTTP adapter. The `Http3Adapter` is for _incoming_ HTTP/3 connections to Harmony itself.
 
 **Note**: The `dicom` and `dicom_scu` services are used for backends (outgoing DICOM requests). They require the HTTP adapter to receive incoming HTTP requests, then make outgoing DIMSE calls via the SCU client.
 
@@ -79,16 +82,90 @@ This mapping is automatically applied when starting networks based on each servi
 **Protocol**: HTTP/HTTPS
 
 **Features**:
-- Axum-based web server
+- Axum-based web server with optional TLS/HTTPS support
 - Route matching and conflict detection
 - Header and body mapping to/from envelopes
 - Support for all HTTP methods (GET, POST, PUT, DELETE, etc.)
+- TLS 1.3 with HTTP/1.1 and HTTP/2 ALPN when TLS is enabled
+
+**Configuration**:
+
+**Plain HTTP** (default):
+```toml
+[network.default.http]
+bind_address = "0.0.0.0"
+bind_port = 8080
+``` path=null start=null
+
+**HTTPS with TLS**:
+```toml
+[network.secure.http]
+bind_address = "0.0.0.0"
+bind_port = 443
+cert_path = "/etc/harmony/certs/fullchain.pem"
+key_path = "/etc/harmony/certs/privkey.pem"
+``` path=null start=null
+
+When both `cert_path` and `key_path` are provided, the adapter automatically enables HTTPS. The certificate and private key must be in PEM format.
+
+**Supported Key Formats**:
+- PKCS#8 (preferred)
+- RSA PKCS#1 (legacy)
+
+**HTTP to HTTPS Redirect**:
+Use `force_https = true` to redirect all HTTP requests to HTTPS:
+```toml
+[network.redirect.http]
+bind_address = "0.0.0.0"
+bind_port = 80
+force_https = true
+``` path=null start=null
+
+This returns HTTP 301 redirects to the `https://` equivalent URL. Only works when TLS is not configured on the network (no cert/key paths).
 
 **Usage**:
 ```rust
-let adapter = HttpAdapter::new(network_name, bind_addr);
+let adapter = HttpAdapter::new(network_name, bind_addr, tls_config);
 let handle = adapter.start(config, shutdown).await?;
 ``` path=null start=null
+
+### Http3Adapter
+
+**Location**: `src/adapters/http3/`
+
+**Protocol**: HTTP/3 over QUIC
+
+**Features**:
+- QUIC-based HTTP/3 server using pure-Rust stack (quinn + h3 + rustls)
+- TLS 1.3 with ALPN negotiation
+- Multiplexed streams without head-of-line blocking
+- 0-RTT connection resumption support (future enhancement)
+- Shares pipelines with HttpAdapter on the same network
+
+**Usage**:
+```rust
+let adapter = Http3Adapter::from_network(network_name, &network_config)?;
+let handle = adapter.start(config, shutdown).await?;
+``` path=null start=null
+
+**Configuration**:
+The Http3Adapter starts when a network has `[network.<name>.http3]` configuration:
+
+```toml
+[network.default.http3]
+bind_address = "0.0.0.0"
+bind_port = 443
+cert_path = "/etc/harmony/certs/fullchain.pem"
+key_path = "/etc/harmony/certs/privkey.pem"
+``` path=null start=null
+
+**Requirements**:
+- TLS certificate and private key in PEM format
+- UDP port access (HTTP/3 uses QUIC over UDP)
+- Client must support HTTP/3 (e.g., curl with `--http3` flag)
+
+**Coexistence with HTTP/1.x**:
+A network can expose both HTTP/1.x (via HttpAdapter) and HTTP/3 (via Http3Adapter) simultaneously on different ports. Both adapters serve the same pipelines and endpoints.
 
 ### DimseAdapter
 

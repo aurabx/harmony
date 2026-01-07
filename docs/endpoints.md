@@ -51,6 +51,8 @@ port = 11112
 protocol = "dicom"
 ```
 
+**Supported protocols**: `http`, `https`, `h3` (HTTP/3), `dicom`, `harmony`, `fhir`, `hl7v2`, `custom`
+
 ## Endpoint Types
 
 ### HTTP (Passthru)

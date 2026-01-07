@@ -13,6 +13,8 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct ServiceConfig {
+    /// Optional unique identifier (ULID) for this service type
+    pub id: Option<String>,
     pub module: String, // Path to the module or metadata
 }
 
@@ -106,13 +108,16 @@ fn create_builtin_service(
             crate::models::services::types::echo::EchoEndpoint {},
         )),
         "management" => Ok(Box::new(
-            crate::models::services::types::management::ManagementEndpoint {},
+            crate::management::ManagementEndpoint {},
         )),
         "mock_dicom" => Ok(Box::new(
             crate::models::services::types::mock_dicom::MockDicomEndpoint {},
         )),
         "disk" | "storage" => Ok(Box::new(
             crate::models::services::types::storage::StorageBackend::default(),
+        )),
+        "http3" | "h3" => Ok(Box::new(
+            crate::models::services::types::http3::Http3Backend::default(),
         )),
         _ => Err(format!(
             "Unsupported built-in service type: {}",

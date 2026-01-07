@@ -22,29 +22,10 @@ pub struct JmixEndpoint {}
 #[async_trait]
 impl ServiceType for JmixEndpoint {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
-        // Check connection.base_path first
-        let has_connection_path = options
-            .get("connection")
-            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok())
-            .and_then(|c| c.base_path)
-            .is_some_and(|s| !s.trim().is_empty());
-
-        if has_connection_path {
-            return Ok(());
-        }
-
-        // Ensure 'path_prefix' exists and is non-empty
-        if options
-            .get("path_prefix")
-            .and_then(|v| v.as_str())
-            .is_none_or(|s| s.trim().is_empty())
-        {
-            return Err(ConfigError::InvalidEndpoint {
-                name: "jmix".to_string(),
-                reason: "Jmix endpoint requires a non-empty 'path_prefix' or 'connection.base_path'"
-                    .to_string(),
-            });
-        }
+        // All path configuration options are optional per the DSL schema:
+        // - options.path_prefix (optional)
+        // - connection.base_path (optional)
+        // If none are provided, the service will default to "/jmix" in build_router()
 
         // Validate skip_hashing option if provided
         if let Some(skip_hashing) = options.get("skip_hashing") {
@@ -737,9 +718,11 @@ mod tests {
 
     #[test]
     fn test_validate_missing_both() {
+        // path_prefix and connection.base_path are OPTIONAL per DSL schema
+        // Services should default to a reasonable path if not provided
         let endpoint = JmixEndpoint {};
         let options = HashMap::new();
-        assert!(endpoint.validate(&options).is_err());
+        assert!(endpoint.validate(&options).is_ok());
     }
 
     #[test]

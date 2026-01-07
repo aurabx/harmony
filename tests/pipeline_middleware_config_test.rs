@@ -145,6 +145,7 @@ fn test_pipeline_with_list_middleware() {
         endpoints: vec!["ep".to_string()],
         backends: vec!["be".to_string()],
         middleware: PipelineMiddleware::List(vec!["auth".to_string(), "transform".to_string()]),
+        ..Default::default()
     };
 
     assert_eq!(pipeline.middleware.len(), 2);
@@ -163,6 +164,7 @@ fn test_pipeline_with_split_middleware() {
             left: vec!["auth".to_string()],
             right: vec!["log".to_string()],
         },
+        ..Default::default()
     };
 
     assert_eq!(pipeline.middleware.len(), 2);
