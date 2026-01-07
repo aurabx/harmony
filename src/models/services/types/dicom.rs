@@ -12,7 +12,7 @@ use crate::globals::get_storage;
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use dicom_json_tool as djt;
-use dimse::types::{FindQuery, GetQuery, QueryLevel};
+use dimse::types::{DatasetStream, FindQuery, GetQuery, QueryLevel};
 use dimse::{DimseConfig, DimseScu, RemoteNode};
 use std::fs;
 use std::path::Path;
@@ -1027,6 +1027,92 @@ impl DicomScuBackend {
                         "success": false,
                         "error": e.to_string()
                     }),
+                }
+            }
+            "store" => {
+                // C-STORE: Send DICOM data to remote PACS
+                // Data may come as:
+                // 1. Part 10 file (from HTTP client) - has 128-byte preamble + "DICM" magic
+                // 2. Raw dataset bytes (from another DICOM service or DICOMweb middleware)
+                if envelope.original_data.is_empty() {
+                    serde_json::json!({
+                        "operation": "store",
+                        "success": false,
+                        "error": "No DICOM data provided in request body"
+                    })
+                } else {
+                    // Detect format: Part 10 files have "DICM" at byte 128
+                    let is_part10 = envelope.original_data.len() > 132
+                        && &envelope.original_data[128..132] == b"DICM";
+
+                    let dataset = if is_part10 {
+                        // Parse as Part 10 DICOM file
+                        match dicom_object::from_reader(std::io::Cursor::new(&envelope.original_data)) {
+                            Ok(file_obj) => DatasetStream::from_object(file_obj.into_inner()),
+                            Err(e) => {
+                                return Ok({
+                                    let mut env = envelope.clone();
+                                    env.normalized_data = Some(serde_json::json!({
+                                        "operation": "store",
+                                        "success": false,
+                                        "error": format!("Failed to parse DICOM Part 10 file: {}", e)
+                                    }));
+                                    env
+                                });
+                            }
+                        }
+                    } else {
+                        // Treat as raw dataset bytes (from DICOM/DICOMweb pipeline)
+                        DatasetStream::from_bytes(bytes::Bytes::from(envelope.original_data.clone()))
+                    };
+
+                    match scu.store(&remote_node, dataset).await {
+                        Ok(success) => {
+                            // Try to extract SOP UIDs from the original data for the response
+                            let (sop_class_uid, sop_instance_uid) = {
+                                use std::io::Cursor;
+                                let cursor = Cursor::new(&envelope.original_data);
+                                match dicom_object::from_reader(cursor) {
+                                    Ok(obj) => {
+                                        let class_uid = obj
+                                            .element_by_name("SOPClassUID")
+                                            .ok()
+                                            .and_then(|e| e.to_str().ok())
+                                            .map(|s| s.to_string());
+                                        let instance_uid = obj
+                                            .element_by_name("SOPInstanceUID")
+                                            .ok()
+                                            .and_then(|e| e.to_str().ok())
+                                            .map(|s| s.to_string());
+                                        (class_uid, instance_uid)
+                                    }
+                                    Err(_) => (None, None),
+                                }
+                            };
+
+                            let mut response = serde_json::json!({
+                                "operation": "store",
+                                "success": success,
+                                "remote_aet": remote_node.ae_title,
+                                "host": remote_node.host,
+                                "port": remote_node.port
+                            });
+
+                            if let Some(uid) = sop_class_uid {
+                                response["sop_class_uid"] = serde_json::json!(uid);
+                            }
+                            if let Some(uid) = sop_instance_uid {
+                                response["sop_instance_uid"] = serde_json::json!(uid);
+                            }
+
+                            response
+                        }
+                        Err(e) => serde_json::json!({
+                            "operation": "store",
+                            "success": false,
+                            "error": e.to_string()
+                        }),
+                    }
                 }
             }
             _ => {

@@ -696,3 +696,139 @@ async fn test_full_pipeline_http_to_scu_to_pacs() {
 
     let _ = qr_child.kill().await;
 }
+
+/// Test 8: dicom_scu backend C-STORE operation
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dicom_scu_backend_cstore() {
+    if !dcmtk_available() {
+        eprintln!("Skipping test: DCMTK not available");
+        return;
+    }
+
+    let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
+    let (mut qr_child, port, _base) = spawn_dcmqrscp(verbose).await;
+
+    let toml = format!(
+        r#"
+        [proxy]
+        id = "scu-cstore-test"
+        log_level = "info"
+        store_dir = "/tmp"
+
+        [network.default]
+        enable_wireguard = false
+        interface = "wg0"
+
+        [network.default.http]
+        bind_address = "127.0.0.1"
+        bind_port = 8088
+
+        [pipelines.scu_store]
+        description = "HTTP -> DICOM SCU C-STORE"
+        networks = ["default"]
+        endpoints = ["http_ep"]
+        backends = ["scu_backend"]
+        middleware = []
+
+        [endpoints.http_ep]
+        service = "http"
+        [endpoints.http_ep.options]
+        path_prefix = "/dicom"
+
+        [backends.scu_backend]
+        service = "dicom_scu"
+        [backends.scu_backend.options]
+        aet = "QR_SCP"
+        host = "127.0.0.1"
+        port = {port}
+        local_aet = "HARMONY_SCU"
+
+        [services.http]
+        module = ""
+        [services.dicom_scu]
+        module = ""
+    "#,
+        port = port
+    );
+
+    let cfg: Config = load_config_from_str(&toml).expect("valid config");
+    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+
+    // Create a test DICOM file to send
+    let mkuid = |suf: &str| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        format!(
+            "1.2.826.0.1.3680043.10.5432.{}.{}.{}",
+            suf,
+            now.as_secs(),
+            now.subsec_nanos()
+        )
+    };
+
+    let identifier = serde_json::json!({
+        "00080016": { "vr": "UI", "Value": ["1.2.840.10008.5.1.4.1.1.7"] }, // Secondary Capture
+        "00080018": { "vr": "UI", "Value": [ mkuid("sop") ] },
+        "0020000D": { "vr": "UI", "Value": [ mkuid("study") ] },
+        "0020000E": { "vr": "UI", "Value": [ mkuid("series") ] },
+        "00080060": { "vr": "CS", "Value": [ "OT" ] },
+        "00100020": { "vr": "LO", "Value": ["CSTORE_TEST"] },
+        "00100010": { "vr": "PN", "Value": [{"Alphabetic": "STORE^TEST"}] }
+    });
+    let obj = dicom_json_tool::json_value_to_identifier(&identifier).expect("create dicom obj");
+
+    // Write to temporary file as Part 10 format, then read bytes
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let temp_path = temp_dir.path().join("test.dcm");
+    dicom_json_tool::write_part10(&temp_path, &obj).expect("write part10");
+    let dicom_bytes = std::fs::read(&temp_path).expect("read dicom file");
+
+    // Send C-STORE request with raw DICOM bytes
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicom/store")
+                .method("POST")
+                .header("content-type", "application/dicom")
+                .body(Body::from(dicom_bytes))
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+        serde_json::json!({ "raw": String::from_utf8_lossy(&bytes).to_string() })
+    });
+    
+    if status != StatusCode::OK {
+        eprintln!("C-STORE failed with status {}: {:?}", status, json);
+    }
+    assert_eq!(status, StatusCode::OK, "Response: {:?}", json);
+    
+    assert_eq!(
+        json.get("operation").and_then(|v| v.as_str()),
+        Some("store"),
+        "Response should indicate store operation"
+    );
+    assert_eq!(
+        json.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "C-STORE should succeed: {:?}",
+        json
+    );
+    assert!(
+        json.get("sop_class_uid").is_some(),
+        "Response should include SOP Class UID"
+    );
+    assert!(
+        json.get("sop_instance_uid").is_some(),
+        "Response should include SOP Instance UID"
+    );
+
+    let _ = qr_child.kill().await;
+}
