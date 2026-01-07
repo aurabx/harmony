@@ -369,7 +369,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             }
         };
 
-        let _temp = dataset
+        let temp_file = dataset
             .to_temp_file(&target_dir)
             .await
             .map_err(|e| DimseError::operation_failed(format!("store dataset: {}", e)))?;
@@ -393,7 +393,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             meta.insert("PatientID".into(), id.clone());
         }
 
-        // Build body with command metadata and dataset (not identifier - that's for queries)
+        // Build body with command metadata, dataset, and file path for STOW-RS transformation
         let body = serde_json::json!({
             "command": {
                 "message_id": 1,
@@ -401,7 +401,8 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
                 "priority": "MEDIUM",
                 "direction": "REQUEST"
             },
-            "dataset": dicom_json
+            "dataset": dicom_json,
+            "file": temp_file.to_string_lossy()
         });
 
         // Execute pipeline and check for DICOM status in response
