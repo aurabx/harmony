@@ -6,15 +6,19 @@ use std::env;
 struct CliArgs {
     config_path: String,
     validate_only: bool,
+    show_version: bool,
 }
 
 fn parse_cli_args() -> CliArgs {
     let mut args = env::args().skip(1);
     let mut config_path: Option<String> = None;
     let mut validate_only = false;
+    let mut show_version = false;
 
     while let Some(arg) = args.next() {
-        if arg == "--validate-config" {
+        if arg == "--version" || arg == "-v" {
+            show_version = true;
+        } else if arg == "--validate-config" {
             validate_only = true;
         } else if arg == "--config" || arg == "-c" {
             if let Some(val) = args.next() {
@@ -28,6 +32,7 @@ fn parse_cli_args() -> CliArgs {
     CliArgs {
         config_path: config_path.unwrap_or_else(|| "./config/config.toml".to_string()),
         validate_only,
+        show_version,
     }
 }
 
@@ -35,6 +40,11 @@ fn parse_cli_args() -> CliArgs {
 async fn main() {
     // Parse CLI args
     let args = parse_cli_args();
+
+    if args.show_version {
+        println!("harmony {}", env!("CARGO_PKG_VERSION"));
+        std::process::exit(0);
+    }
 
     if args.validate_only {
         // Validation-only mode: check required vars, perform substitution, parse TOML, and report
