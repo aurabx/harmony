@@ -22,7 +22,7 @@ async fn test_left_c_find_to_qido() {
     });
 
     let mut metadata = HashMap::new();
-    metadata.insert("operation".to_string(), "C-FIND".to_string());
+    metadata.insert("dimse_op".to_string(), "find".to_string());
 
     let envelope = RequestEnvelopeBuilder::new()
         .method("POST") // DIMSE usually comes in via some mechanism, but here we simulate internal pipeline flow
@@ -62,7 +62,7 @@ async fn test_left_c_store_to_stow() {
     });
 
     let mut metadata = HashMap::new();
-    metadata.insert("operation".to_string(), "C-STORE".to_string());
+    metadata.insert("dimse_op".to_string(), "store".to_string());
 
     let envelope = RequestEnvelopeBuilder::new()
         .method("POST")
@@ -113,7 +113,7 @@ async fn test_left_c_get_to_wado() {
     });
 
     let mut metadata = HashMap::new();
-    metadata.insert("operation".to_string(), "C-GET".to_string());
+    metadata.insert("dimse_op".to_string(), "get".to_string());
 
     let envelope = RequestEnvelopeBuilder::new()
         .method("POST")
@@ -151,7 +151,7 @@ async fn test_left_c_move_to_wado() {
     });
 
     let mut metadata = HashMap::new();
-    metadata.insert("operation".to_string(), "C-MOVE".to_string());
+    metadata.insert("dimse_op".to_string(), "move".to_string());
 
     let envelope = RequestEnvelopeBuilder::new()
         .method("POST")
@@ -179,7 +179,7 @@ fn create_response_envelope(
     normalized_data: Option<Value>,
 ) -> ResponseEnvelope<Value> {
     let mut request_metadata = HashMap::new();
-    request_metadata.insert("operation".to_string(), operation.to_string());
+    request_metadata.insert("dimse_op".to_string(), operation.to_string());
 
     let mut request_details = harmony::models::envelope::envelope::RequestDetails::default();
     request_details.metadata = request_metadata;
@@ -208,7 +208,7 @@ async fn test_right_cfind_response_array() {
     ]);
 
     let envelope = create_response_envelope(
-        "C-FIND",
+        "find",
         200,
         HashMap::new(),
         Value::Null,
@@ -240,7 +240,7 @@ async fn test_right_cfind_response_single_object() {
     });
 
     let envelope = create_response_envelope(
-        "C-FIND",
+        "find",
         200,
         HashMap::new(),
         qido_result.clone(),
@@ -273,7 +273,7 @@ async fn test_right_cfind_response_empty_null() {
 
     // Empty response (no matches)
     let envelope = create_response_envelope(
-        "C-FIND",
+        "find",
         200,
         HashMap::new(),
         Value::Null,
@@ -306,7 +306,7 @@ async fn test_right_cfind_response_404_no_matches() {
 
     // 404 for C-FIND means no matches (should map to SUCCESS)
     let envelope = create_response_envelope(
-        "C-FIND",
+        "find",
         404,
         HashMap::new(),
         Value::Null,
@@ -328,7 +328,7 @@ async fn test_right_cfind_response_500_failure() {
 
     // 500 should map to FAILURE_UNABLE_TO_PROCESS
     let envelope = create_response_envelope(
-        "C-FIND",
+        "find",
         500,
         HashMap::new(),
         Value::Null,
@@ -362,7 +362,7 @@ async fn test_right_cstore_response_success() {
     });
 
     let envelope = create_response_envelope(
-        "C-STORE",
+        "store",
         200,
         HashMap::new(),
         Value::Null,
@@ -384,7 +384,7 @@ async fn test_right_cstore_response_failure() {
 
     // STOW-RS failure (500)
     let envelope = create_response_envelope(
-        "C-STORE",
+        "store",
         500,
         HashMap::new(),
         Value::Null,
@@ -406,7 +406,7 @@ async fn test_right_cstore_response_404_failure() {
 
     // 404 for C-STORE is a failure (unlike C-FIND)
     let envelope = create_response_envelope(
-        "C-STORE",
+        "store",
         404,
         HashMap::new(),
         Value::Null,
@@ -433,7 +433,7 @@ async fn test_right_cget_response_single_dicom() {
     headers.insert("content-type".to_string(), "application/dicom".to_string());
 
     let envelope = create_response_envelope(
-        "C-GET",
+        "get",
         200,
         headers,
         Value::Null,
@@ -482,7 +482,7 @@ async fn test_right_cget_response_multipart_with_body() {
     });
 
     let envelope = create_response_envelope(
-        "C-GET",
+        "get",
         200,
         headers,
         Value::Null,
@@ -542,7 +542,7 @@ async fn test_right_cmove_response_multipart_with_body() {
     });
 
     let envelope = create_response_envelope(
-        "C-MOVE",
+        "move",
         200,
         headers,
         Value::Null,
@@ -564,7 +564,7 @@ async fn test_right_cstore_response_409_warning() {
     let middleware = DicomToDicomwebMiddleware::new();
 
     let envelope = create_response_envelope(
-        "C-STORE",
+        "store",
         409,
         HashMap::new(),
         Value::Null,
@@ -583,7 +583,7 @@ async fn test_right_cget_response_404_failure() {
 
     // 404 for C-GET is a failure (resource not found)
     let envelope = create_response_envelope(
-        "C-GET",
+        "get",
         404,
         HashMap::new(),
         Value::Null,
@@ -605,7 +605,7 @@ async fn test_right_cmove_response_404_failure() {
 
     // 404 for C-MOVE is also a failure
     let envelope = create_response_envelope(
-        "C-MOVE",
+        "move",
         404,
         HashMap::new(),
         Value::Null,
@@ -630,7 +630,7 @@ async fn test_right_cget_response_dicom_json() {
     headers.insert("content-type".to_string(), "application/dicom+json".to_string());
 
     let envelope = create_response_envelope(
-        "C-GET",
+        "get",
         200,
         headers,
         Value::Null,

@@ -59,24 +59,21 @@ impl Middleware for DicomToDicomwebMiddleware {
         &self,
         mut envelope: RequestEnvelope<Value>,
     ) -> Result<RequestEnvelope<Value>, Error> {
-        // Only process if we have a dimse operation metadata
-        let op = match envelope.request_details.metadata.get("operation") {
-            Some(o) => o.to_uppercase(),
+        // Check dimse_op metadata (standard format: "find", "get", "move", "store")
+        let op = match envelope.request_details.metadata.get("dimse_op") {
+            Some(o) => o.to_lowercase(),
             None => return Ok(envelope),
         };
 
-        // If protocol is not dimse (e.g. already converted or HTTP source), skip
-        // But here we expect to be transforming the request to HTTP for the backend
-        // so we change the protocol context effectively.
-
+        // Transform based on operation type
         match op.as_str() {
-            "C-FIND" => {
+            "find" => {
                 self.transform_cfind_request(&mut envelope)?;
             }
-            "C-STORE" => {
+            "store" => {
                 self.transform_cstore_request(&mut envelope)?;
             }
-            "C-GET" | "C-MOVE" => {
+            "get" | "move" => {
                 self.transform_cget_cmove_request(&mut envelope)?;
             }
             _ => {}
@@ -92,29 +89,29 @@ impl Middleware for DicomToDicomwebMiddleware {
         let op = envelope
             .request_details
             .metadata
-            .get("operation")
-            .map(|s| s.as_str())
-            .unwrap_or("");
+            .get("dimse_op")
+            .map(|s| s.to_lowercase())
+            .unwrap_or_default();
 
         let http_status = envelope.response_details.status;
         debug!(
-            "dicom_to_dicomweb right: operation={}, http_status={}",
+            "dicom_to_dicomweb right: dimse_op={}, http_status={}",
             op, http_status
         );
 
         // Convert HTTP response to expected DIMSE result
-        match op {
-            "C-FIND" => {
+        match op.as_str() {
+            "find" => {
                 self.transform_cfind_response(&mut envelope)?;
             }
-            "C-STORE" => {
+            "store" => {
                 self.transform_cstore_response(&mut envelope)?;
             }
-            "C-GET" | "C-MOVE" => {
+            "get" | "move" => {
                 self.transform_cget_cmove_response(&mut envelope)?;
             }
             _ => {
-                debug!("Unknown or missing operation in response: {}", op);
+                debug!("Unknown or missing dimse_op in response: {}", op);
             }
         }
 
@@ -433,9 +430,9 @@ impl DicomToDicomwebMiddleware {
         let op = envelope
             .request_details
             .metadata
-            .get("operation")
+            .get("dimse_op")
             .map(|s| s.as_str())
-            .unwrap_or("C-GET");
+            .unwrap_or("get");
 
         // Check for HTTP errors
         if http_status >= 400 {

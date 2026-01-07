@@ -191,10 +191,10 @@ impl ServiceType for DicomScpEndpoint {
         // Build RequestDetails from protocol context
         let metadata: Map<String, String> = ctx.meta.clone();
         let op = metadata
-            .get("operation")
+            .get("dimse_op")
             .cloned()
-            .unwrap_or_else(|| "DIMSE".into());
-        let uri = format!("dimse://scp/{}", op.to_lowercase());
+            .unwrap_or_else(|| "dimse".into());
+        let uri = format!("dimse://scp/{}", op);
 
         // Parse normalized_data from payload if it's JSON
         let normalized: Option<serde_json::Value> = serde_json::from_slice(&ctx.payload).ok();
@@ -228,16 +228,16 @@ impl ServiceHandler<Value> for DicomScpEndpoint {
         // The envelope has already been built by build_protocol_envelope
         // Here we can add additional validation or preprocessing if needed
 
-        // Validate operation type
+        // Validate operation type (dimse_op uses lowercase: "find", "get", "move", "store", "echo")
         let operation = envelope
             .request_details
             .metadata
-            .get("operation")
-            .ok_or_else(|| Error::from("Missing operation in DIMSE request"))?;
+            .get("dimse_op")
+            .ok_or_else(|| Error::from("Missing dimse_op in DIMSE request"))?;
 
         // Ensure operation is supported
-        let valid_ops = ["C-ECHO", "C-FIND", "C-MOVE", "C-GET", "C-STORE"];
-        if !valid_ops.contains(&operation.as_str()) {
+        let valid_ops = ["echo", "find", "move", "get", "store"];
+        if !valid_ops.contains(&operation.to_lowercase().as_str()) {
             return Err(Error::from(format!(
                 "Unsupported DIMSE operation: {}",
                 operation

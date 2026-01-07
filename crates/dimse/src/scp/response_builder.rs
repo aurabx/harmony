@@ -1,12 +1,13 @@
 //! Response building and encoding helpers for DIMSE operations
 
+use dicom_core::header::Header;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
 use dicom_ul::{Pdu, ServerAssociation};
 use tokio::net::TcpStream;
 
 use crate::common::{
     build_response, command_fields, create_command_pdata, create_data_pdata, encode_command,
-    encode_dataset, status, DimseMessageBuilder,
+    status, DimseMessageBuilder,
 };
 use crate::types::DatasetStream;
 use crate::{DimseError, Result};
@@ -43,7 +44,37 @@ pub async fn encode_and_send_response(
     if let Some(ds) = dataset {
         // Convert the dataset to a DICOM object
         let dicom_obj = ds.to_object().await?;
-        let identifier_bytes = encode_dataset(&dicom_obj)?;
+
+        // Encode the dataset using the negotiated transfer syntax for this presentation context
+        use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+        use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
+        let ts_uid = association
+            .presentation_contexts()
+            .iter()
+            .find(|pc| pc.id == presentation_context_id)
+            .map(|pc| pc.transfer_syntax.as_str())
+            .ok_or_else(|| DimseError::operation_failed("Presentation context not found"))?;
+        
+        tracing::debug!("Encoding dataset with transfer syntax: {}", ts_uid);
+        
+        // Log VRs of elements in the dataset
+        for elem in dicom_obj.iter() {
+            tracing::debug!("Dataset element: tag={:?}, vr={:?}", elem.tag(), elem.vr());
+        }
+        
+        let ts = TransferSyntaxRegistry
+            .get(ts_uid)
+            .ok_or_else(|| DimseError::operation_failed(format!("Transfer syntax not found: {}", ts_uid)))?;
+
+        let mut identifier_bytes = Vec::new();
+        dicom_obj
+            .write_dataset_with_ts(&mut identifier_bytes, ts)
+            .map_err(|e| DimseError::operation_failed(format!("Failed to encode dataset: {}", e)))?;
+        
+        tracing::debug!("Encoded dataset: {} bytes, first 64: {:02x?}", 
+            identifier_bytes.len(),
+            &identifier_bytes[..identifier_bytes.len().min(64)]);
+
         let data_pdata = create_data_pdata(presentation_context_id, identifier_bytes, true);
 
         association
@@ -92,12 +123,22 @@ pub async fn send_find_response(
     dataset: Option<&DatasetStream>,
     presentation_context_id: u8,
 ) -> Result<()> {
+    // Use the negotiated Abstract Syntax (SOP Class UID) for this presentation context.
+    // This ensures we reply with Patient Root vs Study Root correctly based on the client's request.
+    let sop_class_uid = association
+        .presentation_contexts()
+        .iter()
+        .find(|pc| pc.id == presentation_context_id)
+        .map(|pc| pc.abstract_syntax.as_str())
+        // Fallback to Study Root FIND if not found (should not happen in practice)
+        .unwrap_or("1.2.840.10008.5.1.4.1.2.2.1");
+
     let response = build_response(
         command_fields::C_FIND_RSP,
         message_id,
         status_code,
         dataset.is_some(),
-        "1.2.840.10008.5.1.4.1.2.2.1", // Study Root Query/Retrieve - FIND
+        sop_class_uid,
     );
 
     encode_and_send_response(association, response, dataset, presentation_context_id).await?;
