@@ -2,6 +2,62 @@
 
 ## [Unreleased]
 
+## [0.12.0] - 2026-01-08
+
+### Highlights
+- Data mesh architecture with provider resolution and mesh authentication
+- HTTPS/TLS support for secure connections
+- Enhanced DICOM capabilities with C-STORE on SCU and improved protocol handling
+- Version flag support for CLI
+- Improved configuration management and cloud integration
+
+### Added
+- (AURA-2241) Data mesh infrastructure
+  - Basic mesh data architecture and routing
+  - Mesh authentication and token management
+  - Route mesh ingress routes to matching endpoints
+  - Provider resolution for mesh participants
+  - Support for ingress/egress configuration in meshes
+- (AURA-2240) HTTPS/TLS support for secure connections
+- (AURA-2248) C-STORE support on DICOM SCU for sending datasets
+- (AURA-2245) Provider resolution system
+- CLI version flag (`--version` or `-v`) to display harmony version
+- Configuration push on startup option for cloud integration
+- Support for `id` field on proxy and services configuration
+- Enhanced startup error messages for better diagnostics
+- DICOM flatten support for left-side middleware
+- C-STORE dataset available in envelope for middleware processing
+- Basic DICOM keys added to DIMSE crate
+- Build command for creating release binaries for testing
+
+### Changed
+- Migrated `backend_path` to services configuration
+- Token handling now saves tokens when provided via environment variables
+- Management service organization improved
+- Made JWT `_alg` field optional for flexibility
+
+### Fixed
+- Process no longer exits on invalid config reload (gracefully handles errors)
+- Race conditions in DICOM port allocations resolved
+- Base64 decoding issues on DICOMweb responses corrected
+- DICOM to DICOMweb STOW functionality fixed
+- PDU size support added for DICOM associations
+- Various DICOM protocol-level fixes for improved stability
+- Race conditions between cloud polling and force updates prevented
+- Config writer bug fixed
+- Safer handling for ingress/egress names in meshes
+- Missing ingress/egress on mesh no longer causes fatal errors
+- runbeam-sdk dependency issues resolved
+- Test resource conflicts (dcmqrscp) resolved
+- DICOMweb test stability improved
+- Dev install script fixed
+
+### Documentation
+- Provider and mesh documentation updates
+
+### Dependencies
+- Internal crates updated to 0.12.0 (dimse, dicom_json_tool, harmony_transform, harmony-database, harmony-filesystem)
+
 ## [0.11.0] - 2025-12-23
 
 ### Highlights
@@ -432,6 +488,8 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.12.0]: https://github.com/aurabx/harmony/compare/0.11.0...0.12.0
+[0.11.0]: https://github.com/aurabx/harmony/compare/0.10.1...0.11.0
 [0.10.1]: https://github.com/aurabx/harmony/compare/0.10.0...0.10.1
 [0.10.0]: https://github.com/aurabx/harmony/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/aurabx/harmony/compare/0.8.0...0.9.0
