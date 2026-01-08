@@ -551,6 +551,7 @@ async fn test_full_workflow() {
     println!("Step 1: C-STORE");
     let store_output = Command::new("storescu")
         .args([
+            "-d", // Enable DCMTK debug output
             "--aetitle", "TEST_SCU",
             "--call", "BRIDGE_SCP",
             "127.0.0.1",
@@ -569,6 +570,7 @@ async fn test_full_workflow() {
     println!("Step 2: C-FIND");
     let find_output = Command::new("findscu")
         .args([
+            "-d", // Enable DCMTK debug output
             "--aetitle", "TEST_SCU",
             "--call", "BRIDGE_SCP",
             "-P", // Patient Root

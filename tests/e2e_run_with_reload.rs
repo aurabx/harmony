@@ -5,7 +5,6 @@
 //! automatically ensures tests run one at a time.
 
 use harmony::config::config::Config;
-use harmony::config::Cli;
 use reqwest;
 use serial_test::serial;
 use std::fs;

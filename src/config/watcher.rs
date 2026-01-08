@@ -1,6 +1,5 @@
 use super::config::Config;
 use super::reload::{compute_diff, ConfigDiff};
-use super::Cli;
 use crate::adapters::registry::AdapterRegistry;
 use crate::globals;
 use anyhow::Result;

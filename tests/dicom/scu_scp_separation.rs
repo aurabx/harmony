@@ -1,7 +1,6 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use harmony::config::config::{Config, ConfigError};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -30,12 +29,18 @@ fn dcmtk_available() -> bool {
 }
 
 /// Helper to spawn dcmqrscp on a free port
-async fn spawn_dcmqrscp(verbose: bool) -> (tokio::process::Child, u16, PathBuf) {
+async fn spawn_dcmqrscp(verbose: bool) -> (tokio::process::Child, u16, tempfile::TempDir) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind port");
     let port = listener.local_addr().unwrap().port();
     drop(listener);
 
-    let base = PathBuf::from("./tmp/qrscp");
+    std::fs::create_dir_all("./tmp").expect("create tmp");
+    let temp_dir = tempfile::Builder::new()
+        .prefix("qrscp_")
+        .tempdir_in("./tmp")
+        .expect("create temp dir");
+    
+    let base = temp_dir.path();
     let dbdir = base.join("qrdb");
     std::fs::create_dir_all(&dbdir).expect("create qr db dir");
     let cfg_path = base.join("dcmqrscp.cfg");
@@ -49,7 +54,6 @@ async fn spawn_dcmqrscp(verbose: bool) -> (tokio::process::Child, u16, PathBuf) 
         "# Minimal dcmqrscp.cfg\nMaxPDUSize = 16384\nMaxAssociations = 16\n\nHostTable BEGIN\nHostTable END\n\nVendorTable BEGIN\nVendorTable END\n\nAETable BEGIN\nQR_SCP  {}  RW  (9, 1024mb)  ANY\nAETable END\n",
         abs_db.to_string_lossy()
     );
-    std::fs::create_dir_all(&base).expect("create cfg dir");
     std::fs::write(&cfg_path, cfg).expect("write cfg");
 
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
@@ -75,13 +79,13 @@ async fn spawn_dcmqrscp(verbose: bool) -> (tokio::process::Child, u16, PathBuf) 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    (child, port, base)
+    (child, port, temp_dir)
 }
 
 /// Helper to create a minimal DICOM dataset and store it via storescu
 async fn store_test_dataset(
     port: u16,
-    base: &PathBuf,
+    base: &std::path::Path,
     patient_id: &str,
     verbose: bool,
 ) -> anyhow::Result<()> {
@@ -143,7 +147,7 @@ async fn test_dicom_scu_backend_cfind() {
     let (mut qr_child, port, base) = spawn_dcmqrscp(verbose).await;
 
     // Store test data
-    if store_test_dataset(port, &base, "SCU_TEST1", verbose)
+    if store_test_dataset(port, base.path(), "SCU_TEST1", verbose)
         .await
         .is_err()
     {
@@ -410,7 +414,7 @@ async fn test_legacy_dicom_service_backward_compat() {
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let (mut qr_child, port, base) = spawn_dcmqrscp(verbose).await;
 
-    if store_test_dataset(port, &base, "LEGACY_TEST", verbose)
+    if store_test_dataset(port, base.path(), "LEGACY_TEST", verbose)
         .await
         .is_err()
     {
@@ -606,7 +610,7 @@ async fn test_full_pipeline_http_to_scu_to_pacs() {
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let (mut qr_child, qr_port, base) = spawn_dcmqrscp(verbose).await;
 
-    if store_test_dataset(qr_port, &base, "FULL_PIPELINE", verbose)
+    if store_test_dataset(qr_port, base.path(), "FULL_PIPELINE", verbose)
         .await
         .is_err()
     {
@@ -614,6 +618,9 @@ async fn test_full_pipeline_http_to_scu_to_pacs() {
         let _ = qr_child.kill().await;
         return;
     }
+
+    // Wait for dcmqrscp to index the stored data (dcmqridx runs periodically)
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let toml = format!(
         r#"
@@ -706,7 +713,7 @@ async fn test_dicom_scu_backend_cstore() {
     }
 
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
-    let (mut qr_child, port, _base) = spawn_dcmqrscp(verbose).await;
+    let (mut qr_child, port, _base_dir) = spawn_dcmqrscp(verbose).await;
 
     let toml = format!(
         r#"

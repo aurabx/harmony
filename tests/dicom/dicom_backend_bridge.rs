@@ -12,7 +12,13 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 
 #[tokio::test(flavor = "multi_thread")]
 async fn http_to_dicom_backend_echo_succeeds() {
-    let toml = r#"
+    // Find a free port
+    let port = {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind to port 0");
+        listener.local_addr().expect("local addr").port()
+    };
+
+    let toml = format!(r#"
         [proxy]
         id = "dicom-backend-test"
         log_level = "info"
@@ -44,16 +50,16 @@ async fn http_to_dicom_backend_echo_succeeds() {
         [backends.dicom_pacs.options]
         aet = "ORTHANC"
         host = "localhost"
-        port = 4242
+        port = {}
         local_aet = "HARMONY_SCU"
 
         [services.http]
         module = ""
         [services.dicom]
         module = ""
-    "#;
+    "#, port);
 
-    // Start a DCMTK storescp to respond to C-ECHO on 4242
+    // Start a DCMTK storescp to respond to C-ECHO on the dynamic port
     // If dcmtk is not installed, this test will fail. Ensure `brew install dcmtk`.
     // Ensure the output directory exists where storescp will write
     std::fs::create_dir_all("./tmp/dcmtk_in").expect("create dcmtk output dir");
@@ -63,14 +69,14 @@ async fn http_to_dicom_backend_echo_succeeds() {
         .arg("ORTHANC")
         .arg("--output-directory")
         .arg("./tmp/dcmtk_in")
-        .arg("4242")
+        .arg(port.to_string())
         .kill_on_drop(true)
         .spawn()
         .expect("spawn storescp");
 
     // Wait for port to accept connections
     for _ in 0..30 {
-        if tokio::net::TcpStream::connect("127.0.0.1:4242")
+        if tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port))
             .await
             .is_ok()
         {
@@ -79,7 +85,7 @@ async fn http_to_dicom_backend_echo_succeeds() {
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    let cfg: Config = load_config_from_str(toml).expect("valid config");
+    let cfg: Config = load_config_from_str(&toml).expect("valid config");
     let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
 
     // POST /dicom/echo should trigger SCU echo in the DICOM backend and return a JSON body

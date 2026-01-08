@@ -1,6 +1,5 @@
 use harmony::adapters::registry::AdapterRegistry;
 use harmony::config::config::Config;
-use harmony::config::Cli;
 use harmony::globals;
 use runbeam_sdk::MachineToken;
 use std::fs;
@@ -313,7 +312,7 @@ async fn test_update_endpoint_with_missing_proxy_id() {
         // Note: Config validation may catch this before we even get to the update handler
         // This test verifies the defense-in-depth approach
         match toml::from_str::<Config>(&contents) {
-            Ok(mut config) => {
+            Ok(config) => {
                 // If TOML parsing succeeds, try validation
                 match config.validate() {
                     Ok(_) => {
