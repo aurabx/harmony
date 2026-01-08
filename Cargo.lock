@@ -3992,7 +3992,9 @@ dependencies = [
 
 [[package]]
 name = "runbeam-sdk"
-version = "0.10.0"
+version = "0.11.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "7fc40b2f345f25c6e888f312bc4140a82597de50740d19d3177f54f5233d40eb"
 dependencies = [
  "age",
  "base64 0.22.1",
