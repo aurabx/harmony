@@ -65,21 +65,21 @@ class MockDICOMwebHandler(BaseHTTPRequestHandler):
         # Return mock study data
         results = [
             {
-                "0020000D": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345"]},
-                "00100010": {"vr": "PN", "Value": [{"Alphabetic": "Test^Patient"}]},
-                "00100020": {"vr": "LO", "Value": ["TEST123"]},
-                "00080020": {"vr": "DA", "Value": ["20240101"]},
-                "00080030": {"vr": "TM", "Value": ["120000"]},
-                "00080050": {"vr": "SH", "Value": ["ACC001"]},
-                "00080060": {"vr": "CS", "Value": ["CT"]},
-                "00081030": {"vr": "LO", "Value": ["Test Study"]},
+                "(0020,000D)": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345"]},
+                "(0010,0010)": {"vr": "PN", "Value": [{"Alphabetic": "Test^Patient"}]},
+                "(0010,0020)": {"vr": "LO", "Value": ["TEST123"]},
+                "(0008,0020)": {"vr": "DA", "Value": ["20240101"]},
+                "(0008,0030)": {"vr": "TM", "Value": ["120000"]},
+                "(0008,0050)": {"vr": "SH", "Value": ["ACC001"]},
+                "(0008,0060)": {"vr": "CS", "Value": ["CT"]},
+                "(0008,1030)": {"vr": "LO", "Value": ["Test Study"]},
             }
         ]
 
         # Filter by query parameters
-        if "00100020" in params:  # PatientID
-            patient_id = params["00100020"][0]
-            results = [r for r in results if r["00100020"]["Value"][0] == patient_id]
+        if "00100020" in params or "PatientID" in params:  # PatientID
+            patient_id = params.get("00100020", params.get("PatientID", []))[0]
+            results = [r for r in results if r["(0010,0020)"]["Value"][0] == patient_id]
 
         self.send_json_response(200, results)
 
@@ -91,11 +91,11 @@ class MockDICOMwebHandler(BaseHTTPRequestHandler):
         
         results = [
             {
-                "0020000D": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345"]},
-                "0020000E": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345.1"]},
-                "00080060": {"vr": "CS", "Value": ["CT"]},
-                "0008103E": {"vr": "LO", "Value": ["Test Series"]},
-                "00200011": {"vr": "IS", "Value": ["1"]},
+                "(0020,000D)": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345"]},
+                "(0020,000E)": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345.1"]},
+                "(0008,0060)": {"vr": "CS", "Value": ["CT"]},
+                "(0008,103E)": {"vr": "LO", "Value": ["Test Series"]},
+                "(0020,0011)": {"vr": "IS", "Value": ["1"]},
             }
         ]
 
@@ -105,10 +105,10 @@ class MockDICOMwebHandler(BaseHTTPRequestHandler):
         """Handle QIDO-RS instance-level query"""
         results = [
             {
-                "0020000D": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345"]},
-                "0020000E": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345.1"]},
-                "00080018": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345.1.1"]},
-                "00200013": {"vr": "IS", "Value": ["1"]},
+                "(0020,000D)": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345"]},
+                "(0020,000E)": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345.1"]},
+                "(0008,0018)": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345.1.1"]},
+                "(0020,0013)": {"vr": "IS", "Value": ["1"]},
             }
         ]
 
@@ -164,13 +164,13 @@ class MockDICOMwebHandler(BaseHTTPRequestHandler):
             
             # Return success response
             response = {
-                "00081190": {"vr": "UR", "Value": ["http://mock/studies/1.2.3"]},
-                "00081198": {
+                "(0008,1190)": {"vr": "UR", "Value": ["http://mock/studies/1.2.3"]},
+                "(0008,1198)": {
                     "vr": "SQ",
                     "Value": [
                         {
-                            "00081150": {"vr": "UI", "Value": ["1.2.840.10008.5.1.4.1.1.2"]},
-                            "00081155": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345.1.1"]},
+                            "(0008,1150)": {"vr": "UI", "Value": ["1.2.840.10008.5.1.4.1.1.2"]},
+                            "(0008,1155)": {"vr": "UI", "Value": ["1.2.840.113619.2.55.3.12345.1.1"]},
                         }
                     ]
                 }
