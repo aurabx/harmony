@@ -10,6 +10,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::sleep;
+use serial_test::serial;
 
 /// Helper to create a test config file
 fn create_test_config(dir: &TempDir, port: u16) -> PathBuf {
@@ -142,6 +143,7 @@ module = ""
 }
 
 #[tokio::test]
+#[serial]
 async fn test_config_diff_zero_downtime_changes() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_test_config(&temp_dir, 8080);
@@ -170,6 +172,7 @@ async fn test_config_diff_zero_downtime_changes() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_config_diff_adapter_restart_required() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_test_config(&temp_dir, 8080);
@@ -197,6 +200,7 @@ async fn test_config_diff_adapter_restart_required() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_invalid_config_rejected() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_test_config(&temp_dir, 8080);
@@ -219,9 +223,10 @@ interface = "lo0"
 "#;
     fs::write(&config_path, invalid_content).expect("Failed to write invalid config");
 
-    // Try to load - should panic during validation
-    let cli = Cli::new(config_path.to_string_lossy().to_string());
-    let result = std::panic::catch_unwind(|| Config::from_args(cli));
+    // Load and validate manually to avoid process::exit
+    let contents = std::fs::read_to_string(&config_path).expect("read config");
+    let config: Config = toml::from_str(&contents).expect("parse config");
+    let result = config.validate();
 
     // Verify load failed
     assert!(result.is_err());
@@ -232,6 +237,7 @@ interface = "lo0"
 }
 
 #[tokio::test]
+#[serial]
 async fn test_adapter_registry_start_stop() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_test_config(&temp_dir, 19080); // Use high port to avoid conflicts
@@ -269,6 +275,7 @@ async fn test_adapter_registry_start_stop() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_adapter_registry_restart() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_test_config(&temp_dir, 19081);
@@ -309,6 +316,7 @@ async fn test_adapter_registry_restart() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_network_add_remove() {
     let temp_dir = TempDir::new().unwrap();
 
@@ -406,6 +414,7 @@ network = "net1"
 }
 
 #[tokio::test]
+#[serial]
 async fn test_zero_downtime_config_swap() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_test_config(&temp_dir, 8080);
@@ -436,6 +445,7 @@ async fn test_zero_downtime_config_swap() {
 }
 
 #[tokio::test]
+#[serial]
 #[ignore] // This test spawns actual file watcher - only run manually
 async fn test_file_watcher_detects_changes() {
     let temp_dir = TempDir::new().unwrap();
@@ -496,6 +506,7 @@ async fn test_file_watcher_detects_changes() {
 }
 
 #[tokio::test]
+#[serial]
 #[ignore] // This test simulates cloud poller + file watcher integration - only run manually
 async fn test_cloud_poller_writes_file_watcher_applies() {
     let temp_dir = TempDir::new().unwrap();

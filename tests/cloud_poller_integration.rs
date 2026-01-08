@@ -9,6 +9,7 @@ use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::sleep;
+use serial_test::serial;
 
 /// Helper to create a minimal test config file
 fn create_test_config(dir: &TempDir, port: u16) -> PathBuf {
@@ -189,6 +190,7 @@ network = "default"
 }
 
 #[tokio::test]
+#[serial]
 async fn test_load_and_validate_config_success() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_test_config(&temp_dir, 8080);
@@ -214,20 +216,22 @@ async fn test_load_and_validate_config_success() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_load_and_validate_config_invalid() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_invalid_config(&temp_dir);
 
-    // Should panic during validation (Config::from_args validates)
-    let result = std::panic::catch_unwind(|| {
-        let cli = Cli::new(config_path.to_string_lossy().to_string());
-        Config::from_args(cli)
-    });
+    // Manual load to avoid Config::from_args process::exit
+    let contents = std::fs::read_to_string(&config_path).expect("read config");
+    let mut config: Config = toml::from_str(&contents).expect("parse config");
 
-    assert!(result.is_err(), "Invalid config should fail validation");
+    // Should fail during management injection because network is missing
+    let result = config.inject_management_service();
+    assert!(result.is_err(), "Invalid config should fail management injection");
 }
 
 #[tokio::test]
+#[serial]
 async fn test_cloud_config_diff_zero_downtime() {
     use harmony::config::reload::compute_diff;
 
@@ -254,6 +258,7 @@ async fn test_cloud_config_diff_zero_downtime() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_cloud_config_diff_requires_restart() {
     use harmony::config::reload::compute_diff;
 
@@ -280,6 +285,7 @@ async fn test_cloud_config_diff_requires_restart() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_temp_file_creation_and_cleanup() {
     // Ensure tmp directory exists
     fs::create_dir_all("./tmp").expect("Failed to create tmp directory");
@@ -299,6 +305,7 @@ async fn test_temp_file_creation_and_cleanup() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_config_application_with_adapter_registry() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_test_config(&temp_dir, 8090);
@@ -323,6 +330,7 @@ async fn test_config_application_with_adapter_registry() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_globals_config_set_and_get() {
     let temp_dir = TempDir::new().unwrap();
     let config_path = create_test_config(&temp_dir, 8080);
@@ -342,6 +350,7 @@ async fn test_globals_config_set_and_get() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_globals_config_path_set_and_get() {
     let test_path = "/tmp/test-config.toml".to_string();
 
@@ -773,16 +782,20 @@ use harmony::management::cloud_poller::write_cloud_config;
 
 /// Test that gateway config is written to the main config file
 #[tokio::test]
+#[serial]
 async fn test_write_cloud_config_gateway_routing() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_test_config(&temp_dir, 8080);
+    use tokio::time::timeout;
     
-    // Set up globals - IMPORTANT: set path AFTER creating config to avoid race conditions
-    let config_path_str = config_path.to_string_lossy().to_string();
-    globals::set_config_path(config_path_str.clone());
-    let cli = Cli::new(config_path_str.clone());
-    let config = Config::from_args(cli);
-    globals::set_config(Arc::new(config));
+    let test_result = timeout(Duration::from_secs(10), async {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_test_config(&temp_dir, 8080);
+        
+        // Set up globals - IMPORTANT: set path AFTER creating config to avoid race conditions
+        let config_path_str = config_path.to_string_lossy().to_string();
+        globals::set_config_path(config_path_str.clone());
+        let cli = Cli::new(config_path_str.clone());
+        let config = Config::from_args(cli);
+        globals::set_config(Arc::new(config));
     
     // Gateway config content with [proxy] section
     let gateway_config = r#"
@@ -836,27 +849,34 @@ network = "default"
     assert!(!written_path.contains("/mesh/"), "Gateway should NOT go to mesh/");
     assert!(!written_path.contains("transforms"), "Gateway should NOT go to transforms/");
     
-    // Verify the file exists and was written correctly
-    // Note: written_path may point to a temp dir from another test due to global state,
-    // but the file should exist wherever it was written
-    if std::path::Path::new(&written_path).exists() {
-        let content = fs::read_to_string(&written_path).expect("Failed to read config");
-        assert!(content.contains("updated-gateway"));
-        assert!(content.contains("[proxy]"));
-    }
+        // Verify the file exists and was written correctly
+        // Note: written_path may point to a temp dir from another test due to global state,
+        // but the file should exist wherever it was written
+        if std::path::Path::new(&written_path).exists() {
+            let content = fs::read_to_string(&written_path).expect("Failed to read config");
+            assert!(content.contains("updated-gateway"));
+            assert!(content.contains("[proxy]"));
+        }
+    }).await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 10 seconds");
 }
 
 /// Test that pipeline config is written to pipelines directory
 #[tokio::test]
+#[serial]
 async fn test_write_cloud_config_pipeline_routing() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_test_config(&temp_dir, 8080);
+    use tokio::time::timeout;
     
-    // Set up globals
-    globals::set_config_path(config_path.to_string_lossy().to_string());
-    let cli = Cli::new(config_path.to_string_lossy().to_string());
-    let config = Config::from_args(cli);
-    globals::set_config(Arc::new(config));
+    let test_result = timeout(Duration::from_secs(10), async {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_test_config(&temp_dir, 8080);
+        
+        // Set up globals
+        globals::set_config_path(config_path.to_string_lossy().to_string());
+        let cli = Cli::new(config_path.to_string_lossy().to_string());
+        let config = Config::from_args(cli);
+        globals::set_config(Arc::new(config));
     
     // Pipeline config content
     let pipeline_config = r#"
@@ -884,29 +904,36 @@ middleware = []
     assert!(content.contains("my_test_pipeline"));
     assert!(content.contains("Test pipeline from cloud"));
     
-    // Key verification: the written path is NOT the main config path
-    // (This is the core of the bug fix - pipelines go to pipelines/ not config.toml)
-    assert!(!written_path.ends_with("test-config.toml"), 
-        "Pipeline should NOT be written to main config file");
-    assert!(written_path.contains("pipelines"), 
-        "Pipeline should be written to pipelines directory");
+        // Key verification: the written path is NOT the main config path
+        // (This is the core of the bug fix - pipelines go to pipelines/ not config.toml)
+        assert!(!written_path.ends_with("test-config.toml"), 
+            "Pipeline should NOT be written to main config file");
+        assert!(written_path.contains("pipelines"), 
+            "Pipeline should be written to pipelines directory");
+    }).await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 10 seconds");
 }
 
 /// Test that mesh config is written to mesh directory
 #[tokio::test]
+#[serial]
 async fn test_write_cloud_config_mesh_routing() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_test_config(&temp_dir, 8080);
+    use tokio::time::timeout;
     
-    // Create mesh directory
-    let mesh_dir = temp_dir.path().join("mesh");
-    fs::create_dir_all(&mesh_dir).expect("Failed to create mesh dir");
-    
-    // Set up globals
-    globals::set_config_path(config_path.to_string_lossy().to_string());
-    let cli = Cli::new(config_path.to_string_lossy().to_string());
-    let config = Config::from_args(cli);
-    globals::set_config(Arc::new(config));
+    let test_result = timeout(Duration::from_secs(10), async {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_test_config(&temp_dir, 8080);
+        
+        // Create mesh directory
+        let mesh_dir = temp_dir.path().join("mesh");
+        fs::create_dir_all(&mesh_dir).expect("Failed to create mesh dir");
+        
+        // Set up globals
+        globals::set_config_path(config_path.to_string_lossy().to_string());
+        let cli = Cli::new(config_path.to_string_lossy().to_string());
+        let config = Config::from_args(cli);
+        globals::set_config(Arc::new(config));
     
     // Mesh config content
     let mesh_config = r#"
@@ -932,24 +959,31 @@ base_url = "https://mesh.example.com"
     assert!(content.contains("healthcare_mesh"));
     assert!(content.contains("Healthcare Data Mesh"));
     
-    // Verify main config was NOT overwritten
-    let main_config = fs::read_to_string(&config_path).expect("Failed to read main config");
-    assert!(main_config.contains("[proxy]"));
-    assert!(!main_config.contains("healthcare_mesh"));
+        // Verify main config was NOT overwritten
+        let main_config = fs::read_to_string(&config_path).expect("Failed to read main config");
+        assert!(main_config.contains("[proxy]"));
+        assert!(!main_config.contains("healthcare_mesh"));
+    }).await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 10 seconds");
 }
 
 /// Test that pipeline config does NOT overwrite main config's [proxy] section
 /// This is the critical bug fix test
 #[tokio::test]
+#[serial]
 async fn test_pipeline_config_does_not_overwrite_proxy_section() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_test_config(&temp_dir, 8080);
+    use tokio::time::timeout;
     
-    // Set up globals
-    globals::set_config_path(config_path.to_string_lossy().to_string());
-    let cli = Cli::new(config_path.to_string_lossy().to_string());
-    let config = Config::from_args(cli);
-    globals::set_config(Arc::new(config));
+    let test_result = timeout(Duration::from_secs(10), async {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_test_config(&temp_dir, 8080);
+        
+        // Set up globals
+        globals::set_config_path(config_path.to_string_lossy().to_string());
+        let cli = Cli::new(config_path.to_string_lossy().to_string());
+        let config = Config::from_args(cli);
+        globals::set_config(Arc::new(config));
     
     // Read original config to verify [proxy] exists
     let original_config = fs::read_to_string(&config_path).expect("Failed to read original config");
@@ -976,24 +1010,31 @@ middleware = []
     // Should NOT be written to main config
     assert_ne!(written_path, config_path.to_string_lossy().to_string());
     
-    // Verify main config still has [proxy] section (the bug fix)
-    let main_config_after = fs::read_to_string(&config_path).expect("Failed to read main config");
-    assert!(main_config_after.contains("[proxy]"), "[proxy] section should NOT be destroyed");
-    assert!(main_config_after.contains("id = \"test-proxy\""), "proxy.id should be preserved");
-    assert!(!main_config_after.contains("dangerous_pipeline"), "Pipeline should NOT be in main config");
+        // Verify main config still has [proxy] section (the bug fix)
+        let main_config_after = fs::read_to_string(&config_path).expect("Failed to read main config");
+        assert!(main_config_after.contains("[proxy]"), "[proxy] section should NOT be destroyed");
+        assert!(main_config_after.contains("id = \"test-proxy\""), "proxy.id should be preserved");
+        assert!(!main_config_after.contains("dangerous_pipeline"), "Pipeline should NOT be in main config");
+    }).await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 10 seconds");
 }
 
 /// Test transform config routing (TOML wrapper format)
 #[tokio::test]
+#[serial]
 async fn test_write_cloud_config_transform_routing() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_test_config(&temp_dir, 8080);
+    use tokio::time::timeout;
     
-    // Set up globals
-    globals::set_config_path(config_path.to_string_lossy().to_string());
-    let cli = Cli::new(config_path.to_string_lossy().to_string());
-    let config = Config::from_args(cli);
-    globals::set_config(Arc::new(config));
+    let test_result = timeout(Duration::from_secs(10), async {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_test_config(&temp_dir, 8080);
+        
+        // Set up globals
+        globals::set_config_path(config_path.to_string_lossy().to_string());
+        let cli = Cli::new(config_path.to_string_lossy().to_string());
+        let config = Config::from_args(cli);
+        globals::set_config(Arc::new(config));
     
     // Transform config in TOML wrapper format (as sent by cloud)
     let transform_config = r#"
@@ -1013,22 +1054,29 @@ spec = "[{\"operation\":\"shift\"}]"
     let expected_path = temp_dir.path().join("transforms").join("patient_transform.json");
     assert_eq!(written_path, expected_path.to_string_lossy().to_string());
     
-    // Verify file has .json extension
-    assert!(written_path.ends_with(".json"));
+        // Verify file has .json extension
+        assert!(written_path.ends_with(".json"));
+    }).await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 10 seconds");
 }
 
 /// Test that unknown resource types fall back to main config
 #[tokio::test]
+#[serial]
 async fn test_write_cloud_config_unknown_type_fallback() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_test_config(&temp_dir, 8080);
+    use tokio::time::timeout;
     
-    // Set up globals
-    let config_path_str = config_path.to_string_lossy().to_string();
-    globals::set_config_path(config_path_str.clone());
-    let cli = Cli::new(config_path_str.clone());
-    let config = Config::from_args(cli);
-    globals::set_config(Arc::new(config));
+    let test_result = timeout(Duration::from_secs(10), async {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_test_config(&temp_dir, 8080);
+        
+        // Set up globals
+        let config_path_str = config_path.to_string_lossy().to_string();
+        globals::set_config_path(config_path_str.clone());
+        let cli = Cli::new(config_path_str.clone());
+        let config = Config::from_args(cli);
+        globals::set_config(Arc::new(config));
     
     // Some unknown config type
     let unknown_config = r#"
@@ -1043,23 +1091,30 @@ value = "test"
     assert!(result.is_ok(), "write_cloud_config should succeed with unknown type (fallback)");
     let written_path = result.unwrap();
     
-    // Unknown types should fall back to main config path (verifying it's TOML)
-    // Note: Due to global state sharing, verify the path pattern rather than exact match
-    assert!(written_path.ends_with("test-config.toml") || written_path.ends_with("config.toml"),
-        "Unknown type should fall back to main config, got: {}", written_path);
+        // Unknown types should fall back to main config path (verifying it's TOML)
+        // Note: Due to global state sharing, verify the path pattern rather than exact match
+        assert!(written_path.ends_with("test-config.toml") || written_path.ends_with("config.toml"),
+            "Unknown type should fall back to main config, got: {}", written_path);
+    }).await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 10 seconds");
 }
 
 /// Test that pipeline config without valid section name fails gracefully
 #[tokio::test]
+#[serial]
 async fn test_write_cloud_config_pipeline_missing_name() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_test_config(&temp_dir, 8080);
+    use tokio::time::timeout;
     
-    // Set up globals
-    globals::set_config_path(config_path.to_string_lossy().to_string());
-    let cli = Cli::new(config_path.to_string_lossy().to_string());
-    let config = Config::from_args(cli);
-    globals::set_config(Arc::new(config));
+    let test_result = timeout(Duration::from_secs(10), async {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_test_config(&temp_dir, 8080);
+        
+        // Set up globals
+        globals::set_config_path(config_path.to_string_lossy().to_string());
+        let cli = Cli::new(config_path.to_string_lossy().to_string());
+        let config = Config::from_args(cli);
+        globals::set_config(Arc::new(config));
     
     // Pipeline config without proper pipelines section
     let invalid_pipeline = r#"
@@ -1071,9 +1126,12 @@ id = "not-a-pipeline"
     let config_dir = temp_dir.path();
     let result = write_cloud_config("test-change-7", "pipeline", invalid_pipeline, config_dir).await;
     
-    // Should fail because we can't extract pipeline name
-    assert!(result.is_err(), "Should fail when pipeline name cannot be extracted");
-    assert!(result.unwrap_err().contains("Failed to extract pipeline name"));
+        // Should fail because we can't extract pipeline name
+        assert!(result.is_err(), "Should fail when pipeline name cannot be extracted");
+        assert!(result.unwrap_err().contains("Failed to extract pipeline name"));
+    }).await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 10 seconds");
 }
 
 // Note: Full integration tests with mock HTTP server for RunbeamClient

@@ -333,88 +333,88 @@ impl Config {
             .unwrap_or(false)
     }
 
-    pub fn from_args(cli: Cli) -> Self {
-        // Verify the config file has a .toml extension
-        let config_path = Path::new(&cli.config_path);
-        if config_path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
-            eprintln!(
-                "ERROR: Configuration file must have a .toml extension: {}",
-                cli.config_path
-            );
-            std::process::exit(1);
+    /// Load configuration from a file path without exiting on error.
+    pub fn load(config_path: &str) -> Result<Self, ConfigError> {
+        let path = Path::new(config_path);
+        
+        // Verify extension
+        if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
+            return Err(ConfigError::InvalidProxy {
+                name: "config".to_string(),
+                reason: format!("Configuration file must have a .toml extension: {}", config_path),
+            });
         }
 
-        // Load the base configuration file
-        let contents = match std::fs::read_to_string(&cli.config_path) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("ERROR: Failed to read config file '{}': {}", cli.config_path, e);
-                std::process::exit(1);
-            }
-        };
+        // Read file
+        let contents = std::fs::read_to_string(path).map_err(|e| ConfigError::InvalidProxy {
+            name: "config".to_string(),
+            reason: format!("Failed to read config file '{}': {}", config_path, e),
+        })?;
 
-        // Apply environment variable substitution
+        // Parse and substitute env vars
         let (contents_substituted, _audit) = substitute_env_vars(&contents);
-        let mut config: Config = match toml::from_str(&contents_substituted) {
-            Ok(c) => c,
-            Err(e) => {
-                eprintln!("ERROR: Failed to parse config file '{}': {}", cli.config_path, e);
-                std::process::exit(1);
-            }
-        };
+        let mut config: Config = toml::from_str(&contents_substituted).map_err(|e| ConfigError::InvalidProxy {
+            name: "config".to_string(),
+            reason: format!("Failed to parse config file '{}': {}", config_path, e),
+        })?;
 
-        // Resolve transforms_path relative to config file directory
-        let base_dir = match config_path.parent() {
-            Some(d) => d,
-            None => {
-                eprintln!("ERROR: Failed to get config file directory");
-                std::process::exit(1);
-            }
-        };
+        // Resolve paths
+        let base_dir = path.parent().ok_or_else(|| ConfigError::InvalidProxy {
+            name: "config".to_string(),
+            reason: "Failed to get config file directory".to_string(),
+        })?;
+
         let transforms_path = base_dir.join(&config.proxy.transforms_path);
         config.resolved_transforms_path = Some(transforms_path.to_string_lossy().to_string());
 
-        // Resolve mesh_path relative to config file directory
         let mesh_path = base_dir.join(&config.proxy.mesh_path);
         config.resolved_mesh_path = Some(mesh_path.to_string_lossy().to_string());
 
-        // Attempt to load additional configs and merge them into the current config.
-        match Self::load_additional_configs(&config, &cli.config_path) {
-            Ok(additional_configs) => {
-                config = Self::merge_configs(config, additional_configs);
-            }
-            Err(e) => {
-                tracing::error!("Failed to load additional configurations: {}", e);
-            }
+        // Load additional configs
+        if let Ok(additional_configs) = Self::load_additional_configs(&config, config_path) {
+            config = Self::merge_configs(config, additional_configs);
         }
 
-        // Resolve references (targets/peers)
+        // Resolve references
         match resolve_references(&mut config) {
             Ok(unresolved) => {
                 config.unresolved_backends = unresolved;
             }
             Err(e) => {
-                eprintln!("ERROR: Configuration reference resolution failed: {}", e);
-                std::process::exit(1);
+                return Err(ConfigError::InvalidProxy {
+                    name: "config".to_string(),
+                    reason: format!("Configuration reference resolution failed: {}", e),
+                });
             }
         }
 
-        // Inject management service if enabled
-        if let Err(e) = config.inject_management_service() {
-            eprintln!("ERROR: Failed to inject management service: {:?}", e);
-            std::process::exit(1);
-        }
+        // Inject management service
+        config.inject_management_service()?;
 
-        // Initialize both registries
+        // Initialize registries
         config.initialize_service_registry();
         config.initialize_middleware_registry();
 
-        // Validate the final, merged configuration
-        if let Err(e) = config.validate() {
-            eprintln!("ERROR: Configuration validation failed: {:?}", e);
-            std::process::exit(1);
+        // Validate
+        config.validate()?;
+
+        Ok(config)
+    }
+
+    pub fn from_args(cli: Cli) -> Self {
+        match Self::load(&cli.config_path) {
+            Ok(config) => config,
+            Err(e) => {
+                let msg = match e {
+                    ConfigError::InvalidProxy { reason, .. } => reason,
+                    ConfigError::InvalidNetwork { name, reason } => format!("Invalid network '{}': {}", name, reason),
+                    ConfigError::InvalidPipeline { name, reason } => format!("Invalid pipeline '{}': {}", name, reason),
+                    _ => format!("{:?}", e),
+                };
+                eprintln!("ERROR: {}", msg);
+                std::process::exit(1);
+            }
         }
-        config
     }
 
     fn initialize_service_registry(&self) {

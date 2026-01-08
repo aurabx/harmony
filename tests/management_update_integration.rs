@@ -8,6 +8,7 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::time::{sleep, Duration};
+use serial_test::serial;
 
 /// Helper to create a minimal test config file
 fn create_test_config(dir: &TempDir, port: u16) -> PathBuf {
@@ -174,150 +175,193 @@ module = ""
 }
 
 #[tokio::test]
+#[serial]
 async fn test_update_endpoint_without_machine_token() {
-    // Create test config
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_test_config(&temp_dir, 9091);
+    use tokio::time::timeout;
+    
+    let test_result = timeout(Duration::from_secs(10), async {
+        // Create test config
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_test_config(&temp_dir, 9091);
 
-    // Load config
-    let cli = Cli::new(config_path.to_string_lossy().to_string());
-    let config = Config::from_args(cli);
+        // Load config
+        let contents = std::fs::read_to_string(config_path.as_path()).expect("read config");
+        let mut config: Config = toml::from_str(&contents).expect("parse config");
+        config.inject_management_service().expect("inject management");
+        config.validate().expect("validate config");
 
-    // Set global config for the test
-    globals::set_config(Arc::new(config.clone()));
-    globals::set_config_path(config_path.to_string_lossy().to_string());
+        // Set global config for the test
+        globals::set_config(Arc::new(config.clone()));
+        globals::set_config_path(config_path.to_string_lossy().to_string());
 
-    // Create adapter registry
-    let registry = Arc::new(AdapterRegistry::new());
-    globals::set_adapter_registry(registry);
+        // Create adapter registry
+        let registry = Arc::new(AdapterRegistry::new());
+        globals::set_adapter_registry(registry);
 
-    // Give the server a moment to be ready
-    sleep(Duration::from_millis(100)).await;
+        // Give the server a moment to be ready
+        sleep(Duration::from_millis(100)).await;
 
-    // Test: Call update endpoint without machine token (should fail with 401)
-    let client = reqwest::Client::new();
-    let response = client
-        .post("http://127.0.0.1:9091/admin/update")
-        .send()
-        .await;
+        // Test: Call update endpoint without machine token (should fail with 401)
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let response = client
+            .post("http://127.0.0.1:9091/admin/update")
+            .send()
+            .await;
 
-    match response {
-        Ok(resp) => {
-            assert_eq!(
-                resp.status(),
-                401,
-                "Expected 401 Unauthorized when no machine token is present"
-            );
+        match response {
+            Ok(resp) => {
+                assert_eq!(
+                    resp.status(),
+                    401,
+                    "Expected 401 Unauthorized when no machine token is present"
+                );
 
-            let body: serde_json::Value = resp.json().await.unwrap();
-            assert_eq!(body["error"], "Unauthorized");
-            assert!(body["message"]
-                .as_str()
-                .unwrap()
-                .contains("Run `runbeam harmony:authorize` first"));
-        }
-        Err(e) => {
-            // If server isn't running, that's expected in unit test context
-            println!("Server not running (expected in unit test): {}", e);
-        }
-    }
-}
-
-#[tokio::test]
-async fn test_update_endpoint_with_runbeam_disabled() {
-    // Create test config with runbeam disabled
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_config_runbeam_disabled(&temp_dir, 9092);
-
-    // Load config
-    let cli = Cli::new(config_path.to_string_lossy().to_string());
-    let config = Config::from_args(cli);
-
-    // Set global config for the test
-    globals::set_config(Arc::new(config.clone()));
-    globals::set_config_path(config_path.to_string_lossy().to_string());
-
-    // Create adapter registry
-    let registry = Arc::new(AdapterRegistry::new());
-    globals::set_adapter_registry(registry);
-
-    sleep(Duration::from_millis(100)).await;
-
-    // Test: Call update endpoint with runbeam disabled (should fail with 403)
-    let client = reqwest::Client::new();
-    let response = client
-        .post("http://127.0.0.1:9092/admin/update")
-        .send()
-        .await;
-
-    match response {
-        Ok(resp) => {
-            assert_eq!(
-                resp.status(),
-                403,
-                "Expected 403 Forbidden when Runbeam is disabled"
-            );
-
-            let body: serde_json::Value = resp.json().await.unwrap();
-            assert_eq!(body["error"], "Forbidden");
-            assert!(body["message"]
-                .as_str()
-                .unwrap()
-                .contains("Runbeam Cloud integration is disabled"));
-        }
-        Err(e) => {
-            println!("Server not running (expected in unit test): {}", e);
-        }
-    }
-}
-
-#[tokio::test]
-async fn test_update_endpoint_with_missing_proxy_id() {
-    // Create test config without proxy.id
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_config_missing_proxy_id(&temp_dir, 9093);
-
-    // Load config - this should actually fail during Config::from_args validation
-    // but we test the update handler's validation as well
-    let cli = Cli::new(config_path.to_string_lossy().to_string());
-
-    // Note: Config validation may catch this before we even get to the update handler
-    // This test verifies the defense-in-depth approach
-    match std::panic::catch_unwind(|| Config::from_args(cli)) {
-        Ok(config) => {
-            globals::set_config(Arc::new(config.clone()));
-            globals::set_config_path(config_path.to_string_lossy().to_string());
-
-            let registry = Arc::new(AdapterRegistry::new());
-            globals::set_adapter_registry(registry);
-
-            sleep(Duration::from_millis(100)).await;
-
-            // If config loads, the update endpoint should catch the missing ID
-            let client = reqwest::Client::new();
-            let response = client
-                .post("http://127.0.0.1:9093/admin/update")
-                .send()
-                .await;
-
-            match response {
-                Ok(resp) => {
-                    // Should get 400 or 401 (depending on whether we hit missing ID or missing token first)
-                    assert!(
-                        resp.status() == 400 || resp.status() == 401,
-                        "Expected 400 or 401 for missing proxy ID"
-                    );
-                }
-                Err(e) => {
-                    println!("Server not running (expected in unit test): {}", e);
-                }
+                let body: serde_json::Value = resp.json().await.unwrap();
+                assert_eq!(body["error"], "Unauthorized");
+                assert!(body["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Run `runbeam harmony:authorize` first"));
+            }
+            Err(e) => {
+                // If server isn't running, that's expected in unit test context
+                println!("Server not running (expected in unit test): {}", e);
             }
         }
-        Err(_) => {
-            // Config validation caught the missing ID - this is actually preferred!
-            println!("Config validation correctly rejected config without proxy.id");
+    }).await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 10 seconds");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_update_endpoint_with_runbeam_disabled() {
+    use tokio::time::timeout;
+    
+    let test_result = timeout(Duration::from_secs(10), async {
+        // Create test config with runbeam disabled
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_config_runbeam_disabled(&temp_dir, 9092);
+
+        // Load config
+        let contents = std::fs::read_to_string(config_path.as_path()).expect("read config");
+        let mut config: Config = toml::from_str(&contents).expect("parse config");
+        config.inject_management_service().expect("inject management");
+        config.validate().expect("validate config");
+
+        // Set global config for the test
+        globals::set_config(Arc::new(config.clone()));
+        globals::set_config_path(config_path.to_string_lossy().to_string());
+
+        // Create adapter registry
+        let registry = Arc::new(AdapterRegistry::new());
+        globals::set_adapter_registry(registry);
+
+        sleep(Duration::from_millis(100)).await;
+
+        // Test: Call update endpoint with runbeam disabled (should fail with 403)
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(2))
+            .build()
+            .unwrap();
+        let response = client
+            .post("http://127.0.0.1:9092/admin/update")
+            .send()
+            .await;
+
+        match response {
+            Ok(resp) => {
+                assert_eq!(
+                    resp.status(),
+                    403,
+                    "Expected 403 Forbidden when Runbeam is disabled"
+                );
+
+                let body: serde_json::Value = resp.json().await.unwrap();
+                assert_eq!(body["error"], "Forbidden");
+                assert!(body["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("Runbeam Cloud integration is disabled"));
+            }
+            Err(e) => {
+                println!("Server not running (expected in unit test): {}", e);
+            }
         }
-    }
+    }).await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 10 seconds");
+}
+
+#[tokio::test]
+#[serial]
+async fn test_update_endpoint_with_missing_proxy_id() {
+    use tokio::time::timeout;
+    
+    let test_result = timeout(Duration::from_secs(10), async {
+        // Create test config without proxy.id
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_config_missing_proxy_id(&temp_dir, 9093);
+
+        // Load config - this should actually fail during Config::from_args validation
+        // but we test the update handler's validation as well
+        let contents = std::fs::read_to_string(config_path.as_path()).expect("read config");
+        
+        // Note: Config validation may catch this before we even get to the update handler
+        // This test verifies the defense-in-depth approach
+        match toml::from_str::<Config>(&contents) {
+            Ok(mut config) => {
+                // If TOML parsing succeeds, try validation
+                match config.validate() {
+                    Ok(_) => {
+                        globals::set_config(Arc::new(config.clone()));
+                        globals::set_config_path(config_path.to_string_lossy().to_string());
+
+                        let registry = Arc::new(AdapterRegistry::new());
+                globals::set_adapter_registry(registry);
+
+                sleep(Duration::from_millis(100)).await;
+
+                // If config loads, the update endpoint should catch the missing ID
+                let client = reqwest::Client::builder()
+                    .timeout(Duration::from_secs(2))
+                    .build()
+                    .unwrap();
+                let response = client
+                    .post("http://127.0.0.1:9093/admin/update")
+                    .send()
+                    .await;
+
+                        match response {
+                            Ok(resp) => {
+                                // Should get 400 or 401 (depending on whether we hit missing ID or missing token first)
+                                assert!(
+                                    resp.status() == 400 || resp.status() == 401,
+                                    "Expected 400 or 401 for missing proxy ID"
+                                );
+                            }
+                            Err(e) => {
+                                println!("Server not running (expected in unit test): {}", e);
+                            }
+                        }
+                    }
+                    Err(_) => {
+                        // Validation failed - this is good
+                        println!("Config validation correctly rejected config without proxy.id");
+                    }
+                }
+            }
+            Err(_) => {
+                // Config validation caught the missing ID - this is actually preferred!
+                println!("Config validation correctly rejected config without proxy.id");
+            }
+        }
+    }).await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 10 seconds");
 }
 
 #[tokio::test]
@@ -360,6 +404,7 @@ async fn test_update_response_structure() {
 }
 
 #[tokio::test]
+#[serial]
 async fn test_config_file_reading() {
     // Test that we can read and parse the test config
     let temp_dir = TempDir::new().unwrap();
