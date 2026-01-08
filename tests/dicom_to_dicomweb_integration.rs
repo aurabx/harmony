@@ -39,6 +39,7 @@ impl TestHarness {
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
         
         // Allocate ephemeral ports by binding then dropping listeners
+        // Note: Small race condition window exists between drop and actual binding
         let dicom_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind dicom port");
         let dicom_port = dicom_listener.local_addr().unwrap().port();
         drop(dicom_listener);
@@ -46,6 +47,9 @@ impl TestHarness {
         let http_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind http port");
         let http_backend_port = http_listener.local_addr().unwrap().port();
         drop(http_listener);
+        
+        // Small delay to reduce race condition likelihood
+        std::thread::sleep(std::time::Duration::from_millis(100));
 
         Self {
             _temp_dir: temp_dir,
@@ -215,10 +219,23 @@ module = ""
 
         self.harmony_registry = Some(registry);
 
-        // Wait for DICOM SCP to be ready
-        sleep(Duration::from_secs(2)).await;
+        // Wait for DICOM SCP to be ready with health check
+        println!("Waiting for DICOM SCP to accept connections...");
+        for i in 0..10 {
+            sleep(Duration::from_millis(500)).await;
+            
+            // Try a simple TCP connection to verify the port is listening
+            if std::net::TcpStream::connect(format!("127.0.0.1:{}", self.dicom_port)).is_ok() {
+                println!("DICOM SCP is ready on port {}", self.dicom_port);
+                sleep(Duration::from_millis(500)).await; // Extra time for full initialization
+                return Ok(());
+            }
+            
+            if i == 9 {
+                return Err(format!("DICOM SCP failed to bind to port {} after 5 seconds", self.dicom_port));
+            }
+        }
 
-        println!("Harmony proxy is ready");
         Ok(())
     }
 
