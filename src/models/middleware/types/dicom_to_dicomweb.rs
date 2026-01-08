@@ -311,7 +311,8 @@ impl DicomToDicomwebMiddleware {
         let results = envelope
             .normalized_data
             .as_ref()
-            .or(Some(&envelope.original_data));
+            .or(Some(&envelope.original_data))
+            .cloned();
 
         if let Some(data) = results {
             // Validate it's an array

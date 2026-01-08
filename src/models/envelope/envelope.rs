@@ -553,9 +553,11 @@ impl ResponseEnvelope<Vec<u8>> {
             || content_type.contains("+json");
 
         // Check for binary content types that need base64 preservation
-        let is_binary = content_type.contains("multipart/related")
-            || content_type.contains("application/dicom")
-            || content_type.contains("application/octet-stream");
+        // Note: must exclude JSON types since application/dicom+json contains "application/dicom"
+        let is_binary = !is_json
+            && (content_type.contains("multipart/related")
+                || content_type.contains("application/dicom")
+                || content_type.contains("application/octet-stream"));
 
         // For binary content, preserve as base64 so middleware can access it
         if is_binary && !self.original_data.is_empty() {
