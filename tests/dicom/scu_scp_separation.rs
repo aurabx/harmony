@@ -132,7 +132,7 @@ async fn store_test_dataset(
 }
 
 /// Test 1: dicom_scu backend with outgoing C-FIND
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_dicom_scu_backend_cfind() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -400,7 +400,7 @@ async fn test_scp_cannot_be_backend() {
 }
 
 /// Test 5: Backward compatibility - legacy "dicom" service maps to dicom_scu
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_legacy_dicom_service_backward_compat() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -596,7 +596,7 @@ async fn test_pipeline_scp_receives_external_find() {
 }
 
 /// Test 7: Full pipeline - HTTP -> SCU backend -> external PACS
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_full_pipeline_http_to_scu_to_pacs() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");

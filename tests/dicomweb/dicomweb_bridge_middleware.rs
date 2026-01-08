@@ -64,7 +64,7 @@ async fn build_router() -> axum::Router<()> {
     harmony::router::build_network_router(Arc::new(c), "default").await
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn middleware_maps_studies_to_find() {
     // We are not standing up a DICOM server; just ensure the request falls through to backend layer initiation
     let app = build_router().await;

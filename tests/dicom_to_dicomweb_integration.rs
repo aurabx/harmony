@@ -360,6 +360,7 @@ async fn test_dicom_c_store_to_stow_rs() {
     // Test C-STORE using storescu
     let output = Command::new("storescu")
         .args([
+            "-d", // Enable DCMTK debug output
             "--aetitle", "TEST_SCU",
             "--call", "BRIDGE_SCP",
             "127.0.0.1",
