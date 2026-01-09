@@ -416,6 +416,50 @@ max_bytes = 32768  # Limit for very large payloads
 - Use `RUST_LOG=harmony.dump=info` to enable just dump logs (or `debug` for more verbose)
 - Standard log filtering applies (can be directed to different files/destinations)
 
+## Webhook
+
+Sends pipeline request/response data to an external HTTP endpoint. Useful for audit logging, notifications, or external processing.
+
+Config keys:
+- `endpoint` (string, required): URL to POST data to
+- `apply` (string, optional): When to apply - "left", "right", or "both" (default: "left")
+- `redact_headers` (array of strings, optional): Header names to redact
+- `redact_metadata` (array of strings, optional): Metadata keys to redact
+- `timeout_secs` (integer, optional): Request timeout in seconds (default: 5)
+- `authentication_def` (object, optional): Authentication configuration for the webhook request
+
+Example:
+```toml
+[middleware.audit_webhook]
+type = "webhook"
+[middleware.audit_webhook.options]
+endpoint = "https://audit.example.com/logs"
+apply = "both"
+redact_headers = ["authorization", "cookie"]
+timeout_secs = 2
+```
+
+## JSON Extractor
+
+Ensures the request body is parsed as JSON into `normalized_data`. This is useful when subsequent middleware expects structured JSON data but the content type might not have triggered automatic parsing, or to guarantee `normalized_data` is populated.
+
+Config:
+```toml
+[middleware.ensure_json]
+type = "json_extractor"
+# No options required
+```
+
+## Passthru
+
+A no-op middleware that passes requests and responses through unchanged. Useful for testing, placeholders, or temporarily disabling middleware logic without removing the configuration entry.
+
+Config:
+```toml
+[middleware.noop]
+type = "passthru"
+```
+
 ## Policies
 
 The policies middleware provides comprehensive policy-based access control, rate limiting, and request filtering through a flexible rule system. It supports 13 different rule types including IP filtering, path matching, geographic restrictions, rate limiting, time-based access, HTTP method filtering, User-Agent matching, Content-Type filtering, and query parameter validation.

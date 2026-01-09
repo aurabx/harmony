@@ -51,7 +51,9 @@ port = 11112
 protocol = "dicom"
 ```
 
-**Supported protocols**: `http`, `https`, `h3` (HTTP/3), `dicom`, `harmony`, `fhir`, `hl7v2`, `custom`
+**Supported protocols**: `http`, `https`, `h3` (HTTP/3), `dicom` (DIMSE SCP), `fhir`, `jmix`.
+
+**Experimental/Planned protocols**: `hl7v2`, `custom` (dynamic loading not yet implemented)
 
 ## Endpoint Types
 
