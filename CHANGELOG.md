@@ -10,6 +10,10 @@
 - Enhanced DICOM capabilities with C-STORE on SCU and improved protocol handling
 - Version flag support for CLI
 - Improved configuration management and cloud integration
+- HTTP/3 (QUIC) support for both inbound listeners and outbound backends
+- New middleware for DICOM to DICOMweb protocol translation
+- Enhanced webhook middleware for event integration and audit logging
+- Improved middleware type validation
 
 ### Added
 - (AURA-2241) Data mesh infrastructure
@@ -29,12 +33,21 @@
 - C-STORE dataset available in envelope for middleware processing
 - Basic DICOM keys added to DIMSE crate
 - Build command for creating release binaries for testing
+- HTTP/3 (QUIC) protocol support
+  - HTTP/3 inbound listeners with TLS configuration
+  - HTTP/3 backend connectivity for outbound requests
+  - Coexistence with HTTP/1.x and HTTP/2 on same network
+- DICOM to DICOMweb middleware for protocol translation
+  - Enables DICOM SCP endpoints to proxy to DICOMweb-compatible backends
+- Webhook middleware for event integration
+  - Integration with external event systems
 
 ### Changed
 - Migrated `backend_path` to services configuration
 - Token handling now saves tokens when provided via environment variables
 - Management service organization improved
 - Made JWT `_alg` field optional for flexibility
+- Improved middleware type validation
 
 ### Fixed
 - Process no longer exits on invalid config reload (gracefully handles errors)
@@ -51,34 +64,14 @@
 - Test resource conflicts (dcmqrscp) resolved
 - DICOMweb test stability improved
 - Dev install script fixed
+- Fixed validation failures for `jwt_auth` middleware
+- Missing targets no longer cause crashes during configuration validation
 
 ### Documentation
 - Provider and mesh documentation updates
 
 ### Dependencies
 - Internal crates updated to 0.12.0 (dimse, dicom_json_tool, harmony_transform, harmony-database, harmony-filesystem)
-
-## [0.11.0] - 2025-12-23
-
-### Highlights
-- HTTP/3 (QUIC) support for both inbound listeners and outbound backends
-- New middleware for DICOM to DICOMweb protocol translation
-- Enhanced webhook middleware for event integration and audit logging
-- Improved middleware type validation
-
-### Added
-- HTTP/3 (QUIC) protocol support
-  - HTTP/3 inbound listeners with TLS configuration
-  - HTTP/3 backend connectivity for outbound requests
-  - Coexistence with HTTP/1.x and HTTP/2 on same network
-- DICOM to DICOMweb middleware for protocol translation
-  - Enables DICOM SCP endpoints to proxy to DICOMweb-compatible backends
-- Webhook middleware for event integration
-  - Integration with external event systems
-
-### Fixed
-- Fixed validation failures for `jwt_auth` middleware
-- Missing targets no longer cause crashes during configuration validation
 
 ## [0.10.1] - 2025-12-14
 
@@ -488,8 +481,7 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
-[0.12.0]: https://github.com/aurabx/harmony/compare/0.11.0...0.12.0
-[0.11.0]: https://github.com/aurabx/harmony/compare/0.10.1...0.11.0
+[0.12.0]: https://github.com/aurabx/harmony/compare/0.10.1...0.12.0
 [0.10.1]: https://github.com/aurabx/harmony/compare/0.10.0...0.10.1
 [0.10.0]: https://github.com/aurabx/harmony/compare/0.9.0...0.10.0
 [0.9.0]: https://github.com/aurabx/harmony/compare/0.8.0...0.9.0
