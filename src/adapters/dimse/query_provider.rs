@@ -174,7 +174,7 @@ impl PipelineQueryProvider {
 
         // Build ProtocolCtx for DIMSE
         meta.insert("protocol".into(), "dimse".into());
-        meta.insert("operation".into(), op.to_string());
+        meta.insert("dimse_op".into(), op.to_string());
         let ctx = ProtocolCtx {
             protocol: Protocol::Dimse,
             payload: serde_json::to_vec(&body).unwrap_or_default(),
