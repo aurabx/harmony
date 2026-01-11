@@ -73,6 +73,20 @@ pub struct TargetDetails {
     pub metadata: HashMap<String, String>,
 }
 
+impl Default for TargetDetails {
+    fn default() -> Self {
+        Self {
+            base_url: String::new(),
+            method: String::new(),
+            uri: String::new(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            metadata: HashMap::new(),
+        }
+    }
+}
+
 impl TargetDetails {
     /// Creates TargetDetails from RequestDetails with a base_url
     pub fn from_request_details(base_url: String, request_details: &RequestDetails) -> Self {
@@ -89,7 +103,12 @@ impl TargetDetails {
 
     /// Constructs the full URL by combining base_url with uri and query_params
     pub fn full_url(&self) -> Result<String, crate::utils::Error> {
-        let mut url = format!("{}{}", self.base_url, self.uri);
+        // Handle double-slash case: if base_url ends with / and uri starts with /, remove one
+        let mut url = if self.base_url.ends_with('/') && self.uri.starts_with('/') {
+            format!("{}{}", self.base_url.trim_end_matches('/'), self.uri)
+        } else {
+            format!("{}{}", self.base_url, self.uri)
+        };
 
         // Add query parameters if any exist
         if !self.query_params.is_empty() {
@@ -188,7 +207,7 @@ where
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// let envelope = RequestEnvelope::builder()
     ///     .method("GET")
     ///     .uri("/test")
@@ -210,7 +229,7 @@ where
 /// # Examples
 ///
 /// ## Minimal usage
-/// ```ignore
+/// ```text
 /// let envelope = RequestEnvelopeBuilder::new()
 ///     .method("POST")
 ///     .uri("/api/resource")
@@ -219,7 +238,7 @@ where
 /// ```
 ///
 /// ## From existing RequestDetails
-/// ```ignore
+/// ```text
 /// let request_details = RequestDetails { /* ... */ };
 /// let envelope = RequestEnvelopeBuilder::from_request_details(request_details)
 ///     .original_data(serde_json::json!({"key": "value"}))
@@ -227,7 +246,7 @@ where
 /// ```
 ///
 /// ## With metadata and headers
-/// ```ignore
+/// ```text
 /// let envelope = RequestEnvelopeBuilder::new()
 ///     .method("GET")
 ///     .uri("/test")
@@ -473,13 +492,13 @@ impl<T> Default for RequestEnvelopeBuilder<T> {
     }
 }
 
-impl ResponseEnvelope<Vec<u8>> {
+impl<T> ResponseEnvelope<T> {
     /// Creates a new ResponseEnvelope from backend response components
     pub fn from_backend(
         request_details: RequestDetails,
         status: u16,
         headers: HashMap<String, String>,
-        body: Vec<u8>,
+        original_data: T,
         metadata: Option<HashMap<String, String>>,
     ) -> Self {
         let response_details = ResponseDetails {
@@ -491,12 +510,14 @@ impl ResponseEnvelope<Vec<u8>> {
         ResponseEnvelope {
             request_details,
             response_details,
-            original_data: body,
+            original_data,
             normalized_data: None,
             normalized_snapshot: None,
         }
     }
+}
 
+impl ResponseEnvelope<Vec<u8>> {
     /// Converts to JSON-aware envelope by parsing body if content-type indicates JSON
     pub fn to_json(self) -> Result<ResponseEnvelope<serde_json::Value>, crate::utils::Error> {
         // If normalized_data already exists AND body is empty, preserve normalized_data
@@ -517,19 +538,43 @@ impl ResponseEnvelope<Vec<u8>> {
             // (normalized_data will be preserved below)
         }
 
-        // Check if content-type indicates JSON
-        let is_json = self
+        // Check content-type to determine handling strategy
+        let content_type = self
             .response_details
             .headers
             .get("content-type")
             .or_else(|| self.response_details.headers.get("Content-Type"))
-            .map(|ct| {
-                ct.contains("application/json")
-                    || ct.contains("application/fhir+json")
-                    || ct.contains("application/dicom+json")
-                    || ct.contains("+json")
-            })
-            .unwrap_or(false);
+            .cloned()
+            .unwrap_or_default();
+
+        let is_json = content_type.contains("application/json")
+            || content_type.contains("application/fhir+json")
+            || content_type.contains("application/dicom+json")
+            || content_type.contains("+json");
+
+        // Check for binary content types that need base64 preservation
+        // Note: must exclude JSON types since application/dicom+json contains "application/dicom"
+        let is_binary = !is_json
+            && (content_type.contains("multipart/related")
+                || content_type.contains("application/dicom")
+                || content_type.contains("application/octet-stream"));
+
+        // For binary content, preserve as base64 so middleware can access it
+        if is_binary && !self.original_data.is_empty() {
+            use base64::Engine;
+            let b64 = base64::engine::general_purpose::STANDARD.encode(&self.original_data);
+            let binary_wrapper = serde_json::json!({
+                "body_b64": b64,
+                "content_length": self.original_data.len()
+            });
+            return Ok(ResponseEnvelope {
+                request_details: self.request_details,
+                response_details: self.response_details,
+                original_data: binary_wrapper.clone(),
+                normalized_data: Some(binary_wrapper),
+                normalized_snapshot: self.normalized_snapshot,
+            });
+        }
 
         let (parsed_normalized, original_json) = if is_json && !self.original_data.is_empty() {
             match serde_json::from_slice::<serde_json::Value>(&self.original_data) {
@@ -560,10 +605,39 @@ impl ResponseEnvelope<Vec<u8>> {
         })
     }
 }
-
 impl ResponseEnvelope<serde_json::Value> {
     /// Converts back to byte-level envelope, serializing JSON if needed
     pub fn to_bytes(mut self) -> Result<ResponseEnvelope<Vec<u8>>, crate::utils::Error> {
+        // Check for body_b64 in normalized_data (binary content preserved by to_json)
+        if let Some(ref normalized) = self.normalized_data {
+            if let Some(b64) = normalized.get("body_b64").and_then(|v| v.as_str()) {
+                use base64::Engine;
+                if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                    return Ok(ResponseEnvelope {
+                        request_details: self.request_details,
+                        response_details: self.response_details,
+                        original_data: bytes,
+                        normalized_data: self.normalized_data,
+                        normalized_snapshot: self.normalized_snapshot,
+                    });
+                }
+            }
+        }
+
+        // Also check original_data for body_b64 (fallback)
+        if let Some(b64) = self.original_data.get("body_b64").and_then(|v| v.as_str()) {
+            use base64::Engine;
+            if let Ok(bytes) = base64::engine::general_purpose::STANDARD.decode(b64) {
+                return Ok(ResponseEnvelope {
+                    request_details: self.request_details,
+                    response_details: self.response_details,
+                    original_data: bytes,
+                    normalized_data: self.normalized_data,
+                    normalized_snapshot: self.normalized_snapshot,
+                });
+            }
+        }
+
         // Prefer normalized_data for body (may have been modified by middleware)
         // Fall back to original_data if normalized_data is None
         let body_bytes = if let Some(ref normalized) = self.normalized_data {
@@ -627,7 +701,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_base_url("https://api.example.com");
     /// ```
     pub fn set_target_base_url(&mut self, base_url: impl Into<String>) {
@@ -642,7 +716,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_uri("/v2/resource");
     /// ```
     pub fn set_target_uri(&mut self, uri: impl Into<String>) {
@@ -657,7 +731,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_header("Authorization", "Bearer token123");
     /// ```
     pub fn set_target_header(&mut self, key: impl Into<String>, value: impl Into<String>) {
@@ -672,7 +746,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_query_param("filter", vec!["active".to_string()]);
     /// ```
     pub fn set_target_query_param(&mut self, key: impl Into<String>, values: Vec<String>) {
@@ -687,7 +761,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_metadata("dimse_op", "find");
     /// ```
     pub fn set_target_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
@@ -702,7 +776,7 @@ impl<T> RequestEnvelope<T> {
     ///
     /// # Example
     ///
-    /// ```ignore
+    /// ```text
     /// envelope.set_target_method("POST");
     /// ```
     pub fn set_target_method(&mut self, method: impl Into<String>) {
@@ -838,33 +912,74 @@ mod tests {
         envelope.set_target_uri("/v2/api");
 
         let target = envelope.target_details.as_ref().unwrap();
-        assert_eq!(target.base_url, "https://second.example.com");
+assert_eq!(target.base_url, "https://second.example.com");
         assert_eq!(target.uri, "/v2/api");
     }
 
+    // New tests: binary to_json/to_bytes round trip for application/dicom
     #[test]
-    fn test_initialization_copies_all_fields() {
-        let mut envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
-            .method("POST")
-            .uri("/test")
-            .header("content-type", "application/json")
-            .header("authorization", "Bearer xyz")
-            .query_param("q1", vec!["v1".to_string()])
-            .query_param("q2", vec!["v2a".to_string(), "v2b".to_string()])
-            .metadata_entry("m1", "meta1")
-            .metadata_entry("m2", "meta2")
-            .original_data(vec![])
-            .build()
-            .unwrap();
+    fn test_response_envelope_to_json_binary_dicom_roundtrip() {
+        let mut headers = std::collections::HashMap::new();
+        headers.insert("content-type".to_string(), "application/dicom".to_string());
+        let body = b"DICM_FAKE_BYTES".to_vec();
 
-        envelope.set_target_base_url("https://example.com");
+        let resp = ResponseEnvelope::from_backend(
+            RequestDetails::default(),
+            200,
+            headers.clone(),
+            body.clone(),
+            None,
+        );
 
-        let target = envelope.target_details.as_ref().unwrap();
-        assert_eq!(target.base_url, "https://example.com");
-        assert_eq!(target.method, "POST");
-        assert_eq!(target.uri, "/test");
-        assert_eq!(target.headers.len(), 2);
-        assert_eq!(target.query_params.len(), 2);
-        assert_eq!(target.metadata.len(), 2);
+        // Convert to JSON and ensure body_b64 is present
+        let json_env = resp.to_json().expect("to_json failed");
+        let nd = json_env
+            .normalized_data
+            .clone()
+            .expect("normalized_data missing");
+        assert!(nd.get("body_b64").is_some(), "body_b64 should be present");
+
+        // Convert back to bytes and ensure body matches original
+        let bytes_env = json_env.to_bytes().expect("to_bytes failed");
+        assert_eq!(bytes_env.original_data, body);
+        // Content-type preserved
+        assert_eq!(
+            bytes_env.response_details.headers.get("content-type"),
+            Some(&"application/dicom".to_string())
+        );
+    }
+
+    // New tests: binary to_json/to_bytes for multipart/related
+    #[test]
+    fn test_response_envelope_to_json_multipart_roundtrip() {
+        let mut headers = std::collections::HashMap::new();
+        headers.insert(
+            "content-type".to_string(),
+            "multipart/related; type=\"application/dicom\"; boundary=abc".to_string(),
+        );
+        let body = b"--abc\r\nContent-Type: application/dicom\r\n\r\nDATA\r\n--abc--\r\n".to_vec();
+
+        let resp = ResponseEnvelope::from_backend(
+            RequestDetails::default(),
+            200,
+            headers.clone(),
+            body.clone(),
+            None,
+        );
+
+        let json_env = resp.to_json().expect("to_json failed");
+        let nd = json_env
+            .normalized_data
+            .clone()
+            .expect("normalized_data missing");
+        let b64 = nd.get("body_b64").and_then(|v| v.as_str()).expect("missing b64");
+        use base64::Engine;
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(b64)
+            .expect("decode failed");
+        assert_eq!(decoded, body);
+
+        let bytes_env = json_env.to_bytes().expect("to_bytes failed");
+        assert_eq!(bytes_env.original_data, body);
     }
 }

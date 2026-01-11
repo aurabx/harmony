@@ -1,5 +1,7 @@
 # FHIR ImagingStudy Pipeline Documentation
 
+**Last Updated**: 2025-11-30
+
 This document describes how to implement FHIR ImagingStudy endpoints that query DICOM backends using harmony-proxy, specifically for the endpoint:
 
 ```
@@ -254,10 +256,10 @@ middleware = [
 
 ### Manual Testing
 
-Start harmony-proxy with your configuration:
+Start harmony with your configuration:
 
 ```bash
-./harmony-proxy --config examples/config/pipelines/fhir_imagingstudy.toml
+./harmony --config examples/config/pipelines/fhir_imagingstudy.toml
 ```
 
 Test the endpoint:

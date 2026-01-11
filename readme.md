@@ -13,6 +13,21 @@
   </p>
 </div>
 
+---
+
+<div align="center">
+
+### 🛠️ This project was built by [Aurabox](https://github.com/aurabx)
+
+*Some of our other projects...*
+
+[![Runbeam](https://img.shields.io/badge/Runbeam-Data_Mesh_Platform-purple?style=flat-square)](https://runbeam.io)
+[![JMIX](https://img.shields.io/badge/Aurabox-Medical_Imaging_Exchange-blue?style=flat-square)](https://aurabox.cloud)
+
+</div>
+
+---
+
 ## Overview
 
 Harmony Proxy is a production-ready, extensible data mesh proxy/gateway for heterogeneous systems. It routes requests through configurable endpoints, middleware, and services/backends to connect systems that speak HTTP/JSON, FHIR, DICOM/DICOMweb, and JMIX.
@@ -25,7 +40,7 @@ Highlights:
 - Authentication: JWT (recommend RS256 in production), optional Basic
 - Transformations: JSON transforms (JOLT), DICOM↔DICOMweb bridging, JMIX packaging
 - Runbeam Cloud Integration: Gateway authorization for autonomous API access with 30-day machine tokens
-- Secure Token Storage: Automatic selection of OS keyring or encrypted filesystem (no configuration needed)
+- Secure Token Storage: Encrypted filesystem storage for machine tokens (no configuration needed)
 - Security: XXE prevention, CSV formula injection mitigation, configurable size limits
 - Operationally sound: structured logging, local ./tmp storage convention
 
@@ -63,10 +78,10 @@ sha256sum -c harmony-x86_64-unknown-linux-gnu.sha256
 tar xzf harmony-x86_64-unknown-linux-gnu.tar.gz
 
 # Make executable
-chmod +x harmony-proxy
+chmod +x harmony
 
 # Optional: Move to system path
-sudo mv harmony-proxy /usr/local/bin/
+sudo mv harmony /usr/local/bin/
 ```
 
 #### Linux ARM64
@@ -83,10 +98,10 @@ sha256sum -c harmony-aarch64-unknown-linux-gnu.sha256
 tar xzf harmony-aarch64-unknown-linux-gnu.tar.gz
 
 # Make executable
-chmod +x harmony-proxy
+chmod +x harmony
 
 # Optional: Move to system path
-sudo mv harmony-proxy /usr/local/bin/
+sudo mv harmony /usr/local/bin/
 ```
 
 #### macOS Intel (x86_64)
@@ -103,13 +118,13 @@ shasum -a 256 -c harmony-x86_64-apple-darwin.sha256
 tar xzf harmony-x86_64-apple-darwin.tar.gz
 
 # Remove quarantine attribute (required on macOS)
-xattr -d com.apple.quarantine harmony-proxy
+xattr -d com.apple.quarantine harmony
 
 # Make executable (if needed)
-chmod +x harmony-proxy
+chmod +x harmony
 
 # Optional: Move to system path
-sudo mv harmony-proxy /usr/local/bin/
+sudo mv harmony /usr/local/bin/
 ```
 
 #### macOS Apple Silicon (ARM64)
@@ -126,13 +141,13 @@ shasum -a 256 -c harmony-aarch64-apple-darwin.sha256
 tar xzf harmony-aarch64-apple-darwin.tar.gz
 
 # Remove quarantine attribute (required on macOS)
-xattr -d com.apple.quarantine harmony-proxy
+xattr -d com.apple.quarantine harmony
 
 # Make executable (if needed)
-chmod +x harmony-proxy
+chmod +x harmony
 
 # Optional: Move to system path
-sudo mv harmony-proxy /usr/local/bin/
+sudo mv harmony /usr/local/bin/
 ```
 
 #### Windows x64
@@ -152,7 +167,7 @@ Get-FileHash -Algorithm SHA256 harmony-x86_64-pc-windows-msvc.tar.gz
 tar xzf harmony-x86_64-pc-windows-msvc.tar.gz
 
 # Optional: Add to PATH
-# Move harmony-proxy.exe to a directory in your PATH, or add the current directory to PATH
+# Move harmony.exe to a directory in your PATH, or add the current directory to PATH
 ```
 
 #### Running the binary
@@ -161,10 +176,10 @@ Once installed, run Harmony with a configuration file:
 
 ```bash
 # If in current directory
-./harmony-proxy --config /path/to/config.toml
+./harmony --config /path/to/config.toml
 
 # If installed to /usr/local/bin or in PATH
-harmony-proxy --config /path/to/config.toml
+harmony --config /path/to/config.toml
 ```
 
 Note: To use the example configurations, you'll need to clone this repository or download them separately from the [examples directory](https://github.com/aurabx/harmony/tree/main/examples).
@@ -230,24 +245,24 @@ If you have prebuilt binaries or are running from CI output, use the lean runtim
 
 ```bash
 # Build image from prebuilt binaries (fast path)
-docker build -t harmony-proxy .
+docker build -t harmony .
 
 # Run with default config
 docker run -p 8080:8080 -p 9090:9090 \
   -v $(pwd)/config:/etc/harmony:ro \
-  harmony-proxy
+  harmony
 
 # Run with example config
 docker run -p 8080:8080 \
   -v $(pwd)/examples:/examples:ro \
-  harmony-proxy --config /examples/basic-echo/config.toml
+  harmony --config /examples/basic-echo/config.toml
 ```
 
-If you’d rather build everything from scratch (no prebuilt binaries), specify the full build image explicitly:
+If you'd rather build everything from scratch (no prebuilt binaries), specify the full build image explicitly:
 
 ```bash
-docker build -f Dockerfile.build -t harmony-proxy .
-docker run -p 8080:8080 harmony-proxy
+docker build -f Dockerfile.build -t harmony .
+docker run -p 8080:8080 harmony
 ```
 
 ---
@@ -313,7 +328,7 @@ See [docs/configuration.md](docs/configuration.md), [docs/endpoints.md](docs/end
 ## System requirements
 - Rust (stable)
 - macOS or Linux runtime environment
-- DCMTK (required if you use DICOM DIMSE features)
+- DCMTK (required for DICOM SCU operations: C-GET and C-MOVE; optional for persistent C-STORE SCP)
   - macOS (Homebrew): `brew install dcmtk`
   - Debian/Ubuntu: `sudo apt-get install dcmtk`
 
@@ -353,7 +368,7 @@ runbeam harmony:show-key my-instance
 runbeam harmony:delete-key my-instance
 ```
 
-The CLI stores keys in your OS keyring (macOS Keychain, Linux Secret Service, Windows Credential Manager) and automatically sends them to Harmony's `/admin/authorize` endpoint during gateway authorization.
+The CLI can optionally manage and send encryption keys to Harmony's `/admin/authorize` endpoint during gateway authorization.
 
 **2. Environment Variable (Recommended for Single Instance/Container)**
 
@@ -361,7 +376,7 @@ Set `RUNBEAM_ENCRYPTION_KEY` for the Harmony process:
 
 ```bash
 export RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-...
-./harmony-proxy --config config.toml
+./harmony --config config.toml
 ```
 
 This is ideal for containerized deployments where you want consistent encryption across restarts.
@@ -375,9 +390,8 @@ If neither CLI keys nor environment variables are provided, Harmony auto-generat
 2. `RUNBEAM_ENCRYPTION_KEY` environment variable
 3. Auto-generated key
 
-**Storage Backends:**
-- **OS Keyring** (preferred): Uses native credential storage when available
-- **Encrypted Filesystem** (fallback): `~/.runbeam/<proxy_id>/auth.json` encrypted with age X25519
+**Storage Backend:**
+- **Encrypted Filesystem**: `~/.runbeam/<proxy_id>/auth.json` encrypted with age X25519
 
 **Headless/Pre-Provisioned Deployments:**
 
@@ -390,7 +404,7 @@ export RUNBEAM_MACHINE_TOKEN='{"machine_token":"mt_abc...","expires_at":"2025-12
 # Optionally set encryption key for storage persistence
 export RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-...
 
-./harmony-proxy --config config.toml
+./harmony --config config.toml
 ```
 
 Harmony will use `RUNBEAM_MACHINE_TOKEN` on startup and optionally persist it to storage if it needs to be reused. Priority: environment variable > stored token.
@@ -408,3 +422,19 @@ Important: You may freely download, use, and modify Harmony Proxy for internal u
 ## Support
 - General questions and support: hello@aurabox.cloud
 - Security or conduct concerns: hello@aurabox.cloud
+
+---
+
+<div align="center">
+
+### 🛠️ This project was built by [Aurabox](https://github.com/aurabx)
+
+*Some of our other projects...*
+
+[![Harmony](https://img.shields.io/badge/Harmony-API_Gateway-purple?style=flat-square)](https://github.com/aurabox/harmony-proxy)
+[![Runbeam](https://img.shields.io/badge/Runbeam-Data_Mesh_Platform-purple?style=flat-square)](https://runbeam.io)
+[![JMIX](https://img.shields.io/badge/Aurabox-Medical_Imaging_Exchange-blue?style=flat-square)](https://aurabox.cloud)
+
+</div>
+
+---

@@ -22,9 +22,9 @@ jobs:
       matrix:
         include:
           # Linux (most common distros and containers)
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: x86_64-unknown-linux-gnu        # Ubuntu, Debian, Fedora, RHEL, etc.
-          - os: ubuntu-22.04
+          - os: ubuntu-24.04
             target: aarch64-unknown-linux-gnu       # ARM64 Ubuntu/Debian servers
 
           # macOS (Intel + Apple Silicon)
@@ -52,28 +52,10 @@ jobs:
         with:
           targets: ${{ matrix.target }}
 
-      # --- Linux native build dependencies ---
-      - name: Install system dependencies for native Linux builds
-        if: matrix.target == 'x86_64-unknown-linux-gnu'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libdbus-1-dev pkg-config libssl-dev
-
       # --- Cross Compilation Setup (ARM) ---
       - name: Install cross for ARM builds
         if: matrix.target == 'aarch64-unknown-linux-gnu' || matrix.target == 'armv7-unknown-linux-gnueabihf'
         run: cargo install cross --git https://github.com/cross-rs/cross
-
-      # --- macOS OpenSSL setup ---
-      - name: Install OpenSSL on macOS
-        if: runner.os == 'macOS'
-        run: |
-          brew install --quiet openssl@3 pkg-config
-          echo "OPENSSL_DIR=$(brew --prefix openssl@3)" >> $GITHUB_ENV
-          echo "PKG_CONFIG_PATH=$(brew --prefix openssl@3)/lib/pkgconfig" >> $GITHUB_ENV
-          echo "LIBRARY_PATH=$(brew --prefix openssl@3)/lib" >> $GITHUB_ENV
-          echo "LDFLAGS=-L$(brew --prefix openssl@3)/lib" >> $GITHUB_ENV
-          echo "CPPFLAGS=-I$(brew --prefix openssl@3)/include" >> $GITHUB_ENV
 
       # --- Build step per OS ---
       - name: Build Harmony
@@ -90,10 +72,6 @@ jobs:
               ;;
             Linux)
               case "${{ matrix.target }}" in
-                *musl*)
-                  echo "Skipping musl targets due to DBus dependency"
-                  exit 0
-                  ;;
                 aarch64-unknown-linux-gnu|armv7-unknown-linux-gnueabihf)
                   echo "Building for ARM target ${{ matrix.target }} with cross..."
                   cross build --release --target ${{ matrix.target }}
@@ -146,7 +124,6 @@ jobs:
     name: Build and push multi-arch Docker images
     runs-on: ubuntu-latest
     needs: build-binaries
-    if: startsWith(github.ref, 'refs/tags/')  # Only build Docker images for tags
     permissions:
       contents: read
       packages: write
@@ -160,8 +137,14 @@ jobs:
 
       - name: Prepare Linux binaries
         run: |
+          # Extract binaries from tarballs
+          cd binaries/harmony-x86_64-unknown-linux-gnu && tar xzf harmony-x86_64-unknown-linux-gnu.tar.gz && cd ../..
+          cd binaries/harmony-aarch64-unknown-linux-gnu && tar xzf harmony-aarch64-unknown-linux-gnu.tar.gz && cd ../..
+          # Move to expected locations for Docker build
           mv binaries/harmony-x86_64-unknown-linux-gnu/harmony harmony-amd64 || true
           mv binaries/harmony-aarch64-unknown-linux-gnu/harmony harmony-arm64 || true
+          # Verify binaries exist
+          ls -lh harmony-* || echo "Warning: binaries not found"
 
       - uses: docker/setup-buildx-action@v3
 
@@ -181,15 +164,21 @@ jobs:
       - name: Compute image tags
         id: meta
         run: |
-          TAG=${GITHUB_REF_NAME}
-          echo "tags=${{ env.REGISTRY_DOCKERHUB }}:${TAG},${{ env.REGISTRY_DOCKERHUB }}:latest,${{ env.REGISTRY_GHCR }}:${TAG},${{ env.REGISTRY_GHCR }}:latest" >> $GITHUB_OUTPUT
+          if [[ "${{ github.ref }}" == refs/tags/* ]]; then
+            TAG=${GITHUB_REF_NAME}
+            echo "tags=${{ env.REGISTRY_DOCKERHUB }}:${TAG},${{ env.REGISTRY_DOCKERHUB }}:latest,${{ env.REGISTRY_GHCR }}:${TAG},${{ env.REGISTRY_GHCR }}:latest" >> $GITHUB_OUTPUT
+          else
+            TAG="test-${GITHUB_SHA::8}"
+            echo "tags=${{ env.REGISTRY_DOCKERHUB }}:${TAG},${{ env.REGISTRY_GHCR }}:${TAG}" >> $GITHUB_OUTPUT
+          fi
+          echo "push=true" >> $GITHUB_OUTPUT
 
       - name: Build and push
         uses: docker/build-push-action@v6
         with:
           context: .
           file: Dockerfile
-          push: true
+          push: ${{ steps.meta.outputs.push }}
           platforms: linux/amd64,linux/arm64
           tags: ${{ steps.meta.outputs.tags }}
           cache-from: type=gha

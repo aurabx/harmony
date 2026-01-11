@@ -1,8 +1,0 @@
-[
-  {
-    "operation": "default",
-    "spec": {
-      "dimse_op": "find"
-    }
-  }
-]

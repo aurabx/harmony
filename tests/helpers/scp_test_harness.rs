@@ -127,7 +127,7 @@ mod tests {
                 networks: vec!["test_network".to_string()],
                 endpoints: vec!["test_scp".to_string()],
                 backends: vec![],
-                middleware: vec![],
+                ..Default::default()
             },
         );
 

@@ -1,4 +1,5 @@
 use crate::config::config::ConfigError;
+use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use async_trait::async_trait;
@@ -30,6 +31,8 @@ pub struct DicomScpEndpoint {
     pub enable_move: Option<bool>,
     /// Enable C-GET operations
     pub enable_get: Option<bool>,
+    /// Enable C-STORE operations
+    pub enable_store: Option<bool>,
     /// Storage directory for received DICOM files
     pub storage_dir: Option<String>,
 }
@@ -47,6 +50,15 @@ impl DicomScpEndpoint {
 
     /// Get the port from options or struct, with default fallback
     fn get_port(&self, options: &HashMap<String, Value>) -> u16 {
+        // Check connection config first
+        if let Some(conn_json) = options.get("connection") {
+            if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
+                if let Some(p) = conn.port {
+                    return p;
+                }
+            }
+        }
+
         options
             .get("port")
             .and_then(|v| v.as_u64())
@@ -57,6 +69,15 @@ impl DicomScpEndpoint {
 
     /// Get the bind address from options or struct, with default fallback
     fn get_bind_addr(&self, options: &HashMap<String, Value>) -> String {
+        // Check connection config first
+        if let Some(conn_json) = options.get("connection") {
+            if let Ok(conn) = serde_json::from_value::<ConnectionConfig>(conn_json.clone()) {
+                if !conn.host.is_empty() {
+                    return conn.host;
+                }
+            }
+        }
+
         options
             .get("bind_addr")
             .and_then(|v| v.as_str())
@@ -131,11 +152,16 @@ impl ServiceType for DicomScpEndpoint {
             .and_then(|v| v.as_bool())
             .or(self.enable_get)
             .unwrap_or(false);
+        let enable_store = options
+            .get("enable_store")
+            .and_then(|v| v.as_bool())
+            .or(self.enable_store)
+            .unwrap_or(false);
 
-        if !enable_echo && !enable_find && !enable_move && !enable_get {
+        if !enable_echo && !enable_find && !enable_move && !enable_get && !enable_store {
             return Err(ConfigError::InvalidEndpoint {
                 name: "dicom_scp".to_string(),
-                reason: "At least one DIMSE operation must be enabled (echo, find, move, or get)"
+                reason: "At least one DIMSE operation must be enabled (echo, find, move, get, or store)"
                     .to_string(),
             });
         }
@@ -165,10 +191,10 @@ impl ServiceType for DicomScpEndpoint {
         // Build RequestDetails from protocol context
         let metadata: Map<String, String> = ctx.meta.clone();
         let op = metadata
-            .get("operation")
+            .get("dimse_op")
             .cloned()
-            .unwrap_or_else(|| "DIMSE".into());
-        let uri = format!("dimse://scp/{}", op.to_lowercase());
+            .unwrap_or_else(|| "dimse".into());
+        let uri = format!("dimse://scp/{}", op);
 
         // Parse normalized_data from payload if it's JSON
         let normalized: Option<serde_json::Value> = serde_json::from_slice(&ctx.payload).ok();
@@ -202,16 +228,16 @@ impl ServiceHandler<Value> for DicomScpEndpoint {
         // The envelope has already been built by build_protocol_envelope
         // Here we can add additional validation or preprocessing if needed
 
-        // Validate operation type
+        // Validate operation type (dimse_op uses lowercase: "find", "get", "move", "store", "echo")
         let operation = envelope
             .request_details
             .metadata
-            .get("operation")
-            .ok_or_else(|| Error::from("Missing operation in DIMSE request"))?;
+            .get("dimse_op")
+            .ok_or_else(|| Error::from("Missing dimse_op in DIMSE request"))?;
 
         // Ensure operation is supported
-        let valid_ops = ["C-ECHO", "C-FIND", "C-MOVE", "C-GET", "C-STORE"];
-        if !valid_ops.contains(&operation.as_str()) {
+        let valid_ops = ["echo", "find", "move", "get", "store"];
+        if !valid_ops.contains(&operation.to_lowercase().as_str()) {
             return Err(Error::from(format!(
                 "Unsupported DIMSE operation: {}",
                 operation
@@ -298,6 +324,7 @@ mod tests {
             enable_find: None,
             enable_move: None,
             enable_get: None,
+            enable_store: None,
             storage_dir: None,
         };
 
@@ -315,6 +342,7 @@ mod tests {
             enable_find: None,
             enable_move: None,
             enable_get: None,
+            enable_store: None,
             storage_dir: None,
         };
 
@@ -332,11 +360,30 @@ mod tests {
             enable_find: Some(false),
             enable_move: Some(false),
             enable_get: Some(false),
+            enable_store: Some(false),
             storage_dir: None,
         };
 
         let options = HashMap::new();
         assert!(scp.validate(&options).is_err());
+    }
+
+    #[test]
+    fn test_scp_validation_store_only() {
+        let scp = DicomScpEndpoint {
+            local_aet: Some("TEST_SCP".to_string()),
+            bind_addr: Some("127.0.0.1".to_string()),
+            port: Some(11112),
+            enable_echo: Some(false),
+            enable_find: Some(false),
+            enable_move: Some(false),
+            enable_get: Some(false),
+            enable_store: Some(true),
+            storage_dir: None,
+        };
+
+        let options = HashMap::new();
+        assert!(scp.validate(&options).is_ok());
     }
 
     #[test]
@@ -349,6 +396,7 @@ mod tests {
             enable_find: None,
             enable_move: None,
             enable_get: None,
+            enable_store: None,
             storage_dir: None,
         };
 
@@ -366,6 +414,7 @@ mod tests {
             enable_find: None,
             enable_move: None,
             enable_get: None,
+            enable_store: None,
             storage_dir: None,
         };
 

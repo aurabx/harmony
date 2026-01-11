@@ -31,8 +31,8 @@ pub struct TestUids {
 #[allow(dead_code)]
 fn extract_uids_from_samples() -> Option<TestUids> {
     let candidates = [
-        PathBuf::from("./samples/study_1"),
-        PathBuf::from("./dev/samples/study_1"),
+        PathBuf::from("./samples/dicom/study_1"),
+        PathBuf::from("../../samples/dicom/study_1"),
     ];
     let samples_root = candidates.into_iter().find(|p| p.exists())?;
 

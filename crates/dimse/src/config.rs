@@ -69,6 +69,10 @@ pub struct DimseConfig {
     #[serde(default)]
     pub enable_get: bool,
 
+    /// Enable C-STORE service
+    #[serde(default = "default_true")]
+    pub enable_store: bool,
+
     /// Use an external, persistent Store SCP for incoming C-STORE during C-MOVE
     /// If true, the SCU will NOT open a transient +P listener; the QR SCP must
     /// deliver C-STOREs to the externally configured AE/host/port (e.g., Orthanc
@@ -135,6 +139,7 @@ impl Default for DimseConfig {
             enable_find: true,
             enable_move: true,
             enable_get: false,
+            enable_store: true,
             external_store_scp: false,
         }
     }
@@ -300,6 +305,7 @@ mod tests {
         assert!(config.enable_echo);
         assert!(config.enable_find);
         assert!(config.enable_move);
+        assert!(config.enable_store);
     }
 
     #[test]

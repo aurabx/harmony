@@ -1,6 +1,6 @@
 # Endpoints
 
-**Last Updated**: 2025-01-18 (Phase 6)
+**Last Updated**: 2025-11-30
 
 Endpoints define protocol entry points into the Harmony pipeline. Each endpoint is associated with a **Service** that handles protocol-specific data conversion to/from the internal `Envelope` format.
 
@@ -16,6 +16,44 @@ The endpoint configuration specifies:
 - Which service type to use (e.g., `http`, `fhir`, `jmix`, `dicomweb`, `dicom`)
 - Service-specific options (e.g., `path_prefix` for HTTP endpoints, `local_aet` for DICOM)
 - How the service should construct request/response envelopes
+
+## Connection Configuration
+
+Endpoints can define connection details directly or reference a shared **Peer**.
+
+### Using Peers (Recommended)
+
+Define a peer in your main configuration and reference it from the endpoint.
+
+**config.toml**:
+```toml
+[peers.hospital_a]
+connection.host = "hospital-a.example.com"
+connection.protocol = "dicom"
+authentication.method = "mutual_tls"
+```
+
+**pipelines/main.toml**:
+```toml
+[endpoints.dicom_listener]
+service = "dicom_scp"
+peer_ref = "hospital_a"  # Inherits connection settings
+```
+
+### Direct Configuration
+
+```toml
+[endpoints.dicom_listener]
+service = "dicom_scp"
+[endpoints.dicom_listener.connection]
+host = "0.0.0.0"
+port = 11112
+protocol = "dicom"
+```
+
+**Supported protocols**: `http`, `https`, `h3` (HTTP/3), `dicom` (DIMSE SCP), `fhir`, `jmix`.
+
+**Experimental/Planned protocols**: `hl7v2`, `custom` (dynamic loading not yet implemented)
 
 ## Endpoint Types
 
@@ -99,7 +137,7 @@ service = "jmix"
 path_prefix = "/data"
 ```
 
-See [jmix-dev-testing.md](../dev/jmix-dev-testing.md) for development testing.
+For development testing guidance, refer to the project's development documentation.
 
 ### DICOMweb
 
@@ -142,7 +180,7 @@ path_prefix = "/pacs"
 Provides DICOM DIMSE SCP endpoint for receiving incoming DICOM requests.
 
 **Service behavior**:
-- Accepts incoming DIMSE connections (C-FIND, C-MOVE, C-GET, C-ECHO)
+- Accepts incoming DIMSE connections (C-FIND, C-MOVE, C-GET, C-ECHO, C-STORE)
 - Converts DIMSE operations to `RequestEnvelope` via protocol adapter
 - Routes requests through the pipeline system
 - Returns DIMSE responses to the calling SCU
@@ -159,6 +197,7 @@ enable_echo = true            # Enable C-ECHO (default: true)
 enable_find = true            # Enable C-FIND (default: false)
 enable_move = true            # Enable C-MOVE (default: false)
 enable_get = true             # Enable C-GET (default: false)
+enable_store = true           # Enable C-STORE (default: false)
 storage_dir = "./tmp/dimse"  # Storage directory (optional)
 ```
 
@@ -167,7 +206,7 @@ storage_dir = "./tmp/dimse"  # Storage directory (optional)
 - `C-FIND` - Query for studies/series/images
 - `C-MOVE` - Request dataset transfer to destination AET
 - `C-GET` - Direct dataset retrieval
-- `C-STORE` - Store incoming datasets (planned)
+- `C-STORE` - Store incoming datasets
 
 **Example**: DICOM Query/Retrieve SCP
 ```toml
@@ -185,3 +224,22 @@ storage_dir = "./data/dicom"
 ```
 
 **Note**: The DICOM SCP endpoint uses the `DimseAdapter` protocol adapter, not HTTP. It listens on the configured port for incoming DIMSE associations.
+
+### C-STORE Handling
+
+When `enable_store` is set to `true`, Harmony accepts incoming DICOM objects (C-STORE requests).
+
+1. **Reception**: The file is received and written to the configured storage backend (e.g., `./tmp/dimse/<uuid>.dcm`).
+2. **Pipeline Execution**: Harmony executes the pipeline with a request payload containing metadata about the stored file.
+3. **Response**: Once the pipeline executes successfully, a C-STORE Success status (0x0000) is returned to the caller.
+
+**Pipeline Request Payload (JSON):**
+```json
+{
+  "operation": "store",
+  "dir": "/path/to/storage/dimse",
+  "file": "/path/to/storage/dimse/unique-id.dcm"
+}
+```
+
+This allows you to use middleware to process the file (e.g., extract metadata, forward to another system, or trigger a notification) after it has been safely stored.

@@ -1,9 +1,11 @@
 use crate::adapters::registry::AdapterRegistry;
 use crate::config::config::Config;
+use crate::integrations::provider_resolver::ProviderResolver;
 use crate::storage::StorageBackend;
 use arc_swap::ArcSwap;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, RwLock};
+use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
 /// Global configuration using ArcSwap for lock-free reads
@@ -14,6 +16,10 @@ static ADAPTER_REGISTRY: Lazy<RwLock<Option<Arc<AdapterRegistry>>>> =
     Lazy::new(|| RwLock::new(None));
 static CONFIG_PATH: Lazy<RwLock<Option<String>>> = Lazy::new(|| RwLock::new(None));
 static CLOUD_POLLING_TOKEN: Lazy<RwLock<Option<CancellationToken>>> =
+    Lazy::new(|| RwLock::new(None));
+static PROVIDER_RESOLVER: Lazy<RwLock<Option<Arc<ProviderResolver>>>> =
+    Lazy::new(|| RwLock::new(None));
+static CLOUD_POLL_TRIGGER: Lazy<RwLock<Option<mpsc::UnboundedSender<()>>>> =
     Lazy::new(|| RwLock::new(None));
 
 /// Set the global configuration (initial setup or reload)
@@ -87,6 +93,33 @@ pub fn stop_cloud_polling() {
     if let Some(token) = cell.take() {
         token.cancel();
         tracing::info!("Cloud polling stopped");
+    }
+}
+
+/// Set the global provider resolver
+pub fn set_provider_resolver(resolver: Arc<ProviderResolver>) {
+    let mut cell = PROVIDER_RESOLVER.write().unwrap();
+    *cell = Some(resolver);
+}
+
+/// Get the global provider resolver
+pub fn get_provider_resolver() -> Option<Arc<ProviderResolver>> {
+    PROVIDER_RESOLVER.read().unwrap().clone()
+}
+
+/// Set the cloud poll trigger channel sender
+pub fn set_cloud_poll_trigger(sender: mpsc::UnboundedSender<()>) {
+    let mut cell = CLOUD_POLL_TRIGGER.write().unwrap();
+    *cell = Some(sender);
+}
+
+/// Trigger an immediate cloud config poll
+/// Returns true if the trigger was sent successfully, false if no polling is active
+pub fn trigger_cloud_poll() -> bool {
+    if let Some(sender) = CLOUD_POLL_TRIGGER.read().unwrap().as_ref() {
+        sender.send(()).is_ok()
+    } else {
+        false
     }
 }
 

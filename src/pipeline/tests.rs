@@ -3,7 +3,7 @@ use crate::config::config::Config;
 use crate::models::backends::backends::Backend;
 use crate::models::endpoints::endpoint::Endpoint;
 use crate::models::envelope::envelope::{RequestEnvelope, RequestEnvelopeBuilder};
-use crate::models::pipelines::config::Pipeline;
+use crate::models::pipelines::config::{Pipeline, PipelineMiddleware};
 use crate::models::protocol::{Protocol, ProtocolCtx};
 use std::collections::HashMap;
 
@@ -17,6 +17,9 @@ fn create_test_config() -> Config {
         Endpoint {
             service: "echo".to_string(),
             options: Some(HashMap::new()),
+            peer_ref: None,
+            connection: None,
+            authentication: None,
         },
     );
 
@@ -25,6 +28,11 @@ fn create_test_config() -> Config {
         "test_backend".to_string(),
         Backend {
             service: "http".to_string(),
+            target_ref: None,
+            connection: None,
+            authentication: None,
+            timeout_secs: None,
+            max_retries: None,
             options: Some({
                 let mut opts = HashMap::new();
                 opts.insert("host".to_string(), serde_json::json!("example.com"));
@@ -44,7 +52,8 @@ fn create_test_pipeline(endpoints: Vec<String>, backends: Vec<String>) -> Pipeli
         networks: vec!["test_network".to_string()],
         endpoints,
         backends,
-        middleware: vec![],
+        middleware: PipelineMiddleware::default(),
+        ..Default::default()
     }
 }
 
@@ -97,7 +106,7 @@ async fn test_execute_with_no_endpoints_fails() {
     let envelope = create_test_envelope();
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, &pipeline, &config, &ctx).await;
+    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     assert!(result.is_err());
     match result.unwrap_err() {
@@ -115,7 +124,7 @@ async fn test_execute_with_unknown_endpoint_fails() {
     let envelope = create_test_envelope();
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, &pipeline, &config, &ctx).await;
+    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     assert!(result.is_err());
     match result.unwrap_err() {
@@ -142,7 +151,7 @@ async fn test_execute_with_skip_backends_flag() {
 
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, &pipeline, &config, &ctx).await;
+    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     // Should succeed even though backend is present
     assert!(result.is_ok());
@@ -157,7 +166,7 @@ async fn test_execute_with_no_backends_succeeds() {
     let envelope = create_test_envelope();
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, &pipeline, &config, &ctx).await;
+    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     // Should succeed with empty response
     assert!(result.is_ok());
@@ -175,7 +184,7 @@ async fn test_execute_with_unknown_backend_returns_502() {
     let envelope = create_test_envelope();
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, &pipeline, &config, &ctx).await;
+    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     // Should return 502 when backend not found
     assert!(result.is_ok());
@@ -196,7 +205,7 @@ async fn test_protocol_ctx_carried_through_pipeline() {
     // Test with different protocols
     for protocol in [Protocol::Http, Protocol::Dimse, Protocol::Hl7V2Mllp] {
         let ctx = create_test_protocol_ctx(protocol);
-        let result = PipelineExecutor::execute(envelope.clone(), &pipeline, &config, &ctx).await;
+        let result = PipelineExecutor::execute(envelope.clone(), "test_pipeline", &pipeline, &config, &ctx).await;
 
         // Should succeed regardless of protocol (protocol-agnostic!)
         assert!(result.is_ok(), "Failed for protocol: {:?}", protocol);
@@ -217,7 +226,7 @@ async fn test_normalized_data_preserved() {
 
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, &pipeline, &config, &ctx).await;
+    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     assert!(result.is_ok());
     // normalized_data should be preserved through the pipeline
@@ -228,12 +237,12 @@ async fn test_normalized_data_preserved() {
 async fn test_middleware_chain_empty_succeeds() {
     let config = create_test_config();
     let mut pipeline = create_test_pipeline(vec!["test_endpoint".to_string()], vec![]);
-    pipeline.middleware = vec![]; // Explicitly empty
+    pipeline.middleware = PipelineMiddleware::List(vec![]); // Explicitly empty
 
     let envelope = create_test_envelope();
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, &pipeline, &config, &ctx).await;
+    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     // Should succeed with no middleware
     assert!(result.is_ok());
@@ -255,4 +264,209 @@ fn test_pipeline_executor_is_send_sync() {
 
     assert_send::<PipelineExecutor>();
     assert_sync::<PipelineExecutor>();
+}
+
+#[tokio::test]
+async fn test_backend_path_prefix_prepends_to_uri() {
+    // NOTE: path_prefix is now applied by individual services in backend_outgoing_request(),
+    // not by the executor in resolve_target_details().
+    // This test verifies that resolve_target_details() sets up the base target_details
+    // without applying service-specific options like path_prefix.
+    use crate::models::connection::ConnectionConfig;
+
+    let mut config = Config::default();
+
+    // Add echo endpoint
+    config.endpoints.insert(
+        "test_endpoint".to_string(),
+        Endpoint {
+            service: "echo".to_string(),
+            options: Some(HashMap::new()),
+            peer_ref: None,
+            connection: None,
+            authentication: None,
+        },
+    );
+
+    // Add backend with path_prefix
+    config.backends.insert(
+        "test_backend".to_string(),
+        Backend {
+            service: "http".to_string(),
+            target_ref: None,
+            connection: Some(ConnectionConfig {
+                host: "backend.example.com".to_string(),
+                port: Some(8080),
+                protocol: Some("http".to_string()),
+                base_path: None,
+                ca_cert_path: None,
+            }),
+            authentication: None,
+            timeout_secs: None,
+            max_retries: None,
+            options: Some({
+                let mut opts = HashMap::new();
+                opts.insert("path_prefix".to_string(), serde_json::json!("/api/v1"));
+                opts
+            }),
+        },
+    );
+
+    let pipeline = create_test_pipeline(
+        vec!["test_endpoint".to_string()],
+        vec!["test_backend".to_string()],
+    );
+
+    let envelope = RequestEnvelopeBuilder::new()
+        .method("GET")
+        .uri("/users")
+        .metadata_entry("path", "/users")
+        .original_data(vec![])
+        .build()
+        .unwrap();
+
+    // Resolve target_details - executor sets up base_url and uri from request
+    let envelope_with_target = PipelineExecutor::resolve_target_details(
+        envelope,
+        &pipeline,
+        &config,
+    )
+    .await
+    .unwrap();
+
+    assert!(envelope_with_target.target_details.is_some());
+    let target = envelope_with_target.target_details.unwrap();
+
+    // Executor sets base_url and original URI (path_prefix NOT applied here)
+    assert_eq!(target.uri, "/users");  // path_prefix applied by service, not executor
+    assert_eq!(target.base_url, "http://backend.example.com:8080");
+}
+
+#[tokio::test]
+async fn test_backend_path_prefix_with_base_url() {
+    // NOTE: path_prefix is now applied by individual services in backend_outgoing_request(),
+    // not by the executor in resolve_target_details().
+    let mut config = Config::default();
+
+    config.endpoints.insert(
+        "test_endpoint".to_string(),
+        Endpoint {
+            service: "echo".to_string(),
+            options: Some(HashMap::new()),
+            peer_ref: None,
+            connection: None,
+            authentication: None,
+        },
+    );
+
+    // Backend with both base_url and path_prefix
+    config.backends.insert(
+        "test_backend".to_string(),
+        Backend {
+            service: "http".to_string(),
+            target_ref: None,
+            connection: None,
+            authentication: None,
+            timeout_secs: None,
+            max_retries: None,
+            options: Some({
+                let mut opts = HashMap::new();
+                opts.insert("base_url".to_string(), serde_json::json!("http://api.example.com:5000"));
+                opts.insert("path_prefix".to_string(), serde_json::json!("/v2"));
+                opts
+            }),
+        },
+    );
+
+    let pipeline = create_test_pipeline(
+        vec!["test_endpoint".to_string()],
+        vec!["test_backend".to_string()],
+    );
+
+    let envelope = RequestEnvelopeBuilder::new()
+        .method("POST")
+        .uri("/resource")
+        .metadata_entry("path", "/resource")
+        .original_data(vec![])
+        .build()
+        .unwrap();
+
+    let envelope_with_target = PipelineExecutor::resolve_target_details(
+        envelope,
+        &pipeline,
+        &config,
+    )
+    .await
+    .unwrap();
+
+    let target = envelope_with_target.target_details.unwrap();
+
+    // Executor sets base_url and original URI (path_prefix NOT applied here)
+    assert_eq!(target.uri, "/resource");  // path_prefix applied by service, not executor
+    assert_eq!(target.base_url, "http://api.example.com:5000");
+}
+
+#[tokio::test]
+async fn test_backend_without_path_prefix() {
+    use crate::models::connection::ConnectionConfig;
+
+    let mut config = Config::default();
+
+    config.endpoints.insert(
+        "test_endpoint".to_string(),
+        Endpoint {
+            service: "echo".to_string(),
+            options: Some(HashMap::new()),
+            peer_ref: None,
+            connection: None,
+            authentication: None,
+        },
+    );
+
+    // Backend without path_prefix
+    config.backends.insert(
+        "test_backend".to_string(),
+        Backend {
+            service: "http".to_string(),
+            target_ref: None,
+            connection: Some(ConnectionConfig {
+                host: "backend.example.com".to_string(),
+                port: Some(8080),
+                protocol: Some("http".to_string()),
+                base_path: None,
+                ca_cert_path: None,
+            }),
+            authentication: None,
+            timeout_secs: None,
+            max_retries: None,
+            options: None,
+        },
+    );
+
+    let pipeline = create_test_pipeline(
+        vec!["test_endpoint".to_string()],
+        vec!["test_backend".to_string()],
+    );
+
+    let envelope = RequestEnvelopeBuilder::new()
+        .method("GET")
+        .uri("/test")
+        .metadata_entry("path", "/test")
+        .original_data(vec![])
+        .build()
+        .unwrap();
+
+    let envelope_with_target = PipelineExecutor::resolve_target_details(
+        envelope,
+        &pipeline,
+        &config,
+    )
+    .await
+    .unwrap();
+
+    let target = envelope_with_target.target_details.unwrap();
+
+    // URI should remain unchanged when no path_prefix
+    assert_eq!(target.uri, "/test");
+    assert_eq!(target.base_url, "http://backend.example.com:8080");
 }

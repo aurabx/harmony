@@ -1,7 +1,6 @@
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
 use harmony::config::config::{Config, ConfigError};
-use std::path::PathBuf;
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -30,12 +29,18 @@ fn dcmtk_available() -> bool {
 }
 
 /// Helper to spawn dcmqrscp on a free port
-async fn spawn_dcmqrscp(verbose: bool) -> (tokio::process::Child, u16, PathBuf) {
+async fn spawn_dcmqrscp(verbose: bool) -> (tokio::process::Child, u16, tempfile::TempDir) {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind port");
     let port = listener.local_addr().unwrap().port();
     drop(listener);
 
-    let base = PathBuf::from("./tmp/qrscp");
+    std::fs::create_dir_all("./tmp").expect("create tmp");
+    let temp_dir = tempfile::Builder::new()
+        .prefix("qrscp_")
+        .tempdir_in("./tmp")
+        .expect("create temp dir");
+    
+    let base = temp_dir.path();
     let dbdir = base.join("qrdb");
     std::fs::create_dir_all(&dbdir).expect("create qr db dir");
     let cfg_path = base.join("dcmqrscp.cfg");
@@ -49,7 +54,6 @@ async fn spawn_dcmqrscp(verbose: bool) -> (tokio::process::Child, u16, PathBuf) 
         "# Minimal dcmqrscp.cfg\nMaxPDUSize = 16384\nMaxAssociations = 16\n\nHostTable BEGIN\nHostTable END\n\nVendorTable BEGIN\nVendorTable END\n\nAETable BEGIN\nQR_SCP  {}  RW  (9, 1024mb)  ANY\nAETable END\n",
         abs_db.to_string_lossy()
     );
-    std::fs::create_dir_all(&base).expect("create cfg dir");
     std::fs::write(&cfg_path, cfg).expect("write cfg");
 
     let mut dcmqr = tokio::process::Command::new("dcmqrscp");
@@ -75,13 +79,13 @@ async fn spawn_dcmqrscp(verbose: bool) -> (tokio::process::Child, u16, PathBuf) 
         tokio::time::sleep(std::time::Duration::from_millis(50)).await;
     }
 
-    (child, port, base)
+    (child, port, temp_dir)
 }
 
 /// Helper to create a minimal DICOM dataset and store it via storescu
 async fn store_test_dataset(
     port: u16,
-    base: &PathBuf,
+    base: &std::path::Path,
     patient_id: &str,
     verbose: bool,
 ) -> anyhow::Result<()> {
@@ -132,7 +136,7 @@ async fn store_test_dataset(
 }
 
 /// Test 1: dicom_scu backend with outgoing C-FIND
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_dicom_scu_backend_cfind() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -143,7 +147,7 @@ async fn test_dicom_scu_backend_cfind() {
     let (mut qr_child, port, base) = spawn_dcmqrscp(verbose).await;
 
     // Store test data
-    if store_test_dataset(port, &base, "SCU_TEST1", verbose)
+    if store_test_dataset(port, base.path(), "SCU_TEST1", verbose)
         .await
         .is_err()
     {
@@ -400,7 +404,7 @@ async fn test_scp_cannot_be_backend() {
 }
 
 /// Test 5: Backward compatibility - legacy "dicom" service maps to dicom_scu
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_legacy_dicom_service_backward_compat() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -410,7 +414,7 @@ async fn test_legacy_dicom_service_backward_compat() {
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let (mut qr_child, port, base) = spawn_dcmqrscp(verbose).await;
 
-    if store_test_dataset(port, &base, "LEGACY_TEST", verbose)
+    if store_test_dataset(port, base.path(), "LEGACY_TEST", verbose)
         .await
         .is_err()
     {
@@ -596,7 +600,7 @@ async fn test_pipeline_scp_receives_external_find() {
 }
 
 /// Test 7: Full pipeline - HTTP -> SCU backend -> external PACS
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn test_full_pipeline_http_to_scu_to_pacs() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -606,7 +610,7 @@ async fn test_full_pipeline_http_to_scu_to_pacs() {
     let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
     let (mut qr_child, qr_port, base) = spawn_dcmqrscp(verbose).await;
 
-    if store_test_dataset(qr_port, &base, "FULL_PIPELINE", verbose)
+    if store_test_dataset(qr_port, base.path(), "FULL_PIPELINE", verbose)
         .await
         .is_err()
     {
@@ -614,6 +618,9 @@ async fn test_full_pipeline_http_to_scu_to_pacs() {
         let _ = qr_child.kill().await;
         return;
     }
+
+    // Wait for dcmqrscp to index the stored data (dcmqridx runs periodically)
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
     let toml = format!(
         r#"
@@ -692,6 +699,142 @@ async fn test_full_pipeline_http_to_scu_to_pacs() {
     assert!(
         !matches.is_empty(),
         "Expected at least one C-FIND match in full pipeline"
+    );
+
+    let _ = qr_child.kill().await;
+}
+
+/// Test 8: dicom_scu backend C-STORE operation
+#[tokio::test(flavor = "multi_thread")]
+async fn test_dicom_scu_backend_cstore() {
+    if !dcmtk_available() {
+        eprintln!("Skipping test: DCMTK not available");
+        return;
+    }
+
+    let verbose = std::env::var("HARMONY_TEST_VERBOSE_DCMTK").ok().as_deref() == Some("1");
+    let (mut qr_child, port, _base_dir) = spawn_dcmqrscp(verbose).await;
+
+    let toml = format!(
+        r#"
+        [proxy]
+        id = "scu-cstore-test"
+        log_level = "info"
+        store_dir = "/tmp"
+
+        [network.default]
+        enable_wireguard = false
+        interface = "wg0"
+
+        [network.default.http]
+        bind_address = "127.0.0.1"
+        bind_port = 8088
+
+        [pipelines.scu_store]
+        description = "HTTP -> DICOM SCU C-STORE"
+        networks = ["default"]
+        endpoints = ["http_ep"]
+        backends = ["scu_backend"]
+        middleware = []
+
+        [endpoints.http_ep]
+        service = "http"
+        [endpoints.http_ep.options]
+        path_prefix = "/dicom"
+
+        [backends.scu_backend]
+        service = "dicom_scu"
+        [backends.scu_backend.options]
+        aet = "QR_SCP"
+        host = "127.0.0.1"
+        port = {port}
+        local_aet = "HARMONY_SCU"
+
+        [services.http]
+        module = ""
+        [services.dicom_scu]
+        module = ""
+    "#,
+        port = port
+    );
+
+    let cfg: Config = load_config_from_str(&toml).expect("valid config");
+    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+
+    // Create a test DICOM file to send
+    let mkuid = |suf: &str| {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap();
+        format!(
+            "1.2.826.0.1.3680043.10.5432.{}.{}.{}",
+            suf,
+            now.as_secs(),
+            now.subsec_nanos()
+        )
+    };
+
+    let identifier = serde_json::json!({
+        "00080016": { "vr": "UI", "Value": ["1.2.840.10008.5.1.4.1.1.7"] }, // Secondary Capture
+        "00080018": { "vr": "UI", "Value": [ mkuid("sop") ] },
+        "0020000D": { "vr": "UI", "Value": [ mkuid("study") ] },
+        "0020000E": { "vr": "UI", "Value": [ mkuid("series") ] },
+        "00080060": { "vr": "CS", "Value": [ "OT" ] },
+        "00100020": { "vr": "LO", "Value": ["CSTORE_TEST"] },
+        "00100010": { "vr": "PN", "Value": [{"Alphabetic": "STORE^TEST"}] }
+    });
+    let obj = dicom_json_tool::json_value_to_identifier(&identifier).expect("create dicom obj");
+
+    // Write to temporary file as Part 10 format, then read bytes
+    let temp_dir = tempfile::tempdir().expect("create temp dir");
+    let temp_path = temp_dir.path().join("test.dcm");
+    dicom_json_tool::write_part10(&temp_path, &obj).expect("write part10");
+    let dicom_bytes = std::fs::read(&temp_path).expect("read dicom file");
+
+    // Send C-STORE request with raw DICOM bytes
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicom/store")
+                .method("POST")
+                .header("content-type", "application/dicom")
+                .body(Body::from(dicom_bytes))
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    let status = response.status();
+    let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .unwrap();
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
+        serde_json::json!({ "raw": String::from_utf8_lossy(&bytes).to_string() })
+    });
+    
+    if status != StatusCode::OK {
+        eprintln!("C-STORE failed with status {}: {:?}", status, json);
+    }
+    assert_eq!(status, StatusCode::OK, "Response: {:?}", json);
+    
+    assert_eq!(
+        json.get("operation").and_then(|v| v.as_str()),
+        Some("store"),
+        "Response should indicate store operation"
+    );
+    assert_eq!(
+        json.get("success").and_then(|v| v.as_bool()),
+        Some(true),
+        "C-STORE should succeed: {:?}",
+        json
+    );
+    assert!(
+        json.get("sop_class_uid").is_some(),
+        "Response should include SOP Class UID"
+    );
+    assert!(
+        json.get("sop_instance_uid").is_some(),
+        "Response should include SOP Instance UID"
     );
 
     let _ = qr_child.kill().await;

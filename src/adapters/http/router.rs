@@ -1,6 +1,9 @@
 use super::HttpAdapter;
 use crate::config::config::Config;
-use crate::models::middleware::AuthFailure;
+use crate::models::mesh::registry::{MeshContext, MeshRegistry};
+use crate::models::middleware::{
+    AccessDenied, AuthFailure, ContentTypeDenied, MethodDenied, PathDenied, RateLimitExceeded,
+};
 use crate::pipeline::{PipelineError, PipelineExecutor};
 use axum::body::Body;
 use axum::extract::Request;
@@ -12,10 +15,19 @@ use std::sync::Arc;
 
 /// Build network router for HTTP adapter
 ///
-/// This replaces the old router/dispatcher logic but uses PipelineExecutor
+/// This replaces the old router/dispatcher logic but uses PipelineExecutor.
+/// Mesh routing takes priority: if a request matches a mesh ingress URL,
+/// it is routed to the ingress's endpoint regardless of other route matches.
 pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Router {
     let mut app = Router::new();
     let mut route_registry: HashSet<(Method, String)> = HashSet::new();
+
+    // Build mesh registry for priority routing (with remote reference resolution)
+    let resolver = crate::globals::get_provider_resolver();
+    let mesh_registry = Arc::new(
+        MeshRegistry::from_config_with_resolver(&config, resolver).await
+    );
+    let mesh_config = config.clone();
 
     tracing::info!(
         "🔧 Building router for network '{}' with {} pipelines",
@@ -174,7 +186,137 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
         // HTTP router no longer launches DIMSE listeners
     }
 
+    // Add mesh routing layer - this runs FIRST before normal route matching
+    // If request matches a mesh ingress URL, it's handled here and normal routes are bypassed
+    if !mesh_registry.is_empty() {
+        let mesh_registry_layer = mesh_registry.clone();
+        let mesh_config_layer = mesh_config.clone();
+
+        app = app.layer(axum::middleware::from_fn(move |req: Request, next: axum::middleware::Next| {
+            let mesh_registry = mesh_registry_layer.clone();
+            let config = mesh_config_layer.clone();
+            async move {
+                mesh_routing_layer(req, next, config, mesh_registry).await
+            }
+        }));
+
+        tracing::info!("🔗 Mesh routing layer registered (priority routing)");
+    }
+
     app
+}
+
+/// Mesh routing middleware layer.
+///
+/// This runs BEFORE normal route matching. If the request matches a mesh ingress URL,
+/// it is handled here and the normal route chain is bypassed.
+async fn mesh_routing_layer(
+    mut req: Request,
+    next: axum::middleware::Next,
+    config: Arc<Config>,
+    mesh_registry: Arc<MeshRegistry>,
+) -> Response<Body> {
+    use crate::models::mesh::config::IngressEgressMode;
+
+    // Extract URL components for mesh matching
+    let (scheme, host, port, path) = extract_request_url_parts(&req);
+
+    // Check mesh registry for a match
+    if let Some(route_match) = mesh_registry.resolve(&scheme, &host, port, &path) {
+        // Check if ingress mode=mesh but no mesh was matched
+        // (mesh_name is empty when ingress isn't part of any enabled mesh)
+        if route_match.context.ingress.mode == IngressEgressMode::Mesh
+            && route_match.context.mesh_name.is_empty()
+        {
+            tracing::warn!(
+                "🚫 Mesh route rejected: ingress '{}' requires mesh auth but no mesh matched",
+                route_match.context.ingress_name
+            );
+            return Response::builder()
+                .status(StatusCode::FORBIDDEN)
+                .body(Body::empty())
+                .unwrap_or_else(|_| {
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::empty())
+                        .unwrap()
+                });
+        }
+
+        tracing::info!(
+            "🔗 Mesh route: {}://{}{} -> endpoint '{}' (mesh '{}')",
+            scheme,
+            host,
+            path,
+            route_match.endpoint_name,
+            route_match.context.mesh_name
+        );
+
+        // Handle via mesh routing - bypasses normal routes
+        return match handle_request_with_mesh(
+            &mut req,
+            config,
+            route_match.endpoint_name,
+            route_match.pipeline_name,
+            Some(route_match.context),
+        )
+        .await
+        {
+            Ok(response) => response,
+            Err(status) => Response::builder()
+                .status(status)
+                .body(Body::empty())
+                .unwrap_or_else(|_| {
+                    Response::builder()
+                        .status(StatusCode::INTERNAL_SERVER_ERROR)
+                        .body(Body::empty())
+                        .unwrap()
+                }),
+        };
+    }
+
+    // No mesh match - continue to normal routing
+    next.run(req).await
+}
+
+/// Extract URL components from request for mesh matching.
+fn extract_request_url_parts(req: &Request) -> (String, String, Option<u16>, String) {
+    // Determine scheme from request
+    let scheme = req
+        .uri()
+        .scheme_str()
+        .map(|s| s.to_string())
+        .unwrap_or_else(|| {
+            // Fallback: check X-Forwarded-Proto or assume http
+            req.headers()
+                .get("x-forwarded-proto")
+                .and_then(|v| v.to_str().ok())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| "http".to_string())
+        });
+
+    // Get host from Host header or URI
+    let host_header = req
+        .headers()
+        .get(http::header::HOST)
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or("");
+
+    // Parse host and port from Host header (may include port)
+    let (host, port) = if let Some(colon_pos) = host_header.rfind(':') {
+        let potential_port = &host_header[colon_pos + 1..];
+        if let Ok(p) = potential_port.parse::<u16>() {
+            (host_header[..colon_pos].to_string(), Some(p))
+        } else {
+            (host_header.to_string(), None)
+        }
+    } else {
+        (host_header.to_string(), None)
+    };
+
+    let path = req.uri().path().to_string();
+
+    (scheme, host, port, path)
 }
 
 /// Handle HTTP request using PipelineExecutor
@@ -183,6 +325,20 @@ async fn handle_request(
     config: Arc<Config>,
     endpoint_name: String,
     pipeline_name: String,
+) -> Result<Response<Body>, StatusCode> {
+    handle_request_with_mesh(req, config, endpoint_name, pipeline_name, None).await
+}
+
+/// Handle HTTP request with optional mesh context.
+///
+/// When `mesh_context` is Some, the request came through mesh routing and
+/// the context is attached to ProtocolCtx for downstream middleware.
+async fn handle_request_with_mesh(
+    req: &mut Request,
+    config: Arc<Config>,
+    endpoint_name: String,
+    pipeline_name: String,
+    mesh_context: Option<MeshContext>,
 ) -> Result<Response<Body>, StatusCode> {
     // Look up the endpoint and pipeline from config
     let endpoint = config
@@ -205,12 +361,17 @@ async fn handle_request(
     }
 
     // 1. Convert HTTP Request → ProtocolCtx
-    let ctx = HttpAdapter::http_request_to_protocol_ctx(
+    let mut ctx = HttpAdapter::http_request_to_protocol_ctx(
         req,
         endpoint.options.as_ref().unwrap_or(&HashMap::new()),
     )
     .await
     .map_err(|_| StatusCode::BAD_REQUEST)?;
+
+    // 1b. Attach mesh context if present
+    if let Some(ref mesh_ctx) = mesh_context {
+        attach_mesh_context(&mut ctx, mesh_ctx);
+    }
 
     // 2. Build envelope via service
     let envelope = service
@@ -222,7 +383,7 @@ async fn handle_request(
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
     // 3. Execute pipeline (using standard PipelineExecutor)
-    let response_envelope = PipelineExecutor::execute(envelope, pipeline, &config, &ctx)
+    let response_envelope = PipelineExecutor::execute(envelope, &pipeline_name, pipeline, &config, &ctx)
         .await
         .map_err(|err| {
             tracing::error!("Pipeline execution failed: {}", err);
@@ -285,7 +446,7 @@ async fn handle_streaming_request(
         .map_err(|_| StatusCode::BAD_REQUEST)?;
 
     // 3. Execute streaming pipeline
-    let response_stream = PipelineExecutor::execute_streaming(envelope, pipeline, &config, &ctx)
+    let response_stream = PipelineExecutor::execute_streaming(envelope, &pipeline_name, pipeline, &config, &ctx)
         .await
         .map_err(|err| {
             tracing::error!("Streaming pipeline execution failed: {}", err);
@@ -296,7 +457,7 @@ async fn handle_streaming_request(
     if endpoint.service.to_lowercase() == "http_streaming" {
         // Use http_streaming endpoint to convert stream to HTTP response
         use crate::models::services::types::http_streaming::{HttpStreamingEndpoint, StreamFormat};
-        
+
         let streaming_endpoint = HttpStreamingEndpoint {
             default_format: None,
             buffer_size: None,
@@ -314,7 +475,7 @@ async fn handle_streaming_request(
                 .get("accept")
                 .and_then(|h| h.to_str().ok())
                 .unwrap_or("");
-            
+
             if accept.contains("text/event-stream") {
                 StreamFormat::Sse
             } else if accept.contains("application/x-ndjson") {
@@ -341,7 +502,7 @@ async fn handle_streaming_request(
 
         let results: Vec<_> = response_stream.collect().await;
         let mut response_envelopes = Vec::new();
-        
+
         for result in results {
             match result {
                 Ok(envelope) => response_envelopes.push(envelope),
@@ -368,13 +529,48 @@ async fn handle_streaming_request(
     }
 }
 
+/// Attach mesh context to ProtocolCtx for downstream middleware.
+fn attach_mesh_context(ctx: &mut crate::models::protocol::ProtocolCtx, mesh_ctx: &MeshContext) {
+    // Add mesh info to meta
+    ctx.meta.insert("mesh_name".to_string(), mesh_ctx.mesh_name.clone());
+    ctx.meta.insert("mesh_ingress".to_string(), mesh_ctx.ingress_name.clone());
+    ctx.meta.insert("mesh_pipeline".to_string(), mesh_ctx.pipeline_name.clone());
+    ctx.meta.insert("mesh_provider".to_string(), mesh_ctx.mesh.provider.to_string());
+    ctx.meta.insert("mesh_type".to_string(), mesh_ctx.mesh.mesh_type.to_string());
+
+    // Add structured mesh context to attrs
+    if let serde_json::Value::Object(ref mut attrs) = ctx.attrs {
+        attrs.insert(
+            "mesh".to_string(),
+            serde_json::json!({
+                "name": mesh_ctx.mesh_name,
+                "ingress": mesh_ctx.ingress_name,
+                "pipeline": mesh_ctx.pipeline_name,
+                "provider": mesh_ctx.mesh.provider.to_string(),
+                "type": mesh_ctx.mesh.mesh_type.to_string(),
+                "endpoint": mesh_ctx.ingress.endpoint,
+            }),
+        );
+    }
+}
+
 /// Map pipeline errors to HTTP status codes
-fn map_pipeline_error_to_status(err: &PipelineError) -> StatusCode {
+pub(crate) fn map_pipeline_error_to_status(err: &PipelineError) -> StatusCode {
     match err {
         PipelineError::MiddlewareError(middleware_err) => {
-            // Check if it's an AuthFailure
-            if let Some(_auth_failure) = middleware_err.downcast_ref::<AuthFailure>() {
+            // Check for specific middleware error types and map to appropriate status codes
+            if middleware_err.downcast_ref::<AuthFailure>().is_some() {
                 StatusCode::UNAUTHORIZED
+            } else if middleware_err.downcast_ref::<PathDenied>().is_some() {
+                StatusCode::NOT_FOUND
+            } else if middleware_err.downcast_ref::<MethodDenied>().is_some() {
+                StatusCode::METHOD_NOT_ALLOWED
+            } else if middleware_err.downcast_ref::<ContentTypeDenied>().is_some() {
+                StatusCode::UNSUPPORTED_MEDIA_TYPE
+            } else if middleware_err.downcast_ref::<RateLimitExceeded>().is_some() {
+                StatusCode::TOO_MANY_REQUESTS
+            } else if middleware_err.downcast_ref::<AccessDenied>().is_some() {
+                StatusCode::FORBIDDEN
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             }

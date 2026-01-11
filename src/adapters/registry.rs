@@ -1,4 +1,4 @@
-use super::{dimse::DimseAdapter, http::HttpAdapter, ProtocolAdapter};
+use super::{dimse::DimseAdapter, http::HttpAdapter, http3::Http3Adapter, ProtocolAdapter};
 use crate::config::config::Config;
 use crate::models::protocol::Protocol;
 use anyhow::Result;
@@ -141,9 +141,33 @@ impl AdapterRegistry {
         let mut adapters_to_start: Vec<Box<dyn ProtocolAdapter>> = Vec::new();
 
         for protocol in &required_protocols {
-            let adapter: Box<dyn ProtocolAdapter> = match protocol {
-                Protocol::Http => HttpAdapter::from_network(network_name.clone(), network),
-                Protocol::Dimse => DimseAdapter::from_network(network_name.clone(), network),
+            match protocol {
+                Protocol::Http => {
+                    // Start TCP HTTP adapter if TCP config is present
+                    if network.tcp_config.is_some() {
+                        let adapter: Box<dyn ProtocolAdapter> =
+                            HttpAdapter::from_network(network_name.clone(), network);
+                        adapters_to_start.push(adapter);
+                    } else {
+                        tracing::info!(
+                            "No TCP HTTP config for network '{}' (no [network.{}.http] / tcp_config); skipping HttpAdapter",
+                            network_name,
+                            network_name
+                        );
+                    }
+
+                    // Start HTTP/3 adapter if configured
+                    if network.http3.is_some() {
+                        let adapter: Box<dyn ProtocolAdapter> =
+                            Http3Adapter::from_network(network_name.clone(), network);
+                        adapters_to_start.push(adapter);
+                    }
+                }
+                Protocol::Dimse => {
+                    let adapter: Box<dyn ProtocolAdapter> =
+                        DimseAdapter::from_network(network_name.clone(), network);
+                    adapters_to_start.push(adapter);
+                }
                 _ => {
                     tracing::warn!(
                         "No adapter implementation for protocol {:?}, skipping",
@@ -151,8 +175,7 @@ impl AdapterRegistry {
                     );
                     continue;
                 }
-            };
-            adapters_to_start.push(adapter);
+            }
         }
 
         // Start each adapter

@@ -2,7 +2,7 @@ use harmony::config::config::Config;
 use harmony::models::backends::backends::Backend;
 use harmony::models::endpoints::endpoint::Endpoint;
 use harmony::models::network::config::{NetworkConfig, TcpConfig};
-use harmony::models::pipelines::config::Pipeline;
+use harmony::models::pipelines::config::{Pipeline, PipelineMiddleware};
 use serde_json::json;
 use std::collections::HashMap;
 
@@ -12,10 +12,13 @@ fn create_test_config_with_backends(backends: Vec<(&str, &str, serde_json::Value
 
     // Create a test network
     let mut network = NetworkConfig::default();
-    network.tcp_config = TcpConfig {
+    network.tcp_config = Some(TcpConfig {
         bind_address: "127.0.0.1".to_string(),
         bind_port: 8080,
-    };
+        cert_path: None,
+        key_path: None,
+        force_https: false,
+    });
     config.network.insert("test_network".to_string(), network);
 
     let mut backend_names = Vec::new();
@@ -26,6 +29,11 @@ fn create_test_config_with_backends(backends: Vec<(&str, &str, serde_json::Value
             name.to_string(),
             Backend {
                 service: service.to_string(),
+                target_ref: None,
+                connection: None,
+                authentication: None,
+                timeout_secs: None,
+                max_retries: None,
                 options: Some(
                     options
                         .as_object()
@@ -48,7 +56,8 @@ fn create_test_config_with_backends(backends: Vec<(&str, &str, serde_json::Value
                 networks: vec!["test_network".to_string()],
                 endpoints: vec![],
                 backends: backend_names,
-                middleware: vec![],
+                middleware: PipelineMiddleware::default(),
+                ..Default::default()
             },
         );
     }
@@ -62,20 +71,26 @@ fn create_test_config_with_endpoints(endpoints: Vec<(&str, &str, serde_json::Val
 
     // Create a test network
     let mut network = NetworkConfig::default();
-    network.tcp_config = TcpConfig {
+    network.tcp_config = Some(TcpConfig {
         bind_address: "127.0.0.1".to_string(),
         bind_port: 8080,
-    };
+        cert_path: None,
+        key_path: None,
+        force_https: false,
+    });
     config.network.insert("test_network".to_string(), network);
 
     let mut endpoint_names = Vec::new();
 
     // Add endpoints
-    for (name, service, options) in endpoints {
+    for (name, _service, options) in endpoints {
         config.endpoints.insert(
             name.to_string(),
             Endpoint {
-                service: service.to_string(),
+                service: "dicom_scp".to_string(),
+                peer_ref: None,
+                connection: None,
+                authentication: None,
                 options: Some(
                     options
                         .as_object()
@@ -98,7 +113,8 @@ fn create_test_config_with_endpoints(endpoints: Vec<(&str, &str, serde_json::Val
                 networks: vec!["test_network".to_string()],
                 endpoints: endpoint_names,
                 backends: vec![],
-                middleware: vec![],
+                middleware: PipelineMiddleware::default(),
+                ..Default::default()
             },
         );
     }
@@ -127,7 +143,7 @@ fn count_expected_persistent_scps(config: &Config, network_name: &str) -> usize 
         // Check backends for persistent SCPs
         for backend_name in &pipeline_cfg.backends {
             if let Some(backend) = config.backends.get(backend_name) {
-                if backend.service == "dicom" {
+                if matches!(backend.service.as_str(), "dicom" | "dicom_scu") {
                     if let Some(options) = &backend.options {
                         let persistent = options
                             .get("persistent_store_scp")
@@ -438,7 +454,12 @@ mod tests {
         config.backends.insert(
             "pacs_backend".to_string(),
             Backend {
-                service: "dicom".to_string(),
+                service: "dicom_scu".to_string(),
+                target_ref: None,
+                connection: None,
+                authentication: None,
+                timeout_secs: None,
+                max_retries: None,
                 options: Some({
                     let mut map = HashMap::new();
                     map.insert("persistent_store_scp".to_string(), json!(true));

@@ -86,7 +86,7 @@ impl ParseResult {
 /// Parse Content-Type header into components
 ///
 /// # Example
-/// ```ignore
+/// ```text
 /// let ct = parse_content_type("application/json; charset=utf-8")?;
 /// assert_eq!(ct.media_type, "application/json");
 /// assert_eq!(ct.charset, Some("utf-8".to_string()));

@@ -1,6 +1,6 @@
 # Envelope: Data Exchange Format
 
-**Last Updated**: 2025-01-14 (Path handling documentation added)
+**Last Updated**: 2025-11-30
 
 ## Overview
 

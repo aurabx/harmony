@@ -2,7 +2,9 @@
   {
     "operation": "default",
     "spec": {
-      "dimse_op": "find"
+      "metadata": {
+        "dimse_op": "find"
+      }
     }
   }
 ]

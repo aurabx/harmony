@@ -1,17 +1,17 @@
 # Getting Started
 
-**Last Updated**: 2025-01-18 (Phase 6)
+**Last Updated**: 2025-11-30
 
 **Status**: Alpha-quality software under active development. Some features are placeholders.
 
 ## Architecture Overview
 
-Harmony uses a **protocol adapter architecture** where each protocol (HTTP, DIMSE, HL7, etc.) has a dedicated adapter that feeds into a unified pipeline. See [adapters.md](adapters.md) for details.
+Harmony uses a **protocol adapter architecture** where each protocol (HTTP, HTTP/3, DIMSE, HL7, etc.) has a dedicated adapter that feeds into a unified pipeline. See [adapters.md](adapters.md) for details.
 
 Prerequisites
 - Rust (stable; repository currently targets recent stable toolchains)
 - macOS or Linux
-- DCMTK (required if you use DICOM DIMSE features: endpoints/backends performing C-ECHO/C-FIND/C-MOVE/C-GET)
+- DCMTK (required for DICOM SCU operations: C-GET and C-MOVE; optional for persistent C-STORE SCP)
   - macOS (Homebrew): `brew install dcmtk`
   - Debian/Ubuntu: `sudo apt-get install dcmtk`
 - Optional: WireGuard kernel module if you plan to use WireGuard features
@@ -97,13 +97,20 @@ Conventions
 Harmony uses environment variables for runtime configuration and security settings. These are optional for local development but recommended for production deployments.
 
 ### Quick Reference
+**RUST_LOG** - Logging verbosity (optional, default: `info`)
+- Example: `RUST_LOG=harmony=debug,info`
+- Controls tracing output; use `debug` for development, `info` for production
 
-| Variable | Purpose | Required | Default | Example |
-|----------|---------|----------|---------|--------|
-| `RUST_LOG` | Logging verbosity | No | `info` | `harmony=debug,info` |
-| `RUNBEAM_ENCRYPTION_KEY` | Token storage encryption key | No (containers: recommended) | Auto-generated | `$(age-keygen \| base64)` |
-| `RUNBEAM_JWT_SECRET` | JWT validation secret for Runbeam Cloud | No (production: yes) | Development default | `your-secret-key` |
-| `RUNBEAM_DISABLE_KEYRING` | Force encrypted filesystem storage | No (testing only) | Not set | `1` |
+**RUNBEAM_ENCRYPTION_KEY** - Token storage encryption key (optional for local dev, recommended for containers)
+- Base64-encoded age X25519 key
+- Example: Generated via `age-keygen | base64 | tr -d '\n'`
+- In containers, ensures tokens survive restarts; without it, tokens are lost on restart
+
+**RUNBEAM_JWT_SECRET** - JWT validation secret for Runbeam Cloud (required for production cloud integration)
+- String (recommend 32+ character random value)
+- Example: Generated via `openssl rand -base64 32`
+- Must match secret configured in Runbeam Cloud
+
 
 ### Local Development Example
 
@@ -132,7 +139,7 @@ cargo run --release -- --config /etc/harmony/config.toml
 ```
 
 **Notes**:
-- **RUNBEAM_ENCRYPTION_KEY**: In containers without OS keyring, this ensures tokens survive restarts. Without it, tokens are lost when container restarts. See [Security Documentation](security.md#runbeam_encryption_key) for platform-specific generation commands.
+- **RUNBEAM_ENCRYPTION_KEY**: In containers, this ensures tokens survive restarts. Without it, tokens are lost when container restarts. See [Security Documentation](security.md#runbeam_encryption_key) for platform-specific generation commands.
 - **RUNBEAM_JWT_SECRET**: Required for Runbeam Cloud integration. Falls back to insecure development default with warning.
 - **RUST_LOG**: Controls tracing output. Use `debug` for development, `info` for production.
 

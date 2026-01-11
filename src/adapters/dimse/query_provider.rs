@@ -1,5 +1,5 @@
 use crate::adapters::dimse::status_mapper;
-use crate::globals::get_config;
+use crate::globals::{get_config, get_storage};
 use crate::models::envelope::envelope::ResponseEnvelope;
 use crate::models::protocol::{Protocol, ProtocolCtx};
 use crate::pipeline::executor::PipelineExecutor;
@@ -116,7 +116,7 @@ impl PipelineQueryProvider {
 
         // Build ProtocolCtx for DIMSE
         meta.insert("protocol".into(), "dimse".into());
-        meta.insert("operation".into(), op.to_string());
+        meta.insert("dimse_op".into(), op.to_string());
         let ctx = ProtocolCtx {
             protocol: Protocol::Dimse,
             payload: serde_json::to_vec(&body).unwrap_or_default(),
@@ -137,7 +137,7 @@ impl PipelineQueryProvider {
 
         // Execute pipeline using PipelineExecutor
         let response_envelope =
-            PipelineExecutor::execute(request_envelope, pipeline_cfg, &config, &ctx)
+            PipelineExecutor::execute(request_envelope, &self.pipeline, pipeline_cfg, &config, &ctx)
                 .await
                 .map_err(|e| {
                     DimseError::operation_failed(format!("Pipeline execution failed: {}", e))
@@ -197,7 +197,7 @@ impl PipelineQueryProvider {
 
         // Execute streaming pipeline
         let mut response_stream =
-            PipelineExecutor::execute_streaming(request_envelope, pipeline_cfg, &config, &ctx)
+            PipelineExecutor::execute_streaming(request_envelope, &self.pipeline, pipeline_cfg, &config, &ctx)
                 .await
                 .map_err(|e| {
                     DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
@@ -239,7 +239,8 @@ impl PipelineQueryProvider {
     /// Convert ResponseEnvelope to Vec<DatasetStream>
     ///
     /// Parses the response data and converts it to DICOM datasets.
-    /// Supports both single results and arrays of results.
+    /// Handles the DIMSE backend response format: { "operation": "...", "success": true, "matches": [...] }
+    /// Also supports raw arrays or single DICOM JSON objects for flexibility.
     async fn response_to_datasets(
         &self,
         response: ResponseEnvelope<Vec<u8>>,
@@ -268,8 +269,31 @@ impl PipelineQueryProvider {
             return Ok(vec![]);
         };
 
+        // Extract the results from the response
+        // The DIMSE backend returns: { "operation": "...", "success": true, "matches": [...] }
+        let results = if let Some(matches) = json_data.get("matches") {
+            // DIMSE backend response format - extract matches array
+            tracing::debug!("response_to_datasets: found 'matches' key, extracting array");
+            matches.clone()
+        } else {
+            // Fall back to treating the entire response as results
+            tracing::debug!("response_to_datasets: no 'matches' key, using entire response. Keys: {:?}",
+                json_data.as_object().map(|o| o.keys().collect::<Vec<_>>()));
+            json_data.clone()
+        };
+
+        tracing::debug!("response_to_datasets: results type={:?}, len={}",
+            match &results {
+                serde_json::Value::Array(a) => format!("Array({})", a.len()),
+                serde_json::Value::Object(_) => "Object".to_string(),
+                serde_json::Value::Null => "Null".to_string(),
+                _ => "Other".to_string(),
+            },
+            results.as_array().map(|a| a.len()).unwrap_or(0)
+        );
+
         // Convert JSON to datasets
-        let datasets = match &json_data {
+        let datasets = match &results {
             serde_json::Value::Array(items) => {
                 // Multiple results
                 let mut datasets = Vec::new();
@@ -281,18 +305,22 @@ impl PipelineQueryProvider {
                 datasets
             }
             serde_json::Value::Object(_) => {
-                // Single result
-                if let Some(dataset) = self.json_to_dataset(&json_data).await? {
+                // Single result (not wrapped in array)
+                if let Some(dataset) = self.json_to_dataset(&results).await? {
                     vec![dataset]
                 } else {
                     vec![]
                 }
             }
+            serde_json::Value::Null => {
+                // No results
+                vec![]
+            }
             _ => {
                 // Unexpected format
                 return Err(DimseError::operation_failed(format!(
-                    "Unexpected response format: expected object or array, got {:?}",
-                    json_data
+                    "Unexpected response format: expected object, array, or null, got {:?}",
+                    results
                 )));
             }
         };
@@ -302,8 +330,8 @@ impl PipelineQueryProvider {
 
     /// Convert a single JSON object to a DatasetStream
     ///
-    /// Currently creates in-memory datasets from JSON.
-    /// Future: could support file-based datasets for large results.
+    /// Converts DICOM JSON format to an InMemDicomObject and wraps it in DatasetStream.
+    /// The JSON can be either a raw DICOM JSON object or a wrapper with an "identifier" field.
     async fn json_to_dataset(
         &self,
         json: &serde_json::Value,
@@ -313,15 +341,27 @@ impl PipelineQueryProvider {
             return Ok(None);
         }
 
-        // Convert JSON back to bytes for DatasetStream
-        // In the future, we could parse DICOM JSON and build proper DICOM objects
-        let json_bytes = serde_json::to_vec(json).map_err(|e| {
-            DimseError::operation_failed(format!("Failed to serialize JSON: {}", e))
+        // Extract the identifier JSON - it might be wrapped in a Wrapper struct or be raw DICOM JSON
+        let identifier_json = if let Some(identifier) = json.get("identifier") {
+            // It's a wrapped format (Wrapper struct)
+            tracing::debug!("json_to_dataset: found 'identifier' key, extracting");
+            identifier.clone()
+        } else {
+            // It's raw DICOM JSON
+            tracing::debug!("json_to_dataset: using raw JSON. Keys: {:?}",
+                json.as_object().map(|o| o.keys().collect::<Vec<_>>()));
+            json.clone()
+        };
+
+        // Convert DICOM JSON to InMemDicomObject using dicom_json_tool
+        tracing::debug!("json_to_dataset: converting to DICOM object");
+        let dicom_obj = tool::json_value_to_identifier(&identifier_json).map_err(|e| {
+            tracing::error!("json_to_dataset: conversion FAILED: {}", e);
+            DimseError::operation_failed(format!("Failed to convert JSON to DICOM object: {}", e))
         })?;
 
-        // DatasetStream::from_bytes expects bytes::Bytes, but it's just a wrapper around Vec<u8>
-        // We convert via into() which should work since Bytes implements From<Vec<u8>>
-        let dataset = DatasetStream::from_bytes(json_bytes.into());
+        // Create DatasetStream from the parsed DICOM object
+        let dataset = DatasetStream::from_object(dicom_obj);
         Ok(Some(dataset))
     }
 }
@@ -335,9 +375,8 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         max_results: u32,
     ) -> DimseResult<Vec<DatasetStream>> {
         let mut meta = HashMap::new();
-        meta.insert("dicom.operation".into(), "C-FIND".into());
-        meta.insert("dicom.query_level".into(), format!("{}", query_level));
-        meta.insert("dicom.max_results".into(), max_results.to_string());
+        meta.insert("query_level".into(), format!("{}", query_level));
+        meta.insert("max_results".into(), max_results.to_string());
 
         // Build wrapper for pipeline
         let cmd = tool::model::CommandMeta {
@@ -365,9 +404,9 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
 
         if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
             tracing::info!("Using streaming pipeline for C-FIND");
-            self.run_streaming("C-FIND", body, meta).await
+            self.run_streaming("find", body, meta).await
         } else {
-            let response_envelope = self.run("C-FIND", body, meta).await?;
+            let response_envelope = self.run("find", body, meta).await?;
             self.response_to_datasets(response_envelope).await
         }
     }
@@ -378,8 +417,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         parameters: &HashMap<String, String>,
     ) -> DimseResult<Vec<DatasetStream>> {
         let mut meta = HashMap::new();
-        meta.insert("dicom.operation".into(), "C-MOVE".into());
-        meta.insert("dicom.query_level".into(), format!("{}", query_level));
+        meta.insert("query_level".into(), format!("{}", query_level));
 
         let cmd = tool::model::CommandMeta {
             message_id: Some(1),
@@ -397,7 +435,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let response_envelope = self.run("C-MOVE", body, meta).await?;
+        let response_envelope = self.run("move", body, meta).await?;
 
         // Convert response envelope to datasets
         self.response_to_datasets(response_envelope).await
@@ -409,8 +447,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         parameters: &HashMap<String, String>,
     ) -> DimseResult<Vec<DatasetStream>> {
         let mut meta = HashMap::new();
-        meta.insert("dicom.operation".into(), "C-GET".into());
-        meta.insert("dicom.query_level".into(), format!("{}", query_level));
+        meta.insert("query_level".into(), format!("{}", query_level));
 
         let cmd = tool::model::CommandMeta {
             message_id: Some(1),
@@ -437,35 +474,107 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
 
         if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
             tracing::info!("Using streaming pipeline for C-GET");
-            self.run_streaming("C-GET", body, meta).await
+            self.run_streaming("get", body, meta).await
         } else {
-            let response_envelope = self.run("C-GET", body, meta).await?;
+            // Convert response envelope to datasets
+            let response_envelope = self.run("get", body, meta).await?;
             self.response_to_datasets(response_envelope).await
         }
     }
 
     async fn store(&self, dataset: DatasetStream) -> DimseResult<()> {
-        // Write incoming dataset into the current per-move directory if set, otherwise default
-        let target_dir = get_current_store_dir().unwrap_or_else(|| PathBuf::from("./tmp/dimse"));
-        if let Err(e) = tokio::fs::create_dir_all(&target_dir).await {
-            return Err(DimseError::operation_failed(format!(
-                "ensure store dir: {}",
-                e
-            )));
-        }
-        let _temp = dataset
+        // Resolve storage directory using global storage backend if available, otherwise fallback
+        let target_dir = if let Some(storage) = get_storage() {
+            // For filesystem backend, ensure_dir_str returns the full path
+            storage
+                .ensure_dir_str("dimse")
+                .map_err(|e| DimseError::operation_failed(format!("Storage error: {}", e)))?
+        } else {
+            // Fallback for legacy behavior or when no storage backend configured
+            let dir = get_current_store_dir().unwrap_or_else(|| PathBuf::from("./tmp/dimse"));
+            if let Err(e) = tokio::fs::create_dir_all(&dir).await {
+                return Err(DimseError::operation_failed(format!(
+                    "ensure store dir: {}",
+                    e
+                )));
+            }
+            dir
+        };
+
+        // Convert first instance to DICOM JSON for pipeline metadata
+        // This allows middleware and storage backends to access DICOM tags
+        let dicom_json = match dataset.to_object().await {
+            Ok(obj) => match tool::identifier_to_json_value(&obj) {
+                Ok(json) => Some(json),
+                Err(e) => {
+                    tracing::warn!("Failed to convert DICOM to JSON: {}", e);
+                    None
+                }
+            },
+            Err(e) => {
+                tracing::warn!("Failed to parse DICOM object: {}", e);
+                None
+            }
+        };
+
+        let temp_file = dataset
             .to_temp_file(&target_dir)
             .await
             .map_err(|e| DimseError::operation_failed(format!("store dataset: {}", e)))?;
 
-        // Also emit a pipeline event for observability (optional)
+        // Build metadata from DICOM tags for path resolution
         let mut meta = HashMap::new();
-        meta.insert("dicom.operation".into(), "C-STORE".into());
+
+        // Extract key UIDs from dataset metadata for path templating
+        let ds_meta = dataset.metadata();
+        if let Some(ref uid) = ds_meta.study_instance_uid {
+            meta.insert("StudyInstanceUID".into(), uid.clone());
+        }
+        if let Some(ref uid) = ds_meta.series_instance_uid {
+            meta.insert("SeriesInstanceUID".into(), uid.clone());
+        }
+        if let Some(ref uid) = ds_meta.sop_instance_uid {
+            meta.insert("SOPInstanceUID".into(), uid.clone());
+        }
+        if let Some(ref id) = ds_meta.patient_id {
+            meta.insert("PatientID".into(), id.clone());
+        }
+
+        // Build body with command metadata, dataset, and file path for STOW-RS transformation
         let body = serde_json::json!({
-            "operation": "store",
-            "dir": target_dir.to_string_lossy(),
+            "command": {
+                "message_id": 1,
+                "sop_class_uid": ds_meta.sop_class_uid,
+                "priority": "MEDIUM",
+                "direction": "REQUEST"
+            },
+            "dataset": dicom_json,
+            "file": temp_file.to_string_lossy()
         });
-        let _ = self.run("C-STORE", body, meta).await;
+
+        // Execute pipeline and check for DICOM status in response
+        let response = self.run("store", body, meta).await?;
+
+        // Check for DICOM status in response metadata (set by dicom_to_dicomweb middleware)
+        if let Some(status_str) = response.response_details.metadata.get("dicom_status") {
+            // Parse "0x0000" or "0xC000" format
+            if let Some(hex) = status_str.strip_prefix("0x") {
+                if let Ok(status) = u16::from_str_radix(hex, 16) {
+                    // Check for failure status (0xC000 range indicates failure)
+                    if status >= 0xC000 {
+                        return Err(DimseError::operation_failed(format!(
+                            "C-STORE failed with DICOM status: {}",
+                            status_str
+                        )));
+                    }
+                    // Warning status (0xB000 range) - log but don't fail
+                    if status >= 0xB000 && status < 0xC000 {
+                        tracing::warn!("C-STORE completed with warning status: {}", status_str);
+                    }
+                }
+            }
+        }
+
         Ok(())
     }
 }

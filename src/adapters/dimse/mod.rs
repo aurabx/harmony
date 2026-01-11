@@ -101,7 +101,7 @@ impl ProtocolAdapter for DimseAdapter {
             for backend_name in &pipeline_cfg.backends {
                 if let Some(backend) = config.backends.get(backend_name) {
                     // Legacy persistent DICOM SCP backends
-                    if backend.service == "dicom" {
+                    if backend.service == "dicom" || backend.service == "dicom_scu" {
                         if let Some(options) = &backend.options {
                             let needs_persistent = options
                                 .get("persistent_store_scp")
@@ -223,8 +223,8 @@ impl DimseAdapter {
             .and_then(|s| s.parse::<IpAddr>().ok())
             .or_else(|| {
                 network_config
-                    .map(|nc| nc.tcp_config.bind_address.parse::<IpAddr>().ok())
-                    .flatten()
+                    .and_then(|nc| nc.tcp_config.as_ref())
+                    .and_then(|tcp| tcp.bind_address.parse::<IpAddr>().ok())
             })
             .unwrap_or_else(|| IpAddr::from(std::net::Ipv4Addr::new(0, 0, 0, 0)));
 
@@ -235,7 +235,11 @@ impl DimseAdapter {
             .or_else(|| options.get("port"))
             .and_then(|v| v.as_u64())
             .map(|p| p as u16)
-            .or_else(|| network_config.map(|nc| nc.tcp_config.bind_port))
+            .or_else(|| {
+                network_config
+                    .and_then(|nc| nc.tcp_config.as_ref())
+                    .map(|tcp| tcp.bind_port)
+            })
             .unwrap_or(DEFAULT_DIMSE_PORT);
 
         let key = format!("{}@{}:{}#{}", local_aet, bind_addr, port, endpoint_name);
@@ -283,6 +287,9 @@ impl DimseAdapter {
         }
         if let Some(b) = options.get("enable_get").and_then(|v| v.as_bool()) {
             dimse_config.enable_get = b;
+        }
+        if let Some(b) = options.get("enable_store").and_then(|v| v.as_bool()) {
+            dimse_config.enable_store = b;
         }
 
         let pipeline = pipeline_name.to_string();

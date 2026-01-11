@@ -191,6 +191,24 @@ impl DatasetStream {
             }
         }
 
+        if let Ok(study_instance) = object.element_by_name("StudyInstanceUID") {
+            if let Ok(value) = study_instance.to_str() {
+                metadata.study_instance_uid = Some(value.to_string());
+            }
+        }
+
+        if let Ok(series_instance) = object.element_by_name("SeriesInstanceUID") {
+            if let Ok(value) = series_instance.to_str() {
+                metadata.series_instance_uid = Some(value.to_string());
+            }
+        }
+
+        if let Ok(patient_id) = object.element_by_name("PatientID") {
+            if let Ok(value) = patient_id.to_str() {
+                metadata.patient_id = Some(value.to_string());
+            }
+        }
+
         Self::Object { object, metadata }
     }
 
@@ -220,10 +238,24 @@ impl DatasetStream {
                 let bytes = tokio::fs::read(path).await?;
                 Ok(Bytes::from(bytes))
             }
-            Self::Object { .. } => {
-                // TODO: Implement proper DICOM object serialization
-                // For now, return empty bytes as placeholder
-                Ok(Bytes::new())
+            Self::Object { object, .. } => {
+                // Serialize DICOM object to bytes using Explicit VR Little Endian
+                use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+                use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
+                
+                let ts = TransferSyntaxRegistry
+                    .get("1.2.840.10008.1.2.1") // Explicit VR Little Endian
+                    .ok_or_else(|| crate::error::DimseError::internal(
+                        "Transfer syntax not found"
+                    ))?;
+                
+                let mut buffer = Vec::new();
+                object.write_dataset_with_ts(&mut buffer, ts)
+                    .map_err(|e| crate::error::DimseError::internal(
+                        format!("Failed to serialize DICOM object: {}", e)
+                    ))?;
+                
+                Ok(Bytes::from(buffer))
             }
         }
     }
@@ -232,10 +264,53 @@ impl DatasetStream {
     pub async fn to_object(&self) -> crate::error::Result<InMemDicomObject> {
         match self {
             Self::Object { object, .. } => Ok(object.clone()),
-            _ => {
-                // TODO: Implement proper DICOM object parsing
-                // For now, return empty object as placeholder
-                Ok(dicom_object::InMemDicomObject::new_empty())
+            Self::Memory { data, .. } => {
+                // Parse DICOM object from memory using Explicit VR Little Endian
+                use dicom_encoding::text::SpecificCharacterSet;
+                use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+                use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
+                use std::io::Cursor;
+                
+                let ts = TransferSyntaxRegistry
+                    .get("1.2.840.10008.1.2.1")
+                    .ok_or_else(|| crate::error::DimseError::internal(
+                        "Transfer syntax not found"
+                    ))?;
+                
+                let cursor = Cursor::new(data.as_ref());
+                InMemDicomObject::read_dataset_with_ts_cs(cursor, ts, SpecificCharacterSet::default())
+                    .map_err(|e| crate::error::DimseError::internal(
+                        format!("Failed to parse DICOM object: {}", e)
+                    ))
+            }
+            Self::File { path, .. } => {
+                // Try to read as a complete DICOM file with preamble
+                match dicom_object::open_file(path) {
+                    Ok(obj) => Ok(obj.into_inner()),
+                    Err(_) => {
+                        // Fall back to parsing as raw dataset
+                        use dicom_encoding::text::SpecificCharacterSet;
+                        use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+                        use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
+                        use std::io::Cursor;
+                        
+                        let bytes = std::fs::read(path).map_err(|e| {
+                            crate::error::DimseError::internal(format!("Failed to read file: {}", e))
+                        })?;
+                        
+                        let ts = TransferSyntaxRegistry
+                            .get("1.2.840.10008.1.2.1")
+                            .ok_or_else(|| crate::error::DimseError::internal(
+                                "Transfer syntax not found"
+                            ))?;
+                        
+                        let cursor = Cursor::new(bytes);
+                        InMemDicomObject::read_dataset_with_ts_cs(cursor, ts, SpecificCharacterSet::default())
+                            .map_err(|e| crate::error::DimseError::internal(
+                                format!("Failed to parse DICOM file: {}", e)
+                            ))
+                    }
+                }
             }
         }
     }

@@ -43,6 +43,8 @@ struct Claims {
     iss: Option<String>,
     #[allow(dead_code)]
     aud: Option<JsonValue>, // string or array
+    #[serde(flatten)]
+    extra: std::collections::HashMap<String, JsonValue>,
 }
 
 pub fn parse_config(
@@ -62,7 +64,11 @@ pub fn parse_config(
         .get("audience")
         .and_then(|v| v.as_str())
         .map(|s| s.to_string());
-    let leeway_secs = options.get("leeway_secs").and_then(|v| v.as_u64());
+    // DSL 1.9.0: prefer leeway_secs, fall back to deprecated leeway_seconds
+    let leeway_secs = options
+        .get("leeway_secs")
+        .and_then(|v| v.as_u64())
+        .or_else(|| options.get("leeway_seconds").and_then(|v| v.as_u64()));
     let use_hs256 = options
         .get("use_hs256")
         .and_then(|v| v.as_bool())
@@ -124,7 +130,7 @@ impl JwtAuthMiddleware {
     }
 
     /// Real token validation: verify signature and claims
-    async fn validate_token(&self, token: &str) -> Result<bool, Error> {
+    async fn validate_token(&self, token: &str) -> Result<Claims, Error> {
         // Enforce expected algorithm from header
         let header = decode_header(token).map_err(|_| AuthFailure("invalid JWT header"))?;
         if header.alg != self.algorithm {
@@ -155,7 +161,7 @@ impl JwtAuthMiddleware {
             }
         }
 
-        Ok(true)
+        Ok(token_data.claims)
     }
 
     /// Extract JWT token from Authorization header in the envelope
@@ -179,7 +185,7 @@ impl JwtAuthMiddleware {
 impl Middleware for JwtAuthMiddleware {
     async fn left(
         &self,
-        envelope: RequestEnvelope<serde_json::Value>,
+        mut envelope: RequestEnvelope<serde_json::Value>,
     ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
         // Step 1: Extract the JWT token from the envelope's headers
         let token = match self.extract_token_from_envelope(&envelope) {
@@ -191,16 +197,36 @@ impl Middleware for JwtAuthMiddleware {
         };
 
         // Step 2: Validate the token
-        if !self.validate_token(&token).await? {
-            let error_message = "Invalid or expired JWT token";
-            tracing::error!("{}", error_message);
-            return Err(AuthFailure("jwt verify failed").into());
+        match self.validate_token(&token).await {
+            Ok(claims) => {
+                tracing::info!("JWT token validated successfully");
+                
+                // Inject claims into metadata
+                if let Some(sub) = claims.sub {
+                    envelope.request_details.metadata.insert("sub".to_string(), sub);
+                }
+                if let Some(iss) = claims.iss {
+                    envelope.request_details.metadata.insert("iss".to_string(), iss);
+                }
+                
+                // Inject custom claims
+                for (k, v) in claims.extra {
+                    let val_str = match v {
+                        JsonValue::String(s) => s,
+                        _ => v.to_string(),
+                    };
+                    envelope.request_details.metadata.insert(k, val_str);
+                }
+                
+                // Step 3: Pass through the envelope
+                Ok(envelope)
+            }
+            Err(e) => {
+                let error_message = format!("JWT validation failed: {}", e);
+                tracing::error!("{}", error_message);
+                Err(e)
+            }
         }
-
-        tracing::info!("JWT token validated successfully");
-
-        // Step 3: Pass through the envelope (token is valid)
-        Ok(envelope)
     }
 
     async fn right(
@@ -235,6 +261,8 @@ mod tests {
         exp: i64,
         iat: i64,
         nbf: Option<i64>,
+        #[serde(flatten)]
+        extra: HashMap<String, String>,
     }
 
     fn create_test_envelope_with_auth(auth_header: Option<&str>) -> RequestEnvelope<JsonValue> {
@@ -432,6 +460,7 @@ mod tests {
             exp: now + 3600, // 1 hour from now
             iat: now,
             nbf: Some(now),
+            extra: HashMap::new(),
         };
 
         let token = encode(
@@ -443,7 +472,8 @@ mod tests {
 
         let result = middleware.validate_token(&token).await;
         assert!(result.is_ok());
-        assert!(result.unwrap());
+        let claims = result.unwrap();
+        assert_eq!(claims.sub, Some("test-user".to_string()));
     }
 
     #[tokio::test]
@@ -467,6 +497,7 @@ mod tests {
             exp: now - 3600, // 1 hour ago (expired)
             iat: now - 7200, // 2 hours ago
             nbf: None,
+            extra: HashMap::new(),
         };
 
         let token = encode(
@@ -505,6 +536,7 @@ mod tests {
             exp: now + 3600,
             iat: now,
             nbf: None,
+            extra: HashMap::new(),
         };
 
         let token = encode(
@@ -543,6 +575,7 @@ mod tests {
             exp: now + 3600,
             iat: now,
             nbf: None,
+            extra: HashMap::new(),
         };
 
         let token = encode(
@@ -581,6 +614,7 @@ mod tests {
             exp: now + 3600,
             iat: now,
             nbf: None,
+            extra: HashMap::new(),
         };
 
         // Create token with HS512 algorithm instead of HS256
@@ -633,6 +667,9 @@ mod tests {
         let middleware = JwtAuthMiddleware::new(config);
 
         let now = get_current_timestamp();
+        let mut extra = HashMap::new();
+        extra.insert("tenant".to_string(), "my-tenant".to_string());
+        
         let claims = TestClaims {
             sub: Some("test-user".to_string()),
             iss: Some("test-issuer".to_string()),
@@ -640,6 +677,7 @@ mod tests {
             exp: now + 3600,
             iat: now,
             nbf: Some(now),
+            extra,
         };
 
         let token = encode(
@@ -656,6 +694,12 @@ mod tests {
         let returned_envelope = result.unwrap();
         assert_eq!(returned_envelope.request_details.method, "GET");
         assert_eq!(returned_envelope.request_details.uri, "/test");
+        
+        // Verify metadata injection
+        let meta = returned_envelope.request_details.metadata;
+        assert_eq!(meta.get("sub"), Some(&"test-user".to_string()));
+        assert_eq!(meta.get("iss"), Some(&"test-issuer".to_string()));
+        assert_eq!(meta.get("tenant"), Some(&"my-tenant".to_string()));
     }
 
     #[tokio::test]

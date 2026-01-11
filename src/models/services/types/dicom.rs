@@ -1,4 +1,5 @@
 use crate::config::config::ConfigError;
+use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use async_trait::async_trait;
@@ -11,7 +12,7 @@ use crate::globals::get_storage;
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use dicom_json_tool as djt;
-use dimse::types::{FindQuery, GetQuery, QueryLevel};
+use dimse::types::{DatasetStream, FindQuery, GetQuery, QueryLevel};
 use dimse::{DimseConfig, DimseScu, RemoteNode};
 use std::fs;
 use std::path::Path;
@@ -47,6 +48,11 @@ impl DicomScuBackend {
         &self,
         options: &HashMap<String, Value>,
     ) -> Result<RemoteNode, ConfigError> {
+        // Parse connection config if present
+        let connection = options
+            .get("connection")
+            .and_then(|v| serde_json::from_value::<ConnectionConfig>(v.clone()).ok());
+
         let aet = options
             .get("aet")
             .and_then(|v| v.as_str())
@@ -61,6 +67,7 @@ impl DicomScuBackend {
             .get("host")
             .and_then(|v| v.as_str())
             .or(self.host.as_deref())
+            .or_else(|| connection.as_ref().map(|c| c.host.as_str()))
             .ok_or_else(|| ConfigError::InvalidEndpoint {
                 name: "dicom_scu".to_string(),
                 reason: "Missing 'host' (DICOM server address)".to_string(),
@@ -71,6 +78,7 @@ impl DicomScuBackend {
             .get("port")
             .and_then(|v| v.as_u64())
             .or(self.port.map(|p| p as u64))
+            .or_else(|| connection.as_ref().and_then(|c| c.port.map(|p| p as u64)))
             .ok_or_else(|| ConfigError::InvalidEndpoint {
                 name: "dicom_scu".to_string(),
                 reason: "Missing 'port'".to_string(),
@@ -340,7 +348,13 @@ impl DicomScuBackend {
         // 3. Check dimse_retrieve_mode option (only applies to get/move operations)
         // 4. Check if path is a valid DIMSE operation name (for direct HTTP->DICOM calls)
         // 5. Default to "get" for data retrieval
+        // Note: normalized_data["dimse_op"] is no longer checked as transforms should output to context (metadata)
         let valid_ops = ["echo", "find", "get", "move", "store"];
+        
+        // DEBUG: Log normalized_data structure
+        if let Some(nd) = envelope.normalized_data.as_ref() {
+            tracing::debug!("normalized_data: {}", serde_json::to_string_pretty(nd).unwrap_or_default());
+        }
 
         let op = envelope
             .target_details
@@ -425,7 +439,7 @@ impl DicomScuBackend {
                 let mut params: HashMap<String, String> = HashMap::new();
                 if let Some(map) = identifier_json.as_object() {
                     for (tag, entry) in map.iter() {
-                        // Expect { vr: ..., Value: [...] }
+                        // Expect { vr: ..., Value: [...] } or just { vr: ... } for return keys
                         if let Some(val_array) = entry.get("Value").and_then(|v| v.as_array()) {
                             if let Some(first) = val_array.first() {
                                 if let Some(s) = first.as_str() {
@@ -442,39 +456,40 @@ impl DicomScuBackend {
                                 // Empty array indicates return key
                                 params.insert(tag.clone(), String::new());
                             }
+                        } else if entry.get("vr").is_some() {
+                            // Entry has vr but no Value - treat as return key
+                            params.insert(tag.clone(), String::new());
                         }
                     }
                 }
 
-                // Determine appropriate query level based on filters and return keys
-                let query_level = if params.get("00080018").is_some_and(|v| !v.is_empty()) {
-                    // SOPInstanceUID filter present -> IMAGE level
-                    QueryLevel::Image
-                } else if params.contains_key("00080018")
-                    && (params.get("0020000D").is_some_and(|v| !v.is_empty())
-                        || params.get("0020000E").is_some_and(|v| !v.is_empty()))
-                {
-                    // SOPInstanceUID return key + Study/Series filter -> query for instances (IMAGE level)
-                    // This must come BEFORE the Series condition to take precedence
-                    QueryLevel::Image
-                } else if params.get("0020000E").is_some_and(|v| !v.is_empty()) {
-                    // SeriesInstanceUID filter present -> SERIES level
-                    QueryLevel::Series
-                } else if params.contains_key("0020000E")
-                    && params.get("0020000D").is_some_and(|v| !v.is_empty())
-                {
-                    // SeriesInstanceUID return key + StudyInstanceUID filter -> query for series (SERIES level)
-                    QueryLevel::Series
-                } else if params.get("0020000D").is_some_and(|v| !v.is_empty()) {
-                    // StudyInstanceUID filter present -> STUDY level (for specific study)
-                    QueryLevel::Study
-                } else if params.contains_key("0020000D") {
-                    // StudyInstanceUID return key present (but empty) -> query for studies (STUDY level)
-                    QueryLevel::Study
-                } else {
-                    // Default to PATIENT level
-                    QueryLevel::Patient
-                };
+                // Determine query level from metadata (explicit) or infer from parameters (fallback)
+                let query_level = envelope
+                    .target_details
+                    .as_ref()
+                    .and_then(|td| td.metadata.get("query_level"))
+                    .or_else(|| envelope.request_details.metadata.get("query_level"))
+                    .and_then(|level| match level.to_uppercase().as_str() {
+                        "PATIENT" => Some(QueryLevel::Patient),
+                        "STUDY" => Some(QueryLevel::Study),
+                        "SERIES" => Some(QueryLevel::Series),
+                        "IMAGE" => Some(QueryLevel::Image),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| {
+                        // Fallback: infer from parameters
+                        if params.get("00080018").is_some_and(|v| !v.is_empty()) {
+                            QueryLevel::Image
+                        } else if params.get("0020000E").is_some_and(|v| !v.is_empty()) {
+                            QueryLevel::Series
+                        } else if params.get("0020000D").is_some_and(|v| !v.is_empty())
+                            || params.contains_key("0020000D")
+                        {
+                            QueryLevel::Study
+                        } else {
+                            QueryLevel::Study // Default to STUDY for typical FHIR ImagingStudy queries
+                        }
+                    });
 
                 let mut query = FindQuery::patient(params.get("00100020").cloned()); // PatientID if present
                 query.query_level = query_level;
@@ -636,7 +651,8 @@ impl DicomScuBackend {
                     (dir, true)
                 };
 
-                // In persistent SCP mode, create a per-move subdirectory and direct the SCP to use it
+                // In persistent SCP mode, create a per-move subdirectory
+                // Note: The QueryProvider now uses get_storage() directly, so no need to set a static store dir
                 let mut per_move_dir_opt: Option<std::path::PathBuf> = None;
                 if persistent_scp {
                     let scp_root = options
@@ -646,10 +662,6 @@ impl DicomScuBackend {
                     let per_move_dir = std::path::Path::new(scp_root).join(&folder_id);
                     let _ = std::fs::create_dir_all(&per_move_dir);
                     per_move_dir_opt = Some(per_move_dir.clone());
-                    // Set the current store dir for the persistent SCP QueryProvider (internal SCP)
-                    crate::integrations::dimse::pipeline_query_provider::set_current_store_dir(
-                        per_move_dir.clone(),
-                    );
                 }
 
                 match scu
@@ -1015,6 +1027,92 @@ impl DicomScuBackend {
                         "success": false,
                         "error": e.to_string()
                     }),
+                }
+            }
+            "store" => {
+                // C-STORE: Send DICOM data to remote PACS
+                // Data may come as:
+                // 1. Part 10 file (from HTTP client) - has 128-byte preamble + "DICM" magic
+                // 2. Raw dataset bytes (from another DICOM service or DICOMweb middleware)
+                if envelope.original_data.is_empty() {
+                    serde_json::json!({
+                        "operation": "store",
+                        "success": false,
+                        "error": "No DICOM data provided in request body"
+                    })
+                } else {
+                    // Detect format: Part 10 files have "DICM" at byte 128
+                    let is_part10 = envelope.original_data.len() > 132
+                        && &envelope.original_data[128..132] == b"DICM";
+
+                    let dataset = if is_part10 {
+                        // Parse as Part 10 DICOM file
+                        match dicom_object::from_reader(std::io::Cursor::new(&envelope.original_data)) {
+                            Ok(file_obj) => DatasetStream::from_object(file_obj.into_inner()),
+                            Err(e) => {
+                                return Ok({
+                                    let mut env = envelope.clone();
+                                    env.normalized_data = Some(serde_json::json!({
+                                        "operation": "store",
+                                        "success": false,
+                                        "error": format!("Failed to parse DICOM Part 10 file: {}", e)
+                                    }));
+                                    env
+                                });
+                            }
+                        }
+                    } else {
+                        // Treat as raw dataset bytes (from DICOM/DICOMweb pipeline)
+                        DatasetStream::from_bytes(bytes::Bytes::from(envelope.original_data.clone()))
+                    };
+
+                    match scu.store(&remote_node, dataset).await {
+                        Ok(success) => {
+                            // Try to extract SOP UIDs from the original data for the response
+                            let (sop_class_uid, sop_instance_uid) = {
+                                use std::io::Cursor;
+                                let cursor = Cursor::new(&envelope.original_data);
+                                match dicom_object::from_reader(cursor) {
+                                    Ok(obj) => {
+                                        let class_uid = obj
+                                            .element_by_name("SOPClassUID")
+                                            .ok()
+                                            .and_then(|e| e.to_str().ok())
+                                            .map(|s| s.to_string());
+                                        let instance_uid = obj
+                                            .element_by_name("SOPInstanceUID")
+                                            .ok()
+                                            .and_then(|e| e.to_str().ok())
+                                            .map(|s| s.to_string());
+                                        (class_uid, instance_uid)
+                                    }
+                                    Err(_) => (None, None),
+                                }
+                            };
+
+                            let mut response = serde_json::json!({
+                                "operation": "store",
+                                "success": success,
+                                "remote_aet": remote_node.ae_title,
+                                "host": remote_node.host,
+                                "port": remote_node.port
+                            });
+
+                            if let Some(uid) = sop_class_uid {
+                                response["sop_class_uid"] = serde_json::json!(uid);
+                            }
+                            if let Some(uid) = sop_instance_uid {
+                                response["sop_instance_uid"] = serde_json::json!(uid);
+                            }
+
+                            response
+                        }
+                        Err(e) => serde_json::json!({
+                            "operation": "store",
+                            "success": false,
+                            "error": e.to_string()
+                        }),
+                    }
                 }
             }
             _ => {

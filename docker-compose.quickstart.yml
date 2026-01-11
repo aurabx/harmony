@@ -1,0 +1,13 @@
+version: '3.8'
+
+services:
+  harmony:
+    image: aurabox/harmony:latest
+    ports:
+      - "8080:8080"
+      - "9090:9090"
+    environment:
+      - RUST_LOG=harmony=info
+    # Note: This quickstart configuration runs with in-memory defaults.
+    # For production use with persistent configuration, see:
+    # https://github.com/aurabx/harmony#installation

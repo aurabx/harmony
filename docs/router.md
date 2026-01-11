@@ -1,5 +1,7 @@
 # Router and Pipeline Architecture
 
+**Last Updated**: 2025-11-30
+
 Harmony uses a protocol-agnostic adapter architecture. This document describes the unified pipeline that handles all protocols (HTTP, DIMSE, HL7, etc.).
 
 The pipeline is responsible for processing requests through a structured series of layers, ensuring proper authentication, transformation, and communication with relevant services and backends. All protocols follow the same pipeline execution path via `PipelineExecutor`.

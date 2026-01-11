@@ -1,12 +1,9 @@
 [workspace]
-members = [
-    "crates/*",
-]
-resolver = "2"
+members = ["crates/*"]
 
 [package]
 name = "harmony"
-version = "0.5.0"
+version = "0.12.0"
 edition = "2021"
 
 [lib]
@@ -23,7 +20,7 @@ harmony-database = { path = "crates/database" }
 #jmix-rs = { path = "../jmix/jmix-rust" }
 jmix-rs = "0.3"
 #runbeam-sdk = { path = "../runbeam-sdk" }
-runbeam-sdk = "0.5.0"
+runbeam-sdk = "0.11.0"
 
 dicom-object = "0.9"
 dicom-pixeldata = { version = "0.9", features = ["image", "rle", "jpeg"] }
@@ -33,6 +30,7 @@ image = { version = "0.24", default-features = false, features = ["jpeg", "png"]
 
 tokio = { version = "1", features = ["full"] }
 axum = "0.8.4"
+axum-server = { version = "0.7", features = ["tls-rustls"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 tracing = "0.1"
@@ -73,9 +71,15 @@ encoding_rs = "0.8"
 sha2 = "0.10"
 lazy_static = "1.4"
 bytes = "1.5"
-
-[features]
-default = []
+dirs = "5.0"
+object_store = { version = "0.12.4", features = ["aws", "http"] }
+# HTTP/3 (QUIC) stack
+quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls"] }
+h3 = { version = "0.0.8", default-features = false }
+h3-quinn = "0.0.10"
+rustls = { version = "0.23", features = ["ring"] }
+rustls-pemfile = "2"
+webpki-roots = "0.26"
 
 [dev-dependencies]
 tokio-test = "0.4"
@@ -85,6 +89,9 @@ dicom-dictionary-std = "0.9"
 dicom-core = "0.9"
 tempfile = "3.10"
 serial_test = "3.0"
+dimse = { path = "crates/dimse" }
+rcgen = "0.12"
+futures-util = "0.3"
 
 # Test organization
 
@@ -119,6 +126,10 @@ path = "tests/dicom/scu_scp_separation.rs"
 
 # DICOMweb tests
 [[test]]
+name = "dicom_cstore_filesystem"
+path = "tests/dicom/cstore_filesystem.rs"
+
+[[test]]
 name = "dicomweb_frames_qrscp"
 path = "tests/dicomweb/dicomweb_frames_qrscp.rs"
 
@@ -133,6 +144,10 @@ path = "tests/dicomweb/dicomweb_bridge_middleware.rs"
 [[test]]
 name = "dicomweb_integration"
 path = "tests/dicomweb/integration.rs"
+
+[[test]]
+name = "dicom_to_dicomweb_middleware"
+path = "tests/dicomweb/dicom_to_dicomweb_middleware.rs"
 
 # FHIR tests
 [[test]]
@@ -170,6 +185,10 @@ name = "content_type_integration"
 path = "tests/http/content_type_integration.rs"
 
 [[test]]
+name = "backend_authentication_headers"
+path = "tests/http/backend_authentication_headers.rs"
+
+[[test]]
 name = "config_reload_integration"
 path = "tests/config_reload_integration.rs"
 
@@ -180,6 +199,14 @@ path = "tests/cloud_poller_integration.rs"
 [[test]]
 name = "adapter_registry_integration"
 path = "tests/adapter_registry_integration.rs"
+
+[[test]]
+name = "webhook_middleware_integration"
+path = "tests/webhook_middleware_integration.rs"
+
+[[test]]
+name = "http3_e2e"
+path = "tests/http3_e2e.rs"
 
 [profile.profiling]
 inherits = "release"

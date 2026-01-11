@@ -9,6 +9,36 @@ use std::collections::HashMap;
 // Middleware registry similar to services
 pub static MIDDLEWARE_REGISTRY: OnceCell<HashMap<String, String>> = OnceCell::new();
 
+/// Returns all valid built-in middleware type names.
+/// This is the single source of truth for middleware type validation.
+pub fn builtin_middleware_types() -> &'static [&'static str] {
+    &[
+        "jwtauth",
+        "jwt_auth",
+        "basic_auth",
+        "connect",
+        "passthru",
+        "json_extractor",
+        "json",
+        "jmix_builder",
+        "dicomweb_bridge",
+        "dicomweb",
+        "dicom_to_dicomweb",
+        "dicom_flatten",
+        "dicom_flatten_middleware",
+        "dicom_unflatten",
+        "dicom_unflatten_middleware",
+        "transform",
+        "path_filter",
+        "log_dump",
+        "dump",
+        "webhook",
+        "metadata_transform",
+        "policies",
+        "mesh_auth",
+    ]
+}
+
 #[derive(Debug, serde::Deserialize, Default, Clone)]
 #[serde(default)]
 pub struct MiddlewareConfig {
@@ -33,13 +63,28 @@ pub fn resolve_middleware_type(
     options: &HashMap<String, Value>,
     transforms_path: Option<&str>,
 ) -> Result<Box<dyn Middleware>, String> {
+    resolve_middleware_type_with_config(middleware_type, options, transforms_path, None)
+}
+
+/// Resolves a middleware type with full Config context (for policies middleware)
+pub fn resolve_middleware_type_with_config(
+    middleware_type: &str,
+    options: &HashMap<String, Value>,
+    transforms_path: Option<&str>,
+    config: Option<&crate::config::config::Config>,
+) -> Result<Box<dyn Middleware>, String> {
     // Check the registry first
     if let Some(registry) = MIDDLEWARE_REGISTRY.get() {
         if let Some(module) = registry.get(middleware_type) {
             match module.as_str() {
                 "" => {
                     // Default built-in modules
-                    create_builtin_middleware_type(middleware_type, options, transforms_path)
+                    create_builtin_middleware_type_with_config(
+                        middleware_type,
+                        options,
+                        transforms_path,
+                        config,
+                    )
                 }
                 module_path => {
                     // Custom module loading would go here
@@ -51,29 +96,44 @@ pub fn resolve_middleware_type(
             }
         } else {
             // Registry is present but does not include this middleware. Attempt built-in fallback.
-            match create_builtin_middleware_type(middleware_type, options, transforms_path) {
+            match create_builtin_middleware_type_with_config(
+                middleware_type,
+                options,
+                transforms_path,
+                config,
+            ) {
                 Ok(mw) => Ok(mw),
                 Err(_) => Err(format!("Unknown middleware type: {}", middleware_type)),
             }
         }
     } else {
         // Fallback to hardcoded types if registry isn't initialized
-        create_builtin_middleware_type(middleware_type, options, transforms_path)
+        create_builtin_middleware_type_with_config(
+            middleware_type,
+            options,
+            transforms_path,
+            config,
+        )
     }
 }
 
-/// Creates built-in middleware instances
-fn create_builtin_middleware_type(
+/// Creates built-in middleware instances with Config context
+fn create_builtin_middleware_type_with_config(
     middleware_type: &str,
     options: &HashMap<String, Value>,
     transforms_path: Option<&str>,
+    config: Option<&crate::config::config::Config>,
 ) -> Result<Box<dyn Middleware>, String> {
     use crate::models::middleware::types::auth::AuthSidecarMiddleware;
     use crate::models::middleware::types::connect::AuraboxConnectMiddleware;
+    use crate::models::middleware::types::dicom_flatten::DicomFlattenMiddleware;
+    use crate::models::middleware::types::dicom_unflatten::DicomUnflattenMiddleware;
     use crate::models::middleware::types::jwtauth::JwtAuthMiddleware;
     use crate::models::middleware::types::metadata_transform::MetadataTransformMiddleware;
-    use crate::models::middleware::types::path_filter::PathFilterMiddleware;
-    use crate::models::middleware::types::transform::JoltTransformMiddleware;
+use crate::models::middleware::types::path_filter::PathFilterMiddleware;
+use crate::models::middleware::types::logger::{LogDumpMiddleware, parse_config as parse_logger_config};
+use crate::models::middleware::types::transform::JoltTransformMiddleware;
+use crate::models::middleware::types::webhook::{WebhookMiddleware, parse_config as parse_webhook_config};
 
     match middleware_type.to_lowercase().as_str() {
         "jwtauth" | "jwt_auth" => {
@@ -98,8 +158,19 @@ fn create_builtin_middleware_type(
             crate::models::middleware::types::jmix_builder::JmixBuilderMiddleware::new(),
         )),
         "dicomweb_bridge" | "dicomweb" => Ok(Box::new(
-            crate::models::middleware::types::dicomweb_bridge::DicomwebBridgeMiddleware::new(),
+            crate::models::middleware::types::dicomweb_to_dicom::DICOMwebToDICOMMiddleware::new(),
         )),
+        "dicom_to_dicomweb" => Ok(Box::new(
+            crate::models::middleware::types::dicom_to_dicomweb::DicomToDicomwebMiddleware::new(),
+        )),
+        "dicom_flatten" | "dicom_flatten_middleware" => {
+            let config = crate::models::middleware::types::dicom_flatten::parse_config(options)?;
+            Ok(Box::new(DicomFlattenMiddleware::new(config)))
+        }
+        "dicom_unflatten" | "dicom_unflatten_middleware" => {
+            let config = crate::models::middleware::types::dicom_unflatten::parse_config(options)?;
+            Ok(Box::new(DicomUnflattenMiddleware::new(config)))
+        }
         "transform" => {
             let config = crate::models::middleware::types::transform::parse_config(
                 options,
@@ -111,6 +182,14 @@ fn create_builtin_middleware_type(
             let config = crate::models::middleware::types::path_filter::parse_config(options)?;
             Ok(Box::new(PathFilterMiddleware::new(config)?))
         }
+        "log_dump" | "dump" => {
+            let config = parse_logger_config(options)?;
+            Ok(Box::new(LogDumpMiddleware::new(config)))
+        }
+        "webhook" => {
+            let config = parse_webhook_config(options)?;
+            Ok(Box::new(WebhookMiddleware::new(config)))
+        }
         "metadata_transform" => {
             let config = crate::models::middleware::types::metadata_transform::parse_config(
                 options,
@@ -119,9 +198,20 @@ fn create_builtin_middleware_type(
             Ok(Box::new(MetadataTransformMiddleware::new(config)?))
         }
         "policies" => {
-            let config = crate::models::middleware::types::policies::parse_config(options)?;
+            let cfg = config.ok_or("Policies middleware requires Config context")?;
+            let config = crate::models::middleware::types::policies::parse_config(
+                options,
+                &cfg.policies,
+                &cfg.rules,
+            )?;
             Ok(Box::new(
                 crate::models::middleware::types::policies::PoliciesMiddleware::new(config)?,
+            ))
+        }
+        "mesh_auth" => {
+            let mesh_config = crate::models::middleware::types::mesh_auth::parse_config_with_context(options, config)?;
+            Ok(Box::new(
+                crate::models::middleware::types::mesh_auth::MeshAuthMiddleware::new(mesh_config),
             ))
         }
         _ => Err(format!(
@@ -142,18 +232,50 @@ pub fn build_middleware_instances_for_pipeline(
 
     for name in names {
         if let Some(middleware_instance) = config.middleware.get(name) {
-            let middleware = middleware_instance
-                .resolve_middleware(transforms_path)
-                .map_err(|err| {
-                    format!("Failed to resolve middleware instance '{}': {}", name, err)
-                })?;
+            // Resolve authentication reference if present
+            let mut resolved_options = middleware_instance.options.clone();
+            if let Some(auth_ref) = &middleware_instance.authentication {
+                if let Some(auth_def) = config.authentications.get(auth_ref) {
+                    // Merge authentication options into middleware options (legacy behavior)
+                    for (key, value) in &auth_def.options {
+                        resolved_options.insert(key.clone(), value.clone());
+                    }
+                    // Inject full authentication definition so helpers can apply headers
+                    resolved_options.insert(
+                        "authentication_def".to_string(),
+                        serde_json::to_value(auth_def).map_err(|e| format!("Failed to serialize auth def: {}", e))?,
+                    );
+                } else {
+                    return Err(format!(
+                        "Middleware '{}' references unknown authentication '{}'",
+                        name, auth_ref
+                    ));
+                }
+            }
+
+            // Pass instance name for metadata lookup (webhook.<instance_name>)
+            resolved_options.insert("__instance_name".to_string(), serde_json::json!(name));
+
+            // Use new method that passes Config context for policies middleware
+            let middleware = resolve_middleware_type_with_config(
+                &middleware_instance.middleware_type,
+                &resolved_options,
+                transforms_path,
+                Some(config),
+            )
+            .map_err(|err| format!("Failed to resolve middleware instance '{}': {}", name, err))?;
             instances.push(middleware);
         } else {
             // Fallback: if the name itself corresponds to a built-in middleware type,
             // allow referencing it directly without an instance block.
             // This supports conveniences like using "json_extractor" without an options table.
             let empty_opts: HashMap<String, Value> = HashMap::new();
-            match resolve_middleware_type(name, &empty_opts, transforms_path) {
+            match resolve_middleware_type_with_config(
+                name,
+                &empty_opts,
+                transforms_path,
+                Some(config),
+            ) {
                 Ok(mw) => instances.push(mw),
                 Err(_) => {
                     return Err(format!("Unknown middleware instance '{}'", name));

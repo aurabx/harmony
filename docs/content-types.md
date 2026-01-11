@@ -1,5 +1,7 @@
 # Multi-Content-Type Support
 
+**Last Updated**: 2025-11-30
+
 Harmony proxy supports automatic parsing of multiple content types beyond JSON, enabling seamless data transformation across different formats in healthcare and data integration pipelines.
 
 ## Overview

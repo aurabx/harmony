@@ -194,8 +194,10 @@ impl Middleware for MetadataTransformMiddleware {
                 });
 
                 // Apply transform to create/modify target_details
+                tracing::debug!("Metadata transform input: {}", serde_json::to_string_pretty(&input_json).unwrap_or_default());
                 match self.engine.transform(input_json) {
                     Ok(transformed) => {
+                        tracing::debug!("Metadata transform output: {}", serde_json::to_string_pretty(&transformed).unwrap_or_default());
                         // Create or update target_details from transformed JSON
                         let target_details = self.json_to_target_details(&transformed)?;
 
@@ -584,17 +586,23 @@ mod tests {
             "{}/samples/jolt/metadata_set_dimse_op.json",
             env!("CARGO_MANIFEST_DIR")
         );
+        // Use default transform_target="target_details" as the sample JOLT spec
+        // outputs to { "metadata": { ... } } which matches TargetDetails structure.
         let cfg = MetadataTransformConfig {
             spec_path,
             apply: "left".into(),
             fail_on_error: true,
-            transform_target: "metadata".to_string(),
+            transform_target: "target_details".to_string(),
         };
         let mw = MetadataTransformMiddleware::new(cfg).unwrap();
         let out = mw.left(env).await.unwrap();
+        
+        // Check target_details.metadata
         assert_eq!(
-            out.request_details.metadata.get("dimse_op"),
-            Some(&"find".to_string())
+            out.target_details
+                .as_ref()
+                .and_then(|td| td.metadata.get("dimse_op").map(|s| s.as_str())),
+            Some("find")
         );
     }
 }

@@ -1,19 +1,42 @@
 //! End-to-end tests for hot reload functionality.
 //!
-//! **Note:** These tests bind to actual network ports and should be run sequentially
-//! to avoid port conflicts and timing issues:
-//! ```bash
-//! cargo test --test e2e_run_with_reload -- --test-threads=1
-//! ```
+//! **Note:** These tests bind to actual network ports and use `#[serial]` to run
+//! sequentially, avoiding port conflicts and timing issues. The `serial_test` crate
+//! automatically ensures tests run one at a time.
 
 use harmony::config::config::Config;
-use harmony::config::Cli;
 use reqwest;
+use serial_test::serial;
 use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::{sleep, timeout};
+
+/// Helper to wait for server to become ready by attempting connections
+async fn wait_for_server_ready(port: u16, max_attempts: u32) -> Result<(), String> {
+    let client = reqwest::Client::builder()
+        .timeout(Duration::from_millis(500))
+        .build()
+        .unwrap();
+    
+    for attempt in 1..=max_attempts {
+        let result = client
+            .get(format!("http://127.0.0.1:{}/admin/health", port))
+            .send()
+            .await;
+        
+        if result.is_ok() {
+            return Ok(());
+        }
+        
+        if attempt < max_attempts {
+            sleep(Duration::from_millis(100)).await;
+        }
+    }
+    
+    Err(format!("Server on port {} did not become ready after {} attempts", port, max_attempts))
+}
 
 /// Helper to create a complete test config with pipelines and endpoints
 fn create_full_test_config(dir: &TempDir, port: u16) -> PathBuf {
@@ -164,22 +187,30 @@ module = ""
 }
 
 #[tokio::test]
+#[serial]
 async fn test_run_with_reload_full_lifecycle() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_full_test_config(&temp_dir, 19200);
-    let config_path_str = config_path.to_string_lossy().to_string();
+    let test_result = timeout(Duration::from_secs(60), async {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_full_test_config(&temp_dir, 19200);
+        let config_path_str = config_path.to_string_lossy().to_string();
 
-    // Load config and spawn run_with_reload
-    let cli = Cli::new(config_path_str.clone());
-    let config = Config::from_args(cli);
+        // Load config and spawn run_with_reload
+        let contents = std::fs::read_to_string(&config_path_str).expect("read config");
+        let mut config: Config = toml::from_str(&contents).expect("parse config");
+        config.resolved_transforms_path = Some(temp_dir.path().join("transforms").to_string_lossy().to_string());
+        config.resolved_mesh_path = Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
+        config.inject_management_service().expect("inject management");
+        config.validate().expect("validate config");
 
-    let config_path_clone = config_path_str.clone();
-    let server_handle = tokio::spawn(async move {
-        harmony::run_with_reload(config, Some(config_path_clone)).await;
-    });
+        let config_path_clone = config_path_str.clone();
+        let server_handle = tokio::spawn(async move {
+            harmony::run_with_reload(config, Some(config_path_clone)).await;
+        });
 
-    // Give server time to start
-    sleep(Duration::from_secs(2)).await;
+        // Wait for server to be ready
+        wait_for_server_ready(19200, 30)
+            .await
+            .expect("Server should start within timeout");
 
     // Test 1: Verify server is running and responds to requests
     let client = reqwest::Client::new();
@@ -205,10 +236,7 @@ async fn test_run_with_reload_full_lifecycle() {
     )
     .await;
 
-    assert!(
-        mgmt_response.is_ok(),
-        "Management API should be accessible"
-    );
+    assert!(mgmt_response.is_ok(), "Management API should be accessible");
 
     // Test 3: Hot reload - update config with middleware
     let new_config = create_config_with_middleware(&temp_dir, 19200);
@@ -234,22 +262,35 @@ async fn test_run_with_reload_full_lifecycle() {
         "Requests should succeed after hot reload"
     );
 
-    // Test 4: Cleanup
-    // Note: abort() doesn't trigger graceful shutdown - it just kills the task.
-    // The HTTP servers run in background tasks and will continue running until
-    // process exit or until the registry.stop_all() is called (which requires ctrl-c).
-    // For now, we just abort the task to clean up the test.
-    server_handle.abort();
+        // Test 4: Cleanup
+        // Note: abort() doesn't trigger graceful shutdown - it just kills the task.
+        // The HTTP servers run in background tasks and will continue running until
+        // process exit or until the registry.stop_all() is called.
+        // We must explicitly stop the registry to clean up the detached adapter tasks.
+        server_handle.abort();
 
-    println!("✓ Full run_with_reload lifecycle test passed!");
+        if let Some(registry) = harmony::globals::get_adapter_registry() {
+            let _ = registry.stop_all().await;
+        }
+
+        // Give time for ports to be fully released by the OS
+        sleep(Duration::from_secs(1)).await;
+
+        println!("✓ Full run_with_reload lifecycle test passed!");
+    })
+    .await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 60 seconds");
 }
 
 #[tokio::test]
+#[serial]
 async fn test_run_with_reload_multiple_networks() {
-    let temp_dir = TempDir::new().unwrap();
-    
-    // Create config with two networks
-    let config_content = r#"
+    let test_result = timeout(Duration::from_secs(60), async {
+        let temp_dir = TempDir::new().unwrap();
+
+        // Create config with two networks
+        let config_content = r#"
 [proxy]
 id = "multi-network-test"
 pipelines_path = "pipelines"
@@ -331,7 +372,7 @@ module = ""
 
     let config_path = temp_dir.path().join("multi-net-config.toml");
     fs::write(&config_path, config_content).expect("Failed to write config");
-    
+
     // Create required directories
     fs::create_dir_all(temp_dir.path().join("pipelines")).ok();
     fs::create_dir_all(temp_dir.path().join("transforms")).ok();
@@ -339,15 +380,21 @@ module = ""
     let config_path_str = config_path.to_string_lossy().to_string();
 
     // Load config and spawn server
-    let cli = Cli::new(config_path_str.clone());
-    let config = Config::from_args(cli);
+    let contents = std::fs::read_to_string(&config_path_str).expect("read config");
+    let mut config: Config = toml::from_str(&contents).expect("parse config");
+    config.resolved_transforms_path = Some(temp_dir.path().join("transforms").to_string_lossy().to_string());
+    config.resolved_mesh_path = Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
+    config.inject_management_service().expect("inject management");
+    config.validate().expect("validate config");
 
-    let server_handle = tokio::spawn(async move {
-        harmony::run_with_reload(config, Some(config_path_str)).await;
-    });
+        let server_handle = tokio::spawn(async move {
+            harmony::run_with_reload(config, Some(config_path_str)).await;
+        });
 
-    // Give server time to start both networks
-    sleep(Duration::from_secs(2)).await;
+        // Wait for server to be ready
+        wait_for_server_ready(19201, 30)
+            .await
+            .expect("Server should start within timeout");
 
     let client = reqwest::Client::new();
 
@@ -400,30 +447,48 @@ module = ""
         "Management API should not be accessible on net2"
     );
 
-    // Cleanup
-    server_handle.abort();
-    sleep(Duration::from_millis(500)).await;
+        // Cleanup
+        server_handle.abort();
 
-    println!("✓ Multiple networks test passed!");
+        if let Some(registry) = harmony::globals::get_adapter_registry() {
+            let _ = registry.stop_all().await;
+        }
+
+        // Give time for ports to be fully released by the OS
+        sleep(Duration::from_secs(1)).await;
+
+        println!("✓ Multiple networks test passed!");
+    })
+    .await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 60 seconds");
 }
 
 #[tokio::test]
+#[serial]
 async fn test_run_with_reload_adapter_restart() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_full_test_config(&temp_dir, 19203);
-    let config_path_str = config_path.to_string_lossy().to_string();
+    let test_result = timeout(Duration::from_secs(90), async {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_full_test_config(&temp_dir, 19203);
+        let config_path_str = config_path.to_string_lossy().to_string();
 
-    // Load config and spawn server
-    let cli = Cli::new(config_path_str.clone());
-    let config = Config::from_args(cli);
+        // Load config and spawn server
+        let contents = std::fs::read_to_string(&config_path_str).expect("read config");
+        let mut config: Config = toml::from_str(&contents).expect("parse config");
+        config.resolved_transforms_path = Some(temp_dir.path().join("transforms").to_string_lossy().to_string());
+        config.resolved_mesh_path = Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
+        config.inject_management_service().expect("inject management");
+        config.validate().expect("validate config");
 
-    let config_path_clone = config_path_str.clone();
-    let server_handle = tokio::spawn(async move {
-        harmony::run_with_reload(config, Some(config_path_clone)).await;
-    });
+        let config_path_clone = config_path_str.clone();
+        let server_handle = tokio::spawn(async move {
+            harmony::run_with_reload(config, Some(config_path_clone)).await;
+        });
 
-    // Give server time to start
-    sleep(Duration::from_secs(2)).await;
+        // Wait for server to be ready
+        wait_for_server_ready(19203, 30)
+            .await
+            .expect("Server should start within timeout");
 
     let client = reqwest::Client::new();
 
@@ -532,30 +597,48 @@ module = ""
         "New port should respond after adapter restart"
     );
 
-    // Cleanup
-    server_handle.abort();
-    sleep(Duration::from_millis(500)).await;
+        // Cleanup
+        server_handle.abort();
 
-    println!("✓ Adapter restart test passed!");
+        if let Some(registry) = harmony::globals::get_adapter_registry() {
+            let _ = registry.stop_all().await;
+        }
+
+        // Give time for ports to be fully released by the OS
+        sleep(Duration::from_secs(1)).await;
+
+        println!("✓ Adapter restart test passed!");
+    })
+    .await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 90 seconds");
 }
 
 #[tokio::test]
+#[serial]
 async fn test_run_with_reload_invalid_config_rejected() {
-    let temp_dir = TempDir::new().unwrap();
-    let config_path = create_full_test_config(&temp_dir, 19205);
-    let config_path_str = config_path.to_string_lossy().to_string();
+    let test_result = timeout(Duration::from_secs(60), async {
+        let temp_dir = TempDir::new().unwrap();
+        let config_path = create_full_test_config(&temp_dir, 19205);
+        let config_path_str = config_path.to_string_lossy().to_string();
 
-    // Load config and spawn server
-    let cli = Cli::new(config_path_str.clone());
-    let config = Config::from_args(cli);
+        // Load config and spawn server
+        let contents = std::fs::read_to_string(&config_path_str).expect("read config");
+        let mut config: Config = toml::from_str(&contents).expect("parse config");
+        config.resolved_transforms_path = Some(temp_dir.path().join("transforms").to_string_lossy().to_string());
+        config.resolved_mesh_path = Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
+        config.inject_management_service().expect("inject management");
+        config.validate().expect("validate config");
 
-    let config_path_clone = config_path_str.clone();
-    let server_handle = tokio::spawn(async move {
-        harmony::run_with_reload(config, Some(config_path_clone)).await;
-    });
+        let config_path_clone = config_path_str.clone();
+        let server_handle = tokio::spawn(async move {
+            harmony::run_with_reload(config, Some(config_path_clone)).await;
+        });
 
-    // Give server time to start
-    sleep(Duration::from_secs(2)).await;
+        // Wait for server to be ready
+        wait_for_server_ready(19205, 30)
+            .await
+            .expect("Server should start within timeout");
 
     let client = reqwest::Client::new();
 
@@ -593,9 +676,19 @@ interface = "lo0"
         "Server should continue running with old config after invalid config rejected"
     );
 
-    // Cleanup
-    server_handle.abort();
-    sleep(Duration::from_millis(500)).await;
+        // Cleanup
+        server_handle.abort();
 
-    println!("✓ Invalid config rejection test passed!");
+        if let Some(registry) = harmony::globals::get_adapter_registry() {
+            let _ = registry.stop_all().await;
+        }
+
+        // Give time for ports to be fully released by the OS
+        sleep(Duration::from_secs(1)).await;
+
+        println!("✓ Invalid config rejection test passed!");
+    })
+    .await;
+    
+    assert!(test_result.is_ok(), "Test timed out after 60 seconds");
 }

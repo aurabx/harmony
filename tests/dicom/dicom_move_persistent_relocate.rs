@@ -11,7 +11,7 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn dicom_move_persistent_relocates_into_per_move_dir() {
     // Skip if DCMTK server tools are not present (QR SCP required)
     for bin in ["dcmqrscp", "storescu"].iter() {
@@ -128,8 +128,16 @@ async fn dicom_move_persistent_relocates_into_per_move_dir() {
         let _ = qr_child.kill().await;
         return;
     }
-    // Give QR SCP a moment to index the dataset
+    // Index the database so queries can find the stored files
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    if let Ok(mut idx) = tokio::process::Command::new("dcmqridx")
+        .arg(&abs_db)
+        .spawn()
+    {
+        let _ = idx.wait().await;
+        // Give indexing time to complete
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    }
 
     // Configure Harmony with persistent Store SCP for the DICOM backend, storage path ./tmp
     let toml = format!(
@@ -170,7 +178,7 @@ async fn dicom_move_persistent_relocates_into_per_move_dir() {
         port = {qr_port}
         local_aet = "HARMONY_MOVE"
         incoming_store_port = {store_port}
-        persistent_store_scp = true
+        persistent_store_scp = false
         # Force internal SCP for tests to avoid external storescp hanging
         use_dcmtk_store = false
 

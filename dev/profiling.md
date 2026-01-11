@@ -1,1 +1,0 @@
-sudo cargo flamegraph --bin harmony --profile=profiling -- --config examples/jmix-to-dicom/config.toml

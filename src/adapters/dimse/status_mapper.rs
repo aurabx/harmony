@@ -17,7 +17,7 @@
 //!
 //! # Usage
 //!
-//! ```ignore
+//! ```text
 //! use crate::adapters::dimse::status_mapper;
 //! use dimse::types::DimseStatus;
 //!

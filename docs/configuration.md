@@ -1,54 +1,474 @@
 # Configuration
 
-**Last Updated**: 2025-01-18 (Phase 6)
+**Last Updated**: 2025-11-30
+
+## Environment Variable Substitution
+
+Harmony supports environment variable substitution in all TOML configuration values. This allows you to externalize sensitive data, deployment-specific settings, and other configuration that varies across environments.
+
+### Syntax
+
+Use `$VARIABLE_NAME` to reference environment variables in any TOML value:
+
+```toml
+[proxy]
+id = "$PROXY_ID"
+
+[network.default.http]
+bind_address = "$BIND_ADDRESS"
+bind_port = $BIND_PORT
+
+[backends.remote]
+service = "http"
+
+[backends.remote.options]
+url = "https://$REMOTE_HOST:$REMOTE_PORT/api"
+```
+
+### Variable Names
+
+Valid variable names must:
+- Start with a letter or underscore
+- Contain only alphanumeric characters and underscores
+- Examples: `$VAR`, `$VAR_NAME`, `$_VAR123`
+- Invalid: `$123VAR` (starts with number), `$MY-VAR` (contains hyphen)
+
+### Behavior
+
+**If variable is set**: Replaced with its value
+```bash
+export HOST=example.com
+# $HOST in config becomes: example.com
+```
+
+**If variable is not set**: Replaced with empty string and warning logged
+```toml
+url = "https://$UNDEFINED_VAR/api"  # becomes: https:///api (warning logged)
+```
+
+**Escaped dollar signs**: Use `$$` to represent a literal `$` character
+```toml
+description = "Cost is $$100"  # becomes: Cost is $100
+```
+
+### Examples
+
+#### Externalize Secrets
+
+```toml
+[backends.production]
+service = "http"
+
+[backends.production.options]
+url = "https://api.example.com"
+api_key = "$API_KEY"
+```
+
+Set at runtime:
+```bash
+export API_KEY="secret_key_xyz"
+cargo run -- --config config/config.toml
+```
+
+#### Deployment-Specific Configuration
+
+```toml
+[network.default.http]
+bind_address = "$BIND_ADDRESS"
+bind_port = $BIND_PORT
+
+[proxy]
+id = "harmony-$ENVIRONMENT"
+```
+
+Run different environments:
+```bash
+# Development
+export BIND_ADDRESS=127.0.0.1 BIND_PORT=8080 ENVIRONMENT=dev
+cargo run -- --config config/config.toml
+
+# Production
+export BIND_ADDRESS=0.0.0.0 BIND_PORT=443 ENVIRONMENT=prod
+./harmony --config /etc/harmony/config.toml
+```
+
+#### Multiple Variables
+
+```toml
+url = "$PROTOCOL://$HOST:$PORT/path"
+# becomes: https://example.com:443/path (if PROTOCOL=https, HOST=example.com, PORT=443)
+```
+
+### Best Practices
+
+1. **Use meaningful variable names**: `$API_KEY` instead of `$K`, `$BIND_ADDRESS` instead of `$BA`
+2. **Document required variables**: Include a `.env.example` or README section listing all expected environment variables
+3. **Use default values in scripts**: Wrap your startup in a shell script that sets defaults
+   ```bash
+   #!/bin/bash
+   export BIND_ADDRESS=${BIND_ADDRESS:-127.0.0.1}
+   export BIND_PORT=${BIND_PORT:-8080}
+   exec /path/to/harmony --config config.toml
+   ```
+4. **Never commit secrets**: Use `.gitignore` to exclude `.env` files
+5. **Log warnings**: Check logs during startup to catch missing variables early
+6. **Mark critical variables as required**: Use `required_env_vars` in `[proxy]` section to enforce presence of critical variables
+   ```toml
+   [proxy]
+   id = "harmony"
+   required_env_vars = ["API_KEY", "DATABASE_PASSWORD"]
+   ```
+7. **Use systemd EnvironmentFile or similar**: Instead of exporting secrets in shell, use secure credential management systems
+8. **Rotate secrets regularly**: Check your secret management and rotation policies
+9. **Validate logs**: Ensure sensitive values don't leak into logs (only variable names are logged)
+
+### Security Considerations
+
+**Metadata Disclosure**
+- Environment variable references are visible in your config files
+- Restrict config file permissions: `chmod 600 config.toml` or `chmod 400 config.toml` (read-only after deployment)
+- Configuration files should not be committed to version control if they contain `$VAR_NAME` references for sensitive values
+
+**Missing Variables**
+- By default, missing environment variables are replaced with empty strings
+- Check startup logs for warnings about missing variables: `Environment variable 'X' not found`
+- Use `required_env_vars` in your config to enforce critical variables and fail fast if they're missing
+
+**Value Validation**
+- Environment variable values are substituted as-is into TOML
+- Ensure your values don't contain TOML metacharacters (newlines, unescaped quotes) or they may break configuration
+- Startup validation (see below) can help catch malformed values
+
+**Process Environment Visibility**
+- On some systems, environment variables are visible to other users via `ps aux` or `/proc`
+- For highly sensitive secrets, consider using:
+  - systemd `EnvironmentFile` with restricted permissions
+  - HashiCorp Vault or cloud provider secret managers (AWS Secrets Manager, Azure Key Vault)
+  - Docker secrets or Kubernetes secrets for containerized deployments
+
+**Audit Trail**
+- Substituted variable names are logged at INFO level during startup
+- Missing variables are logged at WARN level during startup
+- Example logs:
+  ```
+  [INFO] Substituted 3 environment variables: API_KEY, DATABASE_PASSWORD, JWT_SECRET
+  [WARN] 1 environment variable not found: MISSING_CONFIG_VAR
+  ```
+- Review startup logs to verify which variables were actually substituted
+
+**Validation Command**
+
+Test your configuration without starting the server:
+
+```bash
+./harmony --config config.toml --validate-config
+# Output:
+# ✓ Configuration is valid
+# ✓ All required environment variables present
+# ✓ Substituted 3 environment variables
+# Exit code: 0
+```
+
+This validates that:
+- All required variables are present
+- Configuration can be parsed after substitution
+- No risky values detected in environment variables
 
 ## Overview
 
 Harmony uses a two-layer configuration model:
-- **Top-level config**: Networks, storage, logging, service registrations
-- **Pipeline files**: Endpoints, middleware, backends, and routing rules
+- **Top-level config**: Networks, providers, logging, service registrations
+- **Pipeline files**: Endpoints, middleware, backends, routing rules, and ingress/egress definitions
+- **Mesh files**: Mesh definitions that group ingress/egress for inter-proxy communication
 
 **Protocol adapters** (HTTP, DIMSE, etc.) are automatically spawned based on pipeline configurations. See [adapters.md](adapters.md) for details.
 
-Top-level config (examples/default/config.toml)
-- [proxy]: service identity, paths, and JWKS cache duration
-- [runbeam]: Runbeam Cloud integration settings (enabled, API URL, poll interval)
-- [management]: Management API settings (enabled, base path, network)
-- [network.<name>]: network interfaces and options
-  - [network.<name>.http]: bind_address and bind_port
-- pipelines_path: directory containing pipeline files
-- transforms_path: directory for custom transforms (if used)
-- [logging]: file logging options and log level
-- [services.*]: built-in or custom service types
-- [middleware_types.*]: built-in or custom middleware types
+### Configuration Schemas
 
-Pipeline files (examples/default/pipelines/*.toml)
-- `[pipelines.<name>]`: binds a set of endpoints, middleware, and backends to one or more networks
-  - `networks`: list of network names from the top-level config
-  - `endpoints`: list of endpoint names defined in this file
-  - `middleware`: ordered list of middleware names (applied in sequence)
-  - `backends`: list of backend names defined in this file
-- `[middleware.<name>]`: middleware instances and their config
-- `[endpoints.<name>]`: endpoint instances with service type and options
-- `[backends.<name>]`: backend instances with service type and target configuration
-- `[targets.<name>]`: concrete destinations that a backend selects from
-- `[endpoint_types.*]`, `[service_types.*]`: register built-in or custom types
+All configuration is validated against formal schemas defined in `harmony-dsl`. For detailed technical reference, see:
 
-**Protocol adapters** are spawned automatically:
-- **HttpAdapter**: Started for pipelines with HTTP/FHIR/JMIX/DICOMweb endpoints
-- **DimseAdapter**: Started for pipelines with DICOM DIMSE endpoints
+- **[Configuration Schemas](./schema.md)** - Overview of all harmony configuration schemas
+- **[Mesh Configuration](./mesh.md)** - Data mesh networking and ingress/egress definitions
+- **[Providers](./providers.md)** - Provider configuration for resource resolution and cloud polling
+- **[Resource References](./resource-references.md)** - Reference syntax for cross-provider resources
+
+### Top-Level Configuration Structure
+
+Top-level config (typically `config.toml`):
+- `[proxy]`: Service identity, paths (pipelines, transforms, mesh), limits, and cloud polling
+- `[provider.*]`: Provider configurations for resource resolution and polling
+- `[management]`: Management API settings
+- `[network.<name>]`: Network interface configurations
+  - `[network.<name>.http]`: HTTP/1.x and HTTP/2 listener settings
+  - `[network.<name>.http3]`: HTTP/3 (QUIC) listener settings
+- `[logging]`: File logging and log level configuration
+- `[runbeam]`: [DEPRECATED] Legacy Runbeam Cloud settings (use `[provider.runbeam]` instead)
+
+### Pipeline Configuration Structure
+
+Pipeline files (typically in `pipelines/` directory):
+- `[pipelines.<name>]`: Pipeline definition grouping endpoints, middleware, backends
+  - `networks`: List of network names to bind this pipeline to
+  - `endpoints`: Endpoints this pipeline handles
+  - `middleware`: Ordered middleware chain
+  - `backends`: Backend targets
+- `[pipelines.<name>.mesh.ingress.*]`: Ingress definitions (URLs → endpoints)
+- `[pipelines.<name>.mesh.egress.*]`: Egress definitions (backends → mesh targets)
+- `[middleware.<name>]`: Middleware configuration
+- `[endpoints.<name>]`: Endpoint configuration
+- `[backends.<name>]`: Backend configuration
+- `[targets.<name>]`: Concrete destinations for backends
+
+### Mesh Configuration Structure
+
+Mesh files (typically in `mesh/` directory):
+- `[mesh.<name>]`: Mesh definition grouping ingress/egress with authentication
+
+Ingress and egress are **nested within pipeline files**, while mesh definitions **group them** in separate mesh files. See [Mesh Configuration](./mesh.md) for complete documentation.
+
+### Protocol Adapters
+
+Adapters are started automatically based on configuration:
+- **HttpAdapter**: For HTTP/FHIR/JMIX/DICOMweb endpoints (TCP: HTTP/1.x, HTTP/2, optional TLS)
+- **Http3Adapter**: For networks with HTTP/3 configuration (QUIC-based, requires TLS)
+- **DimseAdapter**: For DICOM DIMSE endpoints
 - See `src/lib.rs::run()` for orchestration logic
 
-Validation expectations
-- Networks must define valid HTTP bind_address and non-zero bind_port
-- Each pipeline should reference at least one network, endpoint, and backend
-- Unknown middleware names cause validation failure
-- Middleware config is parsed by the middleware modules themselves
+### Validation Expectations
 
-Examples
+- Networks must define valid HTTP bind_address and non-zero bind_port
+- HTTP/3 networks must specify valid cert_path and key_path for TLS
+- HTTPS networks must specify both cert_path and key_path
+- Each pipeline should reference at least one network, endpoint, and backend
+- Mesh definitions must reference valid ingress/egress definitions
+- If ingress/egress specify endpoint/backend overrides, those must exist in the pipeline
+- All referenced providers must be configured
+- Unknown middleware names cause validation failure
+
+### Examples
+
 - Minimal passthrough: examples/default/pipelines/default.toml
 - FHIR passthrough: examples/default/pipelines/fhir.toml
 - FHIR to DICOM flow: examples/default/pipelines/fhir-dicom.toml
+- Data mesh: examples/default/pipelines/data-mesh/ (includes mesh/, pipelines/, config.toml)
+
+## Network Configuration
+
+### Plain HTTP
+
+```toml
+[network.default]
+interface = "wg0"
+enable_wireguard = false
+
+[network.default.http]
+bind_address = "0.0.0.0"
+bind_port = 8080
+```
+
+### HTTPS with TLS
+
+To enable HTTPS on the HTTP adapter, add both `cert_path` and `key_path` to the TCP configuration:
+
+```toml
+[network.secure]
+interface = "wg0"
+enable_wireguard = false
+
+[network.secure.http]
+bind_address = "0.0.0.0"
+bind_port = 443
+cert_path = "/etc/harmony/certs/fullchain.pem"
+key_path = "/etc/harmony/certs/privkey.pem"
+```
+
+**Requirements**:
+- Both `cert_path` and `key_path` must be provided to enable HTTPS
+- Certificate and private key must be in PEM format
+- Supported key formats: PKCS#8 (preferred) and RSA PKCS#1 (legacy)
+- The adapter automatically uses TLS 1.3 with HTTP/1.1 and HTTP/2 ALPN
+
+### HTTP to HTTPS Redirect
+
+To force all HTTP requests to redirect to HTTPS, use the `force_https` option:
+
+```toml
+[network.redirect]
+interface = "wg0"
+enable_wireguard = false
+
+[network.redirect.http]
+bind_address = "0.0.0.0"
+bind_port = 80
+force_https = true
+```
+
+**Behavior**:
+- Returns HTTP 301 (Moved Permanently) redirect to `https://` URL
+- Only applies when TLS is NOT configured (no `cert_path`/`key_path`)
+- Preserves the original path and query parameters
+- Uses the `Host` header to construct the HTTPS URL
+
+**Common Use Case**: Run two networks - one on port 80 with `force_https = true` to redirect, and one on port 443 with TLS certificates to handle HTTPS requests.
+
+**Certificate Generation** (for testing):
+
+```bash
+# Generate self-signed certificate for testing
+openssl req -x509 -newkey rsa:4096 -nodes \
+  -keyout key.pem -out cert.pem -days 365 \
+  -subj "/CN=localhost"
+```
+
+**Production Certificates**:
+- Use Let's Encrypt (certbot) for free production certificates
+- Or obtain certificates from your organization's certificate authority
+- Ensure certificates are renewed before expiration
+
+### Private Key Security
+
+**Supported Key Formats:**
+- PKCS#8 unencrypted (RSA and ECDSA) - preferred format
+- RSA PKCS#1 unencrypted (legacy format)
+
+**Supported Key Algorithms:**
+- RSA (2048, 3072, 4096 bit)
+- ECDSA (P-256, P-384, P-521 curves)
+
+**Encrypted Keys Not Supported:**
+
+Harmony does not support encrypted private keys (PKCS#8 with PBES2 or encrypted RSA PKCS#1). If you have encrypted keys, decrypt them first:
+
+```bash
+# Decrypt PKCS#8 encrypted key
+openssl pkcs8 -in encrypted_key.pem -out key.pem
+
+# Decrypt RSA encrypted key (legacy format)
+openssl rsa -in encrypted_rsa_key.pem -out key.pem
+
+# Secure the unencrypted key
+chmod 600 key.pem
+chown harmony:harmony key.pem  # If running as harmony user
+```
+
+**Why No Encrypted Key Support?**
+
+Encrypted keys with passwords stored in configuration files provide no real security benefit:
+1. Password stored alongside encrypted key = no protection
+2. Industry best practice is unencrypted keys with filesystem permissions
+3. Modern deployments use secret management systems instead
+
+**Security Best Practices:**
+
+1. **File System Permissions** (primary security mechanism):
+   ```bash
+   chmod 600 /etc/harmony/certs/privkey.pem
+   chown harmony:harmony /etc/harmony/certs/privkey.pem
+   ```
+
+2. **Secret Management Systems** (recommended for production):
+   - HashiCorp Vault
+   - AWS Secrets Manager
+   - Azure Key Vault
+   - Google Cloud Secret Manager
+   
+3. **Container Deployments**:
+   - Docker secrets: `docker secret create harmony_key key.pem`
+   - Kubernetes secrets: mount as read-only volume
+   - Environment variable injection (base64 encoded)
+
+4. **Automated Certificate Management**:
+   - Use certbot with Let's Encrypt for automatic renewal
+   - Set up hooks to reload Harmony after certificate renewal
+   - Monitor certificate expiration dates
+
+5. **Hardware Security Modules (HSM)**:
+   - For highly sensitive environments, use HSM-backed certificates
+   - Consider cloud provider HSM services (AWS CloudHSM, Azure Dedicated HSM)
+
+6. **Key Rotation**:
+   - Rotate private keys periodically (e.g., annually)
+   - Use hot reload to apply new certificates without downtime
+   - Keep backup of old keys during rotation period
+
+**Example Production Setup:**
+
+```bash
+# 1. Store key in secret manager
+aws secretsmanager create-secret \
+  --name harmony-tls-key \
+  --secret-string file://privkey.pem
+
+# 2. Retrieve at container startup
+aws secretsmanager get-secret-value \
+  --secret-id harmony-tls-key \
+  --query SecretString \
+  --output text > /run/secrets/privkey.pem
+
+# 3. Set permissions
+chmod 600 /run/secrets/privkey.pem
+
+# 4. Start Harmony
+./harmony --config /etc/harmony/config.toml
+```
+
+### HTTP/3 with QUIC
+
+```toml
+[network.http3_network]
+interface = "wg0"
+enable_wireguard = false
+
+[network.http3_network.http3]
+bind_address = "0.0.0.0"
+bind_port = 443
+cert_path = "/etc/harmony/certs/fullchain.pem"
+key_path = "/etc/harmony/certs/privkey.pem"
+```
+
+HTTP/3 always uses TLS and requires certificates. It runs over UDP instead of TCP.
+
+### Dual-Mode: HTTP and HTTPS on Same Network
+
+You can run both plain HTTP and HTTPS by configuring multiple networks:
+
+```toml
+# Plain HTTP for internal traffic
+[network.internal]
+interface = "wg0"
+enable_wireguard = false
+
+[network.internal.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+# HTTPS for external traffic
+[network.external]
+interface = "wg0"
+enable_wireguard = false
+
+[network.external.http]
+bind_address = "0.0.0.0"
+bind_port = 443
+cert_path = "/etc/harmony/certs/fullchain.pem"
+key_path = "/etc/harmony/certs/privkey.pem"
+```
+
+Then configure your pipelines to use the appropriate network:
+
+```toml
+[pipelines.internal_api]
+networks = ["internal"]
+endpoints = ["api"]
+backends = ["backend"]
+middleware = { incoming = [], outgoing = [] }
+
+[pipelines.external_api]
+networks = ["external"]
+endpoints = ["api"]
+backends = ["backend"]
+middleware = { incoming = ["jwt_auth"], outgoing = [] }
+```
 
 ## Hot Configuration Reload
 
@@ -138,6 +558,18 @@ bind_port = 8082
 ```
 
 Result: New adapters started for "secondary" network. Existing "default" network unaffected.
+
+**Example 4: Adding HTTP/3 to a Network**
+```toml
+# Add HTTP/3 listener alongside existing HTTP
+[network.default.http3]
+bind_address = "0.0.0.0"
+bind_port = 443
+cert_path = "/etc/harmony/certs/fullchain.pem"
+key_path = "/etc/harmony/certs/privkey.pem"
+```
+
+Result: Http3Adapter started on UDP port 443. Existing HTTP adapter on TCP port 8080 continues running. Both adapters serve the same pipelines.
 
 ### Error Handling
 
@@ -385,7 +817,7 @@ See [Hot Configuration Reload](#hot-configuration-reload) for reload behavior de
 
 ### Security Considerations
 
-- **Machine tokens**: Stored securely using OS keyring (macOS Keychain, Linux Secret Service) or encrypted filesystem fallback
+- **Machine tokens**: Stored securely using encrypted filesystem (age X25519 encryption)
 - **Token validation**: Tokens checked for expiry before each poll
 - **HTTPS required**: All Cloud API communication uses TLS
 - **Configuration integrity**: TOML validated before applying to prevent malformed configs
@@ -396,7 +828,7 @@ See [security.md](security.md) for comprehensive security guidance.
 
 **Polling not starting?**
 - Verify gateway is authorized: check for `🌥️ Starting cloud config polling` in logs
-- Check token storage: look for token file in `./tmp/runbeam/auth.json` or OS keyring
+- Check token storage: look for token file in `~/.runbeam/<proxy_id>/auth.json`
 - Verify management API is enabled in config
 
 **Changes not applying?**
@@ -424,18 +856,18 @@ Harmony supports several environment variables that affect runtime behavior. Mos
 
 #### RUNBEAM_ENCRYPTION_KEY
 
-**Purpose**: Provides encryption key for secure machine token storage when OS keyring is unavailable.
+**Purpose**: Provides encryption key for secure machine token storage (encrypted filesystem).
 
 **Interaction with Configuration**:
 - Does not override TOML configuration
 - Affects how machine tokens are stored (see Management API authorization)
-- Used automatically when OS keyring (macOS Keychain, Linux Secret Service) is unavailable
+- Recommended for persistent token storage across restarts
 - Typical in container environments
 
 **When to Set**:
 - Production container deployments (recommended)
 - Headless/CI environments
-- When `RUNBEAM_DISABLE_KEYRING=1` is set (testing)
+- When persistent token storage is needed
 
 **See**: [Security Documentation](security.md#runbeam_encryption_key) for generation examples and best practices.
 
@@ -477,19 +909,6 @@ export RUST_LOG=debug
 
 **Precedence**: `RUST_LOG` environment variable > `logging.log_level` in TOML.
 
-#### RUNBEAM_DISABLE_KEYRING
-
-**Purpose**: Forces use of encrypted filesystem storage instead of OS keyring.
-
-**Interaction with Configuration**:
-- Does not affect TOML configuration
-- Changes token storage backend selection
-- Primarily for testing keyring fallback behavior
-
-**When to Set**:
-- Testing encrypted filesystem storage
-- Debugging keyring-related issues
-- Not needed in containers (keyring typically unavailable anyway)
 
 ### Environment Variable Precedence Rules
 

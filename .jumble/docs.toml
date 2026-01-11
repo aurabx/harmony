@@ -1,0 +1,86 @@
+# Documentation index for harmony-proxy
+# Maps topic names to doc files with one-line summaries
+
+[docs.getting-started]
+path = "docs/getting-started.md"
+summary = "Quick start guide, installation, minimal configuration example"
+
+[docs.configuration]
+path = "docs/configuration.md"
+summary = "Full harmony.toml reference: listeners, backends, middleware chains, transforms"
+
+[docs.adapters]
+path = "docs/adapters.md"
+summary = "Protocol adapters: DICOM, DICOMweb, FHIR, HTTP - configuration and behavior"
+
+[docs.backends]
+path = "docs/backends.md"
+summary = "Backend configuration: connection pools, health checks, failover, load balancing"
+
+[docs.middleware]
+path = "docs/middleware.md"
+summary = "Middleware types, ordering, configuration, writing custom middleware"
+
+[docs.middleware-split]
+path = "docs/middleware-split-configuration.md"
+summary = "Splitting middleware config across files, per-route middleware"
+
+[docs.transforms]
+path = "docs/transforms.md"
+summary = "JOLT transforms: spec format, chaining, conditional transforms"
+
+[docs.endpoints]
+path = "docs/endpoints.md"
+summary = "Endpoint configuration, path patterns, method routing"
+
+[docs.router]
+path = "docs/router.md"
+summary = "Request routing logic, path matching, backend selection"
+
+[docs.envelope]
+path = "docs/envelope.md"
+summary = "RequestEnvelope/ResponseEnvelope structure, metadata, payload handling"
+
+[docs.content-types]
+path = "docs/content-types.md"
+summary = "Content-type handling, DICOM binary, JSON, multipart"
+
+[docs.security]
+path = "docs/security.md"
+summary = "Authentication (JWT, Basic), authorization, TLS, security headers"
+
+[docs.encryption]
+path = "docs/encryption-key-management.md"
+summary = "Key management, encryption at rest, key rotation"
+
+[docs.policies]
+path = "docs/policies-middleware.md"
+summary = "Policy engine: rules, conditions, actions, policy chains"
+
+[docs.policy-rules]
+path = "docs/policy-rules-reference.md"
+summary = "Policy rule syntax reference, operators, built-in functions"
+
+[docs.dimse]
+path = "docs/dimse-integration.md"
+summary = "DICOM DIMSE protocol integration, C-STORE, C-FIND, C-MOVE"
+
+[docs.fhir-imaging]
+path = "docs/fhir_imagingstudy.md"
+summary = "FHIR ImagingStudy resource handling, DICOMweb to FHIR mapping"
+
+[docs.config-reload]
+path = "docs/config-reload.md"
+summary = "Hot reloading configuration, signal handling, zero-downtime updates"
+
+[docs.management-api]
+path = "docs/management-api.md"
+summary = "Admin REST API: health, metrics, config, runtime control"
+
+[docs.testing]
+path = "docs/testing.md"
+summary = "Testing strategies, test fixtures, integration test setup"
+
+[docs.architecture]
+path = "docs/README.md"
+summary = "High-level architecture overview, component diagram, data flow"

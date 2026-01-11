@@ -11,7 +11,7 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     Ok(config)
 }
 
-#[tokio::test]
+#[tokio::test(flavor = "multi_thread")]
 async fn dicom_move_with_dcmqrscp() {
     // Skip if DCMTK tools are not present
     for bin in ["dcmqrscp", "storescu", "movescu"].iter() {
@@ -250,7 +250,7 @@ async fn dicom_move_with_dcmqrscp() {
     }
 
     // Optionally preload dev/samples into QR SCP (up to 20 DICOMs)
-    let samples_root = std::path::Path::new("./dev/samples");
+    let samples_root = std::path::Path::new("../../samples/dicom/samples");
     if samples_root.exists() {
         let files = collect_dcm_files(samples_root, 20);
         if !files.is_empty() {
@@ -264,6 +264,17 @@ async fn dicom_move_with_dcmqrscp() {
         } else {
             eprintln!("No .dcm files found under dev/samples (skipping preload)");
         }
+    }
+
+    // Index the database so queries can find the stored files
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    if let Ok(mut idx) = tokio::process::Command::new("dcmqridx")
+        .arg(&abs_db)
+        .spawn()
+    {
+        let _ = idx.wait().await;
+        // Give indexing time to complete
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     }
 
     // Build Harmony config with DICOM backend pointing to QR_SCP

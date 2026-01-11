@@ -1,6 +1,5 @@
 use super::config::Config;
 use super::reload::{compute_diff, ConfigDiff};
-use super::Cli;
 use crate::adapters::registry::AdapterRegistry;
 use crate::globals;
 use anyhow::Result;
@@ -20,7 +19,11 @@ pub struct ConfigWatcher {
 }
 
 impl ConfigWatcher {
-    pub fn new(config_path: String, pipelines_path: Option<String>, registry: Arc<AdapterRegistry>) -> Self {
+    pub fn new(
+        config_path: String,
+        pipelines_path: Option<String>,
+        registry: Arc<AdapterRegistry>,
+    ) -> Self {
         Self {
             config_path,
             pipelines_path,
@@ -60,7 +63,10 @@ impl ConfigWatcher {
         }
 
         // Debounce and handle reload
-        let mut last_reload = tokio::time::Instant::now();
+        // Initialize to a time far in the past so first reload isn't blocked by cooldown
+        let mut last_reload = tokio::time::Instant::now()
+            .checked_sub(Duration::from_secs(2))
+            .unwrap_or_else(|| tokio::time::Instant::now());
 
         while rx.recv().await.is_some() {
             // Debounce: wait for stable file state
@@ -103,21 +109,24 @@ impl ConfigWatcher {
 
     /// Reload configuration and apply changes
     async fn reload_config(&self) -> Result<ConfigDiff> {
-        // Load new config - catch panics from validation
-        let cli = Cli::new(self.config_path.clone());
-        let new_config = match std::panic::catch_unwind(|| Config::from_args(cli)) {
+        // Load new config using safe loader that returns Result instead of exiting
+        let new_config = match Config::load(&self.config_path) {
             Ok(config) => config,
-            Err(panic_info) => {
-                let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
-                    s.to_string()
-                } else if let Some(s) = panic_info.downcast_ref::<String>() {
-                    s.clone()
-                } else {
-                    "Unknown validation error".to_string()
+            Err(e) => {
+                let msg = match e {
+                    crate::config::config::ConfigError::InvalidProxy { reason, .. } => reason,
+                    crate::config::config::ConfigError::InvalidNetwork { name, reason } => format!("Invalid network '{}': {}", name, reason),
+                    crate::config::config::ConfigError::InvalidPipeline { name, reason } => format!("Invalid pipeline '{}': {}", name, reason),
+                    _ => format!("{:?}", e),
                 };
                 return Err(anyhow::anyhow!("Config validation failed: {}", msg));
             }
         };
+
+        // Update provider resolver with new provider config
+        if let Some(resolver) = globals::get_provider_resolver() {
+            resolver.update_providers(new_config.provider.clone()).await;
+        }
 
         // Get current config
         let old_config =

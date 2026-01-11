@@ -11,14 +11,16 @@ Repository: harmony-proxy - Rust-based proxy/gateway for data meshes (with first
 Harmony is a proxy/gateway that handles, transforms and proxies data between systems. It provides secure communication with support for HTTP/JSON, FHIR, JMIX, DICOM, and DICOMweb protocols, featuring configurable middleware, authentication (JWT), audit logging, and WireGuard networking.
 
 **Key Features:**
-- Multi-protocol support: HTTP passthrough, FHIR, JMIX, DICOM, DICOMweb (QIDO-RS/WADO-RS endpoints)
+- Multi-protocol support: HTTP/HTTPS passthrough, FHIR, JMIX, DICOM, DICOMweb (QIDO-RS/WADO-RS endpoints)
 - Multi-content-type: Automatic parsing of JSON, XML, CSV, form data, multipart, and binary content
 - Hot configuration reload: zero-downtime updates for routes/middleware/backends, selective adapter restart for network changes
 - Configurable routing with groups, endpoints, backends, and middleware
+- TLS/HTTPS support for HTTP adapter with automatic HTTP/1.1 and HTTP/2 ALPN
 - JWT and basic authentication
-- Request/response transformation pipeline
-- AES-256-GCM encryption with ephemeral keys
-- Envelope-based data exchange format
+- **Request/response transformation pipeline**
+- **AES-256-GCM encryption** with ephemeral keys
+- **Normalized connection settings** and reference capabilities (`peer_ref`, `target_ref`) for cleaner configuration
+- **Envelope-based data exchange format**
 - Management API for monitoring and administration
 - Security: XXE prevention, CSV formula injection mitigation, configurable size limits
 
@@ -79,6 +81,7 @@ cargo clippy --all-targets -- -D warnings
 - [docs/envelope.md](docs/envelope.md) - Core Envelope struct for data exchange
 - [docs/endpoints.md](docs/endpoints.md) - Endpoint types (HTTP, FHIR, JMIX, DICOMweb)
 - [docs/backends.md](docs/backends.md) - Backend types and target communication
+- [docs/migration/dsl-v1.9.md](docs/migration/dsl-v1.9.md) - Migration guide for DSL v1.9 (Connection normalization)
 - [docs/management-api.md](docs/management-api.md) - Management API for monitoring and administration
 
 ### Other
@@ -278,8 +281,8 @@ rules = [
 - Rules are processed in order from first to last
 - First matching rule determines outcome (allow or deny)
 - Allow rule: request continues to backend
-- Deny rule: returns 404, sets skip_backends=true
-- No match: implicit deny (404)
+- Deny rule: middleware returns `PathDenied`; the HTTP adapter maps this to HTTP 404 and stops processing
+- No match: implicit deny (middleware returns `PathDenied`, mapped to 404)
 
 **Pattern Syntax:**
 - Exact paths: `/users`
@@ -291,7 +294,7 @@ See docs/middleware.md for complete documentation.
 
 **Important Notes:**
 - Rule order matters - more specific patterns should come before broader patterns
-- No backward compatibility with old string-based format (schema v1.1.0)
+- No backward compatibility with old string-based format
 - Use `{*name}` syntax for catch-all wildcards (matchit requirement)
 
 ## Configuration Structure
@@ -346,14 +349,7 @@ When enabled, the gateway will:
 
 ### Logging Configuration
 
-**Note**: Log level has been moved from `[proxy]` to `[logging]` section (schema v1.2.0+):
-
-```toml
-# OLD (schema v1.1.0 and earlier)
-[proxy]
-log_level = "debug"  # Deprecated
-
-# NEW (schema v1.2.0+) 
+```
 [logging]
 log_level = "debug"  # Moved here
 log_to_file = true
@@ -467,7 +463,7 @@ module = ""
 
 ## Transform Middleware
 
-The transform middleware uses [Fluvio JOLT](https://github.com/infinyon/fluvio-jolt) to perform JSON-to-JSON transformations on request/response data.
+The transform middleware uses [Jolt-RS](https://github.com/aurabx/jolt-rs) to perform JSON-to-JSON transformations on request/response data.
 
 ### Configuration
 
@@ -478,12 +474,14 @@ type = "transform"
 spec_path = "path/to/jolt_spec.json"
 apply = "both"  # "left", "right", or "both" (default)
 fail_on_error = true  # true (default) or false
+debug = false  # true or false (default) - enables detailed logging of transform input/output
 ```
 
 **Field Descriptions:**
 - `spec_path`: Path to the JOLT specification file (JSON format). Relative paths are resolved from the config directory.
 - `apply`: When to apply the transform - "left" (request to backend), "right" (response from backend), or "both" (default)
 - `fail_on_error`: Whether to fail the request on transformation errors (true) or log and continue (false)
+- `debug`: When true, logs the transform input and output at DEBUG level before and after transformation. Useful for debugging transform specs. Default false. Requires `RUST_LOG` to include `debug` or `trace` level for these logs to appear.
 
 ### JOLT Specification Example
 
@@ -555,6 +553,29 @@ Example transformation from patient data to FHIR-like structure:
 }
 ```
 
+### Debugging Transforms
+
+Enable the `debug` option in your transform middleware configuration to log the complete input and output of the JOLT transformation. This is useful when developing or troubleshooting transform specs:
+
+```toml
+[middleware.debug_transform]
+type = "transform"
+[middleware.debug_transform.options]
+spec_path = "path/to/jolt_spec.json"
+debug = true  # Enable detailed logging
+```
+
+When enabled, logs will show the transform input (including injected context) and the output from the JOLT engine. Run with appropriate log level:
+```bash
+RUST_LOG=harmony=debug cargo run -- --config config.toml
+```
+
+Logs will appear as:
+```
+JOLT transform input (request): {...}
+JOLT transform output (request): {...}
+```
+
 ### Pre-Transform Snapshot
 
 The transform middleware automatically preserves the original `normalized_data` in the `normalized_snapshot` field before applying any transformations. This allows other middleware or debugging tools to access the pre-transform state.
@@ -566,4 +587,4 @@ The transform middleware automatically preserves the original `normalized_data` 
 - **remove**: Remove fields from the output
 - **wildcards**: Use `*` and `&` for dynamic field matching
 
-See the [Fluvio JOLT documentation](https://github.com/infinyon/fluvio-jolt) for complete specification details.
+See the [Jolt-RS documentation](https://github.com/aurabx/jolt-rs) for complete specification details.
