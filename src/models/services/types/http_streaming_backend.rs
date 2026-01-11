@@ -190,12 +190,18 @@ impl StreamingBackend for HttpStreamingBackend {
             .or(self.base_url.as_deref())
             .ok_or_else(|| Error::from("base_url is required"))?;
 
-        // Build request URL
+        // Get path prefix from options
+        let path_prefix = options
+            .get("path_prefix")
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+
+        // Build request URL - combine base_url + path_prefix + path from metadata
         let path = envelope.request_details.metadata
             .get("path")
             .map(|p| format!("/{}", p))
             .unwrap_or_default();
-        let url = format!("{}{}", base_url, path);
+        let url = format!("{}{}{}", base_url, path_prefix, path);
 
         info!("Streaming from URL: {}", url);
 
@@ -390,12 +396,16 @@ impl HttpStreamingBackend {
     }
 
     /// Parse NDJSON stream into ResponseEnvelopes
+    /// 
+    /// Also handles JSON array responses - if the entire content is a JSON array,
+    /// each element is treated as a separate item.
     fn parse_ndjson_stream(
         byte_stream: impl Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
         request_details: crate::models::envelope::envelope::RequestDetails,
     ) -> Pin<Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>> {
         let mut buffer = String::new();
         let mut sequence = 0u64;
+        let mut processed_as_array = false;
 
         let stream = byte_stream.flat_map(move |result| {
             match result {
@@ -403,9 +413,9 @@ impl HttpStreamingBackend {
                     // Append to buffer
                     buffer.push_str(&String::from_utf8_lossy(&bytes));
 
-                    // Split by newlines
                     let mut envelopes = Vec::new();
                     
+                    // First try to parse NDJSON (newline-delimited)
                     while let Some(pos) = buffer.find('\n') {
                         let line = buffer[..pos].to_string();
                         buffer = buffer[pos + 1..].to_string();
@@ -419,37 +429,43 @@ impl HttpStreamingBackend {
                         // Parse JSON line
                         match serde_json::from_str::<serde_json::Value>(&line) {
                             Ok(json) => {
-                                // Check for error marker
-                                if let Some(error) = json.get("_error") {
-                                    warn!("NDJSON error: {}", error);
-                                    continue;
+                                if let Some(envelope) = Self::json_to_envelope(&json, &request_details, sequence) {
+                                    envelopes.push(Ok(envelope));
                                 }
-
-                                let body = serde_json::to_vec(&json).unwrap_or_default();
-                                
-                                let mut metadata = HashMap::new();
-                                metadata.insert("stream_sequence".to_string(), sequence.to_string());
-                                
-                                // Extract SOP Instance UID if present
-                                if let Some(sop_uid) = json.get("_sop_instance_uid").and_then(|v| v.as_str()) {
-                                    metadata.insert("sop_instance_uid".to_string(), sop_uid.to_string());
-                                }
-
-                                let mut response = ResponseEnvelope::from_backend(
-                                    request_details.clone(),
-                                    200,
-                                    HashMap::from([("content-type".to_string(), "application/json".to_string())]),
-                                    body,
-                                    Some(metadata),
-                                );
-
-                                response.normalized_data = Some(json);
-                                
-                                debug!("Parsed NDJSON line #{}: {} bytes", sequence, response.original_data.len());
-                                envelopes.push(Ok(response));
                             }
                             Err(e) => {
                                 warn!("Failed to parse NDJSON line: {}", e);
+                            }
+                        }
+                    }
+
+                    // If no newlines found, buffer might contain a complete JSON array response
+                    // Try to parse it when it looks complete (ends with ] or })
+                    if envelopes.is_empty() && !processed_as_array {
+                        let trimmed = buffer.trim();
+                        if (trimmed.starts_with('[') && trimmed.ends_with(']')) ||
+                           (trimmed.starts_with('{') && trimmed.ends_with('}')) {
+                            // Try to parse as JSON
+                            if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
+                                processed_as_array = true;
+                                
+                                // If it's an array, treat each element as a separate item
+                                if let Some(array) = json.as_array() {
+                                    debug!("Parsing JSON array with {} elements", array.len());
+                                    for item in array {
+                                        sequence += 1;
+                                        if let Some(envelope) = Self::json_to_envelope(item, &request_details, sequence) {
+                                            envelopes.push(Ok(envelope));
+                                        }
+                                    }
+                                } else {
+                                    // Single object
+                                    sequence += 1;
+                                    if let Some(envelope) = Self::json_to_envelope(&json, &request_details, sequence) {
+                                        envelopes.push(Ok(envelope));
+                                    }
+                                }
+                                buffer.clear();
                             }
                         }
                     }
@@ -463,6 +479,42 @@ impl HttpStreamingBackend {
         });
         
         Box::pin(stream)
+    }
+
+    /// Convert a JSON value to a ResponseEnvelope
+    fn json_to_envelope(
+        json: &serde_json::Value,
+        request_details: &crate::models::envelope::envelope::RequestDetails,
+        sequence: u64,
+    ) -> Option<ResponseEnvelope<Vec<u8>>> {
+        // Check for error marker
+        if let Some(error) = json.get("_error") {
+            warn!("JSON error: {}", error);
+            return None;
+        }
+
+        let body = serde_json::to_vec(json).unwrap_or_default();
+        
+        let mut metadata = HashMap::new();
+        metadata.insert("stream_sequence".to_string(), sequence.to_string());
+        
+        // Extract SOP Instance UID if present
+        if let Some(sop_uid) = json.get("_sop_instance_uid").and_then(|v| v.as_str()) {
+            metadata.insert("sop_instance_uid".to_string(), sop_uid.to_string());
+        }
+
+        let mut response = ResponseEnvelope::from_backend(
+            request_details.clone(),
+            200,
+            HashMap::from([("content-type".to_string(), "application/json".to_string())]),
+            body,
+            Some(metadata),
+        );
+
+        response.normalized_data = Some(json.clone());
+        
+        debug!("Parsed JSON item #{}: {} bytes", sequence, response.original_data.len());
+        Some(response)
     }
 
     /// Parse multipart stream into ResponseEnvelopes

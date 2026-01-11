@@ -3,6 +3,7 @@ pub mod auth_error;
 pub mod connect;
 pub mod denial_errors;
 pub mod dicom_to_dicomweb;
+pub mod dicom_to_http;
 pub mod dicom_flatten;
 pub mod dicom_unflatten;
 pub mod dicomweb_to_dicom;

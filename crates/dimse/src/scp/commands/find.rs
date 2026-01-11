@@ -33,7 +33,8 @@ fn extract_query_parameters(
     // Extract query parameters from the identifier
     let mut parameters = std::collections::HashMap::new();
 
-    // Common DICOM query tags
+    // Common DICOM query tags (name, tag_string)
+    // We use tag strings as keys to maintain consistency with DICOM JSON format
     let query_tags = vec![
         ("PatientID", "00100020"),
         ("PatientName", "00100010"),
@@ -46,11 +47,12 @@ fn extract_query_parameters(
         ("AccessionNumber", "00080050"),
     ];
 
-    for (name, _tag) in query_tags {
+    for (name, tag) in query_tags {
         if let Ok(elem) = identifier.element_by_name(name) {
             if let Ok(value) = elem.to_str() {
                 if !value.is_empty() {
-                    parameters.insert(name.to_string(), value.to_string());
+                    // Use tag string as key for DICOM JSON compatibility
+                    parameters.insert(tag.to_string(), value.to_string());
                 }
             }
         }

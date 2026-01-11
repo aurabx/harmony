@@ -124,6 +124,11 @@ pub fn build_protocol_ctx(
     meta_map.insert("path_with_query".to_string(), subpath_with_query);
     meta_map.insert("full_path".to_string(), full_path_with_query);
 
+    // Extract DIMSE operation from header if present (for DICOM-to-HTTP bridging)
+    if let Some(dimse_op) = headers.get("x-dimse-op").and_then(|v| v.to_str().ok()) {
+        meta_map.insert("dimse_op".to_string(), dimse_op.to_string());
+    }
+
     // attrs object
     let mut attrs = serde_json::Map::new();
     attrs.insert(

@@ -321,13 +321,18 @@ impl StreamingBackend for DicomScuStreamingBackend {
 
         let scu = DimseScu::new(dimse_config);
 
-        // Determine operation
+        // Determine operation from:
+        // 1. target_details.metadata.dimse_op (set by pipeline routing)
+        // 2. request_details.metadata.dimse_op (set by DIMSE SCP)
+        // 3. x-dimse-op HTTP header (set by dicom_to_http middleware for cross-instance bridging)
+        // 4. Default to "get"
         let op = envelope
             .target_details
             .as_ref()
             .and_then(|td| td.metadata.get("dimse_op"))
             .cloned()
             .or_else(|| envelope.request_details.metadata.get("dimse_op").cloned())
+            .or_else(|| envelope.request_details.headers.get("x-dimse-op").cloned())
             .unwrap_or_else(|| "get".to_string());
 
         let op_normalized = op.trim_start_matches('/').to_lowercase();
