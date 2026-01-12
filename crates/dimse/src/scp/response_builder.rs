@@ -37,8 +37,10 @@ pub async fn encode_and_send_response(
 ) -> Result<()> {
     let response_bytes = encode_command(&response)?;
 
-    let has_dataset = dataset.is_some();
-    let command_pdata = create_command_pdata(presentation_context_id, response_bytes, !has_dataset);
+    // Command PDV is always complete (not fragmented), so is_last must be true.
+    // The presence of a following dataset is indicated by COMMAND_DATA_SET_TYPE field,
+    // not by the is_last flag.
+    let command_pdata = create_command_pdata(presentation_context_id, response_bytes, true);
 
     // If we have a dataset, send it as well
     if let Some(ds) = dataset {

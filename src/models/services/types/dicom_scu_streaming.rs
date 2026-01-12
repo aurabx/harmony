@@ -163,28 +163,33 @@ impl DicomScuStreamingBackend {
     }
 
     /// Build a FindQuery from query parameters
-    fn build_find_query(&self, params: &HashMap<String, String>) -> FindQuery {
-        // Determine appropriate query level based on filters and return keys
-        let query_level = if params.get("00080018").is_some_and(|v| !v.is_empty()) {
-            QueryLevel::Image
-        } else if params.contains_key("00080018")
-            && (params.get("0020000D").is_some_and(|v| !v.is_empty())
-                || params.get("0020000E").is_some_and(|v| !v.is_empty()))
-        {
-            QueryLevel::Image
-        } else if params.get("0020000E").is_some_and(|v| !v.is_empty()) {
-            QueryLevel::Series
-        } else if params.contains_key("0020000E")
-            && params.get("0020000D").is_some_and(|v| !v.is_empty())
-        {
-            QueryLevel::Series
-        } else if params.get("0020000D").is_some_and(|v| !v.is_empty()) {
-            QueryLevel::Study
-        } else if params.contains_key("0020000D") {
-            QueryLevel::Study
-        } else {
-            QueryLevel::Patient
-        };
+    ///
+    /// If `explicit_level` is provided, it takes precedence over inference.
+    fn build_find_query(&self, params: &HashMap<String, String>, explicit_level: Option<QueryLevel>) -> FindQuery {
+        // Use explicit level if provided, otherwise infer from parameters
+        let query_level = explicit_level.unwrap_or_else(|| {
+            // Determine appropriate query level based on filters and return keys
+            if params.get("00080018").is_some_and(|v| !v.is_empty()) {
+                QueryLevel::Image
+            } else if params.contains_key("00080018")
+                && (params.get("0020000D").is_some_and(|v| !v.is_empty())
+                    || params.get("0020000E").is_some_and(|v| !v.is_empty()))
+            {
+                QueryLevel::Image
+            } else if params.get("0020000E").is_some_and(|v| !v.is_empty()) {
+                QueryLevel::Series
+            } else if params.contains_key("0020000E")
+                && params.get("0020000D").is_some_and(|v| !v.is_empty())
+            {
+                QueryLevel::Series
+            } else if params.get("0020000D").is_some_and(|v| !v.is_empty()) {
+                QueryLevel::Study
+            } else if params.contains_key("0020000D") {
+                QueryLevel::Study
+            } else {
+                QueryLevel::Patient
+            }
+        });
 
         let mut query = FindQuery::patient(params.get("00100020").cloned());
         query.query_level = query_level;
@@ -192,6 +197,17 @@ impl DicomScuStreamingBackend {
             query = query.with_parameter(k.clone(), v.clone());
         }
         query
+    }
+
+    /// Parse query level from string (e.g. from HTTP header)
+    fn parse_query_level(level_str: &str) -> Option<QueryLevel> {
+        match level_str.to_uppercase().as_str() {
+            "PATIENT" => Some(QueryLevel::Patient),
+            "STUDY" => Some(QueryLevel::Study),
+            "SERIES" => Some(QueryLevel::Series),
+            "IMAGE" | "INSTANCE" => Some(QueryLevel::Image),
+            _ => None,
+        }
     }
 }
 
@@ -340,7 +356,18 @@ impl StreamingBackend for DicomScuStreamingBackend {
         // Extract query parameters
         let query_params = self.extract_query_params(&envelope)?;
 
-        debug!("DIMSE streaming operation: {}, params: {:?}", op_normalized, query_params);
+        // Extract explicit query level from:
+        // 1. x-query-level HTTP header (set by dicom_to_http middleware)
+        // 2. request_details.metadata.query_level
+        let explicit_query_level = envelope
+            .request_details
+            .headers
+            .get("x-query-level")
+            .or_else(|| envelope.request_details.metadata.get("query_level"))
+            .and_then(|s| Self::parse_query_level(s));
+
+        debug!("DIMSE streaming operation: {}, params: {:?}, explicit_level: {:?}", 
+            op_normalized, query_params, explicit_query_level);
 
         match op_normalized.as_str() {
             "get" => {
@@ -367,8 +394,8 @@ impl StreamingBackend for DicomScuStreamingBackend {
                 Ok(Box::pin(envelope_stream))
             }
             "find" => {
-                // Build query and execute C-FIND
-                let query = self.build_find_query(&query_params);
+                // Build query and execute C-FIND with explicit level if provided
+                let query = self.build_find_query(&query_params, explicit_query_level);
                 let dimse_stream = scu
                     .find(&remote_node, query)
                     .await

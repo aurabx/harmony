@@ -1,5 +1,6 @@
 //! C-FIND command handler
 
+use dicom_core::header::Header;
 use dicom_encoding::text::SpecificCharacterSet;
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
@@ -15,6 +16,10 @@ use crate::scp::DimseScp;
 use crate::scp::response_builder;
 
 /// Extract query parameters from identifier dataset
+///
+/// This extracts ALL tags from the identifier, not just a hardcoded subset.
+/// In DICOM C-FIND, any tag present in the identifier with a value is a filter,
+/// and any tag with an empty value is a "return key" (requested in results).
 fn extract_query_parameters(
     identifier: &InMemDicomObject<StandardDataDictionary>,
 ) -> (QueryLevel, std::collections::HashMap<String, String>) {
@@ -30,34 +35,29 @@ fn extract_query_parameters(
         .parse::<QueryLevel>()
         .unwrap_or(QueryLevel::Study);
 
-    // Extract query parameters from the identifier
+    // Extract ALL query parameters from the identifier
+    // We iterate over all elements and convert tags to DICOM JSON format (GGGGEEEE)
     let mut parameters = std::collections::HashMap::new();
 
-    // Common DICOM query tags (name, tag_string)
-    // We use tag strings as keys to maintain consistency with DICOM JSON format
-    let query_tags = vec![
-        ("PatientID", "00100020"),
-        ("PatientName", "00100010"),
-        ("StudyInstanceUID", "0020000D"),
-        ("SeriesInstanceUID", "0020000E"),
-        ("SOPInstanceUID", "00080018"),
-        ("StudyDate", "00080020"),
-        ("StudyTime", "00080030"),
-        ("Modality", "00080060"),
-        ("AccessionNumber", "00080050"),
-    ];
-
-    for (name, tag) in query_tags {
-        if let Ok(elem) = identifier.element_by_name(name) {
-            if let Ok(value) = elem.to_str() {
-                if !value.is_empty() {
-                    // Use tag string as key for DICOM JSON compatibility
-                    parameters.insert(tag.to_string(), value.to_string());
-                }
-            }
+    for elem in identifier.iter() {
+        let tag = elem.tag();
+        // Format tag as 8-character hex string (e.g., "00100020" for PatientID)
+        let tag_str = format!("{:04X}{:04X}", tag.group(), tag.element());
+        
+        // Skip the QueryRetrieveLevel tag itself - it's handled separately
+        if tag_str == "00080052" {
+            continue;
         }
+        
+        // Try to extract string value
+        let value = elem.to_str()
+            .map(|s| s.trim().to_string())
+            .unwrap_or_default();
+        
+        parameters.insert(tag_str, value);
     }
 
+    debug!("Extracted {} parameters from identifier", parameters.len());
     (query_level, parameters)
 }
 

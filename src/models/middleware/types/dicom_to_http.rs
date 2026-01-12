@@ -67,6 +67,14 @@ impl Middleware for DicomToHttpMiddleware {
             .headers
             .insert("x-dimse-op".to_string(), dimse_op.clone());
 
+        // Forward query_level as HTTP header for C-FIND/C-GET operations
+        if let Some(query_level) = envelope.request_details.metadata.get("query_level") {
+            envelope
+                .request_details
+                .headers
+                .insert("x-query-level".to_string(), query_level.clone());
+        }
+
         // Update target details if present
         envelope.set_target_method("POST");
 
