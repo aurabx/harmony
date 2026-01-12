@@ -823,3 +823,144 @@ async fn test_scp_handles_connection_drop() {
     shutdown.cancel();
     let _ = timeout(Duration::from_secs(2), handle).await;
 }
+
+// PDU size negotiation tests
+
+/// Test that SCP respects a client's small max PDU size
+/// This simulates the Orthanc scenario where the client proposes a 16KB PDU
+#[tokio::test(flavor = "multi_thread")]
+async fn test_scp_respects_small_pdu_from_client() {
+    if !dimse_test_helpers::dcmtk_available() {
+        eprintln!("Skipping test: DCMTK not available");
+        return;
+    }
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind port");
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    // Configure SCP with large max PDU, but client will propose smaller
+    let config = DimseConfig {
+        local_aet: "PDU_SCP".to_string(),
+        bind_addr: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        port,
+        enable_echo: true,
+        enable_find: true,
+        enable_move: false,
+        enable_get: false,
+        enable_store: false,
+        storage_dir: std::path::PathBuf::from("/tmp/dimse_test"),
+        max_associations: 10,
+        incoming_store_port: 11113,
+        max_pdu: 65536, // SCP has large PDU
+        connect_timeout_ms: 5000,
+        association_timeout_ms: 30000,
+        tls: None,
+        preferred_transfer_syntaxes: vec![],
+        external_store_scp: false,
+    };
+
+    let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
+    let scp = DimseScp::new(config, provider);
+
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+
+    let handle = tokio::spawn(async move { scp.run(shutdown_clone).await });
+
+    assert!(wait_for_port(port, 2000).await, "SCP should be listening");
+
+    // echoscu with explicit small max PDU (16KB like Orthanc default)
+    // The --max-pdu flag sets the SCU's proposed max PDU length
+    let output = tokio::process::Command::new("echoscu")
+        .arg("--aetitle")
+        .arg("ORTHANC")
+        .arg("--call")
+        .arg("PDU_SCP")
+        .arg("--max-pdu")
+        .arg("16384") // 16KB - Orthanc's typical default
+        .arg("127.0.0.1")
+        .arg(port.to_string())
+        .output()
+        .await
+        .expect("Failed to run echoscu");
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(2), handle).await;
+
+    if !output.status.success() {
+        eprintln!("echoscu stderr: {}", String::from_utf8_lossy(&output.stderr));
+    }
+    assert!(output.status.success(), "echoscu with small PDU should succeed");
+}
+
+/// Test that SCP can handle C-FIND responses when client has small PDU
+/// This is important for response fragmentation
+#[tokio::test(flavor = "multi_thread")]
+async fn test_scp_find_with_small_client_pdu() {
+    if !dimse_test_helpers::dcmtk_available() {
+        eprintln!("Skipping test: DCMTK not available");
+        return;
+    }
+
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind port");
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let config = DimseConfig {
+        local_aet: "FIND_PDU_SCP".to_string(),
+        bind_addr: IpAddr::V4(Ipv4Addr::new(127, 0, 0, 1)),
+        port,
+        enable_echo: true,
+        enable_find: true,
+        enable_move: false,
+        enable_get: false,
+        enable_store: false,
+        storage_dir: std::path::PathBuf::from("/tmp/dimse_test"),
+        max_associations: 10,
+        incoming_store_port: 11113,
+        max_pdu: 65536, // Large SCP PDU
+        connect_timeout_ms: 5000,
+        association_timeout_ms: 30000,
+        tls: None,
+        preferred_transfer_syntaxes: vec![],
+        external_store_scp: false,
+    };
+
+    let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
+    let scp = DimseScp::new(config, provider);
+
+    let shutdown = CancellationToken::new();
+    let shutdown_clone = shutdown.clone();
+
+    let handle = tokio::spawn(async move { scp.run(shutdown_clone).await });
+
+    assert!(wait_for_port(port, 2000).await, "SCP should be listening");
+
+    // findscu with small max PDU
+    let output = tokio::process::Command::new("findscu")
+        .arg("--aetitle")
+        .arg("SMALL_PDU")
+        .arg("--call")
+        .arg("FIND_PDU_SCP")
+        .arg("--max-pdu")
+        .arg("16384") // 16KB
+        .arg("-P") // Patient root
+        .arg("127.0.0.1")
+        .arg(port.to_string())
+        .arg("-k")
+        .arg("0010,0020=*") // Query all patients
+        .output()
+        .await
+        .expect("Failed to run findscu");
+
+    shutdown.cancel();
+    let _ = timeout(Duration::from_secs(2), handle).await;
+
+    // Should complete without errors (even if no results)
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("Association Rejected"),
+        "C-FIND with small PDU should not be rejected"
+    );
+}
