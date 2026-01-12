@@ -1,6 +1,5 @@
 //! Response building and encoding helpers for DIMSE operations
 
-use dicom_core::header::Header;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
 use dicom_ul::{Pdu, ServerAssociation};
 use tokio::net::TcpStream;
@@ -29,6 +28,9 @@ pub fn build_command_response(
 }
 
 /// Encode and send a response with optional dataset
+///
+/// This function properly fragments large datasets according to the negotiated
+/// maximum PDU size from the requestor (client).
 pub async fn encode_and_send_response(
     association: &mut ServerAssociation<TcpStream>,
     response: InMemDicomObject<StandardDataDictionary>,
@@ -37,10 +39,19 @@ pub async fn encode_and_send_response(
 ) -> Result<()> {
     let response_bytes = encode_command(&response)?;
 
-    let has_dataset = dataset.is_some();
-    let command_pdata = create_command_pdata(presentation_context_id, response_bytes, !has_dataset);
+    // Command PDV is always complete (not fragmented), so is_last must be true.
+    // The presence of a following dataset is indicated by COMMAND_DATA_SET_TYPE field.
+    let command_pdata = create_command_pdata(presentation_context_id, response_bytes, true);
 
-    // If we have a dataset, send it as well
+    // Send command first
+    association
+        .send(&Pdu::PData {
+            data: vec![command_pdata],
+        })
+        .await
+        .map_err(|e| DimseError::network(format!("Failed to send command response: {}", e)))?;
+
+    // If we have a dataset, encode and send it (possibly fragmented)
     if let Some(ds) = dataset {
         // Convert the dataset to a DICOM object
         let dicom_obj = ds.to_object().await?;
@@ -57,39 +68,47 @@ pub async fn encode_and_send_response(
         
         tracing::debug!("Encoding dataset with transfer syntax: {}", ts_uid);
         
-        // Log VRs of elements in the dataset
-        for elem in dicom_obj.iter() {
-            tracing::debug!("Dataset element: tag={:?}, vr={:?}", elem.tag(), elem.vr());
-        }
-        
         let ts = TransferSyntaxRegistry
             .get(ts_uid)
             .ok_or_else(|| DimseError::operation_failed(format!("Transfer syntax not found: {}", ts_uid)))?;
 
-        let mut identifier_bytes = Vec::new();
+        let mut dataset_bytes = Vec::new();
         dicom_obj
-            .write_dataset_with_ts(&mut identifier_bytes, ts)
+            .write_dataset_with_ts(&mut dataset_bytes, ts)
             .map_err(|e| DimseError::operation_failed(format!("Failed to encode dataset: {}", e)))?;
         
-        tracing::debug!("Encoded dataset: {} bytes, first 64: {:02x?}", 
-            identifier_bytes.len(),
-            &identifier_bytes[..identifier_bytes.len().min(64)]);
+        tracing::debug!("Encoded dataset: {} bytes", dataset_bytes.len());
 
-        let data_pdata = create_data_pdata(presentation_context_id, identifier_bytes, true);
+        // Fragment dataset if larger than requestor's max PDU size
+        // PDU header (6 bytes) + P-DATA-TF item header (4 bytes) + PDV header (6 bytes) = 16 bytes overhead
+        const PDU_OVERHEAD: usize = 16;
+        let max_pdu = association.requestor_max_pdu_length() as usize;
+        let max_data_per_pdu = if max_pdu > PDU_OVERHEAD {
+            max_pdu - PDU_OVERHEAD
+        } else {
+            // Fallback to small chunks if max_pdu is too small
+            4096
+        };
 
-        association
-            .send(&Pdu::PData {
-                data: vec![command_pdata, data_pdata],
-            })
-            .await
-            .map_err(|e| DimseError::network(format!("Failed to send response: {}", e)))?;
-    } else {
-        association
-            .send(&Pdu::PData {
-                data: vec![command_pdata],
-            })
-            .await
-            .map_err(|e| DimseError::network(format!("Failed to send response: {}", e)))?;
+        let chunks: Vec<&[u8]> = dataset_bytes.chunks(max_data_per_pdu).collect();
+        let num_chunks = chunks.len();
+
+        tracing::debug!(
+            "Sending dataset in {} chunk(s) (max_pdu: {}, max_data_per_pdu: {})",
+            num_chunks, max_pdu, max_data_per_pdu
+        );
+
+        for (i, chunk) in chunks.into_iter().enumerate() {
+            let is_last = i == num_chunks - 1;
+            let data_pdata = create_data_pdata(presentation_context_id, chunk.to_vec(), is_last);
+
+            association
+                .send(&Pdu::PData {
+                    data: vec![data_pdata],
+                })
+                .await
+                .map_err(|e| DimseError::network(format!("Failed to send dataset fragment {}/{}: {}", i + 1, num_chunks, e)))?;
+        }
     }
 
     Ok(())
@@ -398,5 +417,70 @@ mod tests {
         assert_eq!(counts.completed, 0);
         assert_eq!(counts.failed, 0);
         assert_eq!(counts.warning, 0);
+    }
+
+    // PDU chunking tests
+
+    /// Test helper: compute chunk count for given data size and max PDU
+    fn compute_chunk_count(data_size: usize, max_pdu: usize) -> usize {
+        const PDU_OVERHEAD: usize = 16;
+        let max_data_per_pdu = if max_pdu > PDU_OVERHEAD {
+            max_pdu - PDU_OVERHEAD
+        } else {
+            4096
+        };
+        (data_size + max_data_per_pdu - 1) / max_data_per_pdu // ceiling division
+    }
+
+    #[test]
+    fn test_pdu_chunking_small_data_fits_in_one_pdu() {
+        // Small data (100 bytes) with default PDU size (65536) should fit in one chunk
+        let data_size = 100;
+        let max_pdu = 65536;
+        assert_eq!(compute_chunk_count(data_size, max_pdu), 1);
+    }
+
+    #[test]
+    fn test_pdu_chunking_data_requires_multiple_chunks() {
+        // 100KB data with 16KB PDU should require multiple chunks
+        let data_size = 100_000;
+        let max_pdu = 16384; // 16KB
+        let max_data_per_pdu = max_pdu - 16; // 16368 bytes per chunk
+        let expected_chunks = (data_size + max_data_per_pdu - 1) / max_data_per_pdu;
+        assert_eq!(compute_chunk_count(data_size, max_pdu), expected_chunks);
+        assert!(expected_chunks > 1, "Should require multiple chunks");
+    }
+
+    #[test]
+    fn test_pdu_chunking_with_orthanc_default_pdu() {
+        // Orthanc default max PDU is 16384 bytes
+        let data_size = 50_000; // 50KB dataset
+        let max_pdu = 16384;
+        let chunks = compute_chunk_count(data_size, max_pdu);
+        // 16384 - 16 = 16368 bytes per chunk
+        // 50000 / 16368 = 3.05, so 4 chunks
+        assert_eq!(chunks, 4);
+    }
+
+    #[test]
+    fn test_pdu_chunking_exact_boundary() {
+        // Data size exactly matches available space in one PDU
+        let max_pdu = 16384;
+        let max_data_per_pdu = max_pdu - 16; // 16368
+        let data_size = max_data_per_pdu;
+        assert_eq!(compute_chunk_count(data_size, max_pdu), 1);
+        
+        // One byte over should require 2 chunks
+        assert_eq!(compute_chunk_count(data_size + 1, max_pdu), 2);
+    }
+
+    #[test]
+    fn test_pdu_chunking_very_small_pdu_uses_fallback() {
+        // If max_pdu is too small (less than overhead), fallback to 4096
+        let data_size = 10_000;
+        let max_pdu = 10; // Too small - less than 16 byte overhead
+        // Should use fallback of 4096
+        let expected_chunks = (data_size + 4095) / 4096; // ceiling division by 4096
+        assert_eq!(compute_chunk_count(data_size, max_pdu), expected_chunks);
     }
 }
