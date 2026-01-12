@@ -1,6 +1,7 @@
 //! Configuration types for DIMSE services
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
 use std::path::PathBuf;
 use std::time::Duration;
@@ -79,6 +80,10 @@ pub struct DimseConfig {
     /// HostTable or DicomModalities).
     #[serde(default)]
     pub external_store_scp: bool,
+
+    /// AET table for mapping Application Entity Titles to remote nodes (for C-MOVE)
+    #[serde(default = "default_aet_table")]
+    pub aet_table: HashMap<String, RemoteNode>,
 }
 
 /// Configuration for a remote DICOM node
@@ -141,6 +146,7 @@ impl Default for DimseConfig {
             enable_get: false,
             enable_store: true,
             external_store_scp: false,
+            aet_table: default_aet_table(),
         }
     }
 }
@@ -290,6 +296,10 @@ fn default_max_associations() -> u32 {
 
 fn default_true() -> bool {
     true
+}
+
+fn default_aet_table() -> HashMap<String, RemoteNode> {
+    HashMap::new()
 }
 
 #[cfg(test)]

@@ -192,6 +192,140 @@ pub async fn send_get_response(
     Ok(())
 }
 
+/// Send a C-STORE-RQ as a sub-operation (for C-GET responses)
+pub async fn send_store_suboperation(
+    association: &mut ServerAssociation<TcpStream>,
+    message_id: u16,
+    dataset: &DatasetStream,
+    sop_class_uid: &str,
+    sop_instance_uid: &str,
+    presentation_context_id: u8,
+) -> Result<()> {
+    // Build C-STORE-RQ
+    let request = DimseMessageBuilder::new()
+        .command_field(command_fields::C_STORE_RQ)
+        .message_id(message_id)
+        .has_dataset(true)
+        .affected_sop_class_uid(sop_class_uid)
+        .affected_sop_instance_uid(sop_instance_uid)
+        .priority(crate::common::priority::MEDIUM)
+        .build();
+
+    // Encode command
+    let command_bytes = encode_command(&request)?;
+    let command_pdata = create_command_pdata(presentation_context_id, command_bytes, true);
+
+    // Send command PDU
+    association
+        .send(&Pdu::PData {
+            data: vec![command_pdata],
+        })
+        .await
+        .map_err(|e| DimseError::network(format!("Failed to send C-STORE-RQ command: {}", e)))?;
+
+    // Encode and send dataset
+    let dicom_obj = dataset.to_object().await?;
+
+    use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+    use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
+
+    let ts_uid = association
+        .presentation_contexts()
+        .iter()
+        .find(|pc| pc.id == presentation_context_id)
+        .map(|pc| pc.transfer_syntax.as_str())
+        .ok_or_else(|| DimseError::operation_failed("Presentation context not found"))?;
+
+    let ts = TransferSyntaxRegistry
+        .get(ts_uid)
+        .ok_or_else(|| {
+            DimseError::operation_failed(format!("Transfer syntax not found: {}", ts_uid))
+        })?;
+
+    let mut dataset_bytes = Vec::new();
+    dicom_obj
+        .write_dataset_with_ts(&mut dataset_bytes, ts)
+        .map_err(|e| DimseError::operation_failed(format!("Failed to encode dataset: {}", e)))?;
+
+    let data_pdata = create_data_pdata(presentation_context_id, dataset_bytes, true);
+
+    association
+        .send(&Pdu::PData {
+            data: vec![data_pdata],
+        })
+        .await
+        .map_err(|e| DimseError::network(format!("Failed to send C-STORE-RQ dataset: {}", e)))?;
+
+    Ok(())
+}
+
+/// Receive a C-STORE-RSP (after sending sub-operation)
+pub async fn receive_store_response(association: &mut ServerAssociation<TcpStream>) -> Result<u16> {
+    loop {
+        match association.receive().await {
+            Ok(Pdu::PData { data }) => {
+                for value in data {
+                    if value.value_type == dicom_ul::pdu::PDataValueType::Command {
+                        use dicom_dictionary_std::uids;
+                        use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+                        use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
+                        use std::io::Cursor;
+
+                        let ts = TransferSyntaxRegistry
+                            .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
+                            .ok_or_else(|| {
+                                DimseError::parse("Implicit VR Little Endian TS not found")
+                            })?;
+
+                        let cursor = Cursor::new(&value.data);
+                        let obj = InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
+                            cursor,
+                            ts,
+                            dicom_encoding::text::SpecificCharacterSet::default(),
+                        )
+                        .map_err(|e| {
+                            DimseError::parse(format!("Failed to parse response command: {}", e))
+                        })?;
+
+                        let command_field = obj
+                            .element(dicom_dictionary_std::tags::COMMAND_FIELD)
+                            .ok()
+                            .and_then(|e| e.uint16().ok())
+                            .unwrap_or(0);
+
+                        if command_field != command_fields::C_STORE_RSP {
+                            return Err(DimseError::operation_failed(format!(
+                                "Expected C-STORE-RSP (0x8001), got 0x{:04X}",
+                                command_field
+                            )));
+                        }
+
+                        let status = obj
+                            .element(dicom_dictionary_std::tags::STATUS)
+                            .ok()
+                            .and_then(|e| e.uint16().ok())
+                            .unwrap_or(0xC000);
+
+                        return Ok(status);
+                    }
+                }
+            }
+            Ok(Pdu::AbortRQ { .. }) => {
+                return Err(DimseError::network("Association aborted by peer"));
+            }
+            Ok(Pdu::ReleaseRQ) => {
+                return Err(DimseError::network("Association released by peer unexpectedly"));
+            }
+            Ok(_) => {
+                continue;
+            }
+            Err(e) => {
+                return Err(DimseError::network(format!("Failed to receive response: {}", e)));
+            }
+        }
+    }
+}
+
 /// Build and send a C-STORE response
 pub async fn send_store_response(
     association: &mut ServerAssociation<TcpStream>,

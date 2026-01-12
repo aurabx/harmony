@@ -14,12 +14,20 @@ use crate::{DimseError, Result};
 use super::DimseScp;
 use super::commands;
 
+/// Pending command context for commands that expect a dataset
+#[derive(Clone)]
+pub struct PendingCommand {
+    pub command_field: u16,
+    pub message_id: u16,
+    pub move_destination: Option<String>,
+}
+
 /// Handle P-DATA PDU containing DIMSE command
 pub async fn handle_pdata(
     scp: &DimseScp,
     association: &mut ServerAssociation<TcpStream>,
     pdata: Vec<dicom_ul::pdu::PDataValue>,
-    pending_command: &mut Option<(u16, u16)>,
+    pending_command: &mut Option<PendingCommand>,
     accumulated_identifier: &mut Vec<u8>,
 ) -> Result<()> {
     // Separate command and data PDUs, track presentation context ID
@@ -50,20 +58,21 @@ pub async fn handle_pdata(
             accumulated_identifier.extend_from_slice(&identifier_data);
 
             // Check if we have a pending command to dispatch
-            if let Some((command_field, message_id)) = *pending_command {
+            if let Some(ref pending) = *pending_command {
                 // Dispatch the command with accumulated data
                 debug!(
                     "Dispatching pending command 0x{:04X} with {} bytes of data",
-                    command_field,
+                    pending.command_field,
                     accumulated_identifier.len()
                 );
                 commands::dispatch_command(
                     scp,
                     association,
-                    command_field,
-                    message_id,
+                    pending.command_field,
+                    pending.message_id,
                     accumulated_identifier.clone(),
                     presentation_context_id,
+                    pending.move_destination.clone(),
                 )
                 .await?;
                 *pending_command = None;
@@ -106,9 +115,16 @@ pub async fn handle_pdata(
         .uint16()
         .map_err(|e| DimseError::parse(format!("Invalid message ID: {}", e)))?;
 
+    // Extract MoveDestination for C-MOVE requests (tag 0000,0600)
+    let move_destination = command_obj
+        .element(tags::MOVE_DESTINATION)
+        .ok()
+        .and_then(|e| e.to_str().ok())
+        .map(|s| s.trim().to_string());
+
     debug!(
-        "Received DIMSE command: 0x{:04X}, message ID: {}",
-        command_field, message_id
+        "Received DIMSE command: 0x{:04X}, message ID: {}, move_dest: {:?}",
+        command_field, message_id, move_destination
     );
 
     // Check if this command expects a dataset
@@ -132,6 +148,7 @@ pub async fn handle_pdata(
             message_id,
             identifier_data,
             presentation_context_id,
+            move_destination,
         )
         .await;
     }
@@ -139,7 +156,11 @@ pub async fn handle_pdata(
     // If command expects dataset but we don't have it yet, buffer the command
     if expects_dataset {
         debug!("Command expects dataset, buffering command for next PDU");
-        *pending_command = Some((command_field, message_id));
+        *pending_command = Some(PendingCommand {
+            command_field,
+            message_id,
+            move_destination,
+        });
         return Ok(());
     }
 
@@ -151,6 +172,7 @@ pub async fn handle_pdata(
         message_id,
         Vec::new(),
         presentation_context_id,
+        move_destination,
     )
     .await
 }

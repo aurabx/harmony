@@ -99,6 +99,16 @@ impl DimseMessageBuilder {
         self
     }
 
+    /// Set the Affected SOP Instance UID (0000,1000) - for C-STORE requests
+    pub fn affected_sop_instance_uid(mut self, uid: &str) -> Self {
+        self.obj.put(DataElement::new(
+            tags::AFFECTED_SOP_INSTANCE_UID,
+            VR::UI,
+            PrimitiveValue::from(uid),
+        ));
+        self
+    }
+
     /// Set the Message ID (0000,0110) - for requests
     pub fn message_id(mut self, id: u16) -> Self {
         self.obj.put(DataElement::new(

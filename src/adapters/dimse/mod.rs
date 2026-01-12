@@ -292,6 +292,43 @@ impl DimseAdapter {
             dimse_config.enable_store = b;
         }
 
+        // AET table for C-MOVE destinations
+        // Format: { "AET_NAME": { "ae_title": "...", "host": "...", "port": ... }, ... }
+        if let Some(aet_table_val) = options.get("aet_table") {
+            if let Some(aet_obj) = aet_table_val.as_object() {
+                for (aet_name, node_val) in aet_obj {
+                    if let Some(node_obj) = node_val.as_object() {
+                        let ae_title = node_obj
+                            .get("ae_title")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or(aet_name)
+                            .to_string();
+                        let host = node_obj
+                            .get("host")
+                            .and_then(|v| v.as_str())
+                            .unwrap_or("localhost")
+                            .to_string();
+                        let port = node_obj
+                            .get("port")
+                            .and_then(|v| v.as_u64())
+                            .map(|p| p as u16)
+                            .unwrap_or(11112);
+
+                        dimse_config.aet_table.insert(
+                            aet_name.clone(),
+                            dimse::RemoteNode::new(ae_title, host, port),
+                        );
+                        tracing::debug!(
+                            "Added AET '{}' to table: {}:{}",
+                            aet_name,
+                            dimse_config.aet_table[aet_name].host,
+                            dimse_config.aet_table[aet_name].port
+                        );
+                    }
+                }
+            }
+        }
+
         let pipeline = pipeline_name.to_string();
         let endpoint = endpoint_name.to_string();
 

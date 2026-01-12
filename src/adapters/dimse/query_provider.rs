@@ -331,7 +331,10 @@ impl PipelineQueryProvider {
     /// Convert a single JSON object to a DatasetStream
     ///
     /// Converts DICOM JSON format to an InMemDicomObject and wraps it in DatasetStream.
-    /// The JSON can be either a raw DICOM JSON object or a wrapper with an "identifier" field.
+    /// The JSON can be:
+    /// - A raw DICOM JSON object (tags like "00080005")
+    /// - A wrapper with an "identifier" field
+    /// - A binary wrapper with "body_b64" (base64-encoded DICOM Part10 file)
     async fn json_to_dataset(
         &self,
         json: &serde_json::Value,
@@ -339,6 +342,22 @@ impl PipelineQueryProvider {
         // Skip null or empty objects
         if json.is_null() || (json.is_object() && json.as_object().unwrap().is_empty()) {
             return Ok(None);
+        }
+
+        // Check for body_b64 format (binary DICOM wrapped for HTTP transport)
+        if let Some(b64_str) = json.get("body_b64").and_then(|v| v.as_str()) {
+            tracing::debug!("json_to_dataset: found 'body_b64' key, decoding binary DICOM");
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64_str)
+                .map_err(|e| DimseError::operation_failed(format!("Failed to decode base64: {}", e)))?;
+            
+            // Parse DICOM Part10 file from bytes and convert to InMemDicomObject
+            let file_obj = dicom_object::from_reader(&bytes[..])
+                .map_err(|e| DimseError::operation_failed(format!("Failed to parse DICOM from binary: {}", e)))?;
+            let dicom_obj = file_obj.into_inner();
+            
+            return Ok(Some(DatasetStream::from_object(dicom_obj)));
         }
 
         // Extract the identifier JSON - it might be wrapped in a Wrapper struct or be raw DICOM JSON

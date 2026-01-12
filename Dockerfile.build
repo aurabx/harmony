@@ -18,9 +18,9 @@ RUN cargo build --release --bin harmony
 # Runtime stage
 FROM debian:stable-slim
 
-# Install minimal dependencies
+# Install minimal dependencies including DCMTK for DICOM operations
 RUN apt-get update && \
-    apt-get install -y ca-certificates && \
+    apt-get install -y ca-certificates dcmtk && \
     rm -rf /var/lib/apt/lists/*
 
 # Create directories
