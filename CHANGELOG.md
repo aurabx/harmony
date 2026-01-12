@@ -1,6 +1,9 @@
 # Changelog
 
-## [Unreleased]
+## [0.12.1] - 2026-01-13
+
+### Fixes
+- Fix PDU Size negotiation in SCU
 
 ## [0.12.0] - 2026-01-08
 
