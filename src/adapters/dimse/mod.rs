@@ -292,6 +292,13 @@ impl DimseAdapter {
             dimse_config.enable_store = b;
         }
 
+        // Max PDU size configuration
+        if let Some(max_pdu_val) = options.get("max_pdu").and_then(|v| v.as_u64()) {
+            if (16384..=131072).contains(&max_pdu_val) {
+                dimse_config.max_pdu = max_pdu_val as u32;
+            }
+        }
+
         // AET table for C-MOVE destinations
         // Format: { "AET_NAME": { "ae_title": "...", "host": "...", "port": ... }, ... }
         if let Some(aet_table_val) = options.get("aet_table") {

@@ -339,6 +339,13 @@ impl DicomScuBackend {
             }
         }
 
+        // Allow configuring max_pdu for DICOM associations via backend options
+        if let Some(max_pdu_val) = options.get("max_pdu").and_then(|v| v.as_u64()) {
+            if (16384..=131072).contains(&max_pdu_val) {
+                dimse_config.max_pdu = max_pdu_val as u32;
+            }
+        }
+
         // Create SCU client
         let scu = DimseScu::new(dimse_config);
 

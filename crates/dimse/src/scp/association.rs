@@ -45,6 +45,7 @@ async fn handle_association_inner(
     let scp_options = ServerAssociationOptions::new()
         .ae_title(scp.config.local_aet.as_str())
         .ae_access_control(AcceptAny)
+        .max_pdu_length(scp.config.max_pdu)
         .promiscuous(true);
 
     // Establish the association
@@ -52,10 +53,12 @@ async fn handle_association_inner(
         DimseError::association(format!("Failed to establish association: {}", e))
     })?;
 
+    // Log negotiated PDU sizes for debugging
     info!(
-        "Association established with {} (calling AET: {})",
+        "Association established with {} (calling AET: {}, requestor_max_pdu: {})",
         peer_addr,
-        association.client_ae_title()
+        association.client_ae_title(),
+        association.requestor_max_pdu_length()
     );
 
     // Buffer for accumulating identifier data across multiple PDUs
