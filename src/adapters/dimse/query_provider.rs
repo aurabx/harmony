@@ -1,3 +1,4 @@
+use crate::adapters::dimse::envelope_unwrapper::{unwrap_response, UnwrappedContent};
 use crate::adapters::dimse::status_mapper;
 use crate::globals::{get_config, get_storage};
 use crate::models::envelope::envelope::ResponseEnvelope;
@@ -239,8 +240,7 @@ impl PipelineQueryProvider {
     /// Convert ResponseEnvelope to Vec<DatasetStream>
     ///
     /// Parses the response data and converts it to DICOM datasets.
-    /// Handles the DIMSE backend response format: { "operation": "...", "success": true, "matches": [...] }
-    /// Also supports raw arrays or single DICOM JSON objects for flexibility.
+    /// Uses the envelope_unwrapper module to handle various response formats.
     async fn response_to_datasets(
         &self,
         response: ResponseEnvelope<Vec<u8>>,
@@ -257,131 +257,64 @@ impl PipelineQueryProvider {
 
         // Try to parse response body as JSON
         let json_data = if let Some(normalized) = response.normalized_data {
-            // Use normalized_data if available
             normalized
         } else if !response.original_data.is_empty() {
-            // Try to parse original_data as JSON
             serde_json::from_slice(&response.original_data).map_err(|e| {
                 DimseError::operation_failed(format!("Failed to parse response as JSON: {}", e))
             })?
         } else {
-            // Empty response
             return Ok(vec![]);
         };
 
-        // Extract the results from the response
-        // The DIMSE backend returns: { "operation": "...", "success": true, "matches": [...] }
-        let results = if let Some(matches) = json_data.get("matches") {
-            // DIMSE backend response format - extract matches array
-            tracing::debug!("response_to_datasets: found 'matches' key, extracting array");
-            matches.clone()
-        } else {
-            // Fall back to treating the entire response as results
-            tracing::debug!("response_to_datasets: no 'matches' key, using entire response. Keys: {:?}",
-                json_data.as_object().map(|o| o.keys().collect::<Vec<_>>()));
-            json_data.clone()
-        };
-
-        tracing::debug!("response_to_datasets: results type={:?}, len={}",
-            match &results {
-                serde_json::Value::Array(a) => format!("Array({})", a.len()),
-                serde_json::Value::Object(_) => "Object".to_string(),
-                serde_json::Value::Null => "Null".to_string(),
-                _ => "Other".to_string(),
-            },
-            results.as_array().map(|a| a.len()).unwrap_or(0)
-        );
-
-        // Convert JSON to datasets
-        let datasets = match &results {
-            serde_json::Value::Array(items) => {
-                // Multiple results
+        // Use envelope unwrapper to extract clean DICOM content
+        match unwrap_response(&json_data) {
+            UnwrappedContent::DicomJson(items) => {
+                tracing::debug!("response_to_datasets: unwrapped {} DICOM JSON objects", items.len());
                 let mut datasets = Vec::new();
                 for item in items {
-                    if let Some(dataset) = self.json_to_dataset(item).await? {
-                        datasets.push(dataset);
+                    match self.dicom_json_to_dataset(&item) {
+                        Ok(dataset) => datasets.push(dataset),
+                        Err(e) => {
+                            tracing::warn!("Failed to convert DICOM JSON to dataset: {}", e);
+                        }
                     }
                 }
-                datasets
+                Ok(datasets)
             }
-            serde_json::Value::Object(_) => {
-                // Single result (not wrapped in array)
-                if let Some(dataset) = self.json_to_dataset(&results).await? {
-                    vec![dataset]
-                } else {
-                    vec![]
-                }
+            UnwrappedContent::Binary(bytes) => {
+                tracing::debug!("response_to_datasets: unwrapped binary DICOM data ({} bytes)", bytes.len());
+                let dataset = self.binary_to_dataset(&bytes)?;
+                Ok(vec![dataset])
             }
-            serde_json::Value::Null => {
-                // No results
-                vec![]
+            UnwrappedContent::Empty => {
+                tracing::debug!("response_to_datasets: no content to convert");
+                Ok(vec![])
             }
-            _ => {
-                // Unexpected format
-                return Err(DimseError::operation_failed(format!(
-                    "Unexpected response format: expected object, array, or null, got {:?}",
-                    results
-                )));
-            }
-        };
-
-        Ok(datasets)
+        }
     }
 
-    /// Convert a single JSON object to a DatasetStream
+    /// Convert clean DICOM JSON to a DatasetStream
     ///
-    /// Converts DICOM JSON format to an InMemDicomObject and wraps it in DatasetStream.
-    /// The JSON can be:
-    /// - A raw DICOM JSON object (tags like "00080005")
-    /// - A wrapper with an "identifier" field
-    /// - A binary wrapper with "body_b64" (base64-encoded DICOM Part10 file)
-    async fn json_to_dataset(
-        &self,
-        json: &serde_json::Value,
-    ) -> DimseResult<Option<DatasetStream>> {
-        // Skip null or empty objects
-        if json.is_null() || (json.is_object() && json.as_object().unwrap().is_empty()) {
-            return Ok(None);
-        }
-
-        // Check for body_b64 format (binary DICOM wrapped for HTTP transport)
-        if let Some(b64_str) = json.get("body_b64").and_then(|v| v.as_str()) {
-            tracing::debug!("json_to_dataset: found 'body_b64' key, decoding binary DICOM");
-            use base64::Engine;
-            let bytes = base64::engine::general_purpose::STANDARD
-                .decode(b64_str)
-                .map_err(|e| DimseError::operation_failed(format!("Failed to decode base64: {}", e)))?;
-            
-            // Parse DICOM Part10 file from bytes and convert to InMemDicomObject
-            let file_obj = dicom_object::from_reader(&bytes[..])
-                .map_err(|e| DimseError::operation_failed(format!("Failed to parse DICOM from binary: {}", e)))?;
-            let dicom_obj = file_obj.into_inner();
-            
-            return Ok(Some(DatasetStream::from_object(dicom_obj)));
-        }
-
-        // Extract the identifier JSON - it might be wrapped in a Wrapper struct or be raw DICOM JSON
-        let identifier_json = if let Some(identifier) = json.get("identifier") {
-            // It's a wrapped format (Wrapper struct)
-            tracing::debug!("json_to_dataset: found 'identifier' key, extracting");
-            identifier.clone()
-        } else {
-            // It's raw DICOM JSON
-            tracing::debug!("json_to_dataset: using raw JSON. Keys: {:?}",
-                json.as_object().map(|o| o.keys().collect::<Vec<_>>()));
-            json.clone()
-        };
-
-        // Convert DICOM JSON to InMemDicomObject using dicom_json_tool
-        tracing::debug!("json_to_dataset: converting to DICOM object");
-        let dicom_obj = tool::json_value_to_identifier(&identifier_json).map_err(|e| {
-            tracing::error!("json_to_dataset: conversion FAILED: {}", e);
+    /// This function expects already-cleaned DICOM JSON (8-character hex tag keys).
+    /// Use envelope_unwrapper to extract clean JSON before calling this.
+    fn dicom_json_to_dataset(&self, json: &serde_json::Value) -> DimseResult<DatasetStream> {
+        let dicom_obj = tool::json_value_to_identifier(json).map_err(|e| {
+            tracing::error!(
+                "dicom_json_to_dataset: conversion failed: {}. Keys: {:?}",
+                e,
+                json.as_object().map(|o| o.keys().collect::<Vec<_>>())
+            );
             DimseError::operation_failed(format!("Failed to convert JSON to DICOM object: {}", e))
         })?;
+        Ok(DatasetStream::from_object(dicom_obj))
+    }
 
-        // Create DatasetStream from the parsed DICOM object
-        let dataset = DatasetStream::from_object(dicom_obj);
-        Ok(Some(dataset))
+    /// Convert binary DICOM Part10 data to a DatasetStream
+    fn binary_to_dataset(&self, bytes: &[u8]) -> DimseResult<DatasetStream> {
+        let file_obj = dicom_object::from_reader(bytes).map_err(|e| {
+            DimseError::operation_failed(format!("Failed to parse DICOM from binary: {}", e))
+        })?;
+        Ok(DatasetStream::from_object(file_obj.into_inner()))
     }
 }
 

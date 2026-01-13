@@ -1,3 +1,4 @@
+pub mod envelope_unwrapper;
 pub mod query_provider;
 mod status_mapper;
 
