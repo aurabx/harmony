@@ -286,6 +286,10 @@ impl PipelineQueryProvider {
                 let dataset = self.binary_to_dataset(&bytes)?;
                 Ok(vec![dataset])
             }
+            UnwrappedContent::FolderPath(folder_path) => {
+                tracing::debug!("response_to_datasets: reading DICOM files from folder: {:?}", folder_path);
+                self.folder_to_datasets(&folder_path)
+            }
             UnwrappedContent::Empty => {
                 tracing::debug!("response_to_datasets: no content to convert");
                 Ok(vec![])
@@ -315,6 +319,49 @@ impl PipelineQueryProvider {
             DimseError::operation_failed(format!("Failed to parse DICOM from binary: {}", e))
         })?;
         Ok(DatasetStream::from_object(file_obj.into_inner()))
+    }
+
+    /// Read all DICOM files from a folder and convert to DatasetStreams
+    ///
+    /// This is used for C-GET/C-MOVE results where files are stored on disk.
+    fn folder_to_datasets(&self, folder_path: &std::path::Path) -> DimseResult<Vec<DatasetStream>> {
+        let mut datasets = Vec::new();
+
+        let entries = std::fs::read_dir(folder_path).map_err(|e| {
+            DimseError::operation_failed(format!("Failed to read folder {:?}: {}", folder_path, e))
+        })?;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            // Check for .dcm extension or try to parse anyway
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            if ext != "dcm" && ext != "dicom" {
+                // Try to detect DICOM by reading magic bytes
+                if let Ok(bytes) = std::fs::read(&path) {
+                    if bytes.len() < 132 || &bytes[128..132] != b"DICM" {
+                        tracing::debug!("Skipping non-DICOM file: {:?}", path);
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+
+            tracing::debug!("Reading DICOM file: {:?}", path);
+            
+            // Create DatasetStream::File variant pointing to the file
+            // This allows the SCP to send the file directly without re-parsing
+            // Note: delete_on_drop is false since we don't own these files
+            let dataset = DatasetStream::from_file(path.clone(), false);
+            datasets.push(dataset);
+        }
+
+        tracing::info!("folder_to_datasets: loaded {} DICOM files from {:?}", datasets.len(), folder_path);
+        Ok(datasets)
     }
 }
 

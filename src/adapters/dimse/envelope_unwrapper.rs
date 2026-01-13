@@ -13,13 +13,15 @@
 
 use serde_json::Value;
 
-/// Result of unwrapping an envelope - either DICOM JSON objects or binary data
+/// Result of unwrapping an envelope - either DICOM JSON objects, binary data, or file paths
 #[derive(Debug)]
 pub enum UnwrappedContent {
     /// One or more DICOM JSON objects ready for conversion
     DicomJson(Vec<Value>),
     /// Binary DICOM Part10 data (already decoded from base64)
     Binary(Vec<u8>),
+    /// Path to a folder containing DICOM files (for C-GET/C-MOVE results)
+    FolderPath(std::path::PathBuf),
     /// No content (empty response)
     Empty,
 }
@@ -36,6 +38,17 @@ pub fn unwrap_response(json_data: &Value) -> UnwrappedContent {
     if let Some(obj) = json_data.as_object() {
         if obj.is_empty() {
             return UnwrappedContent::Empty;
+        }
+    }
+
+    // Check for folder_path (C-GET/C-MOVE results with files on disk)
+    if let Some(folder_path) = json_data.get("folder_path").and_then(|v| v.as_str()) {
+        let path = std::path::PathBuf::from(folder_path);
+        if path.exists() && path.is_dir() {
+            tracing::debug!("envelope_unwrapper: found 'folder_path' key: {:?}", path);
+            return UnwrappedContent::FolderPath(path);
+        } else {
+            tracing::warn!("envelope_unwrapper: folder_path does not exist or is not a directory: {:?}", path);
         }
     }
 
@@ -71,14 +84,20 @@ pub fn unwrap_response(json_data: &Value) -> UnwrappedContent {
 /// Extracts the results array from various envelope formats
 fn extract_results_array(json_data: &Value) -> Vec<Value> {
     // Priority order for extracting results:
-    // 1. "matches" key (DIMSE backend format)
-    // 2. "dicomweb_data" key (DICOMweb middleware format)
-    // 3. Raw array
-    // 4. Single object (wrap in array)
+    // 1. "matches" key (C-FIND results)
+    // 2. "instances" key (C-GET/C-MOVE results)
+    // 3. "dicomweb_data" key (DICOMweb middleware format)
+    // 4. Raw array
+    // 5. Single object (wrap in array)
 
     if let Some(matches) = json_data.get("matches") {
         tracing::debug!("envelope_unwrapper: extracting from 'matches' key");
         return value_to_array(matches);
+    }
+
+    if let Some(instances) = json_data.get("instances") {
+        tracing::debug!("envelope_unwrapper: extracting from 'instances' key");
+        return value_to_array(instances);
     }
 
     if let Some(dicomweb_data) = json_data.get("dicomweb_data") {
@@ -289,6 +308,48 @@ mod tests {
         match unwrap_response(&Value::Null) {
             UnwrappedContent::Empty => {}
             _ => panic!("Expected Empty"),
+        }
+    }
+
+    #[test]
+    fn test_unwrap_instances_envelope() {
+        // C-GET/C-MOVE response format uses "instances" instead of "matches"
+        let input = json!({
+            "operation": "get",
+            "success": true,
+            "instances": [
+                {"00100020": {"vr": "LO", "Value": ["12345"]}}
+            ],
+            "folder_id": "test-folder",
+            "file_count": 1
+        });
+
+        match unwrap_response(&input) {
+            UnwrappedContent::DicomJson(items) => {
+                assert_eq!(items.len(), 1);
+                assert!(items[0].get("00100020").is_some());
+            }
+            _ => panic!("Expected DicomJson"),
+        }
+    }
+
+    #[test]
+    fn test_unwrap_folder_path() {
+        // When folder_path exists, it should return FolderPath variant
+        // Note: This test requires a real directory to exist
+        let temp_dir = std::env::temp_dir();
+        let input = json!({
+            "operation": "get",
+            "success": true,
+            "folder_path": temp_dir.to_string_lossy(),
+            "file_count": 1
+        });
+
+        match unwrap_response(&input) {
+            UnwrappedContent::FolderPath(path) => {
+                assert_eq!(path, temp_dir);
+            }
+            _ => panic!("Expected FolderPath"),
         }
     }
 
