@@ -93,6 +93,10 @@ dimse = { path = "crates/dimse" }
 rcgen = "0.12"
 futures-util = "0.3"
 
+[profile.release]
+codegen-units = 1
+lto = true
+
 # Test organization
 
 # DICOM tests
