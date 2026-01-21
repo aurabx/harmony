@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+## [0.12.1] - 2026-01-21
+
+### Added
+- Release profile optimization with LTO (Link Time Optimization) and single codegen unit for improved runtime performance
+
+### Fixed
+- PDU size negotiation in DIMSE SCP association and response handling
+- Incorrect crate version dependencies in Cargo.lock
+
 ## [0.12.0] - 2026-01-08
 
 ### Highlights
