@@ -357,7 +357,36 @@ url = "https://api1.example.com"
 
 [targets.api2]
 url = "https://api2.example.com"
-``` path=null start=null
+```
+
+### Mock DICOM
+
+A built-in mock backend that simulates a DICOM PACS. Useful for testing pipelines without requiring a real external PACS system.
+
+**Service behavior**:
+- Acts as a DICOM SCU/Target for pipeline backends
+- Supports `C-FIND` (Patient, Study, Series, Image levels)
+- Supports `C-GET` (Instance and Frame retrieval)
+- Supports `C-ECHO`
+- Provides built-in sample data (CT study with multiple series)
+- Validates query parameters against mock data
+
+**Configuration**:
+```toml
+[backends.mock_pacs]
+service = "mock_dicom"
+# No options required
+```
+
+**Supported Operations**:
+- **Query (C-FIND)**:
+    - Filters supported: `PatientID`, `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID`, `Modality`, `InstanceNumber`
+    - Returns hierarchical results matching the query level
+- **Retrieve (C-GET)**:
+    - Returns mock DICOM file content
+    - Supports frame retrieval (e.g., `.../frames/1`)
+- **Echo (C-ECHO)**:
+    - Always returns success
 
 ## See Also
 

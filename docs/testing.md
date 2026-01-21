@@ -57,6 +57,13 @@ Notes
 - Consider adding end-to-end tests against a full server only in separate, slower suites
 - JMIX (dev): Development testing documentation for JMIX API is available in the project's dev directory
 
+## Mocking External Services
+
+### Mock DICOM Backend
+For testing DICOM pipelines without a real PACS, use the `mock_dicom` backend service. It simulates a PACS that responds to C-FIND, C-GET, and C-ECHO requests with built-in sample data.
+
+See [Backends - Mock DICOM](backends.md#mock-dicom) for configuration details.
+
 ## Verifying Examples
 
 It is recommended to run the provided examples to ensure end-to-end functionality in a real environment.
