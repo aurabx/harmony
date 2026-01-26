@@ -8,4 +8,5 @@ pub mod fhir;
 pub mod http;
 pub mod http3;
 pub mod jmix;
+pub mod jmix_backend;
 pub mod mock_dicom;
