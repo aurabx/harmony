@@ -1799,7 +1799,7 @@ dependencies = [
 
 [[package]]
 name = "harmony"
-version = "0.12.0"
+version = "0.12.2"
 dependencies = [
  "anyhow",
  "arc-swap",

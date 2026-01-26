@@ -171,6 +171,10 @@ path = "tests/jmix/jmix_skip_backends.rs"
 name = "pipeline_jmix_builder"
 path = "tests/jmix/pipeline_jmix_builder.rs"
 
+[[test]]
+name = "jmix_backend_integration"
+path = "tests/jmix/jmix_backend_integration.rs"
+
 # Management tests
 [[test]]
 name = "management_service"

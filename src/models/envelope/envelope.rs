@@ -557,7 +557,12 @@ impl ResponseEnvelope<Vec<u8>> {
         let is_binary = !is_json
             && (content_type.contains("multipart/related")
                 || content_type.contains("application/dicom")
-                || content_type.contains("application/octet-stream"));
+                || content_type.contains("application/octet-stream")
+                || content_type.contains("application/zip")
+                || content_type.contains("application/gzip")
+                || content_type.contains("application/x-gzip")
+                || content_type.contains("application/x-tar")
+                || content_type.contains("application/x-7z-compressed"));
 
         // For binary content, preserve as base64 so middleware can access it
         if is_binary && !self.original_data.is_empty() {
@@ -912,7 +917,7 @@ mod tests {
         envelope.set_target_uri("/v2/api");
 
         let target = envelope.target_details.as_ref().unwrap();
-assert_eq!(target.base_url, "https://second.example.com");
+        assert_eq!(target.base_url, "https://second.example.com");
         assert_eq!(target.uri, "/v2/api");
     }
 
@@ -972,7 +977,10 @@ assert_eq!(target.base_url, "https://second.example.com");
             .normalized_data
             .clone()
             .expect("normalized_data missing");
-        let b64 = nd.get("body_b64").and_then(|v| v.as_str()).expect("missing b64");
+        let b64 = nd
+            .get("body_b64")
+            .and_then(|v| v.as_str())
+            .expect("missing b64");
         use base64::Engine;
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(b64)

@@ -75,6 +75,9 @@ fn create_builtin_service(
         "jmix" => Ok(Box::new(
             crate::models::services::types::jmix::JmixEndpoint {},
         )),
+        "jmix_backend" => Ok(Box::new(
+            crate::models::services::types::jmix_backend::JmixBackend {},
+        )),
         "fhir" => Ok(Box::new(
             crate::models::services::types::fhir::FhirEndpoint {},
         )),
