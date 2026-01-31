@@ -38,95 +38,16 @@ pub fn initialise_service_registry(config: &Config) {
 pub fn resolve_service(
     service_type: &str,
 ) -> Result<Box<dyn ServiceType<ReqBody = Value>>, String> {
-    // Check the registry first
-    if let Some(registry) = SERVICE_REGISTRY.get() {
-        if let Some(module) = registry.get(service_type) {
-            match module.as_str() {
-                "" => {
-                    // Default built-in modules
-                    create_builtin_service(service_type)
-                }
-                module_path => {
-                    // Custom module loading would go here
-                    Err(format!(
-                        "Service type '{}' references module '{}' but dynamic loading is not implemented yet",
-                        service_type, module_path
-                    ))
-                }
-            }
-        } else {
-            // Service not in registry - try built-in services as fallback
-            create_builtin_service(service_type)
-        }
-    } else {
-        // Fallback to hardcoded types if registry isn't initialized
-        create_builtin_service(service_type)
-    }
-}
+    // Ensure built-in factories are registered (idempotent, thread-safe)
+    crate::extensions::registry::initialize_builtin_factories_sync();
 
-/// Creates built-in service instances
-fn create_builtin_service(
-    service_type: &str,
-) -> Result<Box<dyn ServiceType<ReqBody = Value>>, String> {
-    match service_type.to_lowercase().as_str() {
-        "http" => Ok(Box::new(
-            crate::models::services::types::http::HttpEndpoint {},
-        )),
-        "jmix" => Ok(Box::new(
-            crate::models::services::types::jmix::JmixEndpoint {},
-        )),
-        "jmix_backend" => Ok(Box::new(
-            crate::models::services::types::jmix_backend::JmixBackend {},
-        )),
-        "fhir" => Ok(Box::new(
-            crate::models::services::types::fhir::FhirEndpoint {},
-        )),
-        // Backward compatibility: "dicom" maps to "dicom_scu"
-        "dicom" | "dicom_scu" => Ok(Box::new(
-            crate::models::services::types::dicom::DicomScuBackend {
-                local_aet: None,
-                aet: None,
-                host: None,
-                port: None,
-                use_tls: None,
-            },
-        )),
-        "dicom_scp" => Ok(Box::new(
-            crate::models::services::types::dicom_scp::DicomScpEndpoint {
-                local_aet: None,
-                bind_addr: None,
-                port: None,
-                enable_echo: None,
-                enable_find: None,
-                enable_move: None,
-                enable_get: None,
-                enable_store: None,
-                storage_dir: None,
-            },
-        )),
-        "dicomweb" => Ok(Box::new(
-            crate::models::services::types::dicomweb::DicomwebEndpoint {},
-        )),
-        "echo" => Ok(Box::new(
-            crate::models::services::types::echo::EchoEndpoint {},
-        )),
-        "management" => Ok(Box::new(
-            crate::management::ManagementEndpoint {},
-        )),
-        "mock_dicom" => Ok(Box::new(
-            crate::models::services::types::mock_dicom::MockDicomEndpoint {},
-        )),
-        "disk" | "storage" => Ok(Box::new(
-            crate::models::services::types::storage::StorageBackend::default(),
-        )),
-        "http3" | "h3" => Ok(Box::new(
-            crate::models::services::types::http3::Http3Backend::default(),
-        )),
-        _ => Err(format!(
-            "Unsupported built-in service type: {}",
-            service_type
-        )),
-    }
+    // Use the unified registry for all service resolution
+    let registry = crate::extensions::get_registry();
+    let reg = registry
+        .read()
+        .map_err(|e| format!("Failed to acquire read lock on registry: {}", e))?;
+
+    reg.resolve_service(service_type)
 }
 
 #[async_trait]

@@ -1,6 +1,5 @@
-use harmony::config::config::Config;
 use harmony::config::env_substitution::{substitute_env_vars, validate_substituted_values};
-use harmony::config::Cli;
+use harmony::{Cli, Config, HarmonyBuilder};
 use std::env;
 
 struct CliArgs {
@@ -48,8 +47,8 @@ async fn main() {
 
     if args.validate_only {
         // Validation-only mode: check required vars, perform substitution, parse TOML, and report
-        let contents = std::fs::read_to_string(&args.config_path)
-            .expect("Failed to read config file");
+        let contents =
+            std::fs::read_to_string(&args.config_path).expect("Failed to read config file");
 
         // Extract required_env_vars from [proxy]
         let mut missing_required: Vec<String> = Vec::new();
@@ -69,7 +68,7 @@ async fn main() {
 
         if !missing_required.is_empty() {
             eprintln!(
-                "✗ Configuration validation failed\n✗ Missing required environment variables: {}",
+                "Configuration validation failed\nMissing required environment variables: {}",
                 missing_required.join(", ")
             );
             std::process::exit(1);
@@ -79,22 +78,35 @@ async fn main() {
         let (_substituted, audit) = substitute_env_vars(&contents);
         let warnings = validate_substituted_values(&audit);
         for w in warnings.warnings {
-            eprintln!("⚠ {}", w);
+            eprintln!("Warning: {}", w);
         }
 
         // Full load/validate using standard path
-        let cli = if args.validate_only {
-            Cli::new_validate_only(args.config_path.clone())
-        } else {
-            Cli::new(args.config_path.clone())
-        };
+        let cli = Cli::new_validate_only(args.config_path.clone());
         let _config = Config::from_args(cli);
-        println!("✓ Configuration is valid\n✓ All required environment variables present\n✓ Substitution completed");
+        println!("Configuration is valid\nAll required environment variables present\nSubstitution completed");
         std::process::exit(0);
     }
 
-    // Normal startup
+    // Normal startup using HarmonyBuilder
+    // This is the recommended way to start Harmony, especially for commercial editions
+    // that need to register custom plugins, auth providers, middleware, or services.
+    //
+    // Example for commercial edition:
+    // ```
+    // HarmonyBuilder::from_config_path(&args.config_path)
+    //     .unwrap()
+    //     .with_plugin(Box::new(LicensePlugin::new()))
+    //     .with_auth_provider(Box::new(SamlProvider::new()))
+    //     .with_middleware_factory(Box::new(RateLimitFactory::new()))
+    //     .run()
+    //     .await;
+    // ```
     let cli = Cli::new(args.config_path.clone());
     let config = Config::from_args(cli);
-    harmony::run_with_reload(config, Some(args.config_path)).await;
+
+    HarmonyBuilder::new(config)
+        .with_config_path(args.config_path)
+        .run()
+        .await;
 }

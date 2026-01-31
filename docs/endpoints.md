@@ -1,8 +1,10 @@
 # Endpoints
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2025-01-31
 
 Endpoints define protocol entry points into the Harmony pipeline. Each endpoint is associated with a **Service** that handles protocol-specific data conversion to/from the internal `Envelope` format.
+
+> **Custom Services**: To create your own service types for endpoints, see [extensions.md](extensions.md#service-factories).
 
 ## Architecture
 

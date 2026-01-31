@@ -70,155 +70,19 @@ pub fn resolve_middleware_type(
 pub fn resolve_middleware_type_with_config(
     middleware_type: &str,
     options: &HashMap<String, Value>,
-    transforms_path: Option<&str>,
+    _transforms_path: Option<&str>,
     config: Option<&crate::config::config::Config>,
 ) -> Result<Box<dyn Middleware>, String> {
-    // Check the registry first
-    if let Some(registry) = MIDDLEWARE_REGISTRY.get() {
-        if let Some(module) = registry.get(middleware_type) {
-            match module.as_str() {
-                "" => {
-                    // Default built-in modules
-                    create_builtin_middleware_type_with_config(
-                        middleware_type,
-                        options,
-                        transforms_path,
-                        config,
-                    )
-                }
-                module_path => {
-                    // Custom module loading would go here
-                    Err(format!(
-                        "Middleware type '{}' references module '{}' but dynamic loading is not implemented yet",
-                        middleware_type, module_path
-                    ))
-                }
-            }
-        } else {
-            // Registry is present but does not include this middleware. Attempt built-in fallback.
-            match create_builtin_middleware_type_with_config(
-                middleware_type,
-                options,
-                transforms_path,
-                config,
-            ) {
-                Ok(mw) => Ok(mw),
-                Err(_) => Err(format!("Unknown middleware type: {}", middleware_type)),
-            }
-        }
-    } else {
-        // Fallback to hardcoded types if registry isn't initialized
-        create_builtin_middleware_type_with_config(
-            middleware_type,
-            options,
-            transforms_path,
-            config,
-        )
-    }
-}
+    // Ensure built-in factories are registered (idempotent, thread-safe)
+    crate::extensions::registry::initialize_builtin_factories_sync();
 
-/// Creates built-in middleware instances with Config context
-fn create_builtin_middleware_type_with_config(
-    middleware_type: &str,
-    options: &HashMap<String, Value>,
-    transforms_path: Option<&str>,
-    config: Option<&crate::config::config::Config>,
-) -> Result<Box<dyn Middleware>, String> {
-    use crate::models::middleware::types::auth::AuthSidecarMiddleware;
-    use crate::models::middleware::types::connect::AuraboxConnectMiddleware;
-    use crate::models::middleware::types::dicom_flatten::DicomFlattenMiddleware;
-    use crate::models::middleware::types::dicom_unflatten::DicomUnflattenMiddleware;
-    use crate::models::middleware::types::jwtauth::JwtAuthMiddleware;
-    use crate::models::middleware::types::metadata_transform::MetadataTransformMiddleware;
-use crate::models::middleware::types::path_filter::PathFilterMiddleware;
-use crate::models::middleware::types::logger::{LogDumpMiddleware, parse_config as parse_logger_config};
-use crate::models::middleware::types::transform::JoltTransformMiddleware;
-use crate::models::middleware::types::webhook::{WebhookMiddleware, parse_config as parse_webhook_config};
+    // Use the unified registry for all middleware resolution
+    let registry = crate::extensions::get_registry();
+    let reg = registry
+        .read()
+        .map_err(|e| format!("Failed to acquire read lock on registry: {}", e))?;
 
-    match middleware_type.to_lowercase().as_str() {
-        "jwtauth" | "jwt_auth" => {
-            let config = crate::models::middleware::types::jwtauth::parse_config(options)?;
-            Ok(Box::new(JwtAuthMiddleware::new(config)))
-        }
-        "basic_auth" => {
-            let config = crate::models::middleware::types::auth::parse_config(options)?;
-            Ok(Box::new(AuthSidecarMiddleware::new(config)))
-        }
-        "connect" => {
-            let config = crate::models::middleware::types::connect::parse_config(options)?;
-            Ok(Box::new(AuraboxConnectMiddleware::new(config)))
-        }
-        "passthru" => Ok(Box::new(
-            crate::models::middleware::types::passthru::PassthruMiddleware::new(),
-        )),
-        "json_extractor" | "json" => Ok(Box::new(
-            crate::models::middleware::types::json_extractor::JsonExtractorMiddleware::new(),
-        )),
-        "jmix_builder" => Ok(Box::new(
-            crate::models::middleware::types::jmix_builder::JmixBuilderMiddleware::new(),
-        )),
-        "dicomweb_bridge" | "dicomweb" => Ok(Box::new(
-            crate::models::middleware::types::dicomweb_to_dicom::DICOMwebToDICOMMiddleware::new(),
-        )),
-        "dicom_to_dicomweb" => Ok(Box::new(
-            crate::models::middleware::types::dicom_to_dicomweb::DicomToDicomwebMiddleware::new(),
-        )),
-        "dicom_flatten" | "dicom_flatten_middleware" => {
-            let config = crate::models::middleware::types::dicom_flatten::parse_config(options)?;
-            Ok(Box::new(DicomFlattenMiddleware::new(config)))
-        }
-        "dicom_unflatten" | "dicom_unflatten_middleware" => {
-            let config = crate::models::middleware::types::dicom_unflatten::parse_config(options)?;
-            Ok(Box::new(DicomUnflattenMiddleware::new(config)))
-        }
-        "transform" => {
-            let config = crate::models::middleware::types::transform::parse_config(
-                options,
-                transforms_path,
-            )?;
-            Ok(Box::new(JoltTransformMiddleware::new(config)?))
-        }
-        "path_filter" => {
-            let config = crate::models::middleware::types::path_filter::parse_config(options)?;
-            Ok(Box::new(PathFilterMiddleware::new(config)?))
-        }
-        "log_dump" | "dump" => {
-            let config = parse_logger_config(options)?;
-            Ok(Box::new(LogDumpMiddleware::new(config)))
-        }
-        "webhook" => {
-            let config = parse_webhook_config(options)?;
-            Ok(Box::new(WebhookMiddleware::new(config)))
-        }
-        "metadata_transform" => {
-            let config = crate::models::middleware::types::metadata_transform::parse_config(
-                options,
-                transforms_path,
-            )?;
-            Ok(Box::new(MetadataTransformMiddleware::new(config)?))
-        }
-        "policies" => {
-            let cfg = config.ok_or("Policies middleware requires Config context")?;
-            let config = crate::models::middleware::types::policies::parse_config(
-                options,
-                &cfg.policies,
-                &cfg.rules,
-            )?;
-            Ok(Box::new(
-                crate::models::middleware::types::policies::PoliciesMiddleware::new(config)?,
-            ))
-        }
-        "mesh_auth" => {
-            let mesh_config = crate::models::middleware::types::mesh_auth::parse_config_with_context(options, config)?;
-            Ok(Box::new(
-                crate::models::middleware::types::mesh_auth::MeshAuthMiddleware::new(mesh_config),
-            ))
-        }
-        _ => Err(format!(
-            "Unsupported built-in middleware type: {}",
-            middleware_type
-        )),
-    }
+    reg.resolve_middleware(middleware_type, options, config)
 }
 
 /// Build middleware instances for a pipeline from configuration

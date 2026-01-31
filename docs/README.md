@@ -1,6 +1,6 @@
 # Documentation Index
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2025-01-31
 
 Welcome to Harmony Proxy's documentation. Harmony is a general-purpose data mesh proxy with first-class support for medical data (FHIR, DICOM/DICOMweb, JMIX). Start here to explore concepts, configuration, and usage.
 
@@ -13,6 +13,7 @@ Welcome to Harmony Proxy's documentation. Harmony is a general-purpose data mesh
 - **[system-description.md](system-description.md)** - High-level system overview and Runbeam architecture
 - **[router.md](router.md)** - Pipeline architecture and request flow (Protocol Adapter → PipelineExecutor → Protocol Adapter)
 - **[adapters.md](adapters.md)** - Protocol adapter guide (HTTP, HTTP/3, DIMSE, how to implement new protocols)
+- **[extensions.md](extensions.md)** - Extension system for custom services, middleware, and plugins
 - **[envelope.md](envelope.md)** - Core Envelope struct for data exchange
 
 ## Configuration Reference

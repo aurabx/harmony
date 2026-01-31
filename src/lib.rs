@@ -2,6 +2,7 @@ pub mod adapters;
 pub mod clients;
 pub mod config;
 pub mod core;
+pub mod extensions;
 mod file;
 pub mod globals;
 pub mod integrations;
@@ -13,8 +14,21 @@ pub mod storage_adapter;
 mod utils;
 pub mod management;
 
-use crate::adapters::registry::AdapterRegistry;
-use crate::config::config::Config;
+// Re-export key types for external use
+pub use adapters::registry::AdapterRegistry;
+pub use adapters::ProtocolAdapter;
+pub use config::config::{Config, ConfigError};
+pub use config::Cli;
+pub use extensions::{
+    get_extension_registry, get_registry, initialize_builtin_factories, AuthProvider,
+    ConfigExtension, HarmonyBuilder, HarmonyPlugin, MiddlewareFactory, ServiceFactory,
+    UnifiedRegistry,
+};
+pub use models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
+pub use models::middleware::middleware::Middleware;
+pub use models::protocol::{Protocol, ProtocolCtx};
+pub use models::services::services::{ServiceHandler, ServiceType};
+pub use storage::{StorageBackend, StorageConfig};
 use crate::config::watcher::ConfigWatcher;
 use crate::integrations::provider_resolver::ProviderResolver;
 use crate::storage::create_storage_backend;
@@ -33,6 +47,9 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
     // crates, so rustls cannot auto-select one. We use aws-lc-rs as it's already
     // a transitive dependency and avoids pulling in BoringSSL via ring.
     let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+    // Initialize unified registry with built-in factories
+    initialize_builtin_factories().await;
 
     // Initialize provider resolver from config providers
     // MeshRegistry will use this to resolve remote references when building

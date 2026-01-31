@@ -1,8 +1,10 @@
 # Backends
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2025-01-31
 
 Backends enable the pipeline to communicate with external systems (targets). Backends operate within the unified `PipelineExecutor` and handle the "backend invocation" step of the pipeline.
+
+> **Custom Backends**: To create your own backend service types, see [extensions.md](extensions.md#service-factories).
 
 ## Architecture
 

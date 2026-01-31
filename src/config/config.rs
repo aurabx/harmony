@@ -5,6 +5,7 @@ use crate::config::proxy_config::ProxyConfig;
 use crate::config::resolution::resolve_references;
 use crate::config::runbeam_config::RunbeamConfig;
 use crate::config::Cli;
+use crate::management::ManagementConfig;
 use crate::models::backends::backends::Backend;
 use crate::models::connection::AuthenticationDefinition;
 use crate::models::endpoints::endpoint::Endpoint;
@@ -16,7 +17,6 @@ use crate::models::peers::config::PeerConfig;
 use crate::models::pipelines::config::Pipeline;
 use crate::models::services::services::initialise_service_registry;
 use crate::models::services::services::ServiceConfig;
-use crate::management::ManagementConfig;
 use crate::models::targets::config::TargetConfig;
 use crate::storage::StorageConfig;
 use once_cell::sync::Lazy;
@@ -119,6 +119,20 @@ pub struct Config {
     /// Remote ingress definitions (URLs of remote mesh members)
     #[serde(default)]
     pub remote_ingress: HashMap<String, RemoteIngress>,
+    /// Extension configuration for commercial/custom editions.
+    /// This field provides a flexible way to pass configuration to plugins
+    /// and custom extensions without modifying the core config schema.
+    ///
+    /// # Example
+    /// ```toml
+    /// [extensions]
+    /// license_key = "XXXX-XXXX-XXXX"
+    ///
+    /// [extensions.rate_limit]
+    /// max_requests_per_minute = 1000
+    /// ```
+    #[serde(default)]
+    pub extensions: HashMap<String, serde_json::Value>,
     /// Resolved absolute path to transforms directory (not serialized)
     #[serde(skip)]
     pub resolved_transforms_path: Option<String>,
@@ -336,12 +350,15 @@ impl Config {
     /// Load configuration from a file path without exiting on error.
     pub fn load(config_path: &str) -> Result<Self, ConfigError> {
         let path = Path::new(config_path);
-        
+
         // Verify extension
         if path.extension().and_then(|ext| ext.to_str()) != Some("toml") {
             return Err(ConfigError::InvalidProxy {
                 name: "config".to_string(),
-                reason: format!("Configuration file must have a .toml extension: {}", config_path),
+                reason: format!(
+                    "Configuration file must have a .toml extension: {}",
+                    config_path
+                ),
             });
         }
 
@@ -353,10 +370,11 @@ impl Config {
 
         // Parse and substitute env vars
         let (contents_substituted, _audit) = substitute_env_vars(&contents);
-        let mut config: Config = toml::from_str(&contents_substituted).map_err(|e| ConfigError::InvalidProxy {
-            name: "config".to_string(),
-            reason: format!("Failed to parse config file '{}': {}", config_path, e),
-        })?;
+        let mut config: Config =
+            toml::from_str(&contents_substituted).map_err(|e| ConfigError::InvalidProxy {
+                name: "config".to_string(),
+                reason: format!("Failed to parse config file '{}': {}", config_path, e),
+            })?;
 
         // Resolve paths
         let base_dir = path.parent().ok_or_else(|| ConfigError::InvalidProxy {
@@ -407,8 +425,12 @@ impl Config {
             Err(e) => {
                 let msg = match e {
                     ConfigError::InvalidProxy { reason, .. } => reason,
-                    ConfigError::InvalidNetwork { name, reason } => format!("Invalid network '{}': {}", name, reason),
-                    ConfigError::InvalidPipeline { name, reason } => format!("Invalid pipeline '{}': {}", name, reason),
+                    ConfigError::InvalidNetwork { name, reason } => {
+                        format!("Invalid network '{}': {}", name, reason)
+                    }
+                    ConfigError::InvalidPipeline { name, reason } => {
+                        format!("Invalid pipeline '{}': {}", name, reason)
+                    }
                     _ => format!("{:?}", e),
                 };
                 eprintln!("ERROR: {}", msg);
@@ -472,7 +494,7 @@ impl Config {
                                 tracing::error!("Failed to parse config file {:?}: {}", path, e);
                             }
                         }
-                    },
+                    }
                     Err(e) => {
                         tracing::error!("Failed to read config file {:?}: {}", path, e);
                     }
@@ -623,10 +645,12 @@ impl Config {
 
     fn validate_providers(&self) -> Result<(), ConfigError> {
         for (name, provider) in &self.provider {
-            provider.validate(name).map_err(|e| ConfigError::InvalidProvider {
-                name: name.clone(),
-                reason: e,
-            })?;
+            provider
+                .validate(name)
+                .map_err(|e| ConfigError::InvalidProvider {
+                    name: name.clone(),
+                    reason: e,
+                })?;
         }
         Ok(())
     }
@@ -753,7 +777,8 @@ impl Config {
             }
 
             // Warn and skip if backends are unresolved
-            let unresolved_pipeline_backends: Vec<&String> = pipeline.backends
+            let unresolved_pipeline_backends: Vec<&String> = pipeline
+                .backends
                 .iter()
                 .filter(|b| self.unresolved_backends.contains(*b))
                 .collect();
@@ -785,10 +810,7 @@ impl Config {
 
             // Warn if middleware is empty
             if pipeline.middleware.is_empty() {
-                tracing::warn!(
-                    "Pipeline '{}' has no middleware configured",
-                    name
-                );
+                tracing::warn!("Pipeline '{}' has no middleware configured", name);
             }
         }
         Ok(())
@@ -971,10 +993,12 @@ impl Config {
     fn validate_mesh(&self) -> Result<(), ConfigError> {
         // Validate mesh ingress definitions
         for (name, ingress) in &self.ingress {
-            ingress.validate().map_err(|e| ConfigError::InvalidMeshIngress {
-                name: name.clone(),
-                reason: e,
-            })?;
+            ingress
+                .validate()
+                .map_err(|e| ConfigError::InvalidMeshIngress {
+                    name: name.clone(),
+                    reason: e,
+                })?;
 
             // Verify ingress references a valid pipeline
             let pipeline = self.pipelines.get(&ingress.pipeline).ok_or_else(|| {
@@ -1008,10 +1032,12 @@ impl Config {
 
         // Validate mesh egress definitions
         for (name, egress) in &self.egress {
-            egress.validate().map_err(|e| ConfigError::InvalidMeshEgress {
-                name: name.clone(),
-                reason: e,
-            })?;
+            egress
+                .validate()
+                .map_err(|e| ConfigError::InvalidMeshEgress {
+                    name: name.clone(),
+                    reason: e,
+                })?;
 
             // Verify egress references a valid pipeline
             let pipeline = self.pipelines.get(&egress.pipeline).ok_or_else(|| {
@@ -1051,7 +1077,9 @@ impl Config {
             })?;
 
             // For Runbeam provider, mesh id should be explicitly set
-            if mesh.provider == crate::models::mesh::config::MeshProvider::Runbeam && mesh.id.is_none() {
+            if mesh.provider == crate::models::mesh::config::MeshProvider::Runbeam
+                && mesh.id.is_none()
+            {
                 tracing::warn!(
                     "Runbeam mesh '{}' does not have 'id' field set. Sync config from Runbeam Cloud to populate the id.",
                     name
@@ -1075,7 +1103,11 @@ impl Config {
     /// Validate a mesh ingress reference.
     /// Supports both local names and provider-based references.
     /// Missing ingress items are logged as warnings and do not cause validation to fail.
-    fn validate_mesh_ingress_reference(&self, mesh_name: &str, reference: &str) -> Result<(), ConfigError> {
+    fn validate_mesh_ingress_reference(
+        &self,
+        mesh_name: &str,
+        reference: &str,
+    ) -> Result<(), ConfigError> {
         use crate::config::resource_reference::ParsedReference;
 
         // Parse the reference
@@ -1093,7 +1125,9 @@ impl Config {
         if parsed.is_local() {
             if let Some(local_name) = parsed.local_name() {
                 // Check local ingress and remote_ingress maps
-                if !self.ingress.contains_key(local_name) && !self.remote_ingress.contains_key(local_name) {
+                if !self.ingress.contains_key(local_name)
+                    && !self.remote_ingress.contains_key(local_name)
+                {
                     tracing::warn!(
                         "Mesh '{}' references missing local ingress '{}' (not found in ingress or remote_ingress)",
                         mesh_name, local_name
@@ -1105,13 +1139,17 @@ impl Config {
             if self.get_provider(&parsed.provider).is_none() {
                 tracing::warn!(
                     "Mesh '{}' references missing remote ingress '{}' with unknown provider '{}'",
-                    mesh_name, reference, parsed.provider
+                    mesh_name,
+                    reference,
+                    parsed.provider
                 );
             } else {
                 // Remote references will be resolved at runtime
                 tracing::debug!(
                     "Mesh '{}' has remote ingress reference '{}' (provider: {})",
-                    mesh_name, reference, parsed.provider
+                    mesh_name,
+                    reference,
+                    parsed.provider
                 );
             }
         }
@@ -1122,7 +1160,11 @@ impl Config {
     /// Validate a mesh egress reference.
     /// Supports both local names and provider-based references.
     /// Missing egress items are logged as warnings and do not cause validation to fail.
-    fn validate_mesh_egress_reference(&self, mesh_name: &str, reference: &str) -> Result<(), ConfigError> {
+    fn validate_mesh_egress_reference(
+        &self,
+        mesh_name: &str,
+        reference: &str,
+    ) -> Result<(), ConfigError> {
         use crate::config::resource_reference::ParsedReference;
 
         // Parse the reference
@@ -1142,7 +1184,8 @@ impl Config {
                 if !self.egress.contains_key(local_name) {
                     tracing::warn!(
                         "Mesh '{}' references missing local egress '{}'",
-                        mesh_name, local_name
+                        mesh_name,
+                        local_name
                     );
                 }
             }
@@ -1151,13 +1194,17 @@ impl Config {
             if self.get_provider(&parsed.provider).is_none() {
                 tracing::warn!(
                     "Mesh '{}' references missing remote egress '{}' with unknown provider '{}'",
-                    mesh_name, reference, parsed.provider
+                    mesh_name,
+                    reference,
+                    parsed.provider
                 );
             } else {
                 // Remote references will be resolved at runtime
                 tracing::debug!(
                     "Mesh '{}' has remote egress reference '{}' (provider: {})",
-                    mesh_name, reference, parsed.provider
+                    mesh_name,
+                    reference,
+                    parsed.provider
                 );
             }
         }
