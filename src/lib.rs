@@ -1,6 +1,7 @@
 pub mod adapters;
 pub mod clients;
 pub mod config;
+pub mod core;
 mod file;
 pub mod globals;
 pub mod integrations;

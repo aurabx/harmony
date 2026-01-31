@@ -429,14 +429,15 @@ pub fn calculate_checksum(data: &[u8]) -> String {
     format!("{:x}", hasher.finalize())
 }
 
-/// Detect if content is likely binary based on content-type
+/// Detect if content is likely binary based on content-type.
+///
+/// This function delegates to the protocol-agnostic `core::content::mime` module
+/// which provides comprehensive MIME type classification.
+///
+/// For more advanced detection (including byte sniffing and compression awareness),
+/// use `core::content::ContentAnalysis` directly.
 pub fn is_binary_content(media_type: &str) -> bool {
-    media_type.starts_with("image/")
-        || media_type.starts_with("video/")
-        || media_type.starts_with("audio/")
-        || media_type.starts_with("application/octet-stream")
-        || media_type.starts_with("application/pdf")
-        || media_type.starts_with("application/zip")
+    crate::core::content::mime::is_definitely_binary(media_type)
 }
 
 /// Create metadata for binary content
@@ -536,10 +537,25 @@ mod tests {
 
     #[test]
     fn test_is_binary_content() {
+        // Binary types
         assert!(is_binary_content("image/jpeg"));
+        assert!(is_binary_content("image/png"));
         assert!(is_binary_content("video/mp4"));
+        assert!(is_binary_content("audio/mpeg"));
         assert!(is_binary_content("application/octet-stream"));
+        assert!(is_binary_content("application/pdf"));
+        assert!(is_binary_content("application/zip"));
+        assert!(is_binary_content("application/gzip"));
+        assert!(is_binary_content("application/wasm"));
+        assert!(is_binary_content("application/dicom"));
+        assert!(is_binary_content("font/woff2"));
+        assert!(is_binary_content("multipart/related"));
+
+        // Text types (should return false)
         assert!(!is_binary_content("application/json"));
         assert!(!is_binary_content("text/html"));
+        assert!(!is_binary_content("text/plain"));
+        assert!(!is_binary_content("application/xml"));
+        assert!(!is_binary_content("application/fhir+json"));
     }
 }

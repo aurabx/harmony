@@ -553,16 +553,8 @@ impl ResponseEnvelope<Vec<u8>> {
             || content_type.contains("+json");
 
         // Check for binary content types that need base64 preservation
-        // Note: must exclude JSON types since application/dicom+json contains "application/dicom"
-        let is_binary = !is_json
-            && (content_type.contains("multipart/related")
-                || content_type.contains("application/dicom")
-                || content_type.contains("application/octet-stream")
-                || content_type.contains("application/zip")
-                || content_type.contains("application/gzip")
-                || content_type.contains("application/x-gzip")
-                || content_type.contains("application/x-tar")
-                || content_type.contains("application/x-7z-compressed"));
+        // Uses the protocol-agnostic core::content::mime module for comprehensive detection
+        let is_binary = !is_json && crate::core::content::mime::is_definitely_binary(&content_type);
 
         // For binary content, preserve as base64 so middleware can access it
         if is_binary && !self.original_data.is_empty() {
