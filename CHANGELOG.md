@@ -1,9 +1,14 @@
 # Changelog
 
-## [0.12.1] - 2026-01-13
+## [0.12.3] - 2026-01-30
 
-### Fixes
-- Fix PDU Size negotiation in SCU
+### Fixed
+- DICOM C-GET ordering bug that could return results in incorrect order
+
+## [0.12.2] - 2026-01-21
+
+### Fixed
+- PDU Size negotiation in SCU
 
 ## [0.12.1] - 2026-01-21
 
@@ -493,6 +498,9 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.12.3]: https://github.com/aurabx/harmony/compare/0.12.2...0.12.3
+[0.12.2]: https://github.com/aurabx/harmony/compare/0.12.1...0.12.2
+[0.12.1]: https://github.com/aurabx/harmony/compare/0.12.0...0.12.1
 [0.12.0]: https://github.com/aurabx/harmony/compare/0.10.1...0.12.0
 [0.10.1]: https://github.com/aurabx/harmony/compare/0.10.0...0.10.1
 [0.10.0]: https://github.com/aurabx/harmony/compare/0.9.0...0.10.0

@@ -345,9 +345,9 @@ impl DicomScuBackend {
         // Resolve DIMSE operation with proper precedence:
         // 1. Check target_details.metadata["dimse_op"] (set by middleware)
         // 2. Check request_details.metadata["dimse_op"] (fallback for compatibility)
-        // 3. Check dimse_retrieve_mode option (only applies to get/move operations)
-        // 4. Check if path is a valid DIMSE operation name (for direct HTTP->DICOM calls)
-        // 5. Default to "get" for data retrieval
+        // 3. Check if path is a valid DIMSE operation name (for direct HTTP->DICOM calls)
+        // 4. Default to "get" for data retrieval
+        // 5. Apply dimse_retrieve_mode to switch between get/move if applicable
         // Note: normalized_data["dimse_op"] is no longer checked as transforms should output to context (metadata)
         let valid_ops = ["echo", "find", "get", "move", "store"];
         
@@ -356,20 +356,12 @@ impl DicomScuBackend {
             tracing::debug!("normalized_data: {}", serde_json::to_string_pretty(nd).unwrap_or_default());
         }
 
-        let op = envelope
+        let mut op = envelope
             .target_details
             .as_ref()
             .and_then(|td| td.metadata.get("dimse_op"))
             .cloned()
             .or_else(|| envelope.request_details.metadata.get("dimse_op").cloned())
-            .or_else(|| {
-                // Only use dimse_retrieve_mode for retrieval operations
-                // This allows backend configuration to override default "get" with "move"
-                options
-                    .get("dimse_retrieve_mode")
-                    .and_then(|v| v.as_str())
-                    .map(|s| s.to_string())
-            })
             .or_else(|| {
                 // Check if path is a valid DIMSE operation (for direct HTTP->DICOM calls)
                 let path = envelope
@@ -385,6 +377,21 @@ impl DicomScuBackend {
                 }
             })
             .unwrap_or_else(|| "get".to_string());
+        
+        // Apply dimse_retrieve_mode only for get/move operations
+        // This allows backend configuration to switch between C-GET and C-MOVE
+        // for retrieval operations (e.g., when PACS doesn't support C-GET)
+        if op == "get" || op == "move" {
+            if let Some(retrieve_mode) = options
+                .get("dimse_retrieve_mode")
+                .and_then(|v| v.as_str())
+            {
+                let mode = retrieve_mode.to_lowercase();
+                if mode == "get" || mode == "move" {
+                    op = mode;
+                }
+            }
+        }
 
         // Validate operation is a valid DIMSE operation
         let normalized_op = op.trim_start_matches('/').to_lowercase();
