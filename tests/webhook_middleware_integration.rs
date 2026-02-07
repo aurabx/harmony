@@ -355,3 +355,231 @@ async fn test_webhook_both_posts_twice() {
     sides.sort();
     assert_eq!(sides, vec!["left", "right"]);
 }
+
+#[tokio::test]
+async fn test_webhook_with_global_sensitive_field_patterns() {
+    let (hook_url, store, _handle) = build_webhook_receiver().await;
+
+    // Configure global sensitive_field_patterns at the proxy level
+    // These patterns should automatically redact matching fields in webhook payloads
+    let cfg_text = format!(r#"
+        [proxy]
+        id = "webhook-sensitive-patterns-test"
+        log_level = "debug"
+        sensitive_field_patterns = [
+            ".*patient.*name.*",
+            ".*ssn.*",
+            ".*secret.*"
+        ]
+
+        [storage]
+        backend = "filesystem"
+        [storage.options]
+        path = "./tmp"
+
+        [network.default]
+        enable_wireguard = false
+        interface = "wg0"
+
+        [network.default.http]
+        bind_address = "127.0.0.1"
+        bind_port = 8091
+
+        [pipelines.core]
+        networks = ["default"]
+        endpoints = ["http_endpoint"]
+        backends = ["echo_backend"]
+        middleware = ["hook_patterns"]
+
+        [endpoints.http_endpoint]
+        service = "http"
+        [endpoints.http_endpoint.options]
+        path_prefix = "/proxy"
+
+        [backends.echo_backend]
+        service = "echo"
+
+        [middleware.hook_patterns]
+        type = "webhook"
+        [middleware.hook_patterns.options]
+        endpoint = "{hook}/hook"
+        apply = "left"
+        # Note: No explicit redact_headers - patterns should handle it
+
+        [services.http]
+        module = ""
+        [services.echo]
+        module = ""
+        [middleware_types.webhook]
+        module = ""
+        [middleware_types.passthru]
+        module = ""
+    "#, hook = hook_url);
+
+    let cfg = load_config_from_str(&cfg_text).expect("valid config");
+    
+    // Verify the patterns are loaded in config
+    assert_eq!(cfg.proxy.sensitive_field_patterns.len(), 3);
+    assert!(cfg.proxy.sensitive_field_patterns.contains(&".*patient.*name.*".to_string()));
+    
+    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+
+    // Send request with headers that match sensitive patterns
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/proxy/echo")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header("X-Patient-Name", "John Doe")       // Should be redacted by pattern
+                .header("X-Patient-SSN", "123-45-6789")     // Should be redacted by pattern
+                .header("X-Api-Secret", "super-secret")     // Should be redacted by pattern
+                .header("X-Safe-Header", "visible-value")   // Should NOT be redacted
+                .body(Body::from(r#"{"hello":"world"}"#))
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    // Wait for webhook delivery
+    let posts = wait_for_posts(&store, 1, 1500).await;
+    assert!(posts.len() >= 1, "expected at least one webhook POST");
+
+    let (body, _headers) = &posts[0];
+
+    // Validate that pattern-matched headers are redacted
+    let req_headers = body
+        .get("request")
+        .and_then(|r| r.get("headers"))
+        .and_then(|h| h.as_object())
+        .expect("headers object");
+
+    // Headers matching sensitive patterns should be redacted
+    assert_eq!(
+        req_headers.get("x-patient-name").and_then(|v| v.as_str()),
+        Some("<redacted>"),
+        "X-Patient-Name should be redacted by .*patient.*name.* pattern"
+    );
+    assert_eq!(
+        req_headers.get("x-patient-ssn").and_then(|v| v.as_str()),
+        Some("<redacted>"),
+        "X-Patient-SSN should be redacted by .*ssn.* pattern"
+    );
+    assert_eq!(
+        req_headers.get("x-api-secret").and_then(|v| v.as_str()),
+        Some("<redacted>"),
+        "X-Api-Secret should be redacted by .*secret.* pattern"
+    );
+    
+    // Safe header should NOT be redacted
+    assert_eq!(
+        req_headers.get("x-safe-header").and_then(|v| v.as_str()),
+        Some("visible-value"),
+        "X-Safe-Header should NOT be redacted"
+    );
+}
+
+#[tokio::test]
+async fn test_webhook_combined_explicit_and_pattern_redaction() {
+    let (hook_url, store, _handle) = build_webhook_receiver().await;
+
+    // Test that both explicit redact_headers AND global patterns work together
+    let cfg_text = format!(r#"
+        [proxy]
+        id = "webhook-combined-redaction-test"
+        log_level = "debug"
+        sensitive_field_patterns = [".*secret.*"]
+
+        [storage]
+        backend = "filesystem"
+        [storage.options]
+        path = "./tmp"
+
+        [network.default]
+        enable_wireguard = false
+        interface = "wg0"
+
+        [network.default.http]
+        bind_address = "127.0.0.1"
+        bind_port = 8092
+
+        [pipelines.core]
+        networks = ["default"]
+        endpoints = ["http_endpoint"]
+        backends = ["echo_backend"]
+        middleware = ["hook_combined"]
+
+        [endpoints.http_endpoint]
+        service = "http"
+        [endpoints.http_endpoint.options]
+        path_prefix = "/proxy"
+
+        [backends.echo_backend]
+        service = "echo"
+
+        [middleware.hook_combined]
+        type = "webhook"
+        [middleware.hook_combined.options]
+        endpoint = "{hook}/hook"
+        apply = "left"
+        redact_headers = ["authorization"]  # Explicit redaction
+
+        [services.http]
+        module = ""
+        [services.echo]
+        module = ""
+        [middleware_types.webhook]
+        module = ""
+        [middleware_types.passthru]
+        module = ""
+    "#, hook = hook_url);
+
+    let cfg = load_config_from_str(&cfg_text).expect("valid config");
+    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/proxy/echo")
+                .method("POST")
+                .header("content-type", "application/json")
+                .header("authorization", "Bearer token123")  // Explicit redaction
+                .header("x-api-secret", "secret-value")      // Pattern redaction
+                .header("x-other", "visible")                // Should NOT be redacted
+                .body(Body::from(r#"{"test":"data"}"#))
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let posts = wait_for_posts(&store, 1, 1500).await;
+    assert!(posts.len() >= 1, "expected at least one webhook POST");
+
+    let (body, _headers) = &posts[0];
+    let req_headers = body
+        .get("request")
+        .and_then(|r| r.get("headers"))
+        .and_then(|h| h.as_object())
+        .expect("headers object");
+
+    // Both explicit and pattern redaction should work
+    assert_eq!(
+        req_headers.get("authorization").and_then(|v| v.as_str()),
+        Some("<redacted>"),
+        "authorization should be redacted by explicit config"
+    );
+    assert_eq!(
+        req_headers.get("x-api-secret").and_then(|v| v.as_str()),
+        Some("<redacted>"),
+        "x-api-secret should be redacted by pattern"
+    );
+    assert_eq!(
+        req_headers.get("x-other").and_then(|v| v.as_str()),
+        Some("visible"),
+        "x-other should NOT be redacted"
+    );
+}

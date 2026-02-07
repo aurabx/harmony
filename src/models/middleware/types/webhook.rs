@@ -1,5 +1,6 @@
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
+use crate::utils::redaction::SensitiveFieldMatcher;
 use crate::utils::Error;
 use async_trait::async_trait;
 use serde::Deserialize;
@@ -15,6 +16,8 @@ pub struct WebhookConfig {
     #[serde(default = "default_timeout")] pub timeout_secs: u64,
     #[serde(default)] pub instance_name: String,
     #[serde(skip)] pub auth_def: Option<crate::models::connection::AuthenticationDefinition>,
+    /// Global sensitive field patterns from proxy config (regex patterns)
+    #[serde(default)] pub sensitive_field_patterns: Vec<String>,
 }
 
 fn default_apply() -> String { "left".to_string() }
@@ -22,10 +25,15 @@ fn default_timeout() -> u64 { 5 }
 
 pub struct WebhookMiddleware {
     cfg: WebhookConfig,
+    /// Compiled pattern matcher for sensitive field detection
+    sensitive_matcher: SensitiveFieldMatcher,
 }
 
 impl WebhookMiddleware {
-    pub fn new(cfg: WebhookConfig) -> Self { Self { cfg } }
+    pub fn new(cfg: WebhookConfig) -> Self {
+        let sensitive_matcher = SensitiveFieldMatcher::new(&cfg.sensitive_field_patterns);
+        Self { cfg, sensitive_matcher }
+    }
 
     fn should_left(&self) -> bool {
         self.cfg.apply.eq_ignore_ascii_case("left") || self.cfg.apply.eq_ignore_ascii_case("both")
@@ -35,24 +43,32 @@ impl WebhookMiddleware {
     }
 
     fn redact_headers(&self, headers: &HashMap<String, String>) -> HashMap<String, String> {
-        if self.cfg.redact_headers.is_empty() { return headers.clone(); }
-        let set: Vec<String> = self.cfg.redact_headers.iter().map(|s| s.to_lowercase()).collect();
-        let mut redacted = headers.clone();
-        for (k, v) in redacted.iter_mut() {
-            if set.iter().any(|rk| rk == &k.to_lowercase()) {
-                *v = "<redacted>".to_string();
+        // First apply pattern-based redaction from global sensitive_field_patterns
+        let mut redacted = self.sensitive_matcher.redact_headers(headers);
+        
+        // Then apply explicit redact_headers list (case-insensitive exact match)
+        if !self.cfg.redact_headers.is_empty() {
+            let set: Vec<String> = self.cfg.redact_headers.iter().map(|s| s.to_lowercase()).collect();
+            for (k, v) in redacted.iter_mut() {
+                if set.iter().any(|rk| rk == &k.to_lowercase()) {
+                    *v = "<redacted>".to_string();
+                }
             }
         }
         redacted
     }
 
     fn redact_metadata(&self, metadata: &HashMap<String, String>) -> HashMap<String, String> {
-        if self.cfg.redact_metadata.is_empty() { return metadata.clone(); }
-        let set: Vec<String> = self.cfg.redact_metadata.iter().map(|s| s.to_lowercase()).collect();
-        let mut redacted = metadata.clone();
-        for (k, v) in redacted.iter_mut() {
-            if set.iter().any(|rk| rk == &k.to_lowercase()) {
-                *v = "<redacted>".to_string();
+        // First apply pattern-based redaction from global sensitive_field_patterns
+        let mut redacted = self.sensitive_matcher.redact_metadata(metadata);
+        
+        // Then apply explicit redact_metadata list (case-insensitive exact match)
+        if !self.cfg.redact_metadata.is_empty() {
+            let set: Vec<String> = self.cfg.redact_metadata.iter().map(|s| s.to_lowercase()).collect();
+            for (k, v) in redacted.iter_mut() {
+                if set.iter().any(|rk| rk == &k.to_lowercase()) {
+                    *v = "<redacted>".to_string();
+                }
             }
         }
         redacted
@@ -171,8 +187,16 @@ impl Middleware for WebhookMiddleware {
     }
 }
 
-/// Parse configuration from HashMap for middleware registry
+/// Parse configuration from HashMap for middleware registry.
 pub fn parse_config(options: &HashMap<String, Value>) -> Result<WebhookConfig, String> {
+    parse_config_with_patterns(options, &[])
+}
+
+/// Parse configuration with optional global sensitive field patterns.
+pub fn parse_config_with_patterns(
+    options: &HashMap<String, Value>,
+    global_sensitive_patterns: &[String],
+) -> Result<WebhookConfig, String> {
     let endpoint = options
         .get("endpoint")
         .and_then(|v| v.as_str())
@@ -210,7 +234,19 @@ pub fn parse_config(options: &HashMap<String, Value>) -> Result<WebhookConfig, S
         .get("authentication_def")
         .and_then(|v| serde_json::from_value::<crate::models::connection::AuthenticationDefinition>(v.clone()).ok());
 
-    Ok(WebhookConfig { endpoint, apply, redact_headers, redact_metadata, timeout_secs, instance_name, auth_def })
+    // Use global patterns passed from proxy config
+    let sensitive_field_patterns = global_sensitive_patterns.to_vec();
+
+    Ok(WebhookConfig { 
+        endpoint, 
+        apply, 
+        redact_headers, 
+        redact_metadata, 
+        timeout_secs, 
+        instance_name, 
+        auth_def,
+        sensitive_field_patterns,
+    })
 }
 
 #[cfg(test)]
@@ -232,5 +268,92 @@ mod tests {
     fn test_requires_endpoint() {
         let opts = HashMap::new();
         assert!(parse_config(&opts).is_err());
+    }
+
+    #[test]
+    fn test_parse_config_with_global_patterns() {
+        let mut opts = HashMap::new();
+        opts.insert("endpoint".into(), json!("https://example.com/hook"));
+        
+        let global_patterns = vec![".*ssn.*".to_string(), ".*password.*".to_string()];
+        let cfg = parse_config_with_patterns(&opts, &global_patterns).unwrap();
+        
+        assert_eq!(cfg.sensitive_field_patterns, global_patterns);
+    }
+
+    #[test]
+    fn test_sensitive_patterns_redact_headers() {
+        let cfg = WebhookConfig {
+            endpoint: "https://example.com".to_string(),
+            apply: "left".to_string(),
+            redact_headers: vec![],
+            redact_metadata: vec![],
+            timeout_secs: 5,
+            instance_name: "test".to_string(),
+            auth_def: None,
+            sensitive_field_patterns: vec![".*secret.*".to_string(), ".*password.*".to_string()],
+        };
+        let mw = WebhookMiddleware::new(cfg);
+
+        let mut headers = HashMap::new();
+        headers.insert("X-Api-Secret".to_string(), "secret-value".to_string());
+        headers.insert("X-Password".to_string(), "pass123".to_string());
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+
+        let redacted = mw.redact_headers(&headers);
+
+        assert_eq!(redacted.get("X-Api-Secret").unwrap(), "<redacted>");
+        assert_eq!(redacted.get("X-Password").unwrap(), "<redacted>");
+        assert_eq!(redacted.get("Content-Type").unwrap(), "application/json");
+    }
+
+    #[test]
+    fn test_sensitive_patterns_redact_metadata() {
+        let cfg = WebhookConfig {
+            endpoint: "https://example.com".to_string(),
+            apply: "left".to_string(),
+            redact_headers: vec![],
+            redact_metadata: vec![],
+            timeout_secs: 5,
+            instance_name: "test".to_string(),
+            auth_def: None,
+            sensitive_field_patterns: vec![".*ssn.*".to_string()],
+        };
+        let mw = WebhookMiddleware::new(cfg);
+
+        let mut metadata = HashMap::new();
+        metadata.insert("patient_ssn".to_string(), "123-45-6789".to_string());
+        metadata.insert("patient_id".to_string(), "12345".to_string());
+
+        let redacted = mw.redact_metadata(&metadata);
+
+        assert_eq!(redacted.get("patient_ssn").unwrap(), "<redacted>");
+        assert_eq!(redacted.get("patient_id").unwrap(), "12345");
+    }
+
+    #[test]
+    fn test_combined_explicit_and_pattern_redaction() {
+        let cfg = WebhookConfig {
+            endpoint: "https://example.com".to_string(),
+            apply: "left".to_string(),
+            redact_headers: vec!["authorization".to_string()],
+            redact_metadata: vec!["token".to_string()],
+            timeout_secs: 5,
+            instance_name: "test".to_string(),
+            auth_def: None,
+            sensitive_field_patterns: vec![".*secret.*".to_string()],
+        };
+        let mw = WebhookMiddleware::new(cfg);
+
+        let mut headers = HashMap::new();
+        headers.insert("Authorization".to_string(), "Bearer token".to_string());
+        headers.insert("X-Api-Secret".to_string(), "secret123".to_string());
+        headers.insert("Content-Type".to_string(), "application/json".to_string());
+
+        let redacted = mw.redact_headers(&headers);
+
+        assert_eq!(redacted.get("Authorization").unwrap(), "<redacted>");
+        assert_eq!(redacted.get("X-Api-Secret").unwrap(), "<redacted>");
+        assert_eq!(redacted.get("Content-Type").unwrap(), "application/json");
     }
 }

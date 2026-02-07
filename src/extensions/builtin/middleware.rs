@@ -379,9 +379,17 @@ impl MiddlewareFactory for LogDumpFactory {
     fn create(
         &self,
         options: &HashMap<String, Value>,
-        _config: Option<&Config>,
+        config: Option<&Config>,
     ) -> Result<Box<dyn Middleware>, String> {
-        let config = crate::models::middleware::types::logger::parse_config(options)?;
+        // Extract global sensitive field patterns from proxy config
+        let sensitive_patterns = config
+            .map(|c| c.proxy.sensitive_field_patterns.as_slice())
+            .unwrap_or(&[]);
+
+        let config = crate::models::middleware::types::logger::parse_config_with_patterns(
+            options,
+            sensitive_patterns,
+        )?;
         Ok(Box::new(
             crate::models::middleware::types::logger::LogDumpMiddleware::new(config),
         ))
@@ -402,9 +410,17 @@ impl MiddlewareFactory for WebhookFactory {
     fn create(
         &self,
         options: &HashMap<String, Value>,
-        _config: Option<&Config>,
+        config: Option<&Config>,
     ) -> Result<Box<dyn Middleware>, String> {
-        let config = crate::models::middleware::types::webhook::parse_config(options)?;
+        // Extract global sensitive field patterns from proxy config
+        let sensitive_patterns = config
+            .map(|c| c.proxy.sensitive_field_patterns.as_slice())
+            .unwrap_or(&[]);
+
+        let config = crate::models::middleware::types::webhook::parse_config_with_patterns(
+            options,
+            sensitive_patterns,
+        )?;
         Ok(Box::new(
             crate::models::middleware::types::webhook::WebhookMiddleware::new(config),
         ))
