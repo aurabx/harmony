@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::command::{Command, Operation};
+
 /// Parse status for content parsing operations
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ParseStatus {
@@ -43,6 +45,10 @@ pub struct RequestEnvelope<T> {
     /// Target details for the backend call (base_url, method, headers, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_details: Option<TargetDetails>,
+    /// The intended operation for the backend (set by endpoint or transform).
+    /// Backends interpret this according to their protocol.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<Command>,
     /// Original data received from the source (not serialized).
     #[serde(skip)]
     pub original_data: T,
@@ -197,6 +203,7 @@ where
             request_details,
             backend_request_details,
             target_details: None,
+            command: None,
             original_data,
             normalized_data,
             normalized_snapshot: None,
@@ -267,6 +274,7 @@ pub struct RequestEnvelopeBuilder<T> {
     content_metadata: Option<ContentMetadata>,
     backend_request_details: Option<RequestDetails>,
     target_details: Option<TargetDetails>,
+    command: Option<Command>,
     original_data: Option<T>,
     normalized_data: Option<serde_json::Value>,
     normalized_snapshot: Option<serde_json::Value>,
@@ -286,6 +294,7 @@ impl<T> RequestEnvelopeBuilder<T> {
             content_metadata: None,
             backend_request_details: None,
             target_details: None,
+            command: None,
             original_data: None,
             normalized_data: None,
             normalized_snapshot: None,
@@ -305,6 +314,7 @@ impl<T> RequestEnvelopeBuilder<T> {
             content_metadata: details.content_metadata.clone(),
             backend_request_details: None,
             target_details: None,
+            command: None,
             original_data: None,
             normalized_data: None,
             normalized_snapshot: None,
@@ -410,6 +420,18 @@ impl<T> RequestEnvelopeBuilder<T> {
         self
     }
 
+    /// Sets the command.
+    pub fn command(mut self, command: Option<Command>) -> Self {
+        self.command = command;
+        self
+    }
+
+    /// Sets the command with just an operation.
+    pub fn operation(mut self, operation: Operation) -> Self {
+        self.command = Some(Command::new(operation));
+        self
+    }
+
     /// Sets the original data.
     pub fn original_data(mut self, data: T) -> Self {
         self.original_data = Some(data);
@@ -479,6 +501,7 @@ where
             request_details,
             backend_request_details,
             target_details: self.target_details,
+            command: self.command,
             original_data,
             normalized_data,
             normalized_snapshot: self.normalized_snapshot,
@@ -779,6 +802,82 @@ impl<T> RequestEnvelope<T> {
     pub fn set_target_method(&mut self, method: impl Into<String>) {
         let target = self.get_or_init_target_details();
         target.method = method.into();
+    }
+
+    /// Sets the command with just an operation.
+    ///
+    /// # Example
+    ///
+    /// ```text
+    /// envelope.set_command(Operation::Query);
+    /// ```
+    pub fn set_command(&mut self, operation: Operation) {
+        self.command = Some(Command::new(operation));
+    }
+
+    /// Sets the command with operation and parameters.
+    ///
+    /// # Example
+    ///
+    /// ```text
+    /// let mut params = HashMap::new();
+    /// params.insert("query_level".to_string(), json!("STUDY"));
+    /// envelope.set_command_with_params(Operation::Query, params);
+    /// ```
+    pub fn set_command_with_params(
+        &mut self,
+        operation: Operation,
+        params: HashMap<String, serde_json::Value>,
+    ) {
+        self.command = Some(Command::with_params(operation, params));
+    }
+
+    /// Resolves the operation, falling back to legacy metadata if command not set.
+    ///
+    /// This method checks in order:
+    /// 1. Explicit `command.operation` if set
+    /// 2. Legacy `target_details.metadata["dimse_op"]`
+    /// 3. Legacy `request_details.metadata["dimse_op"]`
+    ///
+    /// Returns `None` if no operation can be determined.
+    pub fn resolve_operation(&self) -> Option<Operation> {
+        // Prefer explicit command
+        if let Some(cmd) = &self.command {
+            return Some(cmd.operation);
+        }
+
+        // Legacy fallback: check metadata for dimse_op
+        let legacy_op = self
+            .target_details
+            .as_ref()
+            .and_then(|td| td.metadata.get("dimse_op"))
+            .or_else(|| self.request_details.metadata.get("dimse_op"))?;
+
+        match legacy_op.to_lowercase().as_str() {
+            "find" => Some(Operation::Query),
+            "get" | "move" => Some(Operation::Retrieve),
+            "store" => Some(Operation::Store),
+            "echo" => Some(Operation::Ping),
+            _ => None,
+        }
+    }
+
+    /// Resolves the full command, with legacy fallback.
+    ///
+    /// Returns a `Command` if one is explicitly set or can be inferred from legacy metadata.
+    pub fn resolve_command(&self) -> Option<Command> {
+        if self.command.is_some() {
+            return self.command.clone();
+        }
+
+        // Legacy fallback
+        let legacy_op = self
+            .target_details
+            .as_ref()
+            .and_then(|td| td.metadata.get("dimse_op"))
+            .or_else(|| self.request_details.metadata.get("dimse_op"))?;
+
+        Command::from_legacy_dimse_op(legacy_op)
     }
 }
 

@@ -93,6 +93,7 @@ impl Middleware for JoltTransformMiddleware {
                         "metadata": envelope.request_details.metadata,
                     },
                     "target_details": envelope.target_details,
+                    "command": envelope.command,
                 }
             });
 
@@ -187,6 +188,15 @@ impl Middleware for JoltTransformMiddleware {
                                  }
                              }
                          }
+
+                        // Merge command if present in output context
+                        if let Some(cmd_out) = context_out.get("command") {
+                            if !cmd_out.is_null() {
+                                if let Ok(cmd) = serde_json::from_value::<crate::models::envelope::command::Command>(cmd_out.clone()) {
+                                    envelope.command = Some(cmd);
+                                }
+                            }
+                        }
                     }
 
                     envelope.normalized_data = Some(result_data);

@@ -191,6 +191,7 @@ impl Middleware for MetadataTransformMiddleware {
                     "metadata": envelope.request_details.metadata,
                     "method": envelope.request_details.method,
                     "uri": envelope.request_details.uri,
+                    "command": envelope.command,
                 });
 
                 // Apply transform to create/modify target_details
@@ -210,6 +211,15 @@ impl Middleware for MetadataTransformMiddleware {
                                 envelope.target_details.as_mut().unwrap(),
                                 &target_details,
                             );
+                        }
+
+                        // Check for command in transform output
+                        if let Some(cmd_out) = transformed.get("command") {
+                            if !cmd_out.is_null() {
+                                if let Ok(cmd) = serde_json::from_value::<crate::models::envelope::command::Command>(cmd_out.clone()) {
+                                    envelope.command = Some(cmd);
+                                }
+                            }
                         }
 
                         tracing::debug!(

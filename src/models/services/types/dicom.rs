@@ -1,5 +1,6 @@
 use crate::config::config::ConfigError;
 use crate::models::connection::ConnectionConfig;
+use crate::models::envelope::command::Operation;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use async_trait::async_trait;
@@ -342,63 +343,79 @@ impl DicomScuBackend {
         // Create SCU client
         let scu = DimseScu::new(dimse_config);
 
-        // Resolve DIMSE operation with proper precedence:
-        // 1. Check target_details.metadata["dimse_op"] (set by middleware)
-        // 2. Check request_details.metadata["dimse_op"] (fallback for compatibility)
-        // 3. Check if path is a valid DIMSE operation name (for direct HTTP->DICOM calls)
-        // 4. Default to "get" for data retrieval
-        // 5. Apply dimse_retrieve_mode to switch between get/move if applicable
-        // Note: normalized_data["dimse_op"] is no longer checked as transforms should output to context (metadata)
+        // Resolve DIMSE operation from Command or legacy metadata
+        // 
+        // Priority:
+        // 1. envelope.command (set by endpoint or transform) - uses resolve_operation()
+        //    which also checks legacy metadata as fallback
+        // 2. Path-based detection (for direct HTTP->DICOM calls)
+        // 3. Default to "get" for data retrieval
+        //
+        // For Retrieve operations, dimse_retrieve_mode can switch between get/move
         let valid_ops = ["echo", "find", "get", "move", "store"];
         
-        // DEBUG: Log normalized_data structure
+        // DEBUG: Log command and normalized_data structure
+        if let Some(cmd) = envelope.command.as_ref() {
+            tracing::debug!("command: {:?}", cmd);
+        }
         if let Some(nd) = envelope.normalized_data.as_ref() {
             tracing::debug!("normalized_data: {}", serde_json::to_string_pretty(nd).unwrap_or_default());
         }
 
-        let mut op = envelope
-            .target_details
-            .as_ref()
-            .and_then(|td| td.metadata.get("dimse_op"))
-            .cloned()
-            .or_else(|| envelope.request_details.metadata.get("dimse_op").cloned())
-            .or_else(|| {
-                // Check if path is a valid DIMSE operation (for direct HTTP->DICOM calls)
-                let path = envelope
+        // Map universal Operation to DIMSE operation string
+        let normalized_op = match envelope.resolve_operation() {
+            Some(Operation::Query) => "find".to_string(),
+            Some(Operation::Retrieve) => {
+                // Check command params for retrieve_mode preference
+                let retrieve_mode = envelope
+                    .command
+                    .as_ref()
+                    .and_then(|c| c.params.get("retrieve_mode"))
+                    .and_then(|v| v.as_str())
+                    .or_else(|| {
+                        options
+                            .get("dimse_retrieve_mode")
+                            .and_then(|v| v.as_str())
+                    })
+                    .unwrap_or("get");
+                retrieve_mode.to_lowercase()
+            }
+            Some(Operation::Store) => "store".to_string(),
+            Some(Operation::Ping) => "echo".to_string(),
+            Some(op) => {
+                return Err(Error::from(format!(
+                    "Operation '{}' not supported by DICOM SCU backend. Supported: Query, Retrieve, Store, Ping",
+                    op
+                )));
+            }
+            None => {
+                // Final fallback: check path or default to "get"
+                let path_op = envelope
                     .request_details
                     .metadata
                     .get("path")
-                    .map(|s| s.trim_start_matches('/').to_lowercase())?;
+                    .map(|s| s.trim_start_matches('/').to_lowercase())
+                    .filter(|p| valid_ops.contains(&p.as_str()));
 
-                if valid_ops.contains(&path.as_str()) {
-                    Some(path)
-                } else {
-                    None
-                }
-            })
-            .unwrap_or_else(|| "get".to_string());
-        
-        // Apply dimse_retrieve_mode only for get/move operations
-        // This allows backend configuration to switch between C-GET and C-MOVE
-        // for retrieval operations (e.g., when PACS doesn't support C-GET)
-        if op == "get" || op == "move" {
-            if let Some(retrieve_mode) = options
-                .get("dimse_retrieve_mode")
-                .and_then(|v| v.as_str())
-            {
-                let mode = retrieve_mode.to_lowercase();
-                if mode == "get" || mode == "move" {
-                    op = mode;
+                match path_op {
+                    Some(op) => op,
+                    None => {
+                        // Apply dimse_retrieve_mode for default retrieval
+                        options
+                            .get("dimse_retrieve_mode")
+                            .and_then(|v| v.as_str())
+                            .map(|s| s.to_lowercase())
+                            .unwrap_or_else(|| "get".to_string())
+                    }
                 }
             }
-        }
+        };
 
-        // Validate operation is a valid DIMSE operation
-        let normalized_op = op.trim_start_matches('/').to_lowercase();
+        // Validate the resolved operation
         if !valid_ops.contains(&normalized_op.as_str()) {
             return Err(Error::from(format!(
                 "Invalid DIMSE operation: '{}'. Valid operations are: {}",
-                op,
+                normalized_op,
                 valid_ops.join(", ")
             )));
         }
@@ -1127,7 +1144,7 @@ impl DicomScuBackend {
                 serde_json::json!({
                     "operation": "unknown",
                     "success": false,
-                    "error": format!("Unsupported DIMSE operation: '{}'. Valid operations are: echo, find, get, move, store", op)
+                    "error": format!("Unsupported DIMSE operation: '{}'. Valid operations are: echo, find, get, move, store", normalized_op)
                 })
             }
         };
