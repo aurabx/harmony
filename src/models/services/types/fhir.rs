@@ -47,8 +47,8 @@ impl ServiceType for FhirEndpoint {
         // Return route configurations for GET/POST/PUT/DELETE methods
         vec![RouteConfig {
             path: format!("{}/{{*wildcard}}", path_prefix), // Use {*wildcard} syntax
-            methods: vec![Method::GET, Method::POST, Method::PUT, Method::DELETE],
-            description: Some("Handles FHIR GET/POST/PUT/DELETE requests".to_string()),
+            methods: vec![Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::HEAD, Method::OPTIONS],
+            description: Some("Handles FHIR RESTful API requests".to_string()),
         }]
     }
 
@@ -71,9 +71,74 @@ impl ServiceHandler<Value> for FhirEndpoint {
     // Process the incoming request and transform it into an Envelope
     async fn endpoint_incoming_request(
         &self,
-        envelope: RequestEnvelope<Vec<u8>>,
+        mut envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
+        // Refine the Command with FHIR-specific operation semantics
+        use crate::models::envelope::command::{Command, Operation};
+
+        let method = envelope.request_details.method.to_uppercase();
+        let subpath = envelope
+            .request_details
+            .metadata
+            .get("path")
+            .cloned()
+            .unwrap_or_default();
+        let parts: Vec<&str> = subpath.split('/').filter(|s| !s.is_empty()).collect();
+
+        let operation = match method.as_str() {
+            "GET" => match parts.as_slice() {
+                // GET /metadata -> Ping (capability statement)
+                ["metadata"] => Some(Operation::Ping),
+                // GET / -> whole-system search
+                [] => Some(Operation::Query),
+                // GET /_history -> whole-system history
+                ["_history"] => Some(Operation::Query),
+                // GET /ResourceType/_history -> type-level history
+                [_resource_type, "_history"] => Some(Operation::Query),
+                // GET /ResourceType/_search -> search (unusual but valid)
+                [_resource_type, "_search"] => Some(Operation::Query),
+                // GET /ResourceType/$operation -> type-level operation
+                [_resource_type, op] if op.starts_with('$') => Some(Operation::Retrieve),
+                // GET /ResourceType -> search (Query)
+                [_resource_type] => Some(Operation::Query),
+                // GET /ResourceType/id -> read (Retrieve)
+                [_resource_type, _id] => Some(Operation::Retrieve),
+                // GET /ResourceType/id/_history -> instance history (Query)
+                [_resource_type, _id, "_history"] => Some(Operation::Query),
+                // GET /ResourceType/id/_history/vid -> vread (Retrieve)
+                [_resource_type, _id, "_history", _vid] => Some(Operation::Retrieve),
+                // GET /ResourceType/id/$operation -> instance-level operation
+                [_resource_type, _id, op] if op.starts_with('$') => Some(Operation::Retrieve),
+                // GET /ResourceType/id/CompartmentType -> compartment search
+                [_resource_type, _id, _compartment] => Some(Operation::Query),
+                _ => Some(Operation::Retrieve),
+            },
+            "POST" => match parts.as_slice() {
+                // POST / -> batch/transaction
+                [] => Some(Operation::Store),
+                // POST /_search -> whole-system search
+                ["_search"] => Some(Operation::Query),
+                // POST /ResourceType/_search -> search (Query)
+                [_resource_type, "_search"] => Some(Operation::Query),
+                // POST /ResourceType/$operation -> type-level operation
+                [_resource_type, op] if op.starts_with('$') => Some(Operation::Store),
+                // POST /ResourceType/id/$operation -> instance-level operation
+                [_resource_type, _id, op] if op.starts_with('$') => Some(Operation::Store),
+                // POST /ResourceType -> create (Store)
+                _ => Some(Operation::Store),
+            },
+            "PUT" => Some(Operation::Update),
+            "PATCH" => Some(Operation::Patch),
+            "DELETE" => Some(Operation::Delete),
+            "HEAD" | "OPTIONS" => Some(Operation::Ping),
+            _ => None,
+        };
+
+        if let Some(op) = operation {
+            envelope.command = Some(Command::new(op).with_source("fhir_endpoint"));
+        }
+
         Ok(envelope)
     }
 
@@ -133,6 +198,30 @@ impl ServiceHandler<Value> for FhirEndpoint {
             target
         };
 
+        // If an explicit Command is set on the envelope, use it to override the HTTP method
+        // This enables protocol-bridging scenarios (e.g., DICOM -> FHIR)
+        if let Some(ref cmd) = envelope.command {
+            use crate::models::envelope::command::Operation;
+            let overridden_method = match cmd.operation {
+                Operation::Query | Operation::Retrieve => "GET",
+                Operation::Store => "POST",
+                Operation::Update => "PUT",
+                Operation::Patch => "PATCH",
+                Operation::Delete => "DELETE",
+                Operation::Ping => "HEAD",
+                _ => target_details.method.as_str(),
+            };
+            if overridden_method != target_details.method {
+                tracing::debug!(
+                    "FHIR backend: Command({}) overriding method {} -> {}",
+                    cmd.operation,
+                    target_details.method,
+                    overridden_method
+                );
+                target_details.method = overridden_method.to_string();
+            }
+        }
+
         // Apply path_prefix from backend options if present
         // This prepends a path to the request URI (e.g., "/fhir" + "/Patient" = "/fhir/Patient")
         if let Some(path_prefix) = options
@@ -186,12 +275,13 @@ impl ServiceHandler<Value> for FhirEndpoint {
             body_bytes.len()
         );
 
-        let mut response_envelope = ResponseEnvelope::from_backend(
+        let mut response_envelope = ResponseEnvelope::from_backend_with_command(
             envelope.request_details.clone(),
             status,
             response_headers,
             body_bytes,
             None,
+            envelope.command.clone(),
         );
 
         // Try to parse response as JSON if content-type indicates FHIR or JSON

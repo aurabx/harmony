@@ -1,0 +1,21 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "*": "&"
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "command": {
+        "operation": "query",
+        "params": {},
+        "source": "jolt_transform"
+      },
+      "metadata": {
+        "query_level": "STUDY"
+      }
+    }
+  }
+]
