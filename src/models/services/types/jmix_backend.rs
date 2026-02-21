@@ -149,6 +149,27 @@ impl ServiceHandler<Value> for JmixBackend {
                 .unwrap_or_else(|_| "<invalid-url>".to_string())
         );
 
+        // If an explicit Command is set on the envelope, use it to override the HTTP method.
+        // The JMIX endpoint only produces Query, Retrieve, and Store operations,
+        // so we only map those here.
+        if let Some(ref cmd) = envelope.command {
+            use crate::models::envelope::command::Operation;
+            let overridden_method = match cmd.operation {
+                Operation::Query | Operation::Retrieve => "GET",
+                Operation::Store => "POST",
+                _ => target_details.method.as_str(),
+            };
+            if overridden_method != target_details.method {
+                tracing::debug!(
+                    "JMIX backend: Command({}) overriding method {} -> {}",
+                    cmd.operation,
+                    target_details.method,
+                    overridden_method
+                );
+                target_details.method = overridden_method.to_string();
+            }
+        }
+
         // Store target_details in envelope for future use
         envelope.target_details = Some(target_details.clone());
 
@@ -163,12 +184,13 @@ impl ServiceHandler<Value> for JmixBackend {
             body_bytes.len()
         );
 
-        let mut response_envelope = ResponseEnvelope::from_backend(
+        let mut response_envelope = ResponseEnvelope::from_backend_with_command(
             envelope.request_details.clone(),
             status,
             response_headers,
             body_bytes,
             None,
+            envelope.command.clone(),
         );
 
         // Try to parse response as JSON if content-type indicates JSON
@@ -246,16 +268,15 @@ impl JmixBackend {
 
         let full_url = target_details.full_url()?;
 
-        // Build the request
+        // Build the request – JMIX only uses GET (query/retrieve) and POST (store)
         let mut request_builder = match target_details.method.as_str() {
-            "GET" => client.get(&full_url),
+            "GET" | "HEAD" => client.get(&full_url),
             "POST" => client.post(&full_url),
-            "PUT" => client.put(&full_url),
-            "DELETE" => client.delete(&full_url),
-            "PATCH" => client.patch(&full_url),
-            "HEAD" => client.head(&full_url),
             method => {
-                return Err(Error::from(format!("Unsupported HTTP method: {}", method)));
+                return Err(Error::from(format!(
+                    "Unsupported HTTP method for JMIX backend: {}",
+                    method
+                )));
             }
         };
 
