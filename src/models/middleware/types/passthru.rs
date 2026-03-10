@@ -161,6 +161,7 @@ mod tests {
         let envelope = ResponseEnvelope {
             request_details,
             response_details,
+            command: None,
             original_data: json!({"original": "response"}),
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
@@ -183,6 +184,7 @@ mod tests {
         let envelope = ResponseEnvelope {
             request_details,
             response_details,
+            command: None,
             original_data: json!({"original": "response"}),
             normalized_data: None,
             normalized_snapshot: None,
@@ -204,6 +206,7 @@ mod tests {
         let envelope = ResponseEnvelope {
             request_details,
             response_details,
+            command: None,
             original_data: json!({"original": "response"}),
             normalized_data: Some(normalized_data.clone()),
             normalized_snapshot: None,
@@ -245,6 +248,7 @@ mod tests {
         let response_envelope = ResponseEnvelope {
             request_details,
             response_details,
+            command: None,
             original_data: json!({}),
             normalized_data: after_left.normalized_data.clone(),
             normalized_snapshot: None,

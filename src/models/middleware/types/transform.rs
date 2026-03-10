@@ -381,6 +381,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: req.command,
             original_data: req.original_data,
             normalized_data: req.normalized_data,
             normalized_snapshot: req.normalized_snapshot,

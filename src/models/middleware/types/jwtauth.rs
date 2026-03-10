@@ -770,6 +770,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: request_env.command,
             original_data: request_env.original_data,
             normalized_data: request_env.normalized_data,
             normalized_snapshot: request_env.normalized_snapshot,

@@ -150,12 +150,13 @@ mod tests {
             envelope: RequestEnvelope<Vec<u8>>,
             _options: &HashMap<String, Value>,
         ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
-            Ok(ResponseEnvelope::from_backend(
+            Ok(ResponseEnvelope::from_backend_with_command(
                 envelope.request_details,
                 200,
                 HashMap::new(),
                 vec![],
                 None,
+                envelope.command,
             ))
         }
     }

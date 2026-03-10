@@ -424,7 +424,7 @@ mod tests {
             .build().unwrap();
 
         let env = mw.left(env).await.unwrap();
-        let resp = ResponseEnvelope { request_details: env.request_details.clone(), response_details: ResponseDetails { status: 200, headers: HashMap::new(), metadata: HashMap::new() }, original_data: serde_json::json!({}), normalized_data: env.normalized_data.clone(), normalized_snapshot: None };
+        let resp = ResponseEnvelope { request_details: env.request_details.clone(), response_details: ResponseDetails { status: 200, headers: HashMap::new(), metadata: HashMap::new() }, command: None, original_data: serde_json::json!({}), normalized_data: env.normalized_data.clone(), normalized_snapshot: None };
         let _ = mw.right(resp).await.unwrap();
     }
 
@@ -535,6 +535,7 @@ mod tests {
         let resp = ResponseEnvelope {
             request_details: env.request_details.clone(),
             response_details: ResponseDetails { status: 200, headers: HashMap::new(), metadata: HashMap::new() },
+            command: None,
             original_data: json!({}),
             normalized_data: Some(json!({})),
             normalized_snapshot: None,

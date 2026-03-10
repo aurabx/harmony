@@ -314,12 +314,13 @@ impl ServiceHandler<Value> for ManagementEndpoint {
         let mut headers = HashMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
 
-        let mut response_envelope = ResponseEnvelope::from_backend(
+        let mut response_envelope = ResponseEnvelope::from_backend_with_command(
             envelope.request_details.clone(),
             status_code,
             headers,
             body,
             None,
+            envelope.command.clone(),
         );
 
         response_envelope.normalized_data = Some(response_value);

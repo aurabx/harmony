@@ -222,6 +222,7 @@ mod tests {
         let envelope = ResponseEnvelope {
             request_details,
             response_details,
+            command: None,
             original_data: json!({"response": "data"}),
             normalized_data: Some(normalized_data.clone()),
             normalized_snapshot: None,

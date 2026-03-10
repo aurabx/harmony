@@ -205,7 +205,7 @@ impl ServiceHandler<Value> for Http3Backend {
         let base_url = Self::build_base_url(&conn);
 
         // Build target details from request
-        let target_details = if let Some(mut target) = envelope.target_details.take() {
+        let mut target_details = if let Some(mut target) = envelope.target_details.take() {
             if target.base_url.is_empty() {
                 target.base_url = base_url.clone();
             }
@@ -225,6 +225,29 @@ impl ServiceHandler<Value> for Http3Backend {
                 .full_url()
                 .unwrap_or_else(|_| "<invalid-url>".to_string())
         );
+
+        // If an explicit Command is set on the envelope, use it to override the HTTP method
+        if let Some(ref cmd) = envelope.command {
+            use crate::models::envelope::command::Operation;
+            let overridden_method = match cmd.operation {
+                Operation::Query | Operation::Retrieve => "GET",
+                Operation::Store => "POST",
+                Operation::Update => "PUT",
+                Operation::Patch => "PATCH",
+                Operation::Delete => "DELETE",
+                Operation::Ping => "HEAD",
+                _ => target_details.method.as_str(),
+            };
+            if overridden_method != target_details.method {
+                tracing::debug!(
+                    "HTTP/3 backend: Command({}) overriding method {} -> {}",
+                    cmd.operation,
+                    target_details.method,
+                    overridden_method
+                );
+                target_details.method = overridden_method.to_string();
+            }
+        }
 
         envelope.target_details = Some(target_details.clone());
 
@@ -313,12 +336,13 @@ impl ServiceHandler<Value> for Http3Backend {
             response.body.len()
         );
 
-        let mut response_envelope = ResponseEnvelope::from_backend(
+        let mut response_envelope = ResponseEnvelope::from_backend_with_command(
             envelope.request_details.clone(),
             status,
             response.headers,
             response.body,
             None,
+            envelope.command.clone(),
         );
 
         // Try to parse response as JSON if content-type indicates JSON

@@ -802,6 +802,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: None,
             original_data: serde_json::json!({}),
             normalized_data: Some(serde_json::json!({"response": "data"})),
             normalized_snapshot: None,

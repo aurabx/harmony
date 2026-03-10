@@ -286,7 +286,10 @@ mod tests {
 
         // Default values should be added
         assert_eq!(output.get("name").and_then(|v| v.as_str()), Some("test"));
-        assert_eq!(output.get("status").and_then(|v| v.as_str()), Some("pending"));
+        assert_eq!(
+            output.get("status").and_then(|v| v.as_str()),
+            Some("pending")
+        );
         assert_eq!(output.get("count").and_then(|v| v.as_i64()), Some(0));
     }
 
@@ -294,22 +297,6 @@ mod tests {
     fn test_invalid_spec_file() {
         let result = JoltTransformEngine::from_spec_path("/nonexistent/path/spec.json");
         assert!(result.is_err());
-    }
-
-    #[test]
-    #[ignore] // Spec file moved; no longer in examples
-    fn test_parse_real_metadata_set_dimse_op_spec() {
-        // Resolve path relative to this crate directory
-        let spec_path = format!(
-            "{}/../../samples/jolt/metadata_set_dimse_op.json",
-            env!("CARGO_MANIFEST_DIR")
-        );
-        let engine = JoltTransformEngine::from_spec_path(&spec_path)
-            .expect("should parse real metadata_set_dimse_op.json");
-
-        let input = json!({});
-        let out = engine.transform(input).expect("transform ok");
-        assert_eq!(out.get("dimse_op").and_then(|v| v.as_str()), Some("find"));
     }
 
     #[test]
