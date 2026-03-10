@@ -1,6 +1,23 @@
 # Changelog
 
-## [Unreleased]
+## [0.12.3] - 2026-01-30
+
+### Fixed
+- DICOM C-GET ordering bug that could return results in incorrect order
+
+## [0.12.2] - 2026-01-21
+
+### Fixed
+- PDU Size negotiation in SCU
+
+## [0.12.1] - 2026-01-21
+
+### Added
+- Release profile optimization with LTO (Link Time Optimization) and single codegen unit for improved runtime performance
+
+### Fixed
+- PDU size negotiation in DIMSE SCP association and response handling
+- Incorrect crate version dependencies in Cargo.lock
 
 ## [0.12.0] - 2026-01-08
 
@@ -481,6 +498,9 @@
 ### Notes
 - No breaking changes since 0.1.1.
 
+[0.12.3]: https://github.com/aurabx/harmony/compare/0.12.2...0.12.3
+[0.12.2]: https://github.com/aurabx/harmony/compare/0.12.1...0.12.2
+[0.12.1]: https://github.com/aurabx/harmony/compare/0.12.0...0.12.1
 [0.12.0]: https://github.com/aurabx/harmony/compare/0.10.1...0.12.0
 [0.10.1]: https://github.com/aurabx/harmony/compare/0.10.0...0.10.1
 [0.10.0]: https://github.com/aurabx/harmony/compare/0.9.0...0.10.0

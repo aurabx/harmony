@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
+use super::command::{Command, Operation};
+
 /// Parse status for content parsing operations
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub enum ParseStatus {
@@ -43,6 +45,10 @@ pub struct RequestEnvelope<T> {
     /// Target details for the backend call (base_url, method, headers, etc.)
     #[serde(skip_serializing_if = "Option::is_none")]
     pub target_details: Option<TargetDetails>,
+    /// The intended operation for the backend (set by endpoint or transform).
+    /// Backends interpret this according to their protocol.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<Command>,
     /// Original data received from the source (not serialized).
     #[serde(skip)]
     pub original_data: T,
@@ -175,6 +181,11 @@ pub struct ResponseEnvelope<T> {
     pub request_details: RequestDetails,
     /// Response details including status, headers, metadata
     pub response_details: ResponseDetails,
+    /// The command that was active when the request was processed.
+    /// Forwarded from the RequestEnvelope so middleware right() methods
+    /// can inspect the operation without metadata workarounds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<Command>,
     #[serde(skip)]
     pub original_data: T,
     pub normalized_data: Option<serde_json::Value>,
@@ -197,6 +208,7 @@ where
             request_details,
             backend_request_details,
             target_details: None,
+            command: None,
             original_data,
             normalized_data,
             normalized_snapshot: None,
@@ -267,6 +279,7 @@ pub struct RequestEnvelopeBuilder<T> {
     content_metadata: Option<ContentMetadata>,
     backend_request_details: Option<RequestDetails>,
     target_details: Option<TargetDetails>,
+    command: Option<Command>,
     original_data: Option<T>,
     normalized_data: Option<serde_json::Value>,
     normalized_snapshot: Option<serde_json::Value>,
@@ -286,6 +299,7 @@ impl<T> RequestEnvelopeBuilder<T> {
             content_metadata: None,
             backend_request_details: None,
             target_details: None,
+            command: None,
             original_data: None,
             normalized_data: None,
             normalized_snapshot: None,
@@ -305,6 +319,7 @@ impl<T> RequestEnvelopeBuilder<T> {
             content_metadata: details.content_metadata.clone(),
             backend_request_details: None,
             target_details: None,
+            command: None,
             original_data: None,
             normalized_data: None,
             normalized_snapshot: None,
@@ -410,6 +425,18 @@ impl<T> RequestEnvelopeBuilder<T> {
         self
     }
 
+    /// Sets the command.
+    pub fn command(mut self, command: Option<Command>) -> Self {
+        self.command = command;
+        self
+    }
+
+    /// Sets the command with just an operation.
+    pub fn operation(mut self, operation: Operation) -> Self {
+        self.command = Some(Command::new(operation));
+        self
+    }
+
     /// Sets the original data.
     pub fn original_data(mut self, data: T) -> Self {
         self.original_data = Some(data);
@@ -479,6 +506,7 @@ where
             request_details,
             backend_request_details,
             target_details: self.target_details,
+            command: self.command,
             original_data,
             normalized_data,
             normalized_snapshot: self.normalized_snapshot,
@@ -493,7 +521,15 @@ impl<T> Default for RequestEnvelopeBuilder<T> {
 }
 
 impl<T> ResponseEnvelope<T> {
-    /// Creates a new ResponseEnvelope from backend response components
+    /// Creates a new ResponseEnvelope from backend response components without a command.
+    ///
+    /// **Prefer `from_backend_with_command()`** which propagates the typed Command from
+    /// the request pipeline so middleware `right()` methods can inspect the operation
+    /// directly instead of relying on metadata strings.
+    #[deprecated(
+        since = "0.12.3",
+        note = "Use from_backend_with_command() to propagate the Command from the request"
+    )]
     pub fn from_backend(
         request_details: RequestDetails,
         status: u16,
@@ -510,6 +546,32 @@ impl<T> ResponseEnvelope<T> {
         ResponseEnvelope {
             request_details,
             response_details,
+            command: None,
+            original_data,
+            normalized_data: None,
+            normalized_snapshot: None,
+        }
+    }
+
+    /// Creates a new ResponseEnvelope from backend response components with a command.
+    pub fn from_backend_with_command(
+        request_details: RequestDetails,
+        status: u16,
+        headers: HashMap<String, String>,
+        original_data: T,
+        metadata: Option<HashMap<String, String>>,
+        command: Option<Command>,
+    ) -> Self {
+        let response_details = ResponseDetails {
+            status,
+            headers,
+            metadata: metadata.unwrap_or_default(),
+        };
+
+        ResponseEnvelope {
+            request_details,
+            response_details,
+            command,
             original_data,
             normalized_data: None,
             normalized_snapshot: None,
@@ -529,6 +591,7 @@ impl ResponseEnvelope<Vec<u8>> {
                 return Ok(ResponseEnvelope {
                     request_details: self.request_details,
                     response_details: self.response_details,
+                    command: self.command,
                     original_data: existing_normalized.clone(),
                     normalized_data: Some(existing_normalized),
                     normalized_snapshot: self.normalized_snapshot,
@@ -553,11 +616,8 @@ impl ResponseEnvelope<Vec<u8>> {
             || content_type.contains("+json");
 
         // Check for binary content types that need base64 preservation
-        // Note: must exclude JSON types since application/dicom+json contains "application/dicom"
-        let is_binary = !is_json
-            && (content_type.contains("multipart/related")
-                || content_type.contains("application/dicom")
-                || content_type.contains("application/octet-stream"));
+        // Uses the protocol-agnostic core::content::mime module for comprehensive detection
+        let is_binary = !is_json && crate::core::content::mime::is_definitely_binary(&content_type);
 
         // For binary content, preserve as base64 so middleware can access it
         if is_binary && !self.original_data.is_empty() {
@@ -570,6 +630,7 @@ impl ResponseEnvelope<Vec<u8>> {
             return Ok(ResponseEnvelope {
                 request_details: self.request_details,
                 response_details: self.response_details,
+                command: self.command,
                 original_data: binary_wrapper.clone(),
                 normalized_data: Some(binary_wrapper),
                 normalized_snapshot: self.normalized_snapshot,
@@ -599,6 +660,7 @@ impl ResponseEnvelope<Vec<u8>> {
         Ok(ResponseEnvelope {
             request_details: self.request_details,
             response_details: self.response_details,
+            command: self.command,
             original_data: original_json,
             normalized_data: final_normalized,
             normalized_snapshot: self.normalized_snapshot,
@@ -616,6 +678,7 @@ impl ResponseEnvelope<serde_json::Value> {
                     return Ok(ResponseEnvelope {
                         request_details: self.request_details,
                         response_details: self.response_details,
+                        command: self.command,
                         original_data: bytes,
                         normalized_data: self.normalized_data,
                         normalized_snapshot: self.normalized_snapshot,
@@ -631,6 +694,7 @@ impl ResponseEnvelope<serde_json::Value> {
                 return Ok(ResponseEnvelope {
                     request_details: self.request_details,
                     response_details: self.response_details,
+                    command: self.command,
                     original_data: bytes,
                     normalized_data: self.normalized_data,
                     normalized_snapshot: self.normalized_snapshot,
@@ -668,10 +732,28 @@ impl ResponseEnvelope<serde_json::Value> {
         Ok(ResponseEnvelope {
             request_details: self.request_details,
             response_details: self.response_details,
+            command: self.command,
             original_data: body_bytes,
             normalized_data: self.normalized_data,
             normalized_snapshot: self.normalized_snapshot,
         })
+    }
+}
+
+/// Command helpers for ResponseEnvelope
+impl<T> ResponseEnvelope<T> {
+    /// Resolves the operation from the command carried on this response.
+    ///
+    /// Returns the operation from `envelope.command` if set, otherwise `None`.
+    pub fn resolve_operation(&self) -> Option<Operation> {
+        self.command.as_ref().map(|cmd| cmd.operation)
+    }
+
+    /// Resolves the full command carried on this response.
+    ///
+    /// Returns a clone of `envelope.command` if set, otherwise `None`.
+    pub fn resolve_command(&self) -> Option<Command> {
+        self.command.clone()
     }
 }
 
@@ -762,7 +844,7 @@ impl<T> RequestEnvelope<T> {
     /// # Example
     ///
     /// ```text
-    /// envelope.set_target_metadata("dimse_op", "find");
+    /// envelope.set_target_metadata("custom_key", "custom_value");
     /// ```
     pub fn set_target_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
         let target = self.get_or_init_target_details();
@@ -782,6 +864,48 @@ impl<T> RequestEnvelope<T> {
     pub fn set_target_method(&mut self, method: impl Into<String>) {
         let target = self.get_or_init_target_details();
         target.method = method.into();
+    }
+
+    /// Sets the command with just an operation.
+    ///
+    /// # Example
+    ///
+    /// ```text
+    /// envelope.set_command(Operation::Query);
+    /// ```
+    pub fn set_command(&mut self, operation: Operation) {
+        self.command = Some(Command::new(operation));
+    }
+
+    /// Sets the command with operation and parameters.
+    ///
+    /// # Example
+    ///
+    /// ```text
+    /// let mut params = HashMap::new();
+    /// params.insert("query_level".to_string(), json!("STUDY"));
+    /// envelope.set_command_with_params(Operation::Query, params);
+    /// ```
+    pub fn set_command_with_params(
+        &mut self,
+        operation: Operation,
+        params: HashMap<String, serde_json::Value>,
+    ) {
+        self.command = Some(Command::with_params(operation, params));
+    }
+
+    /// Resolves the operation from the command.
+    ///
+    /// Returns the operation from `envelope.command` if set, otherwise `None`.
+    pub fn resolve_operation(&self) -> Option<Operation> {
+        self.command.as_ref().map(|cmd| cmd.operation)
+    }
+
+    /// Resolves the full command.
+    ///
+    /// Returns a clone of `envelope.command` if set, otherwise `None`.
+    pub fn resolve_command(&self) -> Option<Command> {
+        self.command.clone()
     }
 }
 
@@ -864,10 +988,13 @@ mod tests {
     #[test]
     fn test_set_target_metadata() {
         let mut envelope = create_test_envelope();
-        envelope.set_target_metadata("dimse_op", "find");
+        envelope.set_target_metadata("custom_key", "custom_value");
 
         let target = envelope.target_details.as_ref().unwrap();
-        assert_eq!(target.metadata.get("dimse_op"), Some(&"find".to_string()));
+        assert_eq!(
+            target.metadata.get("custom_key"),
+            Some(&"custom_value".to_string())
+        );
         // Should also have original metadata
         assert_eq!(target.metadata.get("protocol"), Some(&"http".to_string()));
     }
@@ -912,7 +1039,7 @@ mod tests {
         envelope.set_target_uri("/v2/api");
 
         let target = envelope.target_details.as_ref().unwrap();
-assert_eq!(target.base_url, "https://second.example.com");
+        assert_eq!(target.base_url, "https://second.example.com");
         assert_eq!(target.uri, "/v2/api");
     }
 
@@ -923,11 +1050,12 @@ assert_eq!(target.base_url, "https://second.example.com");
         headers.insert("content-type".to_string(), "application/dicom".to_string());
         let body = b"DICM_FAKE_BYTES".to_vec();
 
-        let resp = ResponseEnvelope::from_backend(
+        let resp = ResponseEnvelope::from_backend_with_command(
             RequestDetails::default(),
             200,
             headers.clone(),
             body.clone(),
+            None,
             None,
         );
 
@@ -959,11 +1087,12 @@ assert_eq!(target.base_url, "https://second.example.com");
         );
         let body = b"--abc\r\nContent-Type: application/dicom\r\n\r\nDATA\r\n--abc--\r\n".to_vec();
 
-        let resp = ResponseEnvelope::from_backend(
+        let resp = ResponseEnvelope::from_backend_with_command(
             RequestDetails::default(),
             200,
             headers.clone(),
             body.clone(),
+            None,
             None,
         );
 
@@ -972,7 +1101,10 @@ assert_eq!(target.base_url, "https://second.example.com");
             .normalized_data
             .clone()
             .expect("normalized_data missing");
-        let b64 = nd.get("body_b64").and_then(|v| v.as_str()).expect("missing b64");
+        let b64 = nd
+            .get("body_b64")
+            .and_then(|v| v.as_str())
+            .expect("missing b64");
         use base64::Engine;
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(b64)

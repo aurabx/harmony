@@ -11,4 +11,5 @@ pub mod http3;
 pub mod http_streaming;
 pub mod http_streaming_backend;
 pub mod jmix;
+pub mod jmix_backend;
 pub mod mock_dicom;

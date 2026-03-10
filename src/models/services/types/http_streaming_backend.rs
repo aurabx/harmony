@@ -1,4 +1,5 @@
 use crate::config::config::ConfigError;
+use crate::models::envelope::command::Command;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::models::services::streaming::{ResponseStream, StreamingBackend};
@@ -279,18 +280,19 @@ impl StreamingBackend for HttpStreamingBackend {
 
         // Convert to ResponseEnvelope stream based on format
         let request_details = envelope.request_details.clone();
+        let command = envelope.command.clone();
         let envelope_stream = match detected_format {
-            StreamFormat::Sse => Self::parse_sse_stream(byte_stream, request_details),
-            StreamFormat::Ndjson => Self::parse_ndjson_stream(byte_stream, request_details),
+            StreamFormat::Sse => Self::parse_sse_stream(byte_stream, request_details, command),
+            StreamFormat::Ndjson => Self::parse_ndjson_stream(byte_stream, request_details, command),
             StreamFormat::Multipart => {
                 let boundary = boundary_opt
                     .ok_or_else(|| Error::from("Missing boundary in multipart Content-Type"))?;
                 
-                Self::parse_multipart_stream(byte_stream, request_details, boundary)
+                Self::parse_multipart_stream(byte_stream, request_details, boundary, command)
             }
             StreamFormat::Auto => {
                 // Should not reach here, but fallback to NDJSON
-                Self::parse_ndjson_stream(byte_stream, request_details)
+                Self::parse_ndjson_stream(byte_stream, request_details, command)
             }
         };
 
@@ -303,6 +305,7 @@ impl HttpStreamingBackend {
     fn parse_sse_stream(
         byte_stream: impl Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
         request_details: crate::models::envelope::envelope::RequestDetails,
+        command: Option<Command>,
     ) -> Pin<Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>> {
         let mut buffer = String::new();
         let mut sequence = 0u64;
@@ -321,7 +324,7 @@ impl HttpStreamingBackend {
                         buffer = buffer[pos + 2..].to_string();
 
                         // Parse SSE event
-                        if let Some(envelope) = Self::parse_sse_event(&event, &request_details, &mut sequence) {
+                        if let Some(envelope) = Self::parse_sse_event(&event, &request_details, &mut sequence, &command) {
                             envelopes.push(Ok(envelope));
                         }
                     }
@@ -342,6 +345,7 @@ impl HttpStreamingBackend {
         event: &str,
         request_details: &crate::models::envelope::envelope::RequestDetails,
         sequence: &mut u64,
+        command: &Option<Command>,
     ) -> Option<ResponseEnvelope<Vec<u8>>> {
         let mut event_type = "message";
         let mut data = String::new();
@@ -375,12 +379,13 @@ impl HttpStreamingBackend {
                 metadata.insert("stream_sequence".to_string(), sequence.to_string());
                 metadata.insert("event_type".to_string(), event_type.to_string());
 
-                let mut response = ResponseEnvelope::from_backend(
+                let mut response = ResponseEnvelope::from_backend_with_command(
                     request_details.clone(),
                     200,
                     HashMap::from([("content-type".to_string(), "application/json".to_string())]),
                     body,
                     Some(metadata),
+                    command.clone(),
                 );
 
                 response.normalized_data = Some(json);
@@ -402,6 +407,7 @@ impl HttpStreamingBackend {
     fn parse_ndjson_stream(
         byte_stream: impl Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
         request_details: crate::models::envelope::envelope::RequestDetails,
+        command: Option<Command>,
     ) -> Pin<Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>> {
         let mut buffer = String::new();
         let mut sequence = 0u64;
@@ -429,7 +435,7 @@ impl HttpStreamingBackend {
                         // Parse JSON line
                         match serde_json::from_str::<serde_json::Value>(&line) {
                             Ok(json) => {
-                                if let Some(envelope) = Self::json_to_envelope(&json, &request_details, sequence) {
+                                if let Some(envelope) = Self::json_to_envelope(&json, &request_details, sequence, &command) {
                                     envelopes.push(Ok(envelope));
                                 }
                             }
@@ -454,14 +460,14 @@ impl HttpStreamingBackend {
                                     debug!("Parsing JSON array with {} elements", array.len());
                                     for item in array {
                                         sequence += 1;
-                                        if let Some(envelope) = Self::json_to_envelope(item, &request_details, sequence) {
+                                        if let Some(envelope) = Self::json_to_envelope(item, &request_details, sequence, &command) {
                                             envelopes.push(Ok(envelope));
                                         }
                                     }
                                 } else {
                                     // Single object
                                     sequence += 1;
-                                    if let Some(envelope) = Self::json_to_envelope(&json, &request_details, sequence) {
+                                    if let Some(envelope) = Self::json_to_envelope(&json, &request_details, sequence, &command) {
                                         envelopes.push(Ok(envelope));
                                     }
                                 }
@@ -486,6 +492,7 @@ impl HttpStreamingBackend {
         json: &serde_json::Value,
         request_details: &crate::models::envelope::envelope::RequestDetails,
         sequence: u64,
+        command: &Option<Command>,
     ) -> Option<ResponseEnvelope<Vec<u8>>> {
         // Check for error marker
         if let Some(error) = json.get("_error") {
@@ -503,12 +510,13 @@ impl HttpStreamingBackend {
             metadata.insert("sop_instance_uid".to_string(), sop_uid.to_string());
         }
 
-        let mut response = ResponseEnvelope::from_backend(
+        let mut response = ResponseEnvelope::from_backend_with_command(
             request_details.clone(),
             200,
             HashMap::from([("content-type".to_string(), "application/json".to_string())]),
             body,
             Some(metadata),
+            command.clone(),
         );
 
         response.normalized_data = Some(json.clone());
@@ -522,6 +530,7 @@ impl HttpStreamingBackend {
         byte_stream: impl Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
         request_details: crate::models::envelope::envelope::RequestDetails,
         boundary: String,
+        command: Option<Command>,
     ) -> Pin<Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>> {
         let mut buffer = Vec::new();
         let boundary_marker = format!("--{}", boundary);
@@ -539,7 +548,7 @@ impl HttpStreamingBackend {
                     while let Some(part) = Self::extract_multipart_part(&mut buffer, &boundary_marker) {
                         sequence += 1;
 
-                        if let Some(envelope) = Self::parse_multipart_part(&part, &request_details, sequence) {
+                        if let Some(envelope) = Self::parse_multipart_part(&part, &request_details, sequence, &command) {
                             debug!("Parsed multipart part #{}: {} bytes", sequence, envelope.original_data.len());
                             envelopes.push(Ok(envelope));
                         }
@@ -592,6 +601,7 @@ impl HttpStreamingBackend {
         part: &[u8],
         request_details: &crate::models::envelope::envelope::RequestDetails,
         sequence: u64,
+        command: &Option<Command>,
     ) -> Option<ResponseEnvelope<Vec<u8>>> {
         // Split headers and body by double CRLF
         let part_str = String::from_utf8_lossy(part);
@@ -628,12 +638,13 @@ impl HttpStreamingBackend {
         // Extract body
         let body = part[body_start..].to_vec();
         
-        let response = ResponseEnvelope::from_backend(
+        let response = ResponseEnvelope::from_backend_with_command(
             request_details.clone(),
             200,
             headers,
             body,
             Some(metadata),
+            command.clone(),
         );
         
         Some(response)

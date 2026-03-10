@@ -150,10 +150,20 @@ impl ServiceHandler<Value> for StorageBackend {
         envelope: RequestEnvelope<Vec<u8>>,
         options: &HashMap<String, Value>,
     ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
+        use crate::models::envelope::command::Operation;
+
         let method = envelope.request_details.method.to_uppercase();
         let store = self.get_store(options)?;
+
+        // Determine if this is a read or write operation using Command (preferred) or HTTP method (fallback)
+        let is_read = match envelope.resolve_operation() {
+            Some(Operation::Query) | Some(Operation::Retrieve) => true,
+            Some(Operation::Store) | Some(Operation::Update) | Some(Operation::Patch) => false,
+            Some(Operation::Delete) => false, // treat as write-side for now
+            _ => method == "GET",             // fallback to HTTP method
+        };
         
-        if method == "GET" {
+        if is_read {
              // Read operation
              let pattern = options
                 .get("read_pattern")
@@ -190,21 +200,23 @@ impl ServiceHandler<Value> for StorageBackend {
                          headers.insert("content-type".to_string(), ct.to_string());
                      }
 
-                     Ok(ResponseEnvelope::from_backend(
+                     Ok(ResponseEnvelope::from_backend_with_command(
                          envelope.request_details.clone(),
                          200,
                          headers,
                          bytes,
-                         None
+                         None,
+                         envelope.command.clone(),
                      ))
                  },
                  Err(object_store::Error::NotFound { .. }) => {
-                     Ok(ResponseEnvelope::from_backend(
+                     Ok(ResponseEnvelope::from_backend_with_command(
                          envelope.request_details.clone(),
                          404,
                          HashMap::new(),
                          b"File not found".to_vec(),
-                         None
+                         None,
+                         envelope.command.clone(),
                      ))
                  },
                  Err(e) => Err(Error::from(format!("Storage error: {}", e)))
@@ -251,12 +263,13 @@ impl ServiceHandler<Value> for StorageBackend {
              let body = serde_json::to_vec(&body_json).unwrap();
              headers.insert("content-type".to_string(), "application/json".to_string());
 
-             Ok(ResponseEnvelope::from_backend(
+             Ok(ResponseEnvelope::from_backend_with_command(
                  envelope.request_details.clone(),
                  201, // Created
                  headers,
                  body,
-                 None
+                 None,
+                 envelope.command.clone(),
              ))
         }
     }

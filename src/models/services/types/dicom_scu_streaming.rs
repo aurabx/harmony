@@ -1,4 +1,5 @@
 use crate::config::config::ConfigError;
+use crate::models::envelope::command::Command;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::models::services::streaming::{ResponseStream, StreamingBackend, StreamMetadata};
@@ -385,10 +386,12 @@ impl StreamingBackend for DicomScuStreamingBackend {
 
                 // Convert DIMSE stream to ResponseEnvelope stream
                 let request_details = envelope.request_details.clone();
+                let command = envelope.command.clone();
                 let envelope_stream = Self::convert_dimse_stream_to_envelopes(
                     Box::pin(dimse_stream),
                     request_details,
                     stream_metadata,
+                    command,
                 );
 
                 Ok(Box::pin(envelope_stream))
@@ -406,10 +409,12 @@ impl StreamingBackend for DicomScuStreamingBackend {
                     .with_metadata("called_aet", remote_node.ae_title.clone());
 
                 let request_details = envelope.request_details.clone();
+                let command = envelope.command.clone();
                 let envelope_stream = Self::convert_dimse_stream_to_envelopes(
                     Box::pin(dimse_stream),
                     request_details,
                     stream_metadata,
+                    command,
                 );
 
                 Ok(Box::pin(envelope_stream))
@@ -428,6 +433,7 @@ impl DicomScuStreamingBackend {
         dimse_stream: Pin<Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>>,
         request_details: crate::models::envelope::envelope::RequestDetails,
         _stream_metadata: StreamMetadata,
+        command: Option<Command>,
     ) -> impl Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> {
         let mut sequence = 0u64;
 
@@ -471,12 +477,13 @@ impl DicomScuStreamingBackend {
                     }
 
                     // Create ResponseEnvelope for this instance
-                    let mut response = ResponseEnvelope::from_backend(
+                    let mut response = ResponseEnvelope::from_backend_with_command(
                         request_details.clone(),
                         200,
                         headers,
                         bytes,
                         Some(envelope_metadata),
+                        command.clone(),
                     );
 
                     // Set normalized_data for middleware
@@ -507,12 +514,13 @@ impl DicomScuStreamingBackend {
                         envelope_metadata.insert("sop_instance_uid".to_string(), sop_instance_uid.clone());
                     }
 
-                    let mut response = ResponseEnvelope::from_backend(
+                    let mut response = ResponseEnvelope::from_backend_with_command(
                         request_details.clone(),
                         200,
                         headers,
                         serde_json::to_vec(&json).unwrap_or_default(),
                         Some(envelope_metadata),
+                        command.clone(),
                     );
 
                     response.normalized_data = Some(json);
@@ -528,12 +536,13 @@ impl DicomScuStreamingBackend {
                     let mut headers = HashMap::new();
                     headers.insert("content-type".to_string(), "application/json".to_string());
 
-                    let mut response = ResponseEnvelope::from_backend(
+                    let mut response = ResponseEnvelope::from_backend_with_command(
                         request_details.clone(),
                         200,
                         headers,
                         serde_json::to_vec(&json).unwrap_or_default(),
                         None,
+                        command.clone(),
                     );
 
                     response.normalized_data = Some(json);

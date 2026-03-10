@@ -28,6 +28,9 @@ pub fn build_command_response(
 }
 
 /// Encode and send a response with optional dataset
+///
+/// This function properly fragments large datasets according to the negotiated
+/// maximum PDU size from the requestor (client).
 pub async fn encode_and_send_response(
     association: &mut ServerAssociation<TcpStream>,
     response: InMemDicomObject<StandardDataDictionary>,
@@ -37,8 +40,7 @@ pub async fn encode_and_send_response(
     let response_bytes = encode_command(&response)?;
 
     // Command PDV is always complete (not fragmented), so is_last must be true.
-    // The presence of a following dataset is indicated by COMMAND_DATA_SET_TYPE field,
-    // not by the is_last flag.
+    // The presence of a following dataset is indicated by COMMAND_DATA_SET_TYPE field.
     let command_pdata = create_command_pdata(presentation_context_id, response_bytes, true);
 
     // Send command first
@@ -65,7 +67,7 @@ pub async fn encode_and_send_response(
             .ok_or_else(|| DimseError::operation_failed("Presentation context not found"))?;
         
         tracing::debug!("Encoding dataset with transfer syntax: {}", ts_uid);
-        
+
         let ts = TransferSyntaxRegistry
             .get(ts_uid)
             .ok_or_else(|| DimseError::operation_failed(format!("Transfer syntax not found: {}", ts_uid)))?;
@@ -566,6 +568,8 @@ mod tests {
         assert_eq!(counts.warning, 0);
     }
 
+    // PDU chunking tests
+
     /// Test helper: compute chunk count for given data size and max PDU
     fn compute_chunk_count(data_size: usize, max_pdu: usize) -> usize {
         const PDU_OVERHEAD: usize = 16;
@@ -614,7 +618,7 @@ mod tests {
         let max_data_per_pdu = max_pdu - 16; // 16368
         let data_size = max_data_per_pdu;
         assert_eq!(compute_chunk_count(data_size, max_pdu), 1);
-        
+
         // One byte over should require 2 chunks
         assert_eq!(compute_chunk_count(data_size + 1, max_pdu), 2);
     }

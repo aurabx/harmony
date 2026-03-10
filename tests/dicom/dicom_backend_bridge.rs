@@ -100,12 +100,12 @@ async fn http_to_dicom_backend_echo_succeeds() {
         .await
         .expect("router handled request");
 
-    assert_eq!(response.status(), StatusCode::OK);
-
+    let status = response.status();
     let body = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .expect("read response body");
 
+    assert_eq!(status, StatusCode::OK);
     let json: serde_json::Value = serde_json::from_slice(&body).expect("parse json body");
     assert_eq!(json.get("operation").and_then(|v| v.as_str()), Some("echo"));
     assert_eq!(json.get("success").and_then(|v| v.as_bool()), Some(true));

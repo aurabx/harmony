@@ -191,6 +191,7 @@ impl Middleware for MetadataTransformMiddleware {
                     "metadata": envelope.request_details.metadata,
                     "method": envelope.request_details.method,
                     "uri": envelope.request_details.uri,
+                    "command": envelope.command,
                 });
 
                 // Apply transform to create/modify target_details
@@ -210,6 +211,15 @@ impl Middleware for MetadataTransformMiddleware {
                                 envelope.target_details.as_mut().unwrap(),
                                 &target_details,
                             );
+                        }
+
+                        // Check for command in transform output
+                        if let Some(cmd_out) = transformed.get("command") {
+                            if !cmd_out.is_null() {
+                                if let Ok(cmd) = serde_json::from_value::<crate::models::envelope::command::Command>(cmd_out.clone()) {
+                                    envelope.command = Some(cmd);
+                                }
+                            }
                         }
 
                         tracing::debug!(
@@ -390,12 +400,12 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_sets_dimse_op_on_left() {
+    async fn test_sets_metadata_on_left() {
         // Create a temporary JOLT spec file
         let spec = json!([{
             "operation": "default",
             "spec": {
-                "dimse_op": "find"
+                "test_key": "find"
             }
         }]);
 
@@ -415,7 +425,7 @@ mod tests {
         let result = middleware.left(envelope).await.unwrap();
 
         assert_eq!(
-            result.request_details.metadata.get("dimse_op"),
+            result.request_details.metadata.get("test_key"),
             Some(&"find".to_string())
         );
     }
@@ -426,7 +436,7 @@ mod tests {
         let spec = json!([{
             "operation": "default",
             "spec": {
-                "dimse_op": "find"
+                "test_key": "find"
             }
         }]);
 
@@ -449,7 +459,7 @@ mod tests {
         assert!(!left_result
             .request_details
             .metadata
-            .contains_key("dimse_op"));
+            .contains_key("test_key"));
 
         // Convert to ResponseEnvelope for right() method
         let response_envelope = crate::models::envelope::envelope::ResponseEnvelope {
@@ -459,6 +469,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: left_result.command,
             original_data: left_result.original_data,
             normalized_data: left_result.normalized_data,
             normalized_snapshot: left_result.normalized_snapshot,
@@ -468,7 +479,7 @@ mod tests {
         let right_result = middleware.right(response_envelope).await.unwrap();
         // After refactor, right() transforms response_details.metadata, not request_details.metadata
         assert_eq!(
-            right_result.response_details.metadata.get("dimse_op"),
+            right_result.response_details.metadata.get("test_key"),
             Some(&"find".to_string())
         );
     }
@@ -479,7 +490,7 @@ mod tests {
         let spec = json!([{
             "operation": "default",
             "spec": {
-                "dimse_op": "find"
+                "test_key": "find"
             }
         }]);
 
@@ -507,7 +518,7 @@ mod tests {
             Some(&"existing_value".to_string())
         );
         assert_eq!(
-            result.request_details.metadata.get("dimse_op"),
+            result.request_details.metadata.get("test_key"),
             Some(&"find".to_string())
         );
     }
@@ -518,7 +529,7 @@ mod tests {
         let spec = json!([{
             "operation": "default",
             "spec": {
-                "dimse_op": "get",
+                "test_key": "get",
                 "num": 123
             }
         }]);
@@ -535,7 +546,7 @@ mod tests {
         let env = create_test_envelope(HashMap::new());
         let out = mw.left(env).await.unwrap();
         assert_eq!(
-            out.request_details.metadata.get("dimse_op"),
+            out.request_details.metadata.get("test_key"),
             Some(&"get".to_string())
         );
         assert!(out.request_details.metadata.get("num").is_none());
@@ -574,20 +585,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_metadata_middleware_with_real_spec_left_sets_dimse() {
+    async fn test_metadata_middleware_with_real_spec_left_sets_command() {
+        use crate::models::envelope::command::Operation;
+        use crate::models::envelope::envelope::RequestEnvelopeBuilder;
         let env = RequestEnvelopeBuilder::new()
-            .method("GET")
-            .uri("/fhir/ImagingStudy")
-            .original_data(serde_json::Value::Null)
-            .normalized_data(Some(serde_json::Value::Null))
+            .method("POST")
+            .uri("/find")
+            .original_data(serde_json::json!({}))
             .build()
             .unwrap();
         let spec_path = format!(
-            "{}/samples/jolt/metadata_set_dimse_op.json",
+            "{}/samples/jolt/metadata_set_command.json",
             env!("CARGO_MANIFEST_DIR")
         );
         // Use default transform_target="target_details" as the sample JOLT spec
-        // outputs to { "metadata": { ... } } which matches TargetDetails structure.
+        // outputs to { "command": { ... } }
         let cfg = MetadataTransformConfig {
             spec_path,
             apply: "left".into(),
@@ -597,12 +609,7 @@ mod tests {
         let mw = MetadataTransformMiddleware::new(cfg).unwrap();
         let out = mw.left(env).await.unwrap();
         
-        // Check target_details.metadata
-        assert_eq!(
-            out.target_details
-                .as_ref()
-                .and_then(|td| td.metadata.get("dimse_op").map(|s| s.as_str())),
-            Some("find")
-        );
+        // Check that command is set
+        assert_eq!(out.resolve_operation(), Some(Operation::Query));
     }
 }

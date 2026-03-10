@@ -75,6 +75,7 @@ fn create_test_protocol_ctx(protocol: Protocol) -> ProtocolCtx {
         payload: b"test payload".to_vec(),
         meta: HashMap::new(),
         attrs: serde_json::json!({}),
+        command: None,
     }
 }
 
@@ -469,4 +470,81 @@ async fn test_backend_without_path_prefix() {
     // URI should remain unchanged when no path_prefix
     assert_eq!(target.uri, "/test");
     assert_eq!(target.base_url, "http://backend.example.com:8080");
+}
+
+#[tokio::test]
+async fn test_command_propagated_through_pipeline() {
+    use crate::models::envelope::command::{Command, Operation};
+
+    let config = create_test_config();
+    let pipeline = create_test_pipeline(vec!["test_endpoint".to_string()], vec![]);
+
+    // Create an envelope with a Command set
+    let envelope = RequestEnvelopeBuilder::new()
+        .method("GET")
+        .uri("/test")
+        .command(Some(Command::new(Operation::Query).with_source("test")))
+        .original_data(b"test data".to_vec())
+        .build()
+        .unwrap();
+
+    // Verify the request envelope has the command
+    assert_eq!(envelope.resolve_operation(), Some(Operation::Query));
+    assert_eq!(
+        envelope.command.as_ref().unwrap().source.as_deref(),
+        Some("test")
+    );
+
+    let ctx = create_test_protocol_ctx(Protocol::Http);
+
+    let result =
+        PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
+
+    assert!(result.is_ok());
+    let response = result.unwrap();
+
+    // The echo endpoint sets Operation::Ping, which replaces the original Query command.
+    // What matters is that the response has *a* command — proving the pipeline propagates it.
+    assert!(
+        response.command.is_some(),
+        "Command should be propagated to the response envelope"
+    );
+
+    // The echo endpoint sets Ping as its command
+    assert_eq!(response.resolve_operation(), Some(Operation::Ping));
+}
+
+#[tokio::test]
+async fn test_command_present_on_response_without_backends() {
+    use crate::models::envelope::command::{Command, Operation};
+
+    let config = create_test_config();
+    let pipeline = create_test_pipeline(vec!["test_endpoint".to_string()], vec![]);
+
+    // Create an envelope with skip_backends so we get a response without backend processing
+    let mut envelope = RequestEnvelopeBuilder::new()
+        .method("GET")
+        .uri("/test")
+        .command(Some(Command::new(Operation::Retrieve)))
+        .original_data(b"test data".to_vec())
+        .build()
+        .unwrap();
+    envelope
+        .request_details
+        .metadata
+        .insert("skip_backends".to_string(), "true".to_string());
+
+    let ctx = create_test_protocol_ctx(Protocol::Http);
+
+    let result =
+        PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
+
+    assert!(result.is_ok());
+    let response = result.unwrap();
+
+    // Response should carry the command from the pipeline
+    assert!(
+        response.command.is_some(),
+        "Response should have a command even when backends are skipped"
+    );
 }

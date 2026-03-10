@@ -167,6 +167,8 @@ impl ServiceHandler<Value> for JmixEndpoint {
         mut envelope: RequestEnvelope<Vec<u8>>,
         options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
+        use crate::models::envelope::command::{Command, Operation};
+
         let method = envelope.request_details.method.to_uppercase();
         let subpath = envelope
             .request_details
@@ -176,6 +178,21 @@ impl ServiceHandler<Value> for JmixEndpoint {
             .unwrap_or_default();
 
         tracing::debug!("JMIX SERVICE: method='{}', subpath='{}'", method, subpath);
+
+        // Set a typed Command based on the JMIX route
+        let operation = match method.as_str() {
+            "GET" | "HEAD" if subpath.starts_with("api/jmix/") => Some(Operation::Retrieve),
+            "GET" | "HEAD" if subpath == "api/jmix" => {
+                // GET /api/jmix?studyInstanceUid=... is a query
+                Some(Operation::Query)
+            }
+            "POST" if subpath == "api/jmix" => Some(Operation::Store),
+            _ => None,
+        };
+
+        if let Some(op) = operation {
+            envelope.command = Some(Command::new(op).with_source("jmix_endpoint"));
+        }
 
         // Pass endpoint options to middleware via metadata
         envelope
@@ -295,7 +312,7 @@ impl ServiceHandler<Value> for JmixEndpoint {
                 }
 
                 // Let the DICOM backend determine the appropriate operation
-                // based on its dimse_operation configuration
+                // based on its Command configuration
 
                 // Let middleware check if local JMIX exists; if not, backends will handle it
                 return Ok(envelope);
@@ -540,12 +557,13 @@ impl ServiceHandler<Value> for JmixEndpoint {
             response_metadata.insert("jmix_zip_ready".to_string(), zip_ready.clone());
         }
 
-        let mut response_envelope = ResponseEnvelope::from_backend(
+        let mut response_envelope = ResponseEnvelope::from_backend_with_command(
             envelope.request_details.clone(),
             status,
             headers,
             body,
             Some(response_metadata),
+            envelope.command.clone(),
         );
 
         // Preserve normalized_data

@@ -442,6 +442,7 @@ impl PipelineExecutor {
             .metadata(envelope.request_details.metadata.clone())
             .backend_request_details(envelope.backend_request_details.clone())
             .target_details(envelope.target_details.clone())
+            .command(envelope.command.clone())
             .original_data(json_value.clone())
             .normalized_data(Some(json_value))
             .normalized_snapshot(envelope.normalized_snapshot.clone())
@@ -487,6 +488,7 @@ impl PipelineExecutor {
             .metadata(processed_json_envelope.request_details.metadata)
             .backend_request_details(processed_json_envelope.backend_request_details)
             .target_details(processed_json_envelope.target_details)
+            .command(processed_json_envelope.command)
             .original_data(envelope.original_data)
             .normalized_data(processed_json_envelope.normalized_data)
             .normalized_snapshot(processed_json_envelope.normalized_snapshot)
@@ -871,12 +873,13 @@ impl PipelineExecutor {
                 (200, Vec::new())
             };
 
-            let mut response = ResponseEnvelope::from_backend(
+            let mut response = ResponseEnvelope::from_backend_with_command(
                 envelope.request_details.clone(),
                 status_code,
                 HashMap::new(),
                 body,
                 None,
+                envelope.command.clone(),
             );
 
             // Preserve normalized_data for outgoing middleware
@@ -888,12 +891,13 @@ impl PipelineExecutor {
         // If no backends configured, return empty response
         if pipeline.backends.is_empty() {
             tracing::info!("No backends configured - returning empty response");
-            return Ok(ResponseEnvelope::from_backend(
+            return Ok(ResponseEnvelope::from_backend_with_command(
                 envelope.request_details.clone(),
                 200,
                 HashMap::new(),
                 Vec::new(),
                 None,
+                envelope.command.clone(),
             ));
         }
 
@@ -921,12 +925,13 @@ impl PipelineExecutor {
         }
 
         // Backend referenced but not found - return 502
-        Ok(ResponseEnvelope::from_backend(
+        Ok(ResponseEnvelope::from_backend_with_command(
             envelope.request_details.clone(),
             502,
             HashMap::from([("content-type".to_string(), "text/plain".to_string())]),
             b"Backend not found in configuration".to_vec(),
             None,
+            envelope.command.clone(),
         ))
     }
 

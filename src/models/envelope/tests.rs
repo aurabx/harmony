@@ -1,5 +1,6 @@
 #![cfg(test)]
 
+use crate::models::envelope::command::{Command, Operation};
 use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope, RequestEnvelopeBuilder};
 use std::collections::HashMap;
 
@@ -371,4 +372,149 @@ fn test_request_envelope_builder_via_envelope() {
 
     assert_eq!(envelope.request_details.method, "GET");
     assert_eq!(envelope.request_details.uri, "/via-envelope");
+}
+
+// Command tests
+
+#[test]
+fn test_builder_with_command() {
+    let envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
+        .method("POST")
+        .uri("/dicom")
+        .operation(Operation::Query)
+        .original_data(vec![])
+        .build()
+        .unwrap();
+
+    assert!(envelope.command.is_some());
+    let cmd = envelope.command.unwrap();
+    assert_eq!(cmd.operation, Operation::Query);
+}
+
+#[test]
+fn test_builder_with_full_command() {
+    let cmd = Command::new(Operation::Retrieve)
+        .with_source("test")
+        .with_param("retrieve_mode", serde_json::json!("move"));
+
+    let envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
+        .method("POST")
+        .uri("/dicom")
+        .command(Some(cmd))
+        .original_data(vec![])
+        .build()
+        .unwrap();
+
+    assert!(envelope.command.is_some());
+    let cmd = envelope.command.unwrap();
+    assert_eq!(cmd.operation, Operation::Retrieve);
+    assert_eq!(cmd.source, Some("test".to_string()));
+    assert_eq!(
+        cmd.params.get("retrieve_mode"),
+        Some(&serde_json::json!("move"))
+    );
+}
+
+#[test]
+fn test_set_command() {
+    let mut envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
+        .method("GET")
+        .uri("/test")
+        .original_data(vec![])
+        .build()
+        .unwrap();
+
+    assert!(envelope.command.is_none());
+
+    envelope.set_command(Operation::Store);
+
+    assert!(envelope.command.is_some());
+    assert_eq!(
+        envelope.command.as_ref().unwrap().operation,
+        Operation::Store
+    );
+}
+
+#[test]
+fn test_set_command_with_params() {
+    let mut envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
+        .method("GET")
+        .uri("/test")
+        .original_data(vec![])
+        .build()
+        .unwrap();
+
+    let mut params = HashMap::new();
+    params.insert("query_level".to_string(), serde_json::json!("STUDY"));
+    params.insert("limit".to_string(), serde_json::json!(100));
+
+    envelope.set_command_with_params(Operation::Query, params);
+
+    let cmd = envelope.command.as_ref().unwrap();
+    assert_eq!(cmd.operation, Operation::Query);
+    assert_eq!(
+        cmd.params.get("query_level"),
+        Some(&serde_json::json!("STUDY"))
+    );
+    assert_eq!(cmd.params.get("limit"), Some(&serde_json::json!(100)));
+}
+
+#[test]
+fn test_resolve_operation_from_command() {
+    let mut envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
+        .method("GET")
+        .uri("/test")
+        .original_data(vec![])
+        .build()
+        .unwrap();
+
+    envelope.command = Some(Command::new(Operation::Query));
+
+    assert_eq!(envelope.resolve_operation(), Some(Operation::Query));
+}
+
+#[test]
+fn test_resolve_operation_command_takes_precedence() {
+    let mut envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
+        .method("GET")
+        .uri("/test")
+        .original_data(vec![])
+        .build()
+        .unwrap();
+
+    // Set command
+    envelope.command = Some(Command::new(Operation::Store));
+
+    assert_eq!(envelope.resolve_operation(), Some(Operation::Store));
+}
+
+#[test]
+fn test_resolve_operation_returns_none_when_nothing_set() {
+    let envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
+        .method("GET")
+        .uri("/test")
+        .original_data(vec![])
+        .build()
+        .unwrap();
+
+    assert!(envelope.command.is_none());
+    assert_eq!(envelope.resolve_operation(), None);
+}
+
+#[test]
+fn test_resolve_command_from_explicit_command() {
+    let original_cmd = Command::new(Operation::Ping).with_source("test_source");
+
+    let mut envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
+        .method("GET")
+        .uri("/test")
+        .original_data(vec![])
+        .build()
+        .unwrap();
+
+    envelope.command = Some(original_cmd);
+
+    let resolved = envelope.resolve_command().unwrap();
+    assert_eq!(resolved.operation, Operation::Ping);
+    assert_eq!(resolved.source, Some("test_source".to_string()));
 }

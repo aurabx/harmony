@@ -59,10 +59,20 @@ impl Middleware for DicomToDicomwebMiddleware {
         &self,
         mut envelope: RequestEnvelope<Value>,
     ) -> Result<RequestEnvelope<Value>, Error> {
-        // Check dimse_op metadata (standard format: "find", "get", "move", "store")
-        let op = match envelope.request_details.metadata.get("dimse_op") {
-            Some(o) => o.to_lowercase(),
-            None => return Ok(envelope),
+        use crate::models::envelope::command::Operation;
+
+        // Resolve the operation via Command
+        let op = match envelope.resolve_operation() {
+            Some(Operation::Query) => "find".to_string(),
+            Some(Operation::Store) => "store".to_string(),
+            Some(Operation::Retrieve) => "get".to_string(),
+            Some(Operation::Move) => "move".to_string(),
+            Some(Operation::Ping) => return Ok(envelope), // nothing to transform for echo
+            Some(_) => return Ok(envelope),               // unsupported operations pass through
+            None => {
+                // No command -- nothing to transform
+                return Ok(envelope);
+            }
         };
 
         // Transform based on operation type
@@ -86,32 +96,38 @@ impl Middleware for DicomToDicomwebMiddleware {
         &self,
         mut envelope: ResponseEnvelope<Value>,
     ) -> Result<ResponseEnvelope<Value>, Error> {
-        let op = envelope
-            .request_details
-            .metadata
-            .get("dimse_op")
-            .map(|s| s.to_lowercase())
-            .unwrap_or_default();
+        use crate::models::envelope::command::Operation;
 
         let http_status = envelope.response_details.status;
-        debug!(
-            "dicom_to_dicomweb right: dimse_op={}, http_status={}",
-            op, http_status
-        );
 
-        // Convert HTTP response to expected DIMSE result
-        match op.as_str() {
-            "find" => {
+        // Read the operation from the command carried on the response envelope
+        match envelope.resolve_operation() {
+            Some(Operation::Query) => {
+                debug!(
+                    "dicom_to_dicomweb right: operation=query, http_status={}",
+                    http_status
+                );
                 self.transform_cfind_response(&mut envelope)?;
             }
-            "store" => {
+            Some(Operation::Store) => {
+                debug!(
+                    "dicom_to_dicomweb right: operation=store, http_status={}",
+                    http_status
+                );
                 self.transform_cstore_response(&mut envelope)?;
             }
-            "get" | "move" => {
+            Some(Operation::Retrieve | Operation::Move) => {
+                debug!(
+                    "dicom_to_dicomweb right: operation=retrieve/move, http_status={}",
+                    http_status
+                );
                 self.transform_cget_cmove_response(&mut envelope)?;
             }
-            _ => {
-                debug!("Unknown or missing dimse_op in response: {}", op);
+            other => {
+                debug!(
+                    "dicom_to_dicomweb right: no matching operation ({:?}), http_status={}",
+                    other, http_status
+                );
             }
         }
 
@@ -427,13 +443,16 @@ impl DicomToDicomwebMiddleware {
     ) -> Result<(), Error> {
         let http_status = envelope.response_details.status;
 
-        // Get the operation from request metadata
-        let op = envelope
-            .request_details
-            .metadata
-            .get("dimse_op")
-            .map(|s| s.as_str())
-            .unwrap_or("get");
+        // Map the Command operation to a DIMSE operation name for status mapping
+        use crate::models::envelope::command::Operation;
+        let op = match envelope.resolve_operation() {
+            Some(Operation::Query) => "C-FIND",
+            Some(Operation::Retrieve) => "C-GET",
+            Some(Operation::Move) => "C-MOVE",
+            Some(Operation::Store) => "C-STORE",
+            Some(Operation::Ping) => "C-ECHO",
+            _ => "C-GET",
+        };
 
         // Check for HTTP errors
         if http_status >= 400 {
@@ -481,6 +500,25 @@ impl DicomToDicomwebMiddleware {
             envelope.response_details.metadata.insert(
                 "dicom_status".to_string(),
                 format!("0x{:04X}", dicom_status::SUCCESS),
+            );
+        } else if content_type.starts_with("image/") {
+            // Image response from rendered/thumbnail DICOMweb endpoints.
+            // The backend (a DICOMweb server) already performed server-side rendering
+            // and returned a ready-to-serve image (e.g., image/jpeg, image/png).
+            // Pass through as-is — the content-type and body are preserved on the
+            // envelope for the DICOMweb endpoint to return directly in the HTTP response.
+            debug!(
+                "C-GET/C-MOVE received image response (rendered/thumbnail passthrough): {}",
+                content_type
+            );
+            envelope.response_details.metadata.insert(
+                "dicom_status".to_string(),
+                format!("0x{:04X}", dicom_status::SUCCESS),
+            );
+            // Mark as image passthrough so downstream handlers know not to transform
+            envelope.response_details.metadata.insert(
+                "response_format".to_string(),
+                "image_passthrough".to_string(),
             );
         } else {
             warn!(

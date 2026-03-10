@@ -1,0 +1,23 @@
+[
+  {
+    "operation": "shift",
+    "spec": {
+      "query_params": "query_params",
+      "headers": "headers",
+      "cookies": "cookies",
+      "metadata": "metadata",
+      "method": "method",
+      "uri": "uri"
+    }
+  },
+  {
+    "operation": "default",
+    "spec": {
+      "command": {
+        "operation": "query",
+        "params": {},
+        "source": "jolt_transform"
+      }
+    }
+  }
+]

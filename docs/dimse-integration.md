@@ -1,6 +1,6 @@
 # DIMSE Integration
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2026-02-08
 
 Harmony integrates DIMSE via:
 - **DimseAdapter**: Native DICOM DIMSE network operations (SCP) using `dicom-ul` Rust library
@@ -45,11 +45,13 @@ HttpAdapter
 RequestEnvelope
   ↓
 PipelineExecutor
-  ├─ Incoming Middleware (sets dimse_op metadata)
-  └─ DICOM Backend (SCU)
+  ├─ Incoming Middleware (sets Command)
+  └─ DICOM Backend (SCU) reads Command via resolve_operation()
   ↓
 C-ECHO/C-FIND/C-MOVE/C-GET to PACS
 ```
+
+Protocol-aware endpoints and middleware set the `Command` on the envelope. The DICOM backend reads the Command via `resolve_operation()` to select the DIMSE operation, with fallback to path-based detection when no command is set. See [commands.md](commands.md).
 
 See [adapters.md](adapters.md) for protocol adapter details.
 
@@ -104,7 +106,7 @@ local_aet = "HARMONY_SCP"
 
 ### Backend SCU Operations
 
-HTTP requests to backends configured with DICOM service will trigger DIMSE operations.
+HTTP requests to backends configured with DICOM service will trigger DIMSE operations. The DICOM SCU backend uses `resolve_operation()` to determine the DIMSE action from the `Command` on the envelope (with fallback to path-based detection).
 
 Assuming an HTTP endpoint with appropriate transforms:
 

@@ -1,8 +1,10 @@
 # Middleware
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2026-02-08
 
 Middleware extends the request/response pipeline to authenticate, enrich, or transform the `RequestEnvelope` and `ResponseEnvelope` as they flow through the `PipelineExecutor`.
+
+> **Custom Middleware**: To create your own middleware types, see [extensions.md](extensions.md#middleware-factories).
 
 ## Architecture
 
@@ -226,7 +228,7 @@ Example:
 [middleware.fhir_dimse_meta]
 type = "metadata_transform"
 [middleware.fhir_dimse_meta.options]
-spec_path = "transforms/metadata_set_dimse_op.json"
+spec_path = "transforms/metadata_set_command.json"
 apply = "left"
 fail_on_error = true
 ```
@@ -235,7 +237,7 @@ Behavior:
 - Converts metadata to JSON object for JOLT processing
 - Only string-valued outputs from JOLT are written back to metadata
 - Preserves existing metadata fields not modified by transform
-- Common use case: setting dimse_op field to control DICOM backend operations
+- Common use case: setting the `Command` on the envelope to control backend operations. If the transform output includes a `command` field, it is deserialized back as a typed `Command`. See [commands.md](commands.md).
 
 ## JMIX Builder
 
@@ -291,6 +293,7 @@ type = "dicomweb_bridge"
   - `/studies/{study}/series/{series}/instances/{instance}` → C-GET (WADO) or C-FIND (QIDO)
   - `/studies/.../metadata` → C-FIND with full metadata
   - `/studies/.../frames/{frames}` → C-GET for frame extraction
+- Sets `envelope.command` with the appropriate `Operation` (e.g., `Query` for QIDO, `Retrieve` for WADO). See [commands.md](commands.md).
 - Converts query parameters to DICOM identifiers with hex tags
 - Processes `includefield` parameter for attribute filtering
 - Sets appropriate return keys based on query level and includefield
@@ -312,6 +315,8 @@ type = "dicomweb_bridge"
 - Includefield filtering for bandwidth optimization
 - Multipart response handling for bulk data
 - Frame-level image extraction with format conversion
+
+**Command integration**: The DICOM→DICOMweb middleware (reverse direction) reads the Command via `envelope.resolve_operation()` on the `ResponseEnvelope` to dispatch the correct response formatting.
 
 This middleware enables DICOMweb endpoints to communicate with traditional DICOM PACS systems via DIMSE protocols.
 

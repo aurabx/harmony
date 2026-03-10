@@ -1,4 +1,5 @@
 use harmony::models::envelope::envelope::{RequestEnvelopeBuilder, ResponseEnvelope};
+use harmony::models::envelope::command::{Command, Operation};
 use harmony::models::middleware::middleware::Middleware;
 use harmony::models::middleware::types::dicom_to_dicomweb::DicomToDicomwebMiddleware;
 use serde_json::{json, Value};
@@ -21,13 +22,10 @@ async fn test_left_c_find_to_qido() {
         "identifier": identifier
     });
 
-    let mut metadata = HashMap::new();
-    metadata.insert("dimse_op".to_string(), "find".to_string());
-
     let envelope = RequestEnvelopeBuilder::new()
         .method("POST") // DIMSE usually comes in via some mechanism, but here we simulate internal pipeline flow
         .uri("dimse://scp/find")
-        .metadata(metadata)
+        .command(Some(Command::new(Operation::Query)))
         .original_data(Value::Null)
         .normalized_data(Some(normalized_data))
         .build()
@@ -61,13 +59,10 @@ async fn test_left_c_store_to_stow() {
         "file": path
     });
 
-    let mut metadata = HashMap::new();
-    metadata.insert("dimse_op".to_string(), "store".to_string());
-
     let envelope = RequestEnvelopeBuilder::new()
         .method("POST")
         .uri("dimse://scp/store")
-        .metadata(metadata)
+        .command(Some(Command::new(Operation::Store)))
         .original_data(Value::Null)
         .normalized_data(Some(normalized_data))
         .build()
@@ -112,13 +107,10 @@ async fn test_left_c_get_to_wado() {
         "identifier": identifier
     });
 
-    let mut metadata = HashMap::new();
-    metadata.insert("dimse_op".to_string(), "get".to_string());
-
     let envelope = RequestEnvelopeBuilder::new()
         .method("POST")
         .uri("dimse://scp/get")
-        .metadata(metadata)
+        .command(Some(Command::new(Operation::Retrieve)))
         .original_data(Value::Null)
         .normalized_data(Some(normalized_data))
         .build()
@@ -150,13 +142,10 @@ async fn test_left_c_move_to_wado() {
         "identifier": identifier
     });
 
-    let mut metadata = HashMap::new();
-    metadata.insert("dimse_op".to_string(), "move".to_string());
-
     let envelope = RequestEnvelopeBuilder::new()
         .method("POST")
         .uri("dimse://scp/move")
-        .metadata(metadata)
+        .command(Some(Command::new(Operation::Move)))
         .original_data(Value::Null)
         .normalized_data(Some(normalized_data))
         .build()
@@ -178,18 +167,23 @@ fn create_response_envelope(
     original_data: Value,
     normalized_data: Option<Value>,
 ) -> ResponseEnvelope<Value> {
-    let mut request_metadata = HashMap::new();
-    request_metadata.insert("dimse_op".to_string(), operation.to_string());
+    let request_details = harmony::models::envelope::envelope::RequestDetails::default();
 
-    let mut request_details = harmony::models::envelope::envelope::RequestDetails::default();
-    request_details.metadata = request_metadata;
+    let command = match operation {
+        "find" => Some(Command::new(Operation::Query)),
+        "get" => Some(Command::new(Operation::Retrieve)),
+        "move" => Some(Command::new(Operation::Move)),
+        "store" => Some(Command::new(Operation::Store)),
+        _ => None,
+    };
 
-    let mut envelope = ResponseEnvelope::<Value>::from_backend(
+    let mut envelope = ResponseEnvelope::<Value>::from_backend_with_command(
         request_details,
         status,
         headers,
         original_data,
         None,
+        command,
     );
     envelope.normalized_data = normalized_data;
     envelope
@@ -222,11 +216,99 @@ async fn test_right_cfind_response_array() {
         result.response_details.metadata.get("dicom_status"),
         Some(&"0x0000".to_string())
     );
+}
 
-    // Verify result_count is 2
+// ==================== Rendered/Thumbnail Passthrough Tests ====================
+
+#[tokio::test]
+async fn test_right_cget_response_image_jpeg_passthrough() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // DICOMweb backend returns image/jpeg for a rendered endpoint
+    let mut headers = HashMap::new();
+    headers.insert("content-type".to_string(), "image/jpeg".to_string());
+
+    let envelope = create_response_envelope(
+        "get",
+        200,
+        headers,
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is SUCCESS (not FAILURE)
     assert_eq!(
-        result.response_details.metadata.get("result_count"),
-        Some(&"2".to_string())
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
+
+    // Verify it's marked as image passthrough
+    assert_eq!(
+        result.response_details.metadata.get("response_format"),
+        Some(&"image_passthrough".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_right_cget_response_image_png_passthrough() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // DICOMweb backend returns image/png for a thumbnail endpoint
+    let mut headers = HashMap::new();
+    headers.insert("content-type".to_string(), "image/png".to_string());
+
+    let envelope = create_response_envelope(
+        "get",
+        200,
+        headers,
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is SUCCESS
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
+
+    // Verify it's marked as image passthrough
+    assert_eq!(
+        result.response_details.metadata.get("response_format"),
+        Some(&"image_passthrough".to_string())
+    );
+}
+
+#[tokio::test]
+async fn test_right_cget_response_image_gif_passthrough() {
+    let middleware = DicomToDicomwebMiddleware::new();
+
+    // Some backends might return image/gif for multi-frame rendered
+    let mut headers = HashMap::new();
+    headers.insert("content-type".to_string(), "image/gif".to_string());
+
+    let envelope = create_response_envelope(
+        "get",
+        200,
+        headers,
+        Value::Null,
+        None,
+    );
+
+    let result = middleware.right(envelope).await.expect("Middleware failed");
+
+    // Verify DICOM status is SUCCESS (any image/* should be accepted)
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
+
+    assert_eq!(
+        result.response_details.metadata.get("response_format"),
+        Some(&"image_passthrough".to_string())
     );
 }
 

@@ -1,6 +1,6 @@
 # Router and Pipeline Architecture
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2026-02-08
 
 Harmony uses a protocol-agnostic adapter architecture. This document describes the unified pipeline that handles all protocols (HTTP, DIMSE, HL7, etc.).
 
@@ -46,9 +46,9 @@ Protocol Adapter (HttpAdapter/DimseAdapter/...)
 ProtocolCtx + RequestEnvelope
   ↓
 PipelineExecutor (UNIFIED FOR ALL PROTOCOLS)
-  ├─ 1. Endpoint Service Preprocessing
-  ├─ 2. Incoming Middleware Chain (left)
-  ├─ 3. Backend Invocation  
+  ├─ 1. Endpoint Service Preprocessing (sets Command on envelope)
+  ├─ 2. Incoming Middleware Chain (left) (may read/modify Command)
+  ├─ 3. Backend Invocation (reads Command to decide protocol action)
   ├─ 4. Outgoing Middleware Chain (right)
   └─ 5. Endpoint Service Postprocessing
   ↓
@@ -70,9 +70,9 @@ Protocol Response (HTTP/DIMSE/HL7/...)
    - Builds `RequestEnvelope` via service
    
 3. **PipelineExecutor processes the request**:
-   a. **Endpoint preprocessing**: Service-specific request handling
-   b. **Incoming middleware** (left): Auth, transforms, logging (in order)
-   c. **Backend invocation**: Forward to external service/system
+   a. **Endpoint preprocessing**: Service-specific request handling. The endpoint sets a typed `Command` on the envelope expressing the intended operation (e.g., Query, Retrieve, Store). See [commands.md](commands.md).
+   b. **Incoming middleware** (left): Auth, transforms, logging (in order). Protocol-bridge middleware may read or modify the Command.
+   c. **Backend invocation**: The backend reads the Command (via `resolve_operation()`) to decide what protocol action to perform (e.g., map `Query` to C-FIND, or to HTTP GET).
    d. **Outgoing middleware** (right): Response transforms, logging (in order)
    e. **Endpoint postprocessing**: Protocol-aware response shaping
    
@@ -138,11 +138,11 @@ src/
 ```
 Protocol Adapter
   ↓
-Endpoint Preprocessing
+Endpoint Preprocessing (sets Command on envelope)
   ↓
-Incoming Middleware (auth, transforms, etc.)
+Incoming Middleware (auth, transforms, may modify Command)
   ↓
-Backend
+Backend (reads Command to select protocol action)
   ↓
 Outgoing Middleware (transforms, logging, etc.)
   ↓
@@ -155,14 +155,20 @@ Protocol Adapter
 
 ## Concepts
 
-- Endpoint
-  - Entry/exit point converting HTTP requests/responses to/from internal Envelopes.
+- **Envelope**
+  - Protocol-agnostic data carrier. A `RequestEnvelope` carries the request, a `ResponseEnvelope` carries the response. See [envelope.md](envelope.md).
 
-- Middleware
-  - Single ordered chain that augments the flow (auth, transforms, logging, header injection).
+- **Command**
+  - A typed description of operational intent (e.g., `Query`, `Retrieve`, `Store`, `Ping`) set on the `RequestEnvelope`. Endpoints produce commands; backends consume them. See [commands.md](commands.md).
 
-- Backend
-  - Outbound connector to external services; converts Envelopes to protocol-specific requests.
+- **Endpoint**
+  - Entry/exit point converting protocol requests/responses to/from internal Envelopes. Sets a `Command` on the envelope during preprocessing.
+
+- **Middleware**
+  - Single ordered chain that augments the flow (auth, transforms, logging, header injection). Protocol-bridge middleware may read or modify the Command.
+
+- **Backend**
+  - Outbound connector to external services; reads the Command (via `resolve_operation()`) to decide what protocol action to perform.
 
 Notes
 - Place authentication early in the middleware list to fail fast.

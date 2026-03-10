@@ -86,6 +86,10 @@ impl ServiceHandler<Value> for EchoEndpoint {
         mut envelope: RequestEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
+        // Echo endpoint always represents a Ping operation
+        use crate::models::envelope::command::{Command, Operation};
+        envelope.command = Some(Command::new(Operation::Ping).with_source("echo_endpoint"));
+
         // Capture subpath from request metadata inserted by dispatcher
         let subpath = envelope
             .request_details
@@ -161,12 +165,13 @@ impl ServiceHandler<Value> for EchoEndpoint {
         let body_json =
             serde_json::to_vec(&envelope.normalized_data).unwrap_or_else(|_| Vec::new());
 
-        let mut response_envelope = ResponseEnvelope::from_backend(
+        let mut response_envelope = ResponseEnvelope::from_backend_with_command(
             envelope.request_details.clone(),
             status,
             headers,
             body_json,
             None,
+            envelope.command.clone(),
         );
 
         // Set normalized_data to the echoed content

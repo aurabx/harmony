@@ -166,6 +166,17 @@ impl ServiceType for HttpEndpoint {
             .unwrap_or("")
             .to_string();
 
+        // The HTTP method is recorded on the envelope but we do NOT derive a
+        // Command from it here. An HTTP method is ambiguous: POST could mean
+        // Store, Query (FHIR _search), or Ping (/dicom/echo). Protocol-aware
+        // endpoints (DICOMweb, FHIR, DICOM SCP) set the Command in their own
+        // endpoint_incoming_request() where they have enough context to
+        // disambiguate.
+        //
+        // When the HTTP endpoint acts as a *backend* (outbound), it DOES read
+        // envelope.command to override the HTTP method for protocol bridging
+        // (see backend_outgoing_request below).
+
         // Content-type-aware parsing
         use crate::adapters::http::content_type::*;
         use crate::models::envelope::envelope::{ContentMetadata, ParseStatus};
@@ -295,6 +306,7 @@ impl ServiceType for HttpEndpoint {
             .cache_status(cache_status)
             .metadata(metadata)
             .content_metadata(content_metadata)
+            .command(None)
             .target_details(None)
             .original_data(ctx.payload)
             .normalized_data(normalized_data)
@@ -364,6 +376,30 @@ impl ServiceHandler<Value> for HttpEndpoint {
             target
         };
 
+        // If an explicit Command is set on the envelope, use it to override the HTTP method
+        // This enables protocol-bridging scenarios (e.g., DICOM -> HTTP)
+        if let Some(ref cmd) = envelope.command {
+            use crate::models::envelope::command::Operation;
+            let overridden_method = match cmd.operation {
+                Operation::Query | Operation::Retrieve => "GET",
+                Operation::Store => "POST",
+                Operation::Update => "PUT",
+                Operation::Patch => "PATCH",
+                Operation::Delete => "DELETE",
+                Operation::Ping => "HEAD",
+                _ => target_details.method.as_str(),
+            };
+            if overridden_method != target_details.method {
+                tracing::debug!(
+                    "HTTP backend: Command({}) overriding method {} -> {}",
+                    cmd.operation,
+                    target_details.method,
+                    overridden_method
+                );
+                target_details.method = overridden_method.to_string();
+            }
+        }
+
         // Apply path_prefix from backend options if present
         // This prepends a path to the request URI (e.g., "/api" + "/users" = "/api/users")
         if let Some(path_prefix) = options
@@ -412,12 +448,13 @@ impl ServiceHandler<Value> for HttpEndpoint {
             body_bytes.len()
         );
 
-        let mut response_envelope = ResponseEnvelope::from_backend(
+        let mut response_envelope = ResponseEnvelope::from_backend_with_command(
             envelope.request_details.clone(),
             status,
             response_headers,
             body_bytes,
             None,
+            envelope.command.clone(),
         );
 
         // Try to parse response as JSON if content-type indicates JSON

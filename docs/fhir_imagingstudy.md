@@ -24,9 +24,9 @@ HTTP Response ← FHIR Bundle ← [Transform] ← json_extractor ← DICOM JSON 
 2. **FHIR Endpoint**: Processes the REST request and extracts query parameters
 3. **imagingstudy_filter**: Validates path matches "/ImagingStudy" pattern, rejects others with 404
 4. **json_extractor**: Copies HTTP request body to `normalized_data`
-5. **fhir_dimse_meta**: Sets `dimse_op="find"` in request metadata using metadata_set_dimse_op.json
+5. **fhir_dimse_meta**: Sets `Command { operation: Query }` on the envelope using metadata_set_command.json
 6. **Transform Middleware** (optional): Maps query parameters for DICOM backend
-7. **DICOM Backend**: Executes C-FIND STUDY with PatientID filter (uses dimse_op from metadata)
+7. **DICOM Backend**: Executes C-FIND STUDY with PatientID filter (reads Command via `resolve_operation()`)
 8. **json_extractor**: Processes DICOM JSON response
 9. **Transform Middleware**: Converts DICOM study data to FHIR ImagingStudy Bundle
 10. **HTTP Response**: Returns FHIR Bundle with ImagingStudy resources
@@ -167,7 +167,7 @@ rules = [
 [middleware.fhir_dimse_meta]
 type = "metadata_transform"
 [middleware.fhir_dimse_meta.options]
-spec_path = "examples/fhir_dicom/transforms/metadata_set_dimse_op.json"
+spec_path = "examples/fhir_dicom/transforms/metadata_set_command.json"
 apply = "left"
 fail_on_error = true
 

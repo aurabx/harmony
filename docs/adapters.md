@@ -1,10 +1,12 @@
 # Protocol Adapters
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2025-01-31
 
 ## Overview
 
 Protocol adapters are the foundation of Harmony's protocol-agnostic architecture. Each protocol (HTTP, DIMSE, HL7, etc.) has a dedicated adapter that handles protocol-specific I/O while using the unified `PipelineExecutor` for all business logic.
+
+> **Related**: For creating custom services and middleware that work with protocol adapters, see [extensions.md](extensions.md).
 
 **Dynamic Adapter Selection**: Harmony automatically determines which protocol adapters to start for each network based on the services configured in that network's pipelines. This means:
 - Networks with only HTTP-based services (http, jmix, fhir, etc.) start only the `HttpAdapter`

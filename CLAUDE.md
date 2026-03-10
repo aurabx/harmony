@@ -1,8 +1,3 @@
-# warp.md
-
-This file provides guidance to WARP (warp.dev) when working with code in this repository.
-
-Follow the AI Agent Constitution at .aiassistant/rules/constitution.md at all times.
 
 Repository: harmony-proxy - Rust-based proxy/gateway for data meshes (with first-class healthcare support)
 

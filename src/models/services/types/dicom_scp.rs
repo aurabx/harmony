@@ -179,6 +179,7 @@ impl ServiceType for DicomScpEndpoint {
         ctx: crate::models::protocol::ProtocolCtx,
         _options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
+        use crate::models::envelope::command::Operation;
         use crate::models::protocol::Protocol;
         use std::collections::HashMap as Map;
 
@@ -188,13 +189,18 @@ impl ServiceType for DicomScpEndpoint {
             ));
         }
 
-        // Build RequestDetails from protocol context
-        let metadata: Map<String, String> = ctx.meta.clone();
-        let op = metadata
-            .get("dimse_op")
-            .cloned()
-            .unwrap_or_else(|| "dimse".into());
+        // Derive the DIMSE operation name and URI from the typed Command.
+        let command = ctx.command;
+        let op = match command.as_ref().map(|c| c.operation) {
+            Some(Operation::Query) => "find",
+            Some(Operation::Retrieve) => "get",
+            Some(Operation::Move) => "move",
+            Some(Operation::Store) => "store",
+            Some(Operation::Ping) => "echo",
+            _ => "dimse",
+        };
         let uri = format!("dimse://scp/{}", op);
+        let metadata: Map<String, String> = ctx.meta.clone();
 
         // Parse normalized_data from payload if it's JSON
         let normalized: Option<serde_json::Value> = serde_json::from_slice(&ctx.payload).ok();
@@ -207,6 +213,7 @@ impl ServiceType for DicomScpEndpoint {
             .query_params(Map::new())
             .cache_status(None)
             .metadata(metadata)
+            .command(command)
             .target_details(None)
             .original_data(ctx.payload)
             .normalized_data(normalized)
@@ -228,20 +235,19 @@ impl ServiceHandler<Value> for DicomScpEndpoint {
         // The envelope has already been built by build_protocol_envelope
         // Here we can add additional validation or preprocessing if needed
 
-        // Validate operation type (dimse_op uses lowercase: "find", "get", "move", "store", "echo")
-        let operation = envelope
-            .request_details
-            .metadata
-            .get("dimse_op")
-            .ok_or_else(|| Error::from("Missing dimse_op in DIMSE request"))?;
-
-        // Ensure operation is supported
-        let valid_ops = ["echo", "find", "move", "get", "store"];
-        if !valid_ops.contains(&operation.to_lowercase().as_str()) {
-            return Err(Error::from(format!(
-                "Unsupported DIMSE operation: {}",
-                operation
-            )));
+        // Validate that a supported Command was set by build_protocol_envelope
+        use crate::models::envelope::command::Operation;
+        match envelope.resolve_operation() {
+            Some(Operation::Query | Operation::Retrieve | Operation::Move | Operation::Store | Operation::Ping) => {}
+            Some(op) => {
+                return Err(Error::from(format!(
+                    "Unsupported DICOM operation: {}",
+                    op
+                )));
+            }
+            None => {
+                return Err(Error::from("Missing Command on DIMSE request envelope"));
+            }
         }
 
         Ok(envelope)
