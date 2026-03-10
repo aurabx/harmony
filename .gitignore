@@ -66,3 +66,8 @@ harmony.log
 /harmony-arm64
 examples/cstore-filesystem/data/
 /test_upload.txt
+/.agents
+/.automatic
+/.claude
+/.mcp.json
+/opencode.json
