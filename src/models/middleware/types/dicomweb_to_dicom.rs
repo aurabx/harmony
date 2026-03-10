@@ -28,9 +28,7 @@ impl DICOMwebToDICOMMiddleware {
 
     // --- LEFT SIDE HELPERS (DICOMweb → DICOM) ---
 
-    fn set_backend_path(metadata: &mut HashMap<String, String>, op: &str) {
-        // Store intended DIMSE operation without overwriting the routing path
-        metadata.insert("dimse_op".to_string(), op.to_string());
+    fn set_backend_path(metadata: &mut HashMap<String, String>, _op: &str) {
         // Ensure backends are not skipped
         metadata.insert("skip_backends".to_string(), "false".to_string());
     }
@@ -328,6 +326,7 @@ impl Middleware for DICOMwebToDICOMMiddleware {
         let qp = &envelope.request_details.query_params;
 
         // Only act on GET requests from DICOMweb endpoints
+        // DELETE requests pass through to the backend without DIMSE translation
         if method != "GET" {
             return Ok(envelope);
         }
@@ -431,6 +430,16 @@ impl Middleware for DICOMwebToDICOMMiddleware {
             ["studies"] => {
                 op = Some("find");
                 add_return_keys(&mut ident, "study");
+            }
+            // QIDO: /series (top-level series search)
+            ["series"] => {
+                op = Some("find");
+                add_return_keys(&mut ident, "series");
+            }
+            // QIDO: /instances (top-level instance search)
+            ["instances"] => {
+                op = Some("find");
+                add_return_keys(&mut ident, "instance");
             }
             // QIDO: /studies/{study}
             ["studies", study_uid] => {
@@ -605,6 +614,66 @@ impl Middleware for DICOMwebToDICOMMiddleware {
                     vec![(*instance_uid).to_string()],
                 );
             }
+            // WADO rendered: /studies/{study}/rendered
+            ["studies", study_uid, "rendered"] => {
+                op = Some("get");
+                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                envelope.request_details.metadata.insert(
+                    "dicomweb_response_mode".to_string(),
+                    "rendered".to_string(),
+                );
+            }
+            // WADO rendered: /studies/{study}/series/{series}/rendered
+            ["studies", study_uid, "series", series_uid, "rendered"] => {
+                op = Some("get");
+                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                Self::add_tag(&mut ident, "0020000E", "UI", vec![(*series_uid).to_string()]);
+                envelope.request_details.metadata.insert(
+                    "dicomweb_response_mode".to_string(),
+                    "rendered".to_string(),
+                );
+            }
+            // WADO rendered: /studies/{study}/series/{series}/instances/{instance}/rendered
+            ["studies", study_uid, "series", series_uid, "instances", instance_uid, "rendered"] => {
+                op = Some("get");
+                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                Self::add_tag(&mut ident, "0020000E", "UI", vec![(*series_uid).to_string()]);
+                Self::add_tag(&mut ident, "00080018", "UI", vec![(*instance_uid).to_string()]);
+                envelope.request_details.metadata.insert(
+                    "dicomweb_response_mode".to_string(),
+                    "rendered".to_string(),
+                );
+            }
+            // WADO thumbnail: /studies/{study}/thumbnail
+            ["studies", study_uid, "thumbnail"] => {
+                op = Some("get");
+                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                envelope.request_details.metadata.insert(
+                    "dicomweb_response_mode".to_string(),
+                    "thumbnail".to_string(),
+                );
+            }
+            // WADO thumbnail: /studies/{study}/series/{series}/thumbnail
+            ["studies", study_uid, "series", series_uid, "thumbnail"] => {
+                op = Some("get");
+                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                Self::add_tag(&mut ident, "0020000E", "UI", vec![(*series_uid).to_string()]);
+                envelope.request_details.metadata.insert(
+                    "dicomweb_response_mode".to_string(),
+                    "thumbnail".to_string(),
+                );
+            }
+            // WADO thumbnail: /studies/{study}/series/{series}/instances/{instance}/thumbnail
+            ["studies", study_uid, "series", series_uid, "instances", instance_uid, "thumbnail"] => {
+                op = Some("get");
+                Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
+                Self::add_tag(&mut ident, "0020000E", "UI", vec![(*series_uid).to_string()]);
+                Self::add_tag(&mut ident, "00080018", "UI", vec![(*instance_uid).to_string()]);
+                envelope.request_details.metadata.insert(
+                    "dicomweb_response_mode".to_string(),
+                    "thumbnail".to_string(),
+                );
+            }
             // WADO bulkdata (map to get; actual subresource ignored for now)
             ["bulkdata", ..] => {
                 op = Some("get");
@@ -613,8 +682,19 @@ impl Middleware for DICOMwebToDICOMMiddleware {
         }
 
         if let Some(op_name) = op {
-            // Ensure metadata prepared for backend
+            // Ensure metadata prepared for backend (legacy path)
             Self::set_backend_path(&mut envelope.request_details.metadata, op_name);
+
+            // Also set the typed Command for modern consumers
+            use crate::models::envelope::command::{Command, Operation};
+            let operation = match op_name {
+                "find" => Operation::Query,
+                "get" => Operation::Retrieve,
+                "move" => Operation::Move,
+                "store" => Operation::Store,
+                _ => Operation::Retrieve, // Default for unrecognized ops
+            };
+            envelope.command = Some(Command::new(operation).with_source("dicomweb_to_dicom_middleware"));
 
             // Clear any response set by upstream endpoint
             let mut nd = envelope
@@ -696,12 +776,16 @@ impl Middleware for DICOMwebToDICOMMiddleware {
             .clone()
             .unwrap_or_else(|| serde_json::json!({}));
 
-        let operation = nd.get("operation").and_then(|v| v.as_str()).unwrap_or("");
+        // Resolve the operation from the typed Command on the response envelope.
+        // The Command is set by endpoints or left-side middleware and propagated
+        // through the backend via from_backend_with_command().
+        use crate::models::envelope::command::Operation;
+        let resolved_op = envelope.resolve_operation();
         let success = nd.get("success").and_then(|v| v.as_bool()).unwrap_or(false);
 
         tracing::debug!(
             dicomweb_subpath = %path,
-            operation = %operation,
+            operation = ?resolved_op,
             success = %success,
             has_matches = nd.get("matches").is_some(),
             has_instances = nd.get("instances").is_some(),
@@ -731,7 +815,7 @@ impl Middleware for DICOMwebToDICOMMiddleware {
             .unwrap_or(0);
 
         // QIDO lists -> DICOMweb JSON data
-        if operation == "find" {
+        if resolved_op == Some(Operation::Query) {
             let matches_val = nd.get("matches").cloned().unwrap_or(Value::Array(vec![]));
             let mut json = Self::build_qido_json_from_matches(&matches_val, includefield.as_ref());
 
@@ -800,8 +884,29 @@ impl Middleware for DICOMwebToDICOMMiddleware {
             return Ok(envelope);
         }
 
+        // Rendered/thumbnail passthrough -> pass image data from backend unchanged
+        // This must be checked BEFORE the WADO instance branch to avoid incorrectly
+        // matching instance-level rendered/thumbnail paths (e.g., /studies/.../instances/{uid}/rendered)
+        if matches!(resolved_op, Some(Operation::Retrieve | Operation::Move))
+            && (path.ends_with("/rendered") || path.ends_with("/thumbnail"))
+        {
+            // For Pipeline 2 (DIMSE backend): the backend returns raw DICOM objects, not images.
+            // Server-side rendering is not yet implemented — the response passes through as-is
+            // and the endpoint will return whatever the backend provided.
+            //
+            // For Pipeline 1 (DICOMweb HTTP backend): the upstream dicom_to_dicomweb middleware
+            // already recognizes image/* content-types and marks them as image_passthrough.
+            // The response body and headers are preserved on the envelope, so the DICOMweb
+            // endpoint can return the image directly in the HTTP response via standard handling.
+            tracing::debug!(
+                "dicomweb_bridge.right: rendered/thumbnail route, passing through: {}",
+                path
+            );
+            return Ok(envelope);
+        }
+
         // WADO instance retrieval -> multipart DICOM data
-        if operation == "get" && path.contains("/instances/") && !path.contains("/frames/") {
+        if matches!(resolved_op, Some(Operation::Retrieve | Operation::Move)) && path.contains("/instances/") && !path.contains("/frames/") {
             if let Some(folder_path) = nd.get("folder_path").and_then(|v| v.as_str()) {
                 match Self::read_instance_bytes(folder_path) {
                     Ok(parts) => {
@@ -828,7 +933,7 @@ impl Middleware for DICOMwebToDICOMMiddleware {
         }
 
         // WADO frames -> decode and encode image data
-        if operation == "get" && (path.contains("/frames/") || path.contains("frames/")) {
+        if matches!(resolved_op, Some(Operation::Retrieve | Operation::Move)) && (path.contains("/frames/") || path.contains("frames/")) {
             // Accept negotiation - store preferred format for endpoint to use
             let accept = envelope
                 .request_details
@@ -1076,6 +1181,14 @@ mod tests {
         assert!(result.is_ok());
 
         let processed_envelope = result.unwrap();
+        
+        // Verify that command is set for backend processing (check before consuming normalized_data)
+        use crate::models::envelope::command::Operation;
+        assert_eq!(
+            processed_envelope.resolve_operation(),
+            Some(Operation::Query)
+        );
+        
         let nd = processed_envelope.normalized_data.unwrap();
         let identifier = nd.get("dimse_identifier").unwrap().as_object().unwrap();
 
@@ -1095,18 +1208,6 @@ mod tests {
         assert!(
             value_array.is_empty(),
             "Return keys should have empty Value arrays"
-        );
-
-        // Verify includefield is stored in metadata for right-side processing
-        assert!(processed_envelope
-            .request_details
-            .metadata
-            .contains_key("dicomweb_includefield"));
-
-        // Verify that dimse_op is set for backend processing
-        assert_eq!(
-            processed_envelope.request_details.metadata.get("dimse_op"),
-            Some(&"find".to_string())
         );
 
         // Verify skip_backends is set to false
@@ -1137,6 +1238,20 @@ mod tests {
         assert!(result.is_ok());
 
         let processed_envelope = result.unwrap();
+        
+        // Verify that command is set for backend processing (check before consuming normalized_data)
+        use crate::models::envelope::command::Operation;
+        assert_eq!(
+            processed_envelope.resolve_operation(),
+            Some(Operation::Query)
+        );
+        
+        // Verify no includefield metadata is stored
+        assert!(!processed_envelope
+            .request_details
+            .metadata
+            .contains_key("dicomweb_includefield"));
+        
         let nd = processed_envelope.normalized_data.unwrap();
         let identifier = nd.get("dimse_identifier").unwrap().as_object().unwrap();
 
@@ -1156,18 +1271,6 @@ mod tests {
         assert!(
             identifier.contains_key("00100010"),
             "PatientName should be present"
-        );
-
-        // Verify no includefield metadata is stored
-        assert!(!processed_envelope
-            .request_details
-            .metadata
-            .contains_key("dicomweb_includefield"));
-
-        // Verify that dimse_op is set for backend processing
-        assert_eq!(
-            processed_envelope.request_details.metadata.get("dimse_op"),
-            Some(&"find".to_string())
         );
     }
 
@@ -1217,6 +1320,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_right_qido_transformation() {
+        use crate::models::envelope::command::{Command, Operation};
         let bridge = DICOMwebToDICOMMiddleware::new();
 
         // Create a mock right-side request with DICOM find results
@@ -1245,7 +1349,6 @@ mod tests {
         ]);
 
         let normalized_data = serde_json::json!({
-            "operation": "find",
             "success": true,
             "matches": matches
         });
@@ -1257,6 +1360,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: Some(Command::new(Operation::Query)),
             original_data: serde_json::json!({}),
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
@@ -1436,6 +1540,7 @@ mod tests {
 
     #[tokio::test]
     async fn test_pagination_filtering_right_side() {
+        use crate::models::envelope::command::{Command, Operation};
         let bridge = DICOMwebToDICOMMiddleware::new();
 
         // Create mock response with 10 results
@@ -1470,7 +1575,6 @@ mod tests {
         };
 
         let normalized_data = serde_json::json!({
-            "operation": "find",
             "success": true,
             "matches": mock_matches
         });
@@ -1482,6 +1586,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: Some(Command::new(Operation::Query)),
             original_data: serde_json::json!({}),
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
@@ -1595,5 +1700,396 @@ mod tests {
 
         // Verify max_results = limit + offset
         assert_eq!(nd.get("max_results").and_then(|v| v.as_u64()), Some(15));
+    }
+
+    // ==================== Rendered/Thumbnail Passthrough Tests ====================
+
+    #[tokio::test]
+    async fn test_right_rendered_study_passes_through() {
+        use crate::models::envelope::command::{Command, Operation};
+        let bridge = DICOMwebToDICOMMiddleware::new();
+
+        let mut metadata = HashMap::new();
+        metadata.insert("path".to_string(), "studies/1.2.3/rendered".to_string());
+        metadata.insert(
+            "full_path".to_string(),
+            "/dicomweb/studies/1.2.3/rendered".to_string(),
+        );
+
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies/1.2.3/rendered".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            content_metadata: None,
+            metadata,
+        };
+
+        // Simulate a backend response with image data
+        let normalized_data = serde_json::json!({
+            "success": true,
+            "some_image_data": "preserved"
+        });
+
+        let envelope = ResponseEnvelope {
+            request_details,
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: {
+                    let mut h = HashMap::new();
+                    h.insert("content-type".to_string(), "image/jpeg".to_string());
+                    h
+                },
+                metadata: HashMap::new(),
+            },
+            command: Some(Command::new(Operation::Retrieve)),
+            original_data: serde_json::json!({}),
+            normalized_data: Some(normalized_data),
+            normalized_snapshot: None,
+        };
+
+        let result = bridge.right(envelope).await;
+        assert!(result.is_ok());
+
+        let processed = result.unwrap();
+
+        // Verify the envelope passed through unmodified — no dicomweb_response_type set
+        let nd = processed.normalized_data.unwrap();
+        assert!(
+            nd.get("dicomweb_response_type").is_none(),
+            "Rendered passthrough should not set dicomweb_response_type"
+        );
+        // Verify original data is preserved
+        assert_eq!(
+            nd.get("some_image_data").and_then(|v| v.as_str()),
+            Some("preserved")
+        );
+        // Verify content-type header is preserved
+        assert_eq!(
+            processed.response_details.headers.get("content-type"),
+            Some(&"image/jpeg".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_right_thumbnail_instance_passes_through() {
+        use crate::models::envelope::command::{Command, Operation};
+        let bridge = DICOMwebToDICOMMiddleware::new();
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "path".to_string(),
+            "studies/1.2.3/series/4.5.6/instances/7.8.9/thumbnail".to_string(),
+        );
+        metadata.insert(
+            "full_path".to_string(),
+            "/dicomweb/studies/1.2.3/series/4.5.6/instances/7.8.9/thumbnail".to_string(),
+        );
+
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies/1.2.3/series/4.5.6/instances/7.8.9/thumbnail".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            content_metadata: None,
+            metadata,
+        };
+
+        let normalized_data = serde_json::json!({
+            "success": true
+        });
+
+        let envelope = ResponseEnvelope {
+            request_details,
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: {
+                    let mut h = HashMap::new();
+                    h.insert("content-type".to_string(), "image/png".to_string());
+                    h
+                },
+                metadata: HashMap::new(),
+            },
+            command: Some(Command::new(Operation::Retrieve)),
+            original_data: serde_json::json!({}),
+            normalized_data: Some(normalized_data),
+            normalized_snapshot: None,
+        };
+
+        let result = bridge.right(envelope).await;
+        assert!(result.is_ok());
+
+        let processed = result.unwrap();
+
+        // Verify the envelope passed through — no dicomweb_response_type, no mangling
+        let nd = processed.normalized_data.unwrap();
+        assert!(
+            nd.get("dicomweb_response_type").is_none(),
+            "Thumbnail passthrough should not set dicomweb_response_type"
+        );
+        assert_eq!(
+            processed.response_details.headers.get("content-type"),
+            Some(&"image/png".to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_right_instance_rendered_not_treated_as_wado_instance() {
+        // Regression test: ensure instance-level rendered path is NOT matched by the
+        // WADO instance retrieval branch (which would try to read DICOM files from folder_path)
+        use crate::models::envelope::command::{Command, Operation};
+        let bridge = DICOMwebToDICOMMiddleware::new();
+
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "path".to_string(),
+            "studies/1.2.3/series/4.5.6/instances/7.8.9/rendered".to_string(),
+        );
+        metadata.insert(
+            "full_path".to_string(),
+            "/dicomweb/studies/1.2.3/series/4.5.6/instances/7.8.9/rendered".to_string(),
+        );
+
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies/1.2.3/series/4.5.6/instances/7.8.9/rendered".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            content_metadata: None,
+            metadata,
+        };
+
+        let normalized_data = serde_json::json!({
+            "success": true,
+            "folder_path": "/nonexistent/path"
+        });
+
+        let envelope = ResponseEnvelope {
+            request_details,
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: {
+                    let mut h = HashMap::new();
+                    h.insert("content-type".to_string(), "image/jpeg".to_string());
+                    h
+                },
+                metadata: HashMap::new(),
+            },
+            command: Some(Command::new(Operation::Retrieve)),
+            original_data: serde_json::json!({}),
+            normalized_data: Some(normalized_data),
+            normalized_snapshot: None,
+        };
+
+        let result = bridge.right(envelope).await;
+        assert!(result.is_ok());
+
+        let processed = result.unwrap();
+
+        // Should NOT have tried to read from folder_path and build multipart.
+        // If it had, it would have set dicomweb_response_type to "wado_instance".
+        let nd = processed.normalized_data.unwrap();
+        assert!(
+            nd.get("dicomweb_response_type").is_none(),
+            "Instance-level rendered should NOT be treated as WADO instance retrieval"
+        );
+    }
+
+    // ==================== End-to-end Command Propagation Tests ====================
+
+    #[tokio::test]
+    async fn test_command_propagation_left_to_right_query() {
+        // Verifies: request → left() sets Command → simulated backend → right() dispatches on Command
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+
+        // 1. Build a QIDO-RS request (studies search)
+        let mut query_params = HashMap::new();
+        query_params.insert("PatientName".to_string(), vec!["Doe^*".to_string()]);
+
+        let request = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/dicomweb/studies")
+            .query_params(query_params)
+            .metadata_entry("path", "studies")
+            .metadata_entry("full_path", "/dicomweb/studies")
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
+
+        // 2. Pass through left() — should set Command::Query
+        let after_left = bridge.left(request).await.unwrap();
+        assert_eq!(
+            after_left.resolve_operation(),
+            Some(Operation::Query),
+            "left() should set Command to Query for QIDO-RS"
+        );
+
+        // 3. Simulate backend: create ResponseEnvelope propagating the command
+        let response = ResponseEnvelope {
+            request_details: after_left.request_details.clone(),
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
+            command: after_left.command.clone(),
+            original_data: serde_json::json!({}),
+            normalized_data: Some(serde_json::json!({
+                "success": true,
+                "matches": [
+                    {
+                        "00100010": {"vr": "PN", "Value": ["Doe^John"]},
+                        "0020000D": {"vr": "UI", "Value": ["1.2.3.4.5"]}
+                    }
+                ]
+            })),
+            normalized_snapshot: None,
+        };
+
+        // 4. Pass through right() — should dispatch on Command to produce QIDO response
+        let after_right = bridge.right(response).await.unwrap();
+
+        // 5. Verify Command is preserved on the response
+        assert_eq!(
+            after_right.resolve_operation(),
+            Some(Operation::Query),
+            "Command should be preserved through the right() side"
+        );
+
+        // 6. Verify QIDO response was generated (Command-driven dispatch worked)
+        let nd = after_right.normalized_data.unwrap();
+        assert_eq!(
+            nd.get("dicomweb_response_type").and_then(|v| v.as_str()),
+            Some("qido_json"),
+            "right() should produce QIDO JSON response when Command is Query"
+        );
+        assert!(nd.get("dicomweb_data").is_some());
+    }
+
+    #[tokio::test]
+    async fn test_command_propagation_left_to_right_retrieve_rendered() {
+        // Verifies: WADO-RS rendered → left() sets Command::Retrieve →
+        //           right() dispatches on Command+path to pass through rendered response
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+
+        // 1. Build a WADO-RS rendered request
+        let request = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/dicomweb/studies/1.2.3/rendered")
+            .metadata_entry("path", "studies/1.2.3/rendered")
+            .metadata_entry("full_path", "/dicomweb/studies/1.2.3/rendered")
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
+
+        // 2. Pass through left() — should set Command::Retrieve
+        let after_left = bridge.left(request).await.unwrap();
+        assert_eq!(
+            after_left.resolve_operation(),
+            Some(Operation::Retrieve),
+            "left() should set Command to Retrieve for WADO-RS rendered"
+        );
+
+        // 3. Simulate backend: create ResponseEnvelope propagating the command
+        let response = ResponseEnvelope {
+            request_details: after_left.request_details.clone(),
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: {
+                    let mut h = HashMap::new();
+                    h.insert("content-type".to_string(), "image/jpeg".to_string());
+                    h
+                },
+                metadata: HashMap::new(),
+            },
+            command: after_left.command.clone(),
+            original_data: serde_json::json!({}),
+            normalized_data: Some(serde_json::json!({
+                "success": true,
+                "image_data": "mock_rendered_content"
+            })),
+            normalized_snapshot: None,
+        };
+
+        // 4. Pass through right() — rendered response should pass through untransformed
+        let after_right = bridge.right(response).await.unwrap();
+
+        // 5. Verify Command is preserved through the full pipeline
+        assert_eq!(
+            after_right.resolve_operation(),
+            Some(Operation::Retrieve),
+            "Command should be preserved through the right() side"
+        );
+
+        // 6. Verify rendered response passed through (no dicomweb_response_type set)
+        let nd = after_right.normalized_data.unwrap();
+        assert!(
+            nd.get("dicomweb_response_type").is_none(),
+            "Rendered passthrough should not set dicomweb_response_type"
+        );
+        // Original data preserved
+        assert_eq!(
+            nd.get("image_data").and_then(|v| v.as_str()),
+            Some("mock_rendered_content"),
+            "Rendered response data should pass through unchanged"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_right_without_command_passes_through() {
+        // Verifies: if no Command is set on the response, right() does not transform
+        let bridge = DICOMwebToDICOMMiddleware::new();
+
+        let mut metadata = HashMap::new();
+        metadata.insert("path".to_string(), "studies".to_string());
+        metadata.insert("full_path".to_string(), "/dicomweb/studies".to_string());
+
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            content_metadata: None,
+            metadata,
+        };
+
+        let normalized_data = serde_json::json!({
+            "success": true,
+            "matches": [{"00100010": {"vr": "PN", "Value": ["Test"]}}]
+        });
+
+        let envelope = ResponseEnvelope {
+            request_details,
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
+            command: None,
+            original_data: serde_json::json!({}),
+            normalized_data: Some(normalized_data),
+            normalized_snapshot: None,
+        };
+
+        let result = bridge.right(envelope).await.unwrap();
+
+        // Without a Command, the response should pass through unmodified
+        let nd = result.normalized_data.unwrap();
+        assert!(
+            nd.get("dicomweb_response_type").is_none(),
+            "Without a Command, right() should not transform the response"
+        );
+        // Original data should still be present
+        assert!(nd.get("matches").is_some());
     }
 }

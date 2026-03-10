@@ -485,13 +485,20 @@ impl ServiceType for MockDicomEndpoint {
             ));
         }
 
-        // Build minimal RequestDetails using meta
-        let op = ctx
-            .meta
-            .get("operation")
-            .cloned()
-            .unwrap_or_else(|| "DIMSE".into());
-        let uri = format!("mock-dicom://scp/{}", op.to_lowercase());
+        use crate::models::envelope::command::Operation;
+
+        // Derive the DIMSE operation name and URI from the typed Command.
+        let command = ctx.command;
+        let op = match command.as_ref().map(|c| c.operation) {
+            Some(Operation::Query) => "find",
+            Some(Operation::Retrieve) => "get",
+            Some(Operation::Move) => "move",
+            Some(Operation::Store) => "store",
+            Some(Operation::Ping) => "echo",
+            _ => "dimse",
+        };
+        let uri = format!("mock-dicom://scp/{}", op);
+        let meta = ctx.meta;
 
         // Prefer normalized_data as the JSON body if payload is JSON
         let normalized: Option<serde_json::Value> = serde_json::from_slice(&ctx.payload).ok();
@@ -499,7 +506,8 @@ impl ServiceType for MockDicomEndpoint {
         RequestEnvelopeBuilder::new()
             .method(op)
             .uri(uri)
-            .metadata(ctx.meta)
+            .metadata(meta)
+            .command(command)
             .original_data(ctx.payload)
             .normalized_data(normalized)
             .build()
@@ -548,12 +556,13 @@ impl ServiceHandler<Value> for MockDicomEndpoint {
             Vec::new()
         };
 
-        let mut response_envelope = ResponseEnvelope::from_backend(
+        let mut response_envelope = ResponseEnvelope::from_backend_with_command(
             processed_envelope.request_details.clone(),
             status,
             headers,
             body,
             None,
+            processed_envelope.command.clone(),
         );
 
         // Set the response normalized_data from the backend result
@@ -758,14 +767,18 @@ impl MockDicomEndpoint {
             .or_else(|| Some(crate::models::services::path_utils::extract_path(envelope)))
             .unwrap_or_default();
 
-        // Check metadata for dimse_op (set by middleware)
-        // Fallback to path if not set
-        let op = envelope
-            .request_details
-            .metadata
-            .get("dimse_op")
-            .cloned()
-            .unwrap_or_else(|| path.clone());
+        // Resolve operation via Command (preferred) or legacy metadata/path (fallback)
+        use crate::models::envelope::command::Operation;
+
+        let op = match envelope.resolve_operation() {
+            Some(Operation::Query) => "find".to_string(),
+            Some(Operation::Retrieve) => "get".to_string(),
+            Some(Operation::Move) => "get".to_string(), // Mock treats move same as get
+            Some(Operation::Store) => "store".to_string(),
+            Some(Operation::Ping) => "echo".to_string(),
+            // No command set - fall back to path-based detection
+            _ => path.clone(),
+        };
 
         let result = match op.as_str() {
             "echo" | "/echo" => {

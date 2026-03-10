@@ -181,6 +181,11 @@ pub struct ResponseEnvelope<T> {
     pub request_details: RequestDetails,
     /// Response details including status, headers, metadata
     pub response_details: ResponseDetails,
+    /// The command that was active when the request was processed.
+    /// Forwarded from the RequestEnvelope so middleware right() methods
+    /// can inspect the operation without metadata workarounds.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub command: Option<Command>,
     #[serde(skip)]
     pub original_data: T,
     pub normalized_data: Option<serde_json::Value>,
@@ -516,7 +521,15 @@ impl<T> Default for RequestEnvelopeBuilder<T> {
 }
 
 impl<T> ResponseEnvelope<T> {
-    /// Creates a new ResponseEnvelope from backend response components
+    /// Creates a new ResponseEnvelope from backend response components without a command.
+    ///
+    /// **Prefer `from_backend_with_command()`** which propagates the typed Command from
+    /// the request pipeline so middleware `right()` methods can inspect the operation
+    /// directly instead of relying on metadata strings.
+    #[deprecated(
+        since = "0.12.3",
+        note = "Use from_backend_with_command() to propagate the Command from the request"
+    )]
     pub fn from_backend(
         request_details: RequestDetails,
         status: u16,
@@ -533,6 +546,32 @@ impl<T> ResponseEnvelope<T> {
         ResponseEnvelope {
             request_details,
             response_details,
+            command: None,
+            original_data,
+            normalized_data: None,
+            normalized_snapshot: None,
+        }
+    }
+
+    /// Creates a new ResponseEnvelope from backend response components with a command.
+    pub fn from_backend_with_command(
+        request_details: RequestDetails,
+        status: u16,
+        headers: HashMap<String, String>,
+        original_data: T,
+        metadata: Option<HashMap<String, String>>,
+        command: Option<Command>,
+    ) -> Self {
+        let response_details = ResponseDetails {
+            status,
+            headers,
+            metadata: metadata.unwrap_or_default(),
+        };
+
+        ResponseEnvelope {
+            request_details,
+            response_details,
+            command,
             original_data,
             normalized_data: None,
             normalized_snapshot: None,
@@ -552,6 +591,7 @@ impl ResponseEnvelope<Vec<u8>> {
                 return Ok(ResponseEnvelope {
                     request_details: self.request_details,
                     response_details: self.response_details,
+                    command: self.command,
                     original_data: existing_normalized.clone(),
                     normalized_data: Some(existing_normalized),
                     normalized_snapshot: self.normalized_snapshot,
@@ -590,6 +630,7 @@ impl ResponseEnvelope<Vec<u8>> {
             return Ok(ResponseEnvelope {
                 request_details: self.request_details,
                 response_details: self.response_details,
+                command: self.command,
                 original_data: binary_wrapper.clone(),
                 normalized_data: Some(binary_wrapper),
                 normalized_snapshot: self.normalized_snapshot,
@@ -619,6 +660,7 @@ impl ResponseEnvelope<Vec<u8>> {
         Ok(ResponseEnvelope {
             request_details: self.request_details,
             response_details: self.response_details,
+            command: self.command,
             original_data: original_json,
             normalized_data: final_normalized,
             normalized_snapshot: self.normalized_snapshot,
@@ -636,6 +678,7 @@ impl ResponseEnvelope<serde_json::Value> {
                     return Ok(ResponseEnvelope {
                         request_details: self.request_details,
                         response_details: self.response_details,
+                        command: self.command,
                         original_data: bytes,
                         normalized_data: self.normalized_data,
                         normalized_snapshot: self.normalized_snapshot,
@@ -651,6 +694,7 @@ impl ResponseEnvelope<serde_json::Value> {
                 return Ok(ResponseEnvelope {
                     request_details: self.request_details,
                     response_details: self.response_details,
+                    command: self.command,
                     original_data: bytes,
                     normalized_data: self.normalized_data,
                     normalized_snapshot: self.normalized_snapshot,
@@ -688,10 +732,28 @@ impl ResponseEnvelope<serde_json::Value> {
         Ok(ResponseEnvelope {
             request_details: self.request_details,
             response_details: self.response_details,
+            command: self.command,
             original_data: body_bytes,
             normalized_data: self.normalized_data,
             normalized_snapshot: self.normalized_snapshot,
         })
+    }
+}
+
+/// Command helpers for ResponseEnvelope
+impl<T> ResponseEnvelope<T> {
+    /// Resolves the operation from the command carried on this response.
+    ///
+    /// Returns the operation from `envelope.command` if set, otherwise `None`.
+    pub fn resolve_operation(&self) -> Option<Operation> {
+        self.command.as_ref().map(|cmd| cmd.operation)
+    }
+
+    /// Resolves the full command carried on this response.
+    ///
+    /// Returns a clone of `envelope.command` if set, otherwise `None`.
+    pub fn resolve_command(&self) -> Option<Command> {
+        self.command.clone()
     }
 }
 
@@ -782,7 +844,7 @@ impl<T> RequestEnvelope<T> {
     /// # Example
     ///
     /// ```text
-    /// envelope.set_target_metadata("dimse_op", "find");
+    /// envelope.set_target_metadata("custom_key", "custom_value");
     /// ```
     pub fn set_target_metadata(&mut self, key: impl Into<String>, value: impl Into<String>) {
         let target = self.get_or_init_target_details();
@@ -832,52 +894,18 @@ impl<T> RequestEnvelope<T> {
         self.command = Some(Command::with_params(operation, params));
     }
 
-    /// Resolves the operation, falling back to legacy metadata if command not set.
+    /// Resolves the operation from the command.
     ///
-    /// This method checks in order:
-    /// 1. Explicit `command.operation` if set
-    /// 2. Legacy `target_details.metadata["dimse_op"]`
-    /// 3. Legacy `request_details.metadata["dimse_op"]`
-    ///
-    /// Returns `None` if no operation can be determined.
+    /// Returns the operation from `envelope.command` if set, otherwise `None`.
     pub fn resolve_operation(&self) -> Option<Operation> {
-        // Prefer explicit command
-        if let Some(cmd) = &self.command {
-            return Some(cmd.operation);
-        }
-
-        // Legacy fallback: check metadata for dimse_op
-        let legacy_op = self
-            .target_details
-            .as_ref()
-            .and_then(|td| td.metadata.get("dimse_op"))
-            .or_else(|| self.request_details.metadata.get("dimse_op"))?;
-
-        match legacy_op.to_lowercase().as_str() {
-            "find" => Some(Operation::Query),
-            "get" | "move" => Some(Operation::Retrieve),
-            "store" => Some(Operation::Store),
-            "echo" => Some(Operation::Ping),
-            _ => None,
-        }
+        self.command.as_ref().map(|cmd| cmd.operation)
     }
 
-    /// Resolves the full command, with legacy fallback.
+    /// Resolves the full command.
     ///
-    /// Returns a `Command` if one is explicitly set or can be inferred from legacy metadata.
+    /// Returns a clone of `envelope.command` if set, otherwise `None`.
     pub fn resolve_command(&self) -> Option<Command> {
-        if self.command.is_some() {
-            return self.command.clone();
-        }
-
-        // Legacy fallback
-        let legacy_op = self
-            .target_details
-            .as_ref()
-            .and_then(|td| td.metadata.get("dimse_op"))
-            .or_else(|| self.request_details.metadata.get("dimse_op"))?;
-
-        Command::from_legacy_dimse_op(legacy_op)
+        self.command.clone()
     }
 }
 
@@ -960,10 +988,13 @@ mod tests {
     #[test]
     fn test_set_target_metadata() {
         let mut envelope = create_test_envelope();
-        envelope.set_target_metadata("dimse_op", "find");
+        envelope.set_target_metadata("custom_key", "custom_value");
 
         let target = envelope.target_details.as_ref().unwrap();
-        assert_eq!(target.metadata.get("dimse_op"), Some(&"find".to_string()));
+        assert_eq!(
+            target.metadata.get("custom_key"),
+            Some(&"custom_value".to_string())
+        );
         // Should also have original metadata
         assert_eq!(target.metadata.get("protocol"), Some(&"http".to_string()));
     }
@@ -1019,11 +1050,12 @@ mod tests {
         headers.insert("content-type".to_string(), "application/dicom".to_string());
         let body = b"DICM_FAKE_BYTES".to_vec();
 
-        let resp = ResponseEnvelope::from_backend(
+        let resp = ResponseEnvelope::from_backend_with_command(
             RequestDetails::default(),
             200,
             headers.clone(),
             body.clone(),
+            None,
             None,
         );
 
@@ -1055,11 +1087,12 @@ mod tests {
         );
         let body = b"--abc\r\nContent-Type: application/dicom\r\n\r\nDATA\r\n--abc--\r\n".to_vec();
 
-        let resp = ResponseEnvelope::from_backend(
+        let resp = ResponseEnvelope::from_backend_with_command(
             RequestDetails::default(),
             200,
             headers.clone(),
             body.clone(),
+            None,
             None,
         );
 

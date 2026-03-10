@@ -1,4 +1,5 @@
 use crate::globals::get_storage;
+use crate::models::envelope::command::Command;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
 use crate::models::middleware::types::jmix_index::{
@@ -249,11 +250,9 @@ impl Middleware for JmixBuilderMiddleware {
 
             if matches.is_empty() {
                 // No local matches - let backends handle it
-                // Set dimse_op for DICOM backend to use "get" operation (retrieve study data)
-                envelope
-                    .request_details
-                    .metadata
-                    .insert("dimse_op".to_string(), "get".to_string());
+                // Set Command for DICOM backend to use "get" operation (retrieve study data)
+                use crate::models::envelope::command::Operation;
+                envelope.command = Some(Command::new(Operation::Retrieve).with_source("jmix_builder_middleware"));
                 return Ok(envelope);
             }
 
@@ -276,11 +275,9 @@ impl Middleware for JmixBuilderMiddleware {
                     zip_file.display()
                 );
                 // Pass through to backends without setting skip_backends
-                // Set dimse_op for DICOM backend to use "get" operation
-                envelope
-                    .request_details
-                    .metadata
-                    .insert("dimse_op".to_string(), "get".to_string());
+                // Set Command for DICOM backend to use "get" operation
+                use crate::models::envelope::command::Operation;
+                envelope.command = Some(Command::new(Operation::Retrieve).with_source("jmix_builder_middleware"));
                 return Ok(envelope);
             }
 
@@ -657,6 +654,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: None,
             original_data: serde_json::json!({}),
             normalized_data: Some(nd),
             normalized_snapshot: None,
@@ -735,6 +733,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: None,
             original_data: serde_json::json!({}),
             normalized_data: Some(nd),
             normalized_snapshot: None,

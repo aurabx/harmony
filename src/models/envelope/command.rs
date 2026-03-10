@@ -59,28 +59,6 @@ impl Command {
         self.params.insert(key.into(), value);
         self
     }
-
-    /// Create from legacy dimse_op string (for backward compatibility).
-    ///
-    /// Maps:
-    /// - "find" -> Operation::Query
-    /// - "get", "move" -> Operation::Retrieve
-    /// - "store" -> Operation::Store
-    /// - "echo" -> Operation::Ping
-    pub fn from_legacy_dimse_op(dimse_op: &str) -> Option<Self> {
-        let operation = match dimse_op.to_lowercase().as_str() {
-            "find" => Operation::Query,
-            "get" | "move" => Operation::Retrieve,
-            "store" => Operation::Store,
-            "echo" => Operation::Ping,
-            _ => return None,
-        };
-        Some(Self {
-            operation,
-            params: HashMap::new(),
-            source: Some("legacy_dimse_op".to_string()),
-        })
-    }
 }
 
 /// Universal operations that can be mapped to any protocol.
@@ -88,7 +66,8 @@ impl Command {
 /// | Operation   | DICOM SCU    | DICOMweb   | HTTP        | FHIR     |
 /// |-------------|--------------|------------|-------------|----------|
 /// | `Query`     | C-FIND       | QIDO-RS    | GET         | search   |
-/// | `Retrieve`  | C-GET/C-MOVE | WADO-RS    | GET         | read     |
+/// | `Retrieve`  | C-GET        | WADO-RS    | GET         | read     |
+/// | `Move`      | C-MOVE       | -          | -           | -        |
 /// | `Store`     | C-STORE      | STOW-RS    | POST        | create   |
 /// | `Update`    | -            | -          | PUT         | update   |
 /// | `Patch`     | -            | -          | PATCH       | patch    |
@@ -105,8 +84,12 @@ pub enum Operation {
     Query,
 
     /// Retrieve a specific resource or set of resources.
-    /// DICOM: C-GET/C-MOVE | DICOMweb: WADO-RS | HTTP: GET | FHIR: read
+    /// DICOM: C-GET | DICOMweb: WADO-RS | HTTP: GET | FHIR: read
     Retrieve,
+
+    /// Move/relocate a resource (push to a destination).
+    /// DICOM: C-MOVE
+    Move,
 
     /// Store/create a new resource.
     /// DICOM: C-STORE | DICOMweb: STOW-RS | HTTP: POST | FHIR: create
@@ -146,6 +129,7 @@ impl std::fmt::Display for Operation {
         match self {
             Operation::Query => write!(f, "query"),
             Operation::Retrieve => write!(f, "retrieve"),
+            Operation::Move => write!(f, "move"),
             Operation::Store => write!(f, "store"),
             Operation::Update => write!(f, "update"),
             Operation::Patch => write!(f, "patch"),
@@ -214,35 +198,6 @@ mod tests {
     }
 
     #[test]
-    fn test_legacy_dimse_op_conversion() {
-        assert_eq!(
-            Command::from_legacy_dimse_op("find").map(|c| c.operation),
-            Some(Operation::Query)
-        );
-        assert_eq!(
-            Command::from_legacy_dimse_op("FIND").map(|c| c.operation),
-            Some(Operation::Query)
-        );
-        assert_eq!(
-            Command::from_legacy_dimse_op("get").map(|c| c.operation),
-            Some(Operation::Retrieve)
-        );
-        assert_eq!(
-            Command::from_legacy_dimse_op("move").map(|c| c.operation),
-            Some(Operation::Retrieve)
-        );
-        assert_eq!(
-            Command::from_legacy_dimse_op("store").map(|c| c.operation),
-            Some(Operation::Store)
-        );
-        assert_eq!(
-            Command::from_legacy_dimse_op("echo").map(|c| c.operation),
-            Some(Operation::Ping)
-        );
-        assert!(Command::from_legacy_dimse_op("unknown").is_none());
-    }
-
-    #[test]
     fn test_operation_display() {
         assert_eq!(format!("{}", Operation::Query), "query");
         assert_eq!(format!("{}", Operation::Retrieve), "retrieve");
@@ -256,6 +211,7 @@ mod tests {
         let operations = vec![
             Operation::Query,
             Operation::Retrieve,
+            Operation::Move,
             Operation::Store,
             Operation::Update,
             Operation::Patch,

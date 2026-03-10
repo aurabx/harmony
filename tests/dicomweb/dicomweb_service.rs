@@ -289,3 +289,187 @@ async fn dicomweb_nonexistent_route_returns_404() {
     // This should return 404 NOT FOUND since the route doesn't exist
     assert_eq!(response.status(), StatusCode::NOT_FOUND);
 }
+
+// === New DICOMweb Part 18 routes ===
+
+#[tokio::test]
+async fn dicomweb_qido_top_level_series_returns_200_or_error() {
+    let app = build_test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicomweb/series")
+                .method("GET")
+                .header("accept", "application/dicom+json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    assert_ne!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_ne!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dicomweb_qido_top_level_instances_returns_200_or_error() {
+    let app = build_test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicomweb/instances")
+                .method("GET")
+                .header("accept", "application/dicom+json")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    assert_ne!(response.status(), StatusCode::NOT_IMPLEMENTED);
+    assert_ne!(response.status(), StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn dicomweb_delete_study_returns_200_or_error() {
+    let app = build_test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicomweb/studies/1.2.3.4.5")
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    assert_ne!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn dicomweb_delete_series_returns_200_or_error() {
+    let app = build_test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicomweb/studies/1.2.3.4.5/series/1.2.3.4.6")
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    assert_ne!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn dicomweb_delete_instance_returns_200_or_error() {
+    let app = build_test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicomweb/studies/1.2.3.4.5/series/1.2.3.4.6/instances/1.2.3.4.7")
+                .method("DELETE")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    assert_ne!(response.status(), StatusCode::METHOD_NOT_ALLOWED);
+}
+
+#[tokio::test]
+async fn dicomweb_capabilities_returns_json() {
+    let app = build_test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicomweb/capabilities")
+                .method("GET")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    // Capabilities is handled locally — should always return 200
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("valid JSON");
+    assert!(json.get("dicomweb_services").is_some());
+}
+
+#[tokio::test]
+async fn dicomweb_rendered_study_returns_200_or_error() {
+    let app = build_test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicomweb/studies/1.2.3.4.5/rendered")
+                .method("GET")
+                .header("accept", "image/jpeg")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    assert_ne!(response.status(), StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
+async fn dicomweb_rendered_instance_returns_200_or_error() {
+    let app = build_test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicomweb/studies/1.2.3.4.5/series/1.2.3.4.6/instances/1.2.3.4.7/rendered")
+                .method("GET")
+                .header("accept", "image/jpeg")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    assert_ne!(response.status(), StatusCode::NOT_IMPLEMENTED);
+}
+
+#[tokio::test]
+async fn dicomweb_thumbnail_instance_returns_200_or_error() {
+    let app = build_test_router().await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/dicomweb/studies/1.2.3.4.5/series/1.2.3.4.6/instances/1.2.3.4.7/thumbnail")
+                .method("GET")
+                .header("accept", "image/jpeg")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    assert_ne!(response.status(), StatusCode::NOT_FOUND);
+    assert_ne!(response.status(), StatusCode::NOT_IMPLEMENTED);
+}

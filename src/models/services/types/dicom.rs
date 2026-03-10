@@ -156,13 +156,20 @@ impl ServiceType for DicomScuBackend {
             ));
         }
 
-        // Build minimal RequestDetails using meta
+        use crate::models::envelope::command::Operation;
+
+        // Derive the DIMSE operation name and URI from the typed Command.
+        let command = ctx.command;
+        let op = match command.as_ref().map(|c| c.operation) {
+            Some(Operation::Query) => "find",
+            Some(Operation::Retrieve) => "get",
+            Some(Operation::Move) => "move",
+            Some(Operation::Store) => "store",
+            Some(Operation::Ping) => "echo",
+            _ => "dimse",
+        };
+        let uri = format!("dimse://scu/{}", op);
         let metadata: Map<String, String> = ctx.meta.clone();
-        let op = metadata
-            .get("operation")
-            .cloned()
-            .unwrap_or_else(|| "DIMSE".into());
-        let uri = format!("mock-dicom://scp/{}", op.to_lowercase());
 
         // Prefer normalized_data as the JSON body if payload is JSON
         let normalized: Option<serde_json::Value> = serde_json::from_slice(&ctx.payload).ok();
@@ -175,6 +182,7 @@ impl ServiceType for DicomScuBackend {
             .query_params(Map::new())
             .cache_status(None)
             .metadata(metadata)
+            .command(command)
             .target_details(None)
             .original_data(ctx.payload)
             .normalized_data(normalized)
@@ -239,12 +247,13 @@ impl ServiceHandler<Value> for DicomScuBackend {
             Vec::new()
         };
 
-        let mut response_envelope = ResponseEnvelope::from_backend(
+        let mut response_envelope = ResponseEnvelope::from_backend_with_command(
             envelope.request_details.clone(),
             status,
             headers,
             body,
             None,
+            envelope.command.clone(),
         );
 
         response_envelope.normalized_data = envelope.normalized_data;
@@ -353,33 +362,12 @@ impl DicomScuBackend {
         //
         // For Retrieve operations, dimse_retrieve_mode can switch between get/move
         let valid_ops = ["echo", "find", "get", "move", "store"];
-        
-        // DEBUG: Log command and normalized_data structure
-        if let Some(cmd) = envelope.command.as_ref() {
-            tracing::debug!("command: {:?}", cmd);
-        }
-        if let Some(nd) = envelope.normalized_data.as_ref() {
-            tracing::debug!("normalized_data: {}", serde_json::to_string_pretty(nd).unwrap_or_default());
-        }
 
         // Map universal Operation to DIMSE operation string
         let normalized_op = match envelope.resolve_operation() {
             Some(Operation::Query) => "find".to_string(),
-            Some(Operation::Retrieve) => {
-                // Check command params for retrieve_mode preference
-                let retrieve_mode = envelope
-                    .command
-                    .as_ref()
-                    .and_then(|c| c.params.get("retrieve_mode"))
-                    .and_then(|v| v.as_str())
-                    .or_else(|| {
-                        options
-                            .get("dimse_retrieve_mode")
-                            .and_then(|v| v.as_str())
-                    })
-                    .unwrap_or("get");
-                retrieve_mode.to_lowercase()
-            }
+            Some(Operation::Retrieve) => "get".to_string(),
+            Some(Operation::Move) => "move".to_string(),
             Some(Operation::Store) => "store".to_string(),
             Some(Operation::Ping) => "echo".to_string(),
             Some(op) => {

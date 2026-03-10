@@ -147,6 +147,7 @@ pub fn build_protocol_ctx(
         payload: body,
         meta: meta_map,
         attrs: serde_json::Value::Object(attrs),
+        command: None,
     }
 }
 

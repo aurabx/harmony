@@ -1,5 +1,6 @@
 use crate::adapters::dimse::status_mapper;
 use crate::globals::{get_config, get_storage};
+use crate::models::envelope::command::{Command, Operation};
 use crate::models::envelope::envelope::ResponseEnvelope;
 use crate::models::protocol::{Protocol, ProtocolCtx};
 use crate::pipeline::executor::PipelineExecutor;
@@ -96,7 +97,7 @@ impl PipelineQueryProvider {
     /// executes pipeline, and returns response envelope.
     async fn run(
         &self,
-        op: &str,
+        command: Command,
         body: serde_json::Value,
         mut meta: HashMap<String, String>,
     ) -> DimseResult<ResponseEnvelope<Vec<u8>>> {
@@ -114,14 +115,15 @@ impl PipelineQueryProvider {
             endpoint.options.clone().unwrap_or_default();
         let options = &options_owned;
 
-        // Build ProtocolCtx for DIMSE
+        // Build ProtocolCtx for DIMSE with typed Command.
+        // The Command is the single source of truth for the operation.
         meta.insert("protocol".into(), "dimse".into());
-        meta.insert("dimse_op".into(), op.to_string());
         let ctx = ProtocolCtx {
             protocol: Protocol::Dimse,
             payload: serde_json::to_vec(&body).unwrap_or_default(),
             meta,
             attrs: serde_json::json!({}),
+            command: Some(command),
         };
 
         // Let the service build the request envelope
@@ -307,7 +309,13 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let response_envelope = self.run("find", body, meta).await?;
+        let response_envelope = self
+            .run(
+                Command::new(Operation::Query).with_source("dimse_adapter"),
+                body,
+                meta,
+            )
+            .await?;
 
         // Convert response envelope to datasets
         self.response_to_datasets(response_envelope).await
@@ -337,7 +345,13 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let response_envelope = self.run("move", body, meta).await?;
+        let response_envelope = self
+            .run(
+                Command::new(Operation::Move).with_source("dimse_adapter"),
+                body,
+                meta,
+            )
+            .await?;
 
         // Convert response envelope to datasets
         self.response_to_datasets(response_envelope).await
@@ -367,7 +381,13 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let response_envelope = self.run("get", body, meta).await?;
+        let response_envelope = self
+            .run(
+                Command::new(Operation::Retrieve).with_source("dimse_adapter"),
+                body,
+                meta,
+            )
+            .await?;
 
         // Convert response envelope to datasets
         self.response_to_datasets(response_envelope).await
@@ -444,7 +464,13 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         });
 
         // Execute pipeline and check for DICOM status in response
-        let response = self.run("store", body, meta).await?;
+        let response = self
+            .run(
+                Command::new(Operation::Store).with_source("dimse_adapter"),
+                body,
+                meta,
+            )
+            .await?;
 
         // Check for DICOM status in response metadata (set by dicom_to_dicomweb middleware)
         if let Some(status_str) = response.response_details.metadata.get("dicom_status") {

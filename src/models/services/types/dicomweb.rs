@@ -160,6 +160,48 @@ impl DicomwebEndpoint {
                     .body(Body::from(r#"{"error":"Missing frame data"}"#))
                     .map_err(|_| Error::from("Failed to construct error response"))
             }
+            "capabilities" => {
+                // Capabilities response: return the services JSON directly
+                let json_data = data.cloned().unwrap_or(serde_json::json!({}));
+                let body_str = serde_json::to_string(&json_data)
+                    .map_err(|_| Error::from("Failed to serialize capabilities JSON"))?;
+
+                Response::builder()
+                    .status(http::StatusCode::OK)
+                    .header("content-type", "application/json")
+                    .body(Body::from(body_str))
+                    .map_err(|_| Error::from("Failed to construct capabilities response"))
+            }
+            "wado_rendered" | "wado_thumbnail" => {
+                // WADO-RS rendered/thumbnail responses: image/jpeg, image/png, or similar.
+                // The image data is base64-encoded in metadata.body_b64 with the content-type
+                // in metadata.content_type. This path is used when a middleware explicitly
+                // packages a rendered image (e.g., from server-side DICOM pixel decoding).
+                if let Some(meta) = metadata {
+                    let content_type = meta
+                        .get("content_type")
+                        .and_then(|v| v.as_str())
+                        .unwrap_or("image/jpeg");
+
+                    if let Some(body_b64) = meta.get("body_b64").and_then(|v| v.as_str()) {
+                        let bytes = base64::engine::general_purpose::STANDARD
+                            .decode(body_b64)
+                            .map_err(|_| Error::from("Failed to decode rendered body_b64"))?;
+
+                        return Response::builder()
+                            .status(http::StatusCode::OK)
+                            .header("content-type", content_type)
+                            .body(Body::from(bytes))
+                            .map_err(|_| Error::from("Failed to construct rendered response"));
+                    }
+                }
+                // Fallback to error if metadata is missing
+                Response::builder()
+                    .status(http::StatusCode::INTERNAL_SERVER_ERROR)
+                    .header("content-type", "application/json")
+                    .body(Body::from(r#"{"error":"Missing rendered image data"}"#))
+                    .map_err(|_| Error::from("Failed to construct error response"))
+            }
             "wado_frames_error" => {
                 // Handle frame decoding errors
                 let error_msg = metadata
@@ -225,71 +267,111 @@ impl ServiceType for DicomwebEndpoint {
         let base = path_prefix.trim_end_matches('/');
 
         let routes = vec![
-            // QIDO-RS: Query for studies; STOW-RS: Store instances
+            // === QIDO-RS: Search ===
             RouteConfig {
                 path: format!("{}/studies", base),
                 methods: vec![Method::GET, Method::POST],
-                description: Some("DICOMweb QIDO-RS: Query for studies; STOW-RS: Store instances".to_string()),
+                description: Some("QIDO-RS: Search studies; STOW-RS: Store instances".to_string()),
             },
-            // QIDO-RS: Query for specific study; STOW-RS: Store instances to study
             RouteConfig {
                 path: format!("{}/studies/{{study_uid}}", base),
-                methods: vec![Method::GET, Method::POST],
-                description: Some("DICOMweb QIDO-RS: Query for specific study; STOW-RS: Store instances to study".to_string()),
+                methods: vec![Method::GET, Method::POST, Method::DELETE],
+                description: Some("QIDO-RS: Query study; STOW-RS: Store to study; DELETE: Delete study".to_string()),
             },
-            // QIDO-RS: Query for series within a study
+            RouteConfig {
+                path: format!("{}/series", base),
+                methods: vec![Method::GET],
+                description: Some("QIDO-RS: Search all series".to_string()),
+            },
             RouteConfig {
                 path: format!("{}/studies/{{study_uid}}/series", base),
                 methods: vec![Method::GET],
-                description: Some("DICOMweb QIDO-RS: Query for series".to_string()),
+                description: Some("QIDO-RS: Search series in study".to_string()),
             },
-            // QIDO-RS: Query for specific series
             RouteConfig {
                 path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}", base),
-                methods: vec![Method::GET],
-                description: Some("DICOMweb QIDO-RS: Query for specific series".to_string()),
+                methods: vec![Method::GET, Method::DELETE],
+                description: Some("QIDO-RS: Query series; DELETE: Delete series".to_string()),
             },
-            // QIDO-RS: Query for instances within a series
+            RouteConfig {
+                path: format!("{}/instances", base),
+                methods: vec![Method::GET],
+                description: Some("QIDO-RS: Search all instances".to_string()),
+            },
             RouteConfig {
                 path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}/instances", base),
                 methods: vec![Method::GET],
-                description: Some("DICOMweb QIDO-RS: Query for instances".to_string()),
+                description: Some("QIDO-RS: Search instances in series".to_string()),
             },
-            // WADO-RS: Retrieve study metadata
+            RouteConfig {
+                path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}/instances/{{instance_uid}}", base),
+                methods: vec![Method::GET, Method::DELETE],
+                description: Some("WADO-RS: Retrieve instance; DELETE: Delete instance".to_string()),
+            },
+            // === WADO-RS: Metadata ===
             RouteConfig {
                 path: format!("{}/studies/{{study_uid}}/metadata", base),
                 methods: vec![Method::GET],
-                description: Some("DICOMweb WADO-RS: Retrieve study metadata".to_string()),
+                description: Some("WADO-RS: Retrieve study metadata".to_string()),
             },
-            // WADO-RS: Retrieve series metadata
             RouteConfig {
                 path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}/metadata", base),
                 methods: vec![Method::GET],
-                description: Some("DICOMweb WADO-RS: Retrieve series metadata".to_string()),
+                description: Some("WADO-RS: Retrieve series metadata".to_string()),
             },
-            // WADO-RS: Retrieve instance metadata
             RouteConfig {
                 path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}/instances/{{instance_uid}}/metadata", base),
                 methods: vec![Method::GET],
-                description: Some("DICOMweb WADO-RS: Retrieve instance metadata".to_string()),
+                description: Some("WADO-RS: Retrieve instance metadata".to_string()),
             },
-            // WADO-RS: Retrieve instance (DICOM object)
-            RouteConfig {
-                path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}/instances/{{instance_uid}}", base),
-                methods: vec![Method::GET],
-                description: Some("DICOMweb WADO-RS: Retrieve instance".to_string()),
-            },
-            // WADO-RS: Retrieve rendered image frames
+            // === WADO-RS: Frames ===
             RouteConfig {
                 path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}/instances/{{instance_uid}}/frames/{{frame_numbers}}", base),
                 methods: vec![Method::GET],
-                description: Some("DICOMweb WADO-RS: Retrieve rendered frames".to_string()),
+                description: Some("WADO-RS: Retrieve pixel data frames".to_string()),
             },
-            // WADO-RS: Bulk data retrieval
+            // === WADO-RS: Rendered / Thumbnail ===
+            RouteConfig {
+                path: format!("{}/studies/{{study_uid}}/rendered", base),
+                methods: vec![Method::GET],
+                description: Some("WADO-RS: Rendered study".to_string()),
+            },
+            RouteConfig {
+                path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}/rendered", base),
+                methods: vec![Method::GET],
+                description: Some("WADO-RS: Rendered series".to_string()),
+            },
+            RouteConfig {
+                path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}/instances/{{instance_uid}}/rendered", base),
+                methods: vec![Method::GET],
+                description: Some("WADO-RS: Rendered instance".to_string()),
+            },
+            RouteConfig {
+                path: format!("{}/studies/{{study_uid}}/thumbnail", base),
+                methods: vec![Method::GET],
+                description: Some("WADO-RS: Study thumbnail".to_string()),
+            },
+            RouteConfig {
+                path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}/thumbnail", base),
+                methods: vec![Method::GET],
+                description: Some("WADO-RS: Series thumbnail".to_string()),
+            },
+            RouteConfig {
+                path: format!("{}/studies/{{study_uid}}/series/{{series_uid}}/instances/{{instance_uid}}/thumbnail", base),
+                methods: vec![Method::GET],
+                description: Some("WADO-RS: Instance thumbnail".to_string()),
+            },
+            // === WADO-RS: Bulk data ===
             RouteConfig {
                 path: format!("{}/bulkdata/{{*bulk_data_uri}}", base),
                 methods: vec![Method::GET],
-                description: Some("DICOMweb WADO-RS: Bulk data retrieval".to_string()),
+                description: Some("WADO-RS: Bulk data retrieval".to_string()),
+            },
+            // === Capabilities ===
+            RouteConfig {
+                path: format!("{}/capabilities", base),
+                methods: vec![Method::GET],
+                description: Some("DICOMweb: Service capabilities".to_string()),
             },
         ];
 
@@ -367,7 +449,7 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
             hdrs.insert("access-control-allow-origin".to_string(), "*".to_string());
             hdrs.insert(
                 "access-control-allow-methods".to_string(),
-                "GET, OPTIONS".to_string(),
+                "GET, POST, DELETE, OPTIONS".to_string(),
             );
             hdrs.insert(
                 "access-control-allow-headers".to_string(),
@@ -382,28 +464,115 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
             return Ok(envelope);
         }
 
-        // Check if this is a QIDO or WADO endpoint that should be processed
+        // Classify the DICOMweb route and set the appropriate Command
         let parts: Vec<&str> = subpath.split('/').filter(|s| !s.is_empty()).collect();
-        let should_process = match parts.as_slice() {
-            // QIDO endpoints
-            ["studies"] => true,
-            ["studies", _] => true,
-            ["studies", _, "series"] => true,
-            ["studies", _, "series", _] => true, // Specific series
-            ["studies", _, "series", _, "instances"] => true,
-            ["studies", _, "series", _, "instances", _] => true, // Specific instance
-            // WADO endpoints
-            ["studies", _, "metadata"] => true,
-            ["studies", _, "series", _, "metadata"] => true,
-            ["studies", _, "series", _, "instances", _, "metadata"] => true,
-            ["studies", _, "series", _, "instances", _, "frames", _] => true,
-            ["bulkdata", ..] => true,
-            _ => false,
+
+        // Handle GET /capabilities locally — no backend needed
+        if method == "GET" && parts.as_slice() == ["capabilities"] {
+            envelope.normalized_data = Some(serde_json::json!({
+                "dicomweb_response_type": "capabilities",
+                "dicomweb_data": {
+                    "dicomweb_services": [
+                        {
+                            "service": "QIDO-RS",
+                            "description": "Query based on ID for DICOM Objects",
+                            "resources": ["/studies", "/series", "/instances",
+                                          "/studies/{study}/series",
+                                          "/studies/{study}/series/{series}/instances"]
+                        },
+                        {
+                            "service": "WADO-RS",
+                            "description": "Web Access to DICOM Objects",
+                            "resources": ["/studies/{study}",
+                                          "/studies/{study}/metadata",
+                                          "/studies/{study}/series/{series}",
+                                          "/studies/{study}/series/{series}/metadata",
+                                          "/studies/{study}/series/{series}/instances/{instance}",
+                                          "/studies/{study}/series/{series}/instances/{instance}/metadata",
+                                          "/studies/{study}/series/{series}/instances/{instance}/frames/{frames}",
+                                          "/studies/{study}/rendered",
+                                          "/studies/{study}/series/{series}/rendered",
+                                          "/studies/{study}/series/{series}/instances/{instance}/rendered",
+                                          "/studies/{study}/thumbnail",
+                                          "/studies/{study}/series/{series}/thumbnail",
+                                          "/studies/{study}/series/{series}/instances/{instance}/thumbnail",
+                                          "/bulkdata/{uri}"]
+                        },
+                        {
+                            "service": "STOW-RS",
+                            "description": "Store over the Web",
+                            "resources": ["/studies", "/studies/{study}"]
+                        },
+                        {
+                            "service": "DELETE",
+                            "description": "Delete DICOM resources",
+                            "resources": ["/studies/{study}",
+                                          "/studies/{study}/series/{series}",
+                                          "/studies/{study}/series/{series}/instances/{instance}"]
+                        }
+                    ]
+                }
+            }));
+            envelope
+                .request_details
+                .metadata
+                .insert("skip_backends".to_string(), "true".to_string());
+            return Ok(envelope);
+        }
+
+        use crate::models::envelope::command::{Command, Operation};
+
+        let operation = match (method.as_str(), parts.as_slice()) {
+            // === STOW-RS: Store ===
+            ("POST", ["studies"]) => Some(Operation::Store),
+            ("POST", ["studies", _]) => Some(Operation::Store),
+
+            // === DELETE ===
+            ("DELETE", ["studies", _]) => Some(Operation::Delete),
+            ("DELETE", ["studies", _, "series", _]) => Some(Operation::Delete),
+            ("DELETE", ["studies", _, "series", _, "instances", _]) => Some(Operation::Delete),
+
+            // === QIDO-RS: Search (collection endpoints) ===
+            ("GET", ["studies"]) => Some(Operation::Query),
+            ("GET", ["series"]) => Some(Operation::Query),
+            ("GET", ["instances"]) => Some(Operation::Query),
+            ("GET", ["studies", _, "series"]) => Some(Operation::Query),
+            ("GET", ["studies", _, "series", _, "instances"]) => Some(Operation::Query),
+
+            // === WADO-RS: Retrieve (specific resources) ===
+            ("GET", ["studies", _]) => Some(Operation::Retrieve),
+            ("GET", ["studies", _, "series", _]) => Some(Operation::Retrieve),
+            ("GET", ["studies", _, "series", _, "instances", _]) => Some(Operation::Retrieve),
+            // Metadata
+            ("GET", ["studies", _, "metadata"]) => Some(Operation::Retrieve),
+            ("GET", ["studies", _, "series", _, "metadata"]) => Some(Operation::Retrieve),
+            ("GET", ["studies", _, "series", _, "instances", _, "metadata"]) => {
+                Some(Operation::Retrieve)
+            }
+            // Frames
+            ("GET", ["studies", _, "series", _, "instances", _, "frames", _]) => {
+                Some(Operation::Retrieve)
+            }
+            // Rendered
+            ("GET", ["studies", _, "rendered"]) => Some(Operation::Retrieve),
+            ("GET", ["studies", _, "series", _, "rendered"]) => Some(Operation::Retrieve),
+            ("GET", ["studies", _, "series", _, "instances", _, "rendered"]) => {
+                Some(Operation::Retrieve)
+            }
+            // Thumbnail
+            ("GET", ["studies", _, "thumbnail"]) => Some(Operation::Retrieve),
+            ("GET", ["studies", _, "series", _, "thumbnail"]) => Some(Operation::Retrieve),
+            ("GET", ["studies", _, "series", _, "instances", _, "thumbnail"]) => {
+                Some(Operation::Retrieve)
+            }
+            // Bulk data
+            ("GET", ["bulkdata", ..]) => Some(Operation::Retrieve),
+
+            _ => None,
         };
 
-        if should_process {
-            // QIDO and WADO endpoints are implemented - allow backend processing
-            // Do not set skip_backends, let the middleware and backend handle it
+        if let Some(op) = operation {
+            envelope.command = Some(Command::new(op).with_source("dicomweb_endpoint"));
             return Ok(envelope);
         }
 
@@ -566,6 +735,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: None,
             original_data: vec![],
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
@@ -617,6 +787,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: None,
             original_data: vec![],
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
@@ -677,6 +848,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: None,
             original_data: vec![],
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
@@ -740,6 +912,7 @@ mod tests {
                 headers: HashMap::new(),
                 metadata: HashMap::new(),
             },
+            command: None,
             original_data: vec![],
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
@@ -769,6 +942,131 @@ mod tests {
             json["message"],
             "Unable to decode frames for requested instance"
         );
+    }
+
+    #[tokio::test]
+    async fn test_wado_rendered_image_response() {
+        let endpoint = DicomwebEndpoint {};
+
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "content_type".to_string(),
+            Value::String("image/jpeg".to_string()),
+        );
+        // "FAKE_JPEG_DATA" base64-encoded
+        metadata.insert(
+            "body_b64".to_string(),
+            Value::String("RkFLRV9KUEVHX0RBVEE=".to_string()),
+        );
+
+        let normalized_data = serde_json::json!({
+            "dicomweb_response_type": "wado_rendered",
+            "dicomweb_data": serde_json::Value::Null,
+            "dicomweb_metadata": metadata
+        });
+
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies/1.2.3/rendered".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata: HashMap::new(),
+            content_metadata: None,
+        };
+
+        let envelope = ResponseEnvelope {
+            request_details,
+            response_details: ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
+            command: None,
+            original_data: vec![],
+            normalized_data: Some(normalized_data),
+            normalized_snapshot: None,
+        };
+
+        let response = endpoint
+            .endpoint_outgoing_response(envelope, &HashMap::new())
+            .await;
+        assert!(response.is_ok());
+
+        let resp = response.unwrap();
+
+        // Verify status code is 200 OK
+        assert_eq!(resp.status(), http::StatusCode::OK);
+
+        // Verify content-type is image/jpeg
+        let content_type = resp.headers().get("content-type");
+        assert!(content_type.is_some());
+        assert_eq!(content_type.unwrap(), "image/jpeg");
+
+        // Verify body contains the decoded image data
+        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body_bytes.as_ref(), b"FAKE_JPEG_DATA");
+    }
+
+    #[tokio::test]
+    async fn test_wado_thumbnail_png_response() {
+        let endpoint = DicomwebEndpoint {};
+
+        let mut metadata = serde_json::Map::new();
+        metadata.insert(
+            "content_type".to_string(),
+            Value::String("image/png".to_string()),
+        );
+        metadata.insert(
+            "body_b64".to_string(),
+            Value::String("UE5HX0RBVEE=".to_string()), // "PNG_DATA" base64
+        );
+
+        let normalized_data = serde_json::json!({
+            "dicomweb_response_type": "wado_thumbnail",
+            "dicomweb_data": serde_json::Value::Null,
+            "dicomweb_metadata": metadata
+        });
+
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/dicomweb/studies/1.2.3/thumbnail".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata: HashMap::new(),
+            content_metadata: None,
+        };
+
+        let envelope = ResponseEnvelope {
+            request_details,
+            response_details: ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
+            command: None,
+            original_data: vec![],
+            normalized_data: Some(normalized_data),
+            normalized_snapshot: None,
+        };
+
+        let response = endpoint
+            .endpoint_outgoing_response(envelope, &HashMap::new())
+            .await;
+        assert!(response.is_ok());
+
+        let resp = response.unwrap();
+        assert_eq!(resp.status(), http::StatusCode::OK);
+
+        let content_type = resp.headers().get("content-type");
+        assert!(content_type.is_some());
+        assert_eq!(content_type.unwrap(), "image/png");
+
+        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        assert_eq!(body_bytes.as_ref(), b"PNG_DATA");
     }
 
     #[test]

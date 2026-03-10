@@ -2,21 +2,18 @@ use harmony::config::config::Config;
 use harmony::config::Cli;
 use std::path::PathBuf;
 
-/// Helper to load test configuration
+/// Helper to load test configuration from local fixtures
 fn load_test_config() -> Config {
-    let config_path = format!(
-        "{}/../harmony-examples/pipelines/fhir_dicom/config.toml",
-        env!("CARGO_MANIFEST_DIR")
-    );
+    let config_path = format!("{}/tests/fixtures/config.toml", env!("CARGO_MANIFEST_DIR"));
 
     let cli = Cli::new(config_path);
     Config::from_args(cli)
 }
 
-/// Helper to get transform file path
+/// Helper to get transform file path from local fixtures
 fn get_transform_path(name: &str) -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR"))
-        .join("../harmony-examples/pipelines/fhir_dicom/transforms")
+        .join("tests/fixtures/transforms")
         .join(name)
 }
 
@@ -64,11 +61,7 @@ fn test_middleware_chain_correct_order() {
         "fhir_to_dicom_transform",
     ];
 
-    let expected_right = vec![
-        "flatten_dicom",
-        "dicom_to_fhir_bundle",
-        "dump_final_bundle",
-    ];
+    let expected_right = vec!["flatten_dicom", "dicom_to_fhir_bundle", "dump_final_bundle"];
 
     // Total middleware count is left + right
     let expected_total = expected_left.len() + expected_right.len();
@@ -81,16 +74,25 @@ fn test_middleware_chain_correct_order() {
 
     // Verify left chain
     let left_chain = pipeline.middleware.left_chain();
-    assert_eq!(left_chain, expected_left, "Left chain should match expected order");
+    assert_eq!(
+        left_chain, expected_left,
+        "Left chain should match expected order"
+    );
 
     // Verify right chain
     let right_chain = pipeline.middleware.right_chain();
-    assert_eq!(right_chain, expected_right, "Right chain should match expected order");
+    assert_eq!(
+        right_chain, expected_right,
+        "Right chain should match expected order"
+    );
 
     // Verify combined ordering (left chain followed by right chain)
     let combined = pipeline.middleware.to_vec();
     let expected_combined = [expected_left, expected_right].concat();
-    assert_eq!(combined, expected_combined, "Combined middleware should be left + right");
+    assert_eq!(
+        combined, expected_combined,
+        "Combined middleware should be left + right"
+    );
 }
 
 #[test]
@@ -125,10 +127,7 @@ fn test_context_injection_enabled() {
     let config = load_test_config();
 
     // Only the transforms actually in the pipeline configuration
-    let transform_middlewares = vec![
-        "fhir_to_dicom_transform",
-        "dicom_to_fhir_bundle",
-    ];
+    let transform_middlewares = vec!["fhir_to_dicom_transform", "dicom_to_fhir_bundle"];
 
     for name in transform_middlewares {
         let middleware = config
@@ -151,7 +150,7 @@ fn test_transform_files_exist_and_valid() {
     // Verify all transform files referenced in the pipeline exist and are valid JSON
     let transforms = vec![
         "query_to_target_details.json",
-        "metadata_set_dimse_op.json",
+        "metadata_set_command.json",
         "fhir_to_dicom_params.json",
         "dicom_to_fhir_bundle.json",
     ];
@@ -267,9 +266,7 @@ fn test_dicom_to_fhir_includes_endpoints() {
 
     // Verify type field exists
     assert_eq!(
-        default_op
-            .pointer("/spec/type")
-            .and_then(|v| v.as_str()),
+        default_op.pointer("/spec/type").and_then(|v| v.as_str()),
         Some("collection"),
         "Transform should set Bundle type to collection"
     );

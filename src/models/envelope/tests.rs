@@ -1,9 +1,7 @@
 #![cfg(test)]
 
 use crate::models::envelope::command::{Command, Operation};
-use crate::models::envelope::envelope::{
-    RequestDetails, RequestEnvelope, RequestEnvelopeBuilder, TargetDetails,
-};
+use crate::models::envelope::envelope::{RequestDetails, RequestEnvelope, RequestEnvelopeBuilder};
 use std::collections::HashMap;
 
 #[test]
@@ -476,52 +474,15 @@ fn test_resolve_operation_from_command() {
 }
 
 #[test]
-fn test_resolve_operation_legacy_fallback_request_details() {
-    let envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
-        .method("GET")
-        .uri("/test")
-        .metadata_entry("dimse_op", "find")
-        .original_data(vec![])
-        .build()
-        .unwrap();
-
-    // No command set, should fall back to metadata
-    assert!(envelope.command.is_none());
-    assert_eq!(envelope.resolve_operation(), Some(Operation::Query));
-}
-
-#[test]
-fn test_resolve_operation_legacy_fallback_target_details() {
-    let mut envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
-        .method("GET")
-        .uri("/test")
-        .original_data(vec![])
-        .build()
-        .unwrap();
-
-    // Set dimse_op in target_details metadata
-    let mut target = TargetDetails::default();
-    target
-        .metadata
-        .insert("dimse_op".to_string(), "store".to_string());
-    envelope.target_details = Some(target);
-
-    // No command set, should fall back to target_details metadata
-    assert!(envelope.command.is_none());
-    assert_eq!(envelope.resolve_operation(), Some(Operation::Store));
-}
-
-#[test]
 fn test_resolve_operation_command_takes_precedence() {
     let mut envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
         .method("GET")
         .uri("/test")
-        .metadata_entry("dimse_op", "find")
         .original_data(vec![])
         .build()
         .unwrap();
 
-    // Set command - should take precedence over metadata
+    // Set command
     envelope.command = Some(Command::new(Operation::Store));
 
     assert_eq!(envelope.resolve_operation(), Some(Operation::Store));
@@ -556,53 +517,4 @@ fn test_resolve_command_from_explicit_command() {
     let resolved = envelope.resolve_command().unwrap();
     assert_eq!(resolved.operation, Operation::Ping);
     assert_eq!(resolved.source, Some("test_source".to_string()));
-}
-
-#[test]
-fn test_resolve_command_legacy_fallback() {
-    let envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
-        .method("GET")
-        .uri("/test")
-        .metadata_entry("dimse_op", "echo")
-        .original_data(vec![])
-        .build()
-        .unwrap();
-
-    let resolved = envelope.resolve_command().unwrap();
-    assert_eq!(resolved.operation, Operation::Ping);
-    assert_eq!(resolved.source, Some("legacy_dimse_op".to_string()));
-}
-
-#[test]
-fn test_legacy_dimse_op_mapping() {
-    // Test all legacy dimse_op mappings
-    let test_cases = vec![
-        ("find", Operation::Query),
-        ("FIND", Operation::Query),
-        ("get", Operation::Retrieve),
-        ("GET", Operation::Retrieve),
-        ("move", Operation::Retrieve),
-        ("MOVE", Operation::Retrieve),
-        ("store", Operation::Store),
-        ("STORE", Operation::Store),
-        ("echo", Operation::Ping),
-        ("ECHO", Operation::Ping),
-    ];
-
-    for (dimse_op, expected_operation) in test_cases {
-        let envelope: RequestEnvelope<Vec<u8>> = RequestEnvelopeBuilder::new()
-            .method("GET")
-            .uri("/test")
-            .metadata_entry("dimse_op", dimse_op)
-            .original_data(vec![])
-            .build()
-            .unwrap();
-
-        assert_eq!(
-            envelope.resolve_operation(),
-            Some(expected_operation),
-            "Failed for dimse_op: {}",
-            dimse_op
-        );
-    }
 }
