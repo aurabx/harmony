@@ -4,7 +4,7 @@
 
 ## Overview
 
-The Command system provides a **typed, protocol-agnostic way to express operational intent** on a `RequestEnvelope`. Instead of relying on implicit conventions like metadata strings (`metadata["dimse_op"]`) or HTTP method inference, every request flowing through the pipeline carries an explicit `Command` that says what should happen -- regardless of the source or destination protocol.
+The Command system provides a **typed, protocol-agnostic way to express operational intent** on an Envelope. Instead of relying on implicit conventions like metadata strings or HTTP method inference, requests and responses flowing through the pipeline carry an explicit `Command` that says what should happen -- regardless of the source or destination protocol.
 
 Endpoints set commands. Backends interpret them. Middleware can read or modify them.
 
@@ -49,23 +49,23 @@ The `Operation` enum defines the universal vocabulary of operations:
 
 The key design principle: endpoints set an **operation** (what they want done), backends decide **how** to do it in their protocol.
 
-### RequestEnvelope Integration
+### Envelope Integration
 
-The `command` field is `Option<Command>` on `RequestEnvelope`:
+The `command` field is `Option<Command>` on both `RequestEnvelope` and `ResponseEnvelope`:
 
 ```rust
 pub struct RequestEnvelope<T> {
-    pub request_details: RequestDetails,
-    pub backend_request_details: RequestDetails,
-    pub target_details: Option<TargetDetails>,
     pub command: Option<Command>,       // <-- the Command
-    pub original_data: T,
-    pub normalized_data: Option<serde_json::Value>,
-    pub normalized_snapshot: Option<serde_json::Value>,
+    // ...other fields...
+}
+
+pub struct ResponseEnvelope<T> {
+    pub command: Option<Command>,       // <-- carried through from request
+    // ...other fields...
 }
 ```
 
-Being `Option` means existing envelopes without a command continue to work. The `resolve_operation()` method provides automatic fallback to legacy metadata.
+Being `Option` means envelopes without a command continue to work. Backends use `resolve_operation()` which returns `None` when no command is set, allowing fallback to path-based or method-based detection.
 
 ## How It Works
 
@@ -89,8 +89,11 @@ Backend (consumer)
   Maps Operation to protocol-specific action
   |
   v
+ResponseEnvelope (carries command from request)
+  |
+  v
 Middleware chain (right)
-  Response processing (command not on ResponseEnvelope)
+  Can read envelope.resolve_operation() on the response
   |
   v
 Protocol Response
@@ -109,7 +112,6 @@ DicomwebEndpoint.endpoint_incoming_request()
   v
 DICOMwebToDICOM middleware.left()
   Reads: envelope.command.operation == Query
-  Sets: metadata["dimse_op"] = "find" (backward compat)
   Builds DICOM identifier dataset
   |
   v
@@ -123,36 +125,9 @@ DicomScuBackend.backend_outgoing_request()
 
 Endpoints are **producers** -- they determine the operation from the incoming request and set the command on the envelope.
 
-### In `build_protocol_envelope()`
+### Protocol-Specific Endpoints
 
-For endpoints that build envelopes directly (DICOM SCP, MockDicom):
-
-```rust
-use crate::models::envelope::command::Command;
-
-async fn build_protocol_envelope(
-    &self,
-    ctx: ProtocolCtx,
-    _options: &HashMap<String, Value>,
-) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-    let op = ctx.meta.get("dimse_op").cloned().unwrap_or_default();
-
-    // Map the protocol operation to a typed Command
-    let command = Command::from_legacy_dimse_op(&op)
-        .map(|c| c.with_source("my_endpoint"));
-
-    RequestEnvelope::builder()
-        .method(op)
-        .uri(uri)
-        .command(command)   // <-- set the command
-        .original_data(ctx.payload)
-        .build()
-}
-```
-
-### In `endpoint_incoming_request()`
-
-For endpoints that delegate `build_protocol_envelope` to `HttpEndpoint` and then refine the command (DICOMweb, FHIR, JMIX, Echo):
+Protocol-aware endpoints (DICOMweb, FHIR, DICOM SCP, JMIX) set commands based on their protocol semantics:
 
 ```rust
 use crate::models::envelope::command::{Command, Operation};
@@ -182,33 +157,34 @@ async fn endpoint_incoming_request(
 }
 ```
 
-### HTTP Method Mapping
+### HTTP Endpoint (Generic Ingress)
 
-The `HttpEndpoint` sets a default Command from the HTTP method. Protocol-specific endpoints (DICOMweb, FHIR, JMIX) then **override** this with a more precise Operation in `endpoint_incoming_request()`.
+The `HttpEndpoint` does **not** set a Command on inbound requests. It is a generic ingress that doesn't know the protocol semantics of the downstream backend. Protocol-aware middleware or backends resolve the operation from the path, metadata, or their own endpoint logic.
 
-| HTTP Method | Default Operation | May Be Refined To |
-|-------------|-------------------|-------------------|
-| `GET`       | `Retrieve`        | `Query` (for list/search endpoints) |
-| `POST`      | `Store`           | `Query` (for FHIR `_search`) |
-| `PUT`       | `Update`          | - |
-| `PATCH`     | `Patch`           | - |
-| `DELETE`    | `Delete`          | - |
-| `HEAD`      | `Ping`            | - |
-| `OPTIONS`   | `Ping`            | - |
+When acting as a **backend** (outbound), the HTTP endpoint reads `envelope.command` to override the HTTP method for protocol bridging (e.g., a DICOM C-FIND → `Operation::Query` → `GET` request).
 
 ### DIMSE Operation Mapping
 
-Use `Command::from_legacy_dimse_op()` for backward-compatible mapping from DIMSE operation strings:
+For DICOM SCP and similar endpoints that receive DIMSE operations, create commands directly:
 
-| dimse_op string | Operation |
+| DIMSE operation | Operation |
 |-----------------|-----------|
-| `"find"`        | `Query`   |
-| `"get"`         | `Retrieve`|
-| `"move"`        | `Retrieve`|
-| `"store"`       | `Store`   |
-| `"echo"`        | `Ping`    |
+| `find`          | `Query`   |
+| `get`           | `Retrieve`|
+| `move`          | `Move`    |
+| `store`         | `Store`   |
+| `echo`          | `Ping`    |
 
-The `from_legacy_dimse_op()` method is case-insensitive and sets `source: "legacy_dimse_op"` for debugging.
+```rust
+let command = match dimse_op.as_str() {
+    "find" => Some(Command::new(Operation::Query)),
+    "get" => Some(Command::new(Operation::Retrieve)),
+    "move" => Some(Command::new(Operation::Move)),
+    "store" => Some(Command::new(Operation::Store)),
+    "echo" => Some(Command::new(Operation::Ping)),
+    _ => None,
+};
+```
 
 ## Consuming Commands (Backends)
 
@@ -216,7 +192,7 @@ Backends are **consumers** -- they read the command from the envelope to decide 
 
 ### Using `resolve_operation()`
 
-Always use `resolve_operation()` instead of reading `envelope.command` directly. This method provides automatic fallback to legacy `metadata["dimse_op"]` if no Command is set:
+Use `resolve_operation()` to get the operation. It returns `None` when no command is set, allowing backends to fall through to other resolution strategies:
 
 ```rust
 use crate::models::envelope::command::Operation;
@@ -250,13 +226,7 @@ async fn backend_outgoing_request(
 
 ### Resolution Order
 
-`resolve_operation()` checks in this order:
-
-1. **`envelope.command`** -- explicit Command (preferred)
-2. **`target_details.metadata["dimse_op"]`** -- legacy metadata on target
-3. **`request_details.metadata["dimse_op"]`** -- legacy metadata on request
-
-If none are found, returns `None`.
+`resolve_operation()` checks `envelope.command` and returns the operation if set. If no command is present, returns `None`. Backends should implement their own fallback logic (path-based detection, HTTP method mapping, etc.) in the `None` branch.
 
 ### HTTP Backend Pattern
 
@@ -293,6 +263,37 @@ let is_read = match envelope.resolve_operation() {
 };
 ```
 
+## Response Commands
+
+`ResponseEnvelope` carries an `Option<Command>` field that is propagated from the request through the pipeline. This allows middleware `right()` methods to access the operation directly:
+
+```rust
+async fn right(
+    &self,
+    envelope: ResponseEnvelope<Value>,
+) -> Result<ResponseEnvelope<Value>, Error> {
+    match envelope.resolve_operation() {
+        Some(Operation::Query) => { /* format query results */ }
+        Some(Operation::Retrieve) => { /* format retrieval results */ }
+        _ => {}
+    }
+    Ok(envelope)
+}
+```
+
+Use `ResponseEnvelope::from_backend_with_command()` to construct responses that carry the command forward:
+
+```rust
+let response = ResponseEnvelope::from_backend_with_command(
+    envelope.request_details.clone(),
+    status,
+    headers,
+    body,
+    normalized,
+    envelope.command.clone(),  // propagate command
+);
+```
+
 ## Middleware and Commands
 
 ### Reading Commands
@@ -317,18 +318,16 @@ async fn left(
 
 ### Setting Commands (Protocol Bridges)
 
-Protocol-bridging middleware can set the command when translating between protocols. When doing so, **also set the legacy metadata** for backward compatibility:
+Protocol-bridging middleware can set the command when translating between protocols:
 
 ```rust
-// Set the typed Command (modern path)
-use crate::models::envelope::command::Command;
-if let Some(cmd) = Command::from_legacy_dimse_op(op_name) {
-    envelope.command = Some(cmd.with_source("my_bridge_middleware"));
-}
+use crate::models::envelope::command::{Command, Operation};
 
-// Also set legacy metadata (backward compatibility)
-envelope.request_details.metadata
-    .insert("dimse_op".to_string(), op_name.to_string());
+// Set the typed Command
+envelope.command = Some(
+    Command::new(Operation::Query)
+        .with_source("my_bridge_middleware")
+);
 ```
 
 ### Transform Middleware Integration
@@ -426,43 +425,12 @@ RequestEnvelope::builder()
     .build()
 ```
 
-## Backward Compatibility
-
-The Command system is fully backward compatible:
-
-1. **`command` is `Option<Command>`** -- envelopes without a command continue to work
-2. **`resolve_operation()` falls back to legacy metadata** -- checks `metadata["dimse_op"]` if no command is set
-3. **Backends handle `None`** -- the `None` arm falls through to existing method-based or path-based logic
-4. **Dual-write in middleware** -- protocol-bridge middleware sets both `command` and `metadata["dimse_op"]` during the transition
-
-### Migration Path for Existing Code
-
-If your code reads `metadata["dimse_op"]` directly:
-
-```rust
-// Before (legacy)
-let op = envelope.request_details.metadata.get("dimse_op")
-    .cloned()
-    .unwrap_or_default();
-
-// After (modern, with automatic fallback)
-let operation = envelope.resolve_operation();
-match operation {
-    Some(Operation::Query) => { /* was "find" */ }
-    Some(Operation::Retrieve) => { /* was "get" or "move" */ }
-    Some(Operation::Store) => { /* was "store" */ }
-    Some(Operation::Ping) => { /* was "echo" */ }
-    None => { /* no operation set */ }
-    _ => { /* other operations */ }
-}
-```
-
 ## File Locations
 
 | File | Purpose |
 |------|---------|
 | `src/models/envelope/command.rs` | `Command` and `Operation` type definitions |
-| `src/models/envelope/envelope.rs` | `command` field, builder methods, `resolve_operation()` |
+| `src/models/envelope/envelope.rs` | `command` field, builder methods, `resolve_operation()` on both Request and Response envelopes |
 | `src/models/envelope/mod.rs` | Module exports |
 
 ## Current Implementation Status
@@ -471,21 +439,21 @@ All endpoints, backends, and protocol-bridging middleware now produce and consum
 
 | Component | Role | Status |
 |-----------|------|--------|
-| `DicomScpEndpoint` | Producer | Sets command via `from_legacy_dimse_op()` |
-| `HttpEndpoint` | Producer | Maps HTTP method to Operation |
+| `DicomScpEndpoint` | Producer | Sets command from DIMSE operation |
+| `HttpEndpoint` | Ingress | Does **not** set command (generic ingress) |
+| `HttpEndpoint` (backend) | Consumer | Reads command to override HTTP method |
 | `DicomwebEndpoint` | Producer | Maps DICOMweb routes (QIDO/WADO/STOW) |
 | `FhirEndpoint` | Producer | Maps FHIR interactions (search/read/create/etc.) |
 | `EchoEndpoint` | Producer | Always `Ping` |
 | `JmixEndpoint` | Producer | Maps JMIX routes (retrieve/query/store) |
-| `MockDicomEndpoint` | Producer | Sets command via `from_legacy_dimse_op()` |
-| `DicomScuBackend` | Consumer | Uses `resolve_operation()` with legacy fallback |
-| `HttpEndpoint` (backend) | Consumer | Command overrides HTTP method |
+| `MockDicomEndpoint` | Producer | Sets command from DIMSE operation |
+| `DicomScuBackend` | Consumer | Uses `resolve_operation()` with path fallback |
 | `Http3Backend` | Consumer | Command overrides HTTP method |
 | `JmixBackend` | Consumer | Command overrides HTTP method |
 | `StorageBackend` | Consumer | Maps Operation to read/write |
 | `MockDicomEndpoint` (backend) | Consumer | Uses `resolve_operation()` |
-| `DICOMwebToDICOM` middleware | Bridge | Sets command + legacy `dimse_op` |
-| `DicomToDicomweb` middleware | Bridge | Reads via `resolve_operation()` |
+| `DICOMwebToDICOM` middleware | Bridge | Sets command for DICOM backends |
+| `DicomToDicomweb` middleware | Bridge | Reads via `resolve_operation()` on response |
 | `JoltTransform` middleware | Plumbing | Passes command through context |
 | `MetadataTransform` middleware | Plumbing | Passes command through context |
 

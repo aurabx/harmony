@@ -1,6 +1,6 @@
 # Backends
 
-**Last Updated**: 2025-01-31
+**Last Updated**: 2026-02-08
 
 Backends enable the pipeline to communicate with external systems (targets). Backends operate within the unified `PipelineExecutor` and handle the "backend invocation" step of the pipeline.
 
@@ -73,6 +73,7 @@ A basic HTTP backend for connecting to HTTP/HTTPS targets.
 
 **Service behavior**:
 - Accepts a `RequestEnvelope` and converts it to an HTTP request
+- If a `Command` is set on the envelope, the Command's `Operation` overrides the HTTP method (e.g., Query/Retrieve→GET, Store→POST, Update→PUT). See [commands.md](commands.md).
 - Sends request to configured target
 - Converts HTTP response back to `ResponseEnvelope`
 - Preserves headers, status codes, and body
@@ -152,6 +153,7 @@ An HTTP/3 backend for connecting to targets over QUIC with TLS 1.3.
 - Built-in TLS 1.3 encryption (always enabled)
 - Multiplexed streams without head-of-line blocking
 - Supports custom CA certificates for self-signed servers
+- If a `Command` is set on the envelope, the Command's `Operation` overrides the HTTP method, same as the HTTP backend. See [commands.md](commands.md).
 
 **Configuration**:
 ```toml
@@ -216,6 +218,7 @@ A DICOM DIMSE backend for connecting to remote DICOM PACS via C-ECHO/C-FIND/C-MO
 
 **Service behavior**:
 - Converts `RequestEnvelope` to DICOM DIMSE operations (SCU - outgoing requests)
+- Uses `resolve_operation()` to determine the DIMSE action: Query→C-FIND, Retrieve→C-GET/C-MOVE, Store→C-STORE, Ping→C-ECHO. Falls back to path-based detection if no Command is set. See [commands.md](commands.md).
 - Communicates with remote DICOM nodes using AE titles
 - Converts DICOM responses back to `ResponseEnvelope`
 - Supports C-ECHO, C-FIND, C-MOVE, C-GET operations
@@ -275,8 +278,9 @@ See [dimse-integration.md](dimse-integration.md) for detailed DIMSE usage.
 A backend for reading and writing files to local storage or S3-compatible object storage.
 
 **Service behavior**:
-- **GET**: Reads file at path resolved from `read_pattern`
-- **POST/PUT**: Writes request body to path resolved from `write_pattern`
+- Uses `resolve_operation()` to determine read vs. write: Query/Retrieve→read, Store/Update/Patch→write. Falls back to HTTP method if no Command is set. See [commands.md](commands.md).
+- **Read** (GET or Query/Retrieve): Reads file at path resolved from `read_pattern`
+- **Write** (POST/PUT or Store/Update): Writes request body to path resolved from `write_pattern`
 - Supports path templating with metadata, UUIDs, and timestamps
 - Returns `Location` header and JSON status on successful write
 
@@ -367,6 +371,7 @@ A built-in mock backend that simulates a DICOM PACS. Useful for testing pipeline
 
 **Service behavior**:
 - Acts as a DICOM SCU/Target for pipeline backends
+- Uses `resolve_operation()` to determine the operation: Query→C-FIND, Retrieve→C-GET, Ping→C-ECHO. Falls back to path-based detection if no Command is set. See [commands.md](commands.md).
 - Supports `C-FIND` (Patient, Study, Series, Image levels)
 - Supports `C-GET` (Instance and Frame retrieval)
 - Supports `C-ECHO`
@@ -392,6 +397,7 @@ service = "mock_dicom"
 
 ## See Also
 
+- [commands.md](commands.md) - Command system for protocol-agnostic operations
 - [router.md](router.md) - Pipeline execution flow
 - [endpoints.md](endpoints.md) - Protocol entry points
 - [adapters.md](adapters.md) - Protocol adapter architecture

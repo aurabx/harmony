@@ -15,6 +15,7 @@ Welcome to Harmony Proxy's documentation. Harmony is a general-purpose data mesh
 - **[adapters.md](adapters.md)** - Protocol adapter guide (HTTP, HTTP/3, DIMSE, how to implement new protocols)
 - **[extensions.md](extensions.md)** - Extension system for custom services, middleware, and plugins
 - **[envelope.md](envelope.md)** - Core Envelope struct for data exchange
+- **[commands.md](commands.md)** - Command system for protocol-agnostic operations
 
 ## Configuration Reference
 - **[schema.md](schema.md)** - Configuration schemas (mesh, config, pipeline, remote-ingress)

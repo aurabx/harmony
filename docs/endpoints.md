@@ -1,6 +1,6 @@
 # Endpoints
 
-**Last Updated**: 2025-01-31
+**Last Updated**: 2026-02-08
 
 Endpoints define protocol entry points into the Harmony pipeline. Each endpoint is associated with a **Service** that handles protocol-specific data conversion to/from the internal `Envelope` format.
 
@@ -67,6 +67,7 @@ A basic HTTP endpoint handled by `HttpAdapter`.
 - Accepts an HTTP request and converts it into a `RequestEnvelope`
 - Takes a `ResponseEnvelope` and converts it into an HTTP response
 - Preserves headers, query parameters, and body
+- Sets a `Command` on the envelope based on the HTTP method (GET→Retrieve, POST→Store, PUT→Update, PATCH→Patch, DELETE→Delete, HEAD/OPTIONS→Ping). See [commands.md](commands.md).
 
 **Configuration**:
 ```toml
@@ -92,6 +93,7 @@ Extends the HTTP endpoint with FHIR-specific handling.
 - Accepts an HTTP request and converts it into a `RequestEnvelope`
 - Provides FHIR-aware request/response handling
 - Takes a `ResponseEnvelope` and converts it into a FHIR-compliant HTTP response
+- Sets a `Command` based on FHIR interaction type: search→Query, read→Retrieve, create→Store, `_search`→Query, metadata→Ping, and others. See [commands.md](commands.md).
 
 **Configuration**:
 ```toml
@@ -116,6 +118,7 @@ JMIX endpoint registers a strict, fixed set of routes for the JMIX healthcare da
 **Service behavior**:
 - Registers fixed routes under the configured `path_prefix`
 - Handles JMIX data package operations
+- Sets a `Command` based on method and route: GET-by-ID→Retrieve, GET-with-query→Query, POST→Store. See [commands.md](commands.md).
 
 **Supported routes** (under configured `path_prefix`):
 - `GET {prefix}/api/jmix/{id}` - Retrieve JMIX package
@@ -148,6 +151,7 @@ Provides DICOMweb QIDO-RS (Query) and WADO-RS (Retrieve) endpoints.
 **Service behavior**:
 - Accepts DICOMweb requests and converts them into `RequestEnvelope`
 - Supports QIDO-RS queries and WADO-RS retrieval operations
+- Sets a `Command` based on DICOMweb route classification: QIDO-RS→Query, WADO-RS→Retrieve, STOW-RS→Store. See [commands.md](commands.md).
 - Currently returns 501 Not Implemented for all endpoints (skeleton implementation)
 
 **Configuration**:
@@ -184,6 +188,7 @@ Provides DICOM DIMSE SCP endpoint for receiving incoming DICOM requests.
 **Service behavior**:
 - Accepts incoming DIMSE connections (C-FIND, C-MOVE, C-GET, C-ECHO, C-STORE)
 - Converts DIMSE operations to `RequestEnvelope` via protocol adapter
+- Sets a `Command` from the DIMSE operation type (find→Query, get/move→Retrieve, store→Store, echo→Ping). See [commands.md](commands.md).
 - Routes requests through the pipeline system
 - Returns DIMSE responses to the calling SCU
 

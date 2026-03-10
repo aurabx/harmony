@@ -1,6 +1,6 @@
 # Envelope: Data Exchange Format
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2026-02-08
 
 ## Overview
 
@@ -28,6 +28,9 @@ The `RequestEnvelope` wraps incoming request data in a protocol-agnostic format.
 ```rust
 pub struct RequestEnvelope<T> {
     pub request_details: RequestDetails,
+    pub backend_request_details: RequestDetails,
+    pub target_details: Option<TargetDetails>,
+    pub command: Option<Command>,
     pub original_data: T,
     pub normalized_data: Option<serde_json::Value>,
     pub normalized_snapshot: Option<serde_json::Value>,
@@ -38,7 +41,10 @@ pub struct RequestEnvelope<T> {
 
 | Field | Type | Description |
 |-------|------|-------------|
-| `request_details` | `RequestDetails` | Metadata about the request (method, URI, headers, etc.) |
+| `request_details` | `RequestDetails` | Metadata about the incoming request (method, URI, headers, etc.) |
+| `backend_request_details` | `RequestDetails` | Request details for the backend call (may differ from incoming request) |
+| `target_details` | `Option<TargetDetails>` | Backend target connection info (base_url, method, headers, metadata). Set by the pipeline before backend invocation. |
+| `command` | `Option<Command>` | The intended operation for the backend, set by the endpoint or middleware. See [commands.md](commands.md). |
 | `original_data` | `T` (generic) | Raw protocol payload (bytes, JSON, DICOM dataset, etc.) |
 | `normalized_data` | `Option<serde_json::Value>` | JSON representation of `original_data` |
 | `normalized_snapshot` | `Option<serde_json::Value>` | Pre-transform snapshot for debugging |
@@ -56,6 +62,23 @@ pub struct RequestDetails {
     pub query_params: HashMap<String, Vec<String>>,
     pub cache_status: Option<String>,
     pub metadata: HashMap<String, String>,  // Protocol-specific metadata
+    pub content_metadata: Option<ContentMetadata>,
+}
+```
+
+### TargetDetails
+
+Contains backend target connection information, populated by the pipeline before backend invocation:
+
+```rust
+pub struct TargetDetails {
+    pub base_url: String,
+    pub method: String,
+    pub uri: String,
+    pub headers: HashMap<String, String>,
+    pub cookies: HashMap<String, String>,
+    pub query_params: HashMap<String, Vec<String>>,
+    pub metadata: HashMap<String, String>,
 }
 ```
 
@@ -63,7 +86,7 @@ pub struct RequestDetails {
 - `path`: Request subpath without leading slash (e.g., `"Patient/123"`)
 - `path_with_query`: Subpath with query string (e.g., `"Patient/123?_count=5"`)
 - `full_path`: Complete path with prefix and leading slash (e.g., `"/fhir/Patient/123"`)
-- `dimse_op`: DICOM operation (e.g., `C-FIND`, `C-STORE`)
+- `dicom_operation`: DICOM operation string (e.g., `"find"`, `"store"`). Set by some adapters for informational purposes. Prefer using the typed `Command` on the envelope. See [commands.md](commands.md).
 - `request_id`: Unique request identifier
 - `protocol`: Source protocol (e.g., `http`, `dimse`, `hl7`)
 
@@ -168,12 +191,13 @@ pub enum Protocol {
    ↓
 2. Service builds RequestEnvelope from ProtocolCtx
    ├─ Extracts RequestDetails (method, URI, headers)
+   ├─ Sets Command from protocol operation (e.g., HTTP method, DIMSE op)
    ├─ Stores raw payload in original_data
    └─ Normalizes to JSON in normalized_data
    ↓
 3. PipelineExecutor processes RequestEnvelope
-   ├─ Incoming middleware (auth, transforms)
-   ├─ Backend invocation
+   ├─ Incoming middleware (auth, transforms, may modify Command)
+   ├─ Backend invocation (reads Command via resolve_operation())
    └─ Outgoing middleware (response transforms)
    ↓
 4. PipelineExecutor returns ResponseEnvelope
@@ -311,6 +335,32 @@ impl Backend for HttpBackend {
 }
 ```
 
+## Command Resolution
+
+The `RequestEnvelope` provides two helper methods for reading the operational intent with automatic fallback to legacy metadata:
+
+### `resolve_operation()`
+
+Returns `Option<Operation>`. Reads `envelope.command` and returns the operation if set, or `None` if no command is present. Available on both `RequestEnvelope` and `ResponseEnvelope`.
+
+```rust
+let operation = envelope.resolve_operation();
+match operation {
+    Some(Operation::Query) => { /* C-FIND, search, QIDO-RS */ }
+    Some(Operation::Retrieve) => { /* C-GET, read, WADO-RS */ }
+    Some(Operation::Store) => { /* C-STORE, create, STOW-RS */ }
+    Some(Operation::Ping) => { /* C-ECHO, health check */ }
+    None => { /* No operation set -- use existing logic */ }
+    _ => { /* Other operations */ }
+}
+```
+
+### `resolve_command()`
+
+Returns `Option<Command>` (the full Command with params and source). Same fallback chain as `resolve_operation()`, but constructs a `Command` from legacy metadata if needed.
+
+For details on the Command system, available Operations, and how endpoints and backends use them, see [commands.md](commands.md).
+
 ## Best Practices
 
 ### 1. Preserve Original Data
@@ -378,15 +428,16 @@ HTTP POST /dicom/find
   ↓ HttpAdapter
 RequestEnvelope {
   request_details: { method: "POST", uri: "/dicom/find", ... },
+  command: Command { operation: Store },  // From HTTP POST
   original_data: b'{"PatientID": "12345", ...}',
   normalized_data: { "PatientID": "12345", ... },
 }
   ↓ Metadata Transform Middleware
 RequestEnvelope {
   ...,
-  metadata: { "dimse_op": "C-FIND" },  // Added by middleware
+  command: Command { operation: Query },   // Refined by middleware
 }
-  ↓ DICOM Backend
+  ↓ DICOM Backend (reads resolve_operation() → Query → C-FIND)
 C-FIND request to PACS
   ↓
 ResponseEnvelope {
@@ -406,11 +457,12 @@ C-FIND request from remote AET
   ↓ DimseAdapter
 RequestEnvelope {
   request_details: { method: "C-FIND", ... },
-  metadata: { "dimse_op": "C-FIND", "calling_aet": "REMOTE" },
+  command: Command { operation: Query },     // Set by DICOM SCP endpoint
+  metadata: { "calling_aet": "REMOTE" },
   original_data: <DICOM dataset>,
   normalized_data: { "PatientID": "12345", ... },
 }
-  ↓ HTTP Backend
+  ↓ HTTP Backend (reads resolve_operation() → Query → GET)
 GET https://fhir.example.com/Patient?identifier=12345
   ↓
 ResponseEnvelope {
@@ -423,6 +475,7 @@ C-FIND response with DICOM datasets
 
 ## See Also
 
+- [commands.md](commands.md) - Command system for protocol-agnostic operations
 - [adapters.md](adapters.md) - Protocol adapter architecture
 - [router.md](router.md) - Pipeline execution flow
 - [middleware.md](middleware.md) - Middleware usage
