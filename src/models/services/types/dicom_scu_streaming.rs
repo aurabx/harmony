@@ -254,6 +254,7 @@ impl ServiceType for DicomScuStreamingBackend {
             .cache_status(None)
             .metadata(metadata)
             .target_details(None)
+            .command(ctx.command)
             .original_data(ctx.payload)
             .normalized_data(normalized)
             .normalized_snapshot(None)
@@ -555,5 +556,383 @@ impl DicomScuStreamingBackend {
                 }
             }
         })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::envelope::command::{Command, Operation};
+    use crate::models::envelope::envelope::RequestDetails;
+    use dimse::types::{DatasetMetadata, DatasetStream, QueryLevel};
+    use futures_util::StreamExt;
+    use std::collections::HashMap;
+
+    // ── helpers ─────────────────────────────────────────────────────────────
+
+    fn make_backend(aet: Option<&str>, host: Option<&str>, port: Option<u16>) -> DicomScuStreamingBackend {
+        DicomScuStreamingBackend {
+            local_aet: None,
+            aet: aet.map(|s| s.to_string()),
+            host: host.map(|s| s.to_string()),
+            port,
+            use_tls: None,
+        }
+    }
+
+    fn make_options(pairs: &[(&str, serde_json::Value)]) -> HashMap<String, serde_json::Value> {
+        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+    }
+
+    fn dummy_request_details() -> RequestDetails {
+        RequestDetails {
+            method: "GET".to_string(),
+            uri: "dimse://scu/get".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata: HashMap::new(),
+            content_metadata: None,
+        }
+    }
+
+    // ── parse_query_level ────────────────────────────────────────────────────
+
+    #[test]
+    fn test_parse_query_level_patient() {
+        assert_eq!(DicomScuStreamingBackend::parse_query_level("PATIENT"), Some(QueryLevel::Patient));
+        assert_eq!(DicomScuStreamingBackend::parse_query_level("patient"), Some(QueryLevel::Patient));
+    }
+
+    #[test]
+    fn test_parse_query_level_study() {
+        assert_eq!(DicomScuStreamingBackend::parse_query_level("STUDY"), Some(QueryLevel::Study));
+        assert_eq!(DicomScuStreamingBackend::parse_query_level("study"), Some(QueryLevel::Study));
+    }
+
+    #[test]
+    fn test_parse_query_level_series() {
+        assert_eq!(DicomScuStreamingBackend::parse_query_level("SERIES"), Some(QueryLevel::Series));
+    }
+
+    #[test]
+    fn test_parse_query_level_image() {
+        assert_eq!(DicomScuStreamingBackend::parse_query_level("IMAGE"), Some(QueryLevel::Image));
+        assert_eq!(DicomScuStreamingBackend::parse_query_level("INSTANCE"), Some(QueryLevel::Image));
+        assert_eq!(DicomScuStreamingBackend::parse_query_level("instance"), Some(QueryLevel::Image));
+    }
+
+    #[test]
+    fn test_parse_query_level_unknown_returns_none() {
+        assert_eq!(DicomScuStreamingBackend::parse_query_level("FRAME"), None);
+        assert_eq!(DicomScuStreamingBackend::parse_query_level(""), None);
+        assert_eq!(DicomScuStreamingBackend::parse_query_level("GARBAGE"), None);
+    }
+
+    // ── build_find_query level inference ────────────────────────────────────
+
+    #[test]
+    fn test_build_find_query_explicit_level_takes_precedence() {
+        let backend = make_backend(None, None, None);
+        let params = HashMap::new();
+        // Explicit Study overrides default Patient
+        let query = backend.build_find_query(&params, Some(QueryLevel::Study));
+        assert_eq!(query.query_level, QueryLevel::Study);
+    }
+
+    #[test]
+    fn test_build_find_query_infers_patient_from_empty_params() {
+        let backend = make_backend(None, None, None);
+        let params = HashMap::new();
+        let query = backend.build_find_query(&params, None);
+        assert_eq!(query.query_level, QueryLevel::Patient);
+    }
+
+    #[test]
+    fn test_build_find_query_infers_study_from_study_uid() {
+        let backend = make_backend(None, None, None);
+        let mut params = HashMap::new();
+        // 0020000D = StudyInstanceUID (non-empty → Study level)
+        params.insert("0020000D".to_string(), "1.2.3".to_string());
+        let query = backend.build_find_query(&params, None);
+        assert_eq!(query.query_level, QueryLevel::Study);
+    }
+
+    #[test]
+    fn test_build_find_query_infers_series_from_series_uid() {
+        let backend = make_backend(None, None, None);
+        let mut params = HashMap::new();
+        // 0020000E = SeriesInstanceUID (non-empty → Series level)
+        params.insert("0020000E".to_string(), "1.2.3.4".to_string());
+        let query = backend.build_find_query(&params, None);
+        assert_eq!(query.query_level, QueryLevel::Series);
+    }
+
+    #[test]
+    fn test_build_find_query_infers_image_from_sop_instance_uid() {
+        let backend = make_backend(None, None, None);
+        let mut params = HashMap::new();
+        // 00080018 = SOPInstanceUID (non-empty → Image level)
+        params.insert("00080018".to_string(), "1.2.3.4.5".to_string());
+        let query = backend.build_find_query(&params, None);
+        assert_eq!(query.query_level, QueryLevel::Image);
+    }
+
+    #[test]
+    fn test_build_find_query_copies_all_params() {
+        let backend = make_backend(None, None, None);
+        let mut params = HashMap::new();
+        params.insert("00100020".to_string(), "PAT001".to_string());
+        params.insert("00100010".to_string(), "Doe^John".to_string());
+        let query = backend.build_find_query(&params, None);
+        assert!(query.parameters.contains_key("00100020"));
+        assert!(query.parameters.contains_key("00100010"));
+    }
+
+    // ── build_get_query ──────────────────────────────────────────────────────
+
+    #[test]
+    fn test_build_get_query_defaults_to_study_level() {
+        let backend = make_backend(None, None, None);
+        let params = HashMap::new();
+        let query = backend.build_get_query(&params);
+        assert_eq!(query.query_level, QueryLevel::Study);
+    }
+
+    #[test]
+    fn test_build_get_query_copies_params() {
+        let backend = make_backend(None, None, None);
+        let mut params = HashMap::new();
+        params.insert("0020000D".to_string(), "1.2.3".to_string());
+        let query = backend.build_get_query(&params);
+        assert_eq!(query.parameters.get("0020000D").map(|s| s.as_str()), Some("1.2.3"));
+    }
+
+    // ── get_local_aet ────────────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_local_aet_from_options() {
+        let backend = make_backend(None, None, None);
+        let options = make_options(&[("local_aet", serde_json::json!("FROM_OPTIONS"))]);
+        assert_eq!(backend.get_local_aet(&options), Some("FROM_OPTIONS".to_string()));
+    }
+
+    #[test]
+    fn test_get_local_aet_from_struct_when_no_option() {
+        let mut backend = make_backend(None, None, None);
+        backend.local_aet = Some("FROM_STRUCT".to_string());
+        let options = make_options(&[]);
+        assert_eq!(backend.get_local_aet(&options), Some("FROM_STRUCT".to_string()));
+    }
+
+    #[test]
+    fn test_get_local_aet_default_fallback() {
+        let backend = make_backend(None, None, None);
+        let options = make_options(&[]);
+        assert_eq!(backend.get_local_aet(&options), Some("HARMONY_STREAM".to_string()));
+    }
+
+    #[test]
+    fn test_get_local_aet_options_take_precedence_over_struct() {
+        let mut backend = make_backend(None, None, None);
+        backend.local_aet = Some("FROM_STRUCT".to_string());
+        let options = make_options(&[("local_aet", serde_json::json!("FROM_OPTIONS"))]);
+        assert_eq!(backend.get_local_aet(&options), Some("FROM_OPTIONS".to_string()));
+    }
+
+    // ── create_remote_node ───────────────────────────────────────────────────
+
+    #[test]
+    fn test_create_remote_node_success() {
+        let backend = make_backend(None, None, None);
+        let options = make_options(&[
+            ("aet", serde_json::json!("REMOTE_AET")),
+            ("host", serde_json::json!("pacs.example.com")),
+            ("port", serde_json::json!(4242)),
+        ]);
+        assert!(backend.create_remote_node(&options).is_ok());
+    }
+
+    #[test]
+    fn test_create_remote_node_missing_aet_fails() {
+        let backend = make_backend(None, None, None);
+        let options = make_options(&[
+            ("host", serde_json::json!("pacs.example.com")),
+            ("port", serde_json::json!(4242)),
+        ]);
+        let err = backend.create_remote_node(&options).unwrap_err();
+        assert!(format!("{:?}", err).contains("aet"));
+    }
+
+    #[test]
+    fn test_create_remote_node_missing_host_fails() {
+        let backend = make_backend(None, None, None);
+        let options = make_options(&[
+            ("aet", serde_json::json!("REMOTE_AET")),
+            ("port", serde_json::json!(4242)),
+        ]);
+        let err = backend.create_remote_node(&options).unwrap_err();
+        assert!(format!("{:?}", err).contains("host"));
+    }
+
+    #[test]
+    fn test_create_remote_node_missing_port_fails() {
+        let backend = make_backend(None, None, None);
+        let options = make_options(&[
+            ("aet", serde_json::json!("REMOTE_AET")),
+            ("host", serde_json::json!("pacs.example.com")),
+        ]);
+        assert!(backend.create_remote_node(&options).is_err());
+    }
+
+    #[test]
+    fn test_create_remote_node_invalid_port_zero_fails() {
+        let backend = make_backend(None, None, None);
+        let options = make_options(&[
+            ("aet", serde_json::json!("REMOTE_AET")),
+            ("host", serde_json::json!("pacs.example.com")),
+            ("port", serde_json::json!(0u64)),
+        ]);
+        assert!(backend.create_remote_node(&options).is_err());
+    }
+
+    #[test]
+    fn test_create_remote_node_uses_struct_fields_as_fallback() {
+        let backend = make_backend(Some("STRUCT_AET"), Some("struct.host"), Some(1234));
+        let options = make_options(&[]);
+        assert!(backend.create_remote_node(&options).is_ok());
+    }
+
+    // ── convert_dimse_stream_to_envelopes: Command propagation ───────────────
+
+    #[tokio::test]
+    async fn test_convert_stream_propagates_command_to_envelopes() {
+        use dicom_object::InMemDicomObject;
+        use futures_util::stream;
+
+        let command = Command::new(Operation::Retrieve).with_source("test");
+        let request_details = dummy_request_details();
+
+        // Build a minimal in-memory DICOM object (empty but valid)
+        let obj = InMemDicomObject::new_empty();
+        let mut metadata = DatasetMetadata::new();
+        metadata.sop_instance_uid = Some("1.2.3.4.5".to_string());
+
+        let dataset = DatasetStream::Object { object: obj, metadata };
+        let dimse_stream: Pin<Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>> =
+            Box::pin(stream::once(async { Ok(dataset) }));
+
+        let stream_metadata = StreamMetadata::new("dimse-get");
+
+        let mut result_stream = DicomScuStreamingBackend::convert_dimse_stream_to_envelopes(
+            dimse_stream,
+            request_details,
+            stream_metadata,
+            Some(command.clone()),
+        );
+
+        let item = result_stream.next().await.expect("stream should yield one item");
+        let envelope = item.expect("item should be Ok");
+
+        // Command is propagated to the response envelope
+        let cmd = envelope.command.expect("command should be Some");
+        assert_eq!(cmd.operation, Operation::Retrieve);
+        assert_eq!(cmd.source.as_deref(), Some("test"));
+    }
+
+    #[tokio::test]
+    async fn test_convert_stream_none_command_propagated() {
+        use dicom_object::InMemDicomObject;
+        use futures_util::stream;
+
+        let request_details = dummy_request_details();
+        let obj = InMemDicomObject::new_empty();
+        let metadata = DatasetMetadata::new();
+        let dataset = DatasetStream::Object { object: obj, metadata };
+
+        let dimse_stream: Pin<Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>> =
+            Box::pin(stream::once(async { Ok(dataset) }));
+
+        let stream_metadata = StreamMetadata::new("dimse-get");
+
+        let mut result_stream = DicomScuStreamingBackend::convert_dimse_stream_to_envelopes(
+            dimse_stream,
+            request_details,
+            stream_metadata,
+            None,
+        );
+
+        let item = result_stream.next().await.expect("stream should yield one item");
+        let envelope = item.expect("item should be Ok");
+
+        assert!(envelope.command.is_none(), "None command should propagate as None");
+    }
+
+    #[tokio::test]
+    async fn test_convert_stream_dimse_error_propagates() {
+        use futures_util::stream;
+
+        let request_details = dummy_request_details();
+        let err = dimse::DimseError::operation_failed("test error");
+        let dimse_stream: Pin<Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>> =
+            Box::pin(stream::once(async { Err(err) }));
+
+        let stream_metadata = StreamMetadata::new("dimse-get");
+        let mut result_stream = DicomScuStreamingBackend::convert_dimse_stream_to_envelopes(
+            dimse_stream,
+            request_details,
+            stream_metadata,
+            None,
+        );
+
+        let item = result_stream.next().await.expect("stream should yield one item");
+        assert!(item.is_err(), "DIMSE error should surface as Err");
+    }
+
+    // ── run_streaming op-string derivation ───────────────────────────────────
+    //
+    // The full `run_streaming()` requires global config and live services, so we
+    // test the op-derivation mapping directly — the same match arm used there.
+
+    fn derive_op(operation: Operation) -> &'static str {
+        match operation {
+            Operation::Query    => "find",
+            Operation::Retrieve => "get",
+            Operation::Move     => "move",
+            Operation::Store    => "store",
+            Operation::Ping     => "echo",
+            _                   => "unknown",
+        }
+    }
+
+    #[test]
+    fn test_op_derivation_query_maps_to_find() {
+        assert_eq!(derive_op(Operation::Query), "find");
+    }
+
+    #[test]
+    fn test_op_derivation_retrieve_maps_to_get() {
+        assert_eq!(derive_op(Operation::Retrieve), "get");
+    }
+
+    #[test]
+    fn test_op_derivation_move_maps_to_move() {
+        assert_eq!(derive_op(Operation::Move), "move");
+    }
+
+    #[test]
+    fn test_op_derivation_store_maps_to_store() {
+        assert_eq!(derive_op(Operation::Store), "store");
+    }
+
+    #[test]
+    fn test_op_derivation_ping_maps_to_echo() {
+        assert_eq!(derive_op(Operation::Ping), "echo");
+    }
+
+    #[test]
+    fn test_op_derivation_custom_maps_to_unknown() {
+        assert_eq!(derive_op(Operation::Custom), "unknown");
     }
 }

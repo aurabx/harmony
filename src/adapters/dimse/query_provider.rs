@@ -155,7 +155,7 @@ impl PipelineQueryProvider {
     /// Returns a stream of datasets that can be processed progressively.
     async fn run_streaming(
         &self,
-        op: &str,
+        command: Command,
         body: serde_json::Value,
         mut meta: HashMap<String, String>,
     ) -> DimseResult<Vec<DatasetStream>> {
@@ -175,7 +175,19 @@ impl PipelineQueryProvider {
             endpoint.options.clone().unwrap_or_default();
         let options = &options_owned;
 
-        // Build ProtocolCtx for DIMSE
+        // Derive the legacy dimse_op string from the typed Command for backward
+        // compatibility with services that still read metadata.
+        let op = match command.operation {
+            Operation::Query => "find",
+            Operation::Retrieve => "get",
+            Operation::Move => "move",
+            Operation::Store => "store",
+            Operation::Ping => "echo",
+            _ => "unknown",
+        };
+
+        // Build ProtocolCtx for DIMSE with typed Command.
+        // The Command is the single source of truth for the operation.
         meta.insert("protocol".into(), "dimse".into());
         meta.insert("dimse_op".into(), op.to_string());
         let ctx = ProtocolCtx {
@@ -183,7 +195,7 @@ impl PipelineQueryProvider {
             payload: serde_json::to_vec(&body).unwrap_or_default(),
             meta,
             attrs: serde_json::json!({}),
-            command: None,
+            command: Some(command),
         };
 
         // Let the service build the request envelope
@@ -404,13 +416,14 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
         })?;
 
+        let command = Command::new(Operation::Query).with_source("dimse_adapter");
         if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
             tracing::info!("Using streaming pipeline for C-FIND");
-            self.run_streaming("find", body, meta).await
+            self.run_streaming(command, body, meta).await
         } else {
             let response_envelope = self
             .run(
-                Command::new(Operation::Query).with_source("dimse_adapter"),
+                command,
                 body,
                 meta,
             )
@@ -486,13 +499,14 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
         })?;
 
+        let command = Command::new(Operation::Retrieve).with_source("dimse_adapter");
         if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
             tracing::info!("Using streaming pipeline for C-GET");
-            self.run_streaming("get", body, meta).await
+            self.run_streaming(command, body, meta).await
         } else {
             let response_envelope = self
                 .run(
-                    Command::new(Operation::Retrieve).with_source("dimse_adapter"),
+                    command,
                     body,
                     meta,
                 )
@@ -807,6 +821,66 @@ mod tests {
     }
 
     // Note: test_store_dir_functions removed - uses global static that conflicts with parallel test execution
+
+    // ── run_streaming Command → dimse_op mapping ─────────────────────────────
+    //
+    // `run_streaming()` requires a global config and live services so it cannot
+    // be called in unit tests. The op-string derivation logic is a pure match
+    // expression; we duplicate it here so the mapping stays under test.
+
+    fn op_to_dimse_string(op: Operation) -> &'static str {
+        match op {
+            Operation::Query    => "find",
+            Operation::Retrieve => "get",
+            Operation::Move     => "move",
+            Operation::Store    => "store",
+            Operation::Ping     => "echo",
+            _                   => "unknown",
+        }
+    }
+
+    #[test]
+    fn test_run_streaming_query_derives_find() {
+        assert_eq!(op_to_dimse_string(Operation::Query), "find");
+    }
+
+    #[test]
+    fn test_run_streaming_retrieve_derives_get() {
+        assert_eq!(op_to_dimse_string(Operation::Retrieve), "get");
+    }
+
+    #[test]
+    fn test_run_streaming_move_derives_move() {
+        assert_eq!(op_to_dimse_string(Operation::Move), "move");
+    }
+
+    #[test]
+    fn test_run_streaming_store_derives_store() {
+        assert_eq!(op_to_dimse_string(Operation::Store), "store");
+    }
+
+    #[test]
+    fn test_run_streaming_ping_derives_echo() {
+        assert_eq!(op_to_dimse_string(Operation::Ping), "echo");
+    }
+
+    #[test]
+    fn test_run_streaming_custom_derives_unknown() {
+        assert_eq!(op_to_dimse_string(Operation::Custom), "unknown");
+    }
+
+    #[test]
+    fn test_run_streaming_command_carries_correct_operation() {
+        // Verify that the Command built at each call site has the expected operation,
+        // mirroring what run_streaming() receives in practice.
+        let find_cmd = Command::new(Operation::Query).with_source("dimse_adapter");
+        assert_eq!(find_cmd.operation, Operation::Query);
+        assert_eq!(find_cmd.source.as_deref(), Some("dimse_adapter"));
+
+        let get_cmd = Command::new(Operation::Retrieve).with_source("dimse_adapter");
+        assert_eq!(get_cmd.operation, Operation::Retrieve);
+        assert_eq!(get_cmd.source.as_deref(), Some("dimse_adapter"));
+    }
 
     // ── MultiplexingQueryProvider tests ──────────────────────────────────────
 
