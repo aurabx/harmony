@@ -286,6 +286,7 @@ fn register_builtin_middleware(registry: &mut UnifiedRegistry) {
     registry.register_middleware_factory(Box::new(DicomToDicomwebFactory));
     registry.register_middleware_factory(Box::new(DicomFlattenFactory));
     registry.register_middleware_factory(Box::new(DicomUnflattenFactory));
+    registry.register_middleware_factory(Box::new(DicomToHttpFactory));
 
     // Transform middleware
     registry.register_middleware_factory(Box::new(TransformFactory));

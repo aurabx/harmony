@@ -14,6 +14,7 @@ use std::pin::Pin;
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use tracing::{debug, info};
+use http::Method;
 
 /// HTTP streaming endpoint configuration
 ///
@@ -111,9 +112,37 @@ impl ServiceType for HttpStreamingEndpoint {
         Ok(())
     }
 
-    fn build_router(&self, _options: &HashMap<String, Value>) -> Vec<RouteConfig> {
-        // HTTP streaming endpoint doesn't add routes - it handles responses
-        vec![]
+    fn build_router(&self, options: &HashMap<String, Value>) -> Vec<RouteConfig> {
+        // Register a route so the HTTP adapter knows to forward requests here.
+        // Uses `path_prefix` option (default "/"), matching the HttpEndpoint convention.
+        let path_prefix = options
+            .get("path_prefix")
+            .and_then(|v| v.as_str())
+            .filter(|s| !s.is_empty())
+            .unwrap_or("/")
+            .to_string();
+
+        let prefix_trimmed = path_prefix.trim_end_matches('/');
+        let wildcard_path = if prefix_trimmed.is_empty() {
+            "/{*wildcard}".to_string()
+        } else {
+            format!("{}/{{*wildcard}}", prefix_trimmed)
+        };
+
+        let methods = vec![Method::GET, Method::POST, Method::PUT, Method::DELETE];
+
+        vec![
+            RouteConfig {
+                path: path_prefix.clone(),
+                methods: methods.clone(),
+                description: Some("HTTP streaming endpoint (exact path)".to_string()),
+            },
+            RouteConfig {
+                path: wildcard_path,
+                methods,
+                description: Some("HTTP streaming endpoint (subpaths)".to_string()),
+            },
+        ]
     }
 
     async fn build_protocol_envelope(
