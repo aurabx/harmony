@@ -7,22 +7,33 @@ use crate::config::config::Config;
 use crate::models::protocol::Protocol;
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
+use query_provider::DimseOp;
 use std::collections::{HashMap, HashSet};
+use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
-/// Registry of started DIMSE SCPs to prevent duplicate listeners
-/// Key format: "{local_aet}@{bind_addr}:{port}#{endpoint_name}"
+/// Registry of started DIMSE SCPs to prevent duplicate listeners.
+/// Key format: "{bind_addr}:{port}"
 static STARTED_SCP: Lazy<Mutex<HashSet<String>>> = Lazy::new(|| Mutex::new(HashSet::new()));
 
 /// DIMSE protocol adapter
 ///
 /// Handles DICOM DIMSE protocol via SCP (Service Class Provider) listeners.
-/// Supports C-FIND, C-MOVE, C-STORE, and C-ECHO operations.
+/// Multiple pipelines sharing the same `(bind_addr, port)` are multiplexed
+/// onto a single TCP listener, with each DIMSE operation (C-FIND, C-STORE,
+/// etc.) routed to the pipeline that registered for it.
 pub struct DimseAdapter {
     /// Network name this adapter serves
     pub network_name: String,
+}
+
+/// Collected SCP endpoint configuration before grouping.
+struct ScpEndpointConfig {
+    pipeline_name: String,
+    endpoint_name: String,
+    options: HashMap<String, serde_json::Value>,
 }
 
 impl DimseAdapter {
@@ -49,6 +60,227 @@ impl DimseAdapter {
         let mut guard = STARTED_SCP.lock().expect("SCP registry poisoned");
         guard.retain(|k| k != key);
     }
+
+    /// Resolve the bind address for an SCP endpoint, with fallback chain:
+    /// endpoint options → network TCP config → 0.0.0.0
+    fn resolve_bind_addr(
+        options: &HashMap<String, serde_json::Value>,
+        network_config: Option<&crate::models::network::config::NetworkConfig>,
+    ) -> IpAddr {
+        options
+            .get("bind_addr")
+            .and_then(|v| v.as_str())
+            .and_then(|s| s.parse::<IpAddr>().ok())
+            .or_else(|| {
+                network_config
+                    .and_then(|nc| nc.tcp_config.as_ref())
+                    .and_then(|tcp| tcp.bind_address.parse::<IpAddr>().ok())
+            })
+            .unwrap_or_else(|| IpAddr::from(std::net::Ipv4Addr::new(0, 0, 0, 0)))
+    }
+
+    /// Resolve the port for an SCP endpoint, with fallback chain:
+    /// incoming_store_port → port → network TCP config → DEFAULT_DIMSE_PORT
+    fn resolve_port(
+        options: &HashMap<String, serde_json::Value>,
+        network_config: Option<&crate::models::network::config::NetworkConfig>,
+    ) -> u16 {
+        options
+            .get("incoming_store_port")
+            .or_else(|| options.get("port"))
+            .and_then(|v| v.as_u64())
+            .map(|p| p as u16)
+            .or_else(|| {
+                network_config
+                    .and_then(|nc| nc.tcp_config.as_ref())
+                    .map(|tcp| tcp.bind_port)
+            })
+            .unwrap_or(dimse::DEFAULT_DIMSE_PORT)
+    }
+
+    /// Resolve the storage directory, with fallback chain:
+    /// endpoint options → global storage adapter → ./tmp/dimse
+    fn resolve_storage_dir(options: &HashMap<String, serde_json::Value>) -> std::path::PathBuf {
+        if let Some(dir) = options.get("storage_dir").and_then(|v| v.as_str()) {
+            std::path::PathBuf::from(dir)
+        } else if let Some(storage) = crate::globals::get_storage() {
+            storage
+                .ensure_dir_str("dimse")
+                .unwrap_or_else(|_| std::path::PathBuf::from("./tmp/dimse"))
+        } else {
+            std::path::PathBuf::from("./tmp/dimse")
+        }
+    }
+
+    /// Extract the enabled DIMSE operations from endpoint options.
+    fn enabled_ops(options: &HashMap<String, serde_json::Value>) -> Vec<DimseOp> {
+        let mut ops = Vec::new();
+        if options
+            .get("enable_find")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            ops.push(DimseOp::Find);
+        }
+        if options
+            .get("enable_move")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            ops.push(DimseOp::Move);
+        }
+        if options
+            .get("enable_get")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            ops.push(DimseOp::Get);
+        }
+        if options
+            .get("enable_store")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false)
+        {
+            ops.push(DimseOp::Store);
+        }
+        ops
+    }
+
+    /// Build a merged `DimseConfig` from multiple endpoints that share a
+    /// `(bind_addr, port)`.
+    ///
+    /// The merged config takes the union of enabled operations and AET tables.
+    /// The AET and other scalar settings are taken from the first endpoint
+    /// (all endpoints on the same port should use the same AET).
+    fn build_merged_config(
+        bind_addr: IpAddr,
+        port: u16,
+        endpoints: &[&ScpEndpointConfig],
+    ) -> dimse::DimseConfig {
+        let first_options = &endpoints[0].options;
+
+        let local_aet = first_options
+            .get("local_aet")
+            .and_then(|v| v.as_str())
+            .unwrap_or("HARMONY_SCP")
+            .to_string();
+
+        let storage_dir = Self::resolve_storage_dir(first_options);
+
+        let mut config = dimse::DimseConfig {
+            local_aet: local_aet.clone(),
+            bind_addr,
+            port,
+            storage_dir,
+            // Start with everything disabled; we enable per-endpoint below
+            enable_echo: false,
+            enable_find: false,
+            enable_move: false,
+            enable_get: false,
+            enable_store: false,
+            ..Default::default()
+        };
+
+        // Merge settings from all endpoints sharing this listen address
+        for ep in endpoints {
+            let opts = &ep.options;
+
+            // Union of enabled operations
+            if opts
+                .get("enable_echo")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                config.enable_echo = true;
+            }
+            if opts
+                .get("enable_find")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                config.enable_find = true;
+            }
+            if opts
+                .get("enable_move")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                config.enable_move = true;
+            }
+            if opts
+                .get("enable_get")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                config.enable_get = true;
+            }
+            if opts
+                .get("enable_store")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+            {
+                config.enable_store = true;
+            }
+
+            // Max PDU: use the largest value across endpoints
+            if let Some(max_pdu_val) = opts.get("max_pdu").and_then(|v| v.as_u64()) {
+                if (16384..=131072).contains(&max_pdu_val) && max_pdu_val as u32 > config.max_pdu {
+                    config.max_pdu = max_pdu_val as u32;
+                }
+            }
+
+            // Warn if AETs differ across endpoints on the same port
+            let ep_aet = opts
+                .get("local_aet")
+                .and_then(|v| v.as_str())
+                .unwrap_or("HARMONY_SCP");
+            if ep_aet != local_aet {
+                tracing::warn!(
+                    "Endpoint '{}' (pipeline '{}') has AET '{}' but port {}:{} is already \
+                     using AET '{}'. The listener will use '{}'.",
+                    ep.endpoint_name,
+                    ep.pipeline_name,
+                    ep_aet,
+                    bind_addr,
+                    port,
+                    local_aet,
+                    local_aet,
+                );
+            }
+
+            // Merge AET tables
+            if let Some(aet_table_val) = opts.get("aet_table") {
+                if let Some(aet_obj) = aet_table_val.as_object() {
+                    for (aet_name, node_val) in aet_obj {
+                        if let Some(node_obj) = node_val.as_object() {
+                            let ae_title = node_obj
+                                .get("ae_title")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or(aet_name)
+                                .to_string();
+                            let host = node_obj
+                                .get("host")
+                                .and_then(|v| v.as_str())
+                                .unwrap_or("localhost")
+                                .to_string();
+                            let node_port = node_obj
+                                .get("port")
+                                .and_then(|v| v.as_u64())
+                                .map(|p| p as u16)
+                                .unwrap_or(11112);
+
+                            config.aet_table.insert(
+                                aet_name.clone(),
+                                dimse::RemoteNode::new(ae_title, host, node_port),
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
+        config
+    }
 }
 
 #[async_trait]
@@ -61,8 +293,6 @@ impl ProtocolAdapter for DimseAdapter {
         network_name: String,
         _network_config: &crate::models::network::config::NetworkConfig,
     ) -> Box<dyn ProtocolAdapter> {
-        // DIMSE adapter gets bind settings from network config at runtime
-        // via start_scp method, so we just need the network name here
         Box::new(DimseAdapter::new(network_name))
     }
 
@@ -75,25 +305,25 @@ impl ProtocolAdapter for DimseAdapter {
 
         tracing::debug!("Starting DIMSE adapter for network '{}'", network_name);
 
+        let network_config = config.network.get(&network_name).cloned();
+
         // Collect all DIMSE-related endpoints and backends for this network
-        let mut scp_configs: Vec<(String, String, HashMap<String, serde_json::Value>)> = Vec::new();
+        let mut scp_configs: Vec<ScpEndpointConfig> = Vec::new();
 
         for (pipeline_name, pipeline_cfg) in &config.pipelines {
-            // Check if this pipeline belongs to our network
             if !pipeline_cfg.networks.contains(&network_name) {
                 continue;
             }
 
-            // Check all endpoints in this pipeline for DIMSE services
+            // Collect dicom_scp endpoints
             for endpoint_name in &pipeline_cfg.endpoints {
                 if let Some(endpoint) = config.endpoints.get(endpoint_name) {
-                    // Check if this endpoint is DICOM SCP by service name
                     if endpoint.service == "dicom_scp" {
-                        scp_configs.push((
-                            pipeline_name.clone(),
-                            endpoint_name.clone(),
-                            endpoint.options.clone().unwrap_or_default(),
-                        ));
+                        scp_configs.push(ScpEndpointConfig {
+                            pipeline_name: pipeline_name.clone(),
+                            endpoint_name: endpoint_name.clone(),
+                            options: endpoint.options.clone().unwrap_or_default(),
+                        });
                     }
                 }
             }
@@ -101,21 +331,21 @@ impl ProtocolAdapter for DimseAdapter {
             // Also check for persistent SCP backends (legacy support)
             for backend_name in &pipeline_cfg.backends {
                 if let Some(backend) = config.backends.get(backend_name) {
-                    // Legacy persistent DICOM SCP backends
                     if backend.service == "dicom" || backend.service == "dicom_scu" {
                         if let Some(options) = &backend.options {
                             let needs_persistent = options
                                 .get("persistent_store_scp")
                                 .and_then(|v| v.as_bool())
                                 .unwrap_or(false)
-                                || (options.contains_key("host") && options.contains_key("port"));
+                                || (options.contains_key("host")
+                                    && options.contains_key("port"));
 
                             if needs_persistent && options.contains_key("incoming_store_port") {
-                                scp_configs.push((
-                                    pipeline_name.clone(),
-                                    format!("persistent_{}", backend_name),
-                                    options.clone(),
-                                ));
+                                scp_configs.push(ScpEndpointConfig {
+                                    pipeline_name: pipeline_name.clone(),
+                                    endpoint_name: format!("persistent_{}", backend_name),
+                                    options: options.clone(),
+                                });
                             }
                         }
                     }
@@ -128,7 +358,6 @@ impl ProtocolAdapter for DimseAdapter {
                 "No DIMSE endpoints or persistent SCPs found for network '{}'",
                 network_name
             );
-            // Return idle adapter
             return Ok(tokio::spawn(async move {
                 shutdown.cancelled().await;
             }));
@@ -137,7 +366,7 @@ impl ProtocolAdapter for DimseAdapter {
         // Log which DICOM endpoints will be served
         let endpoint_names: Vec<&str> = scp_configs
             .iter()
-            .map(|(_, name, _)| name.as_str())
+            .map(|c| c.endpoint_name.as_str())
             .collect();
         tracing::info!(
             "DIMSE adapter for network '{}' will serve {} endpoint(s): [{}]",
@@ -146,33 +375,108 @@ impl ProtocolAdapter for DimseAdapter {
             endpoint_names.join(", ")
         );
 
-        // Get network config for TCP bind settings
-        let network_config = config.network.get(&network_name).cloned();
+        // Group endpoints by (bind_addr, port) so we start one listener per
+        // unique listen address.
+        let mut groups: HashMap<(IpAddr, u16), Vec<usize>> = HashMap::new();
+        for (idx, ep) in scp_configs.iter().enumerate() {
+            let addr = Self::resolve_bind_addr(&ep.options, network_config.as_ref());
+            let port = Self::resolve_port(&ep.options, network_config.as_ref());
+            groups.entry((addr, port)).or_default().push(idx);
+        }
 
-        // Spawn task to manage SCPs
+        // Spawn task to manage all SCP listeners for this network
         let shutdown_clone = shutdown.clone();
         let handle = tokio::spawn(async move {
             let mut scp_handles = Vec::new();
 
-            // Start each SCP
-            for (pipeline_name, endpoint_name, options) in scp_configs {
-                match Self::start_scp(
-                    &pipeline_name,
-                    &endpoint_name,
-                    &options,
-                    network_config.as_ref(),
-                    shutdown_clone.clone(),
-                )
-                .await
-                {
-                    Ok(scp_handle) => {
-                        scp_handles.push(scp_handle);
-                    }
+            for ((bind_addr, port), indices) in &groups {
+                // Collect references to the endpoints in this group
+                let group_endpoints: Vec<&ScpEndpointConfig> =
+                    indices.iter().map(|&i| &scp_configs[i]).collect();
+
+                let group_names: Vec<String> = group_endpoints
+                    .iter()
+                    .map(|ep| {
+                        format!("{}:{}", ep.pipeline_name, ep.endpoint_name)
+                    })
+                    .collect();
+
+                tracing::info!(
+                    "Starting shared DIMSE SCP on {}:{} for {} endpoint(s): [{}]",
+                    bind_addr,
+                    port,
+                    group_endpoints.len(),
+                    group_names.join(", "),
+                );
+
+                // Build merged DimseConfig (union of enabled operations)
+                let dimse_config =
+                    Self::build_merged_config(*bind_addr, *port, &group_endpoints);
+
+                // Build operation→pipeline routing table
+                let routes: Vec<(String, String, Vec<DimseOp>)> = group_endpoints
+                    .iter()
+                    .map(|ep| {
+                        let ops = Self::enabled_ops(&ep.options);
+                        (ep.pipeline_name.clone(), ep.endpoint_name.clone(), ops)
+                    })
+                    .collect();
+
+                // Check if any endpoint in this group wants DCMTK storescp
+                let use_dcmtk = group_endpoints.iter().any(|ep| {
+                    let is_persistent = ep
+                        .options
+                        .get("persistent_store_scp")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(false);
+                    ep.options
+                        .get("use_dcmtk_store")
+                        .and_then(|v| v.as_bool())
+                        .unwrap_or(is_persistent)
+                });
+
+                let key = format!("{}:{}", bind_addr, port);
+                if !Self::register_scp(key.clone()) {
+                    tracing::info!(
+                        "DIMSE SCP at {}:{} already running, skipping",
+                        bind_addr,
+                        port,
+                    );
+                    continue;
+                }
+
+                let local_aet = dimse_config.local_aet.clone();
+
+                let result = if use_dcmtk {
+                    Self::start_dcmtk_scp(
+                        key,
+                        local_aet,
+                        *port,
+                        dimse_config,
+                        routes,
+                        shutdown_clone.clone(),
+                    )
+                    .await
+                } else {
+                    Self::start_internal_scp(
+                        key,
+                        local_aet,
+                        *bind_addr,
+                        *port,
+                        dimse_config,
+                        routes,
+                        shutdown_clone.clone(),
+                    )
+                    .await
+                };
+
+                match result {
+                    Ok(h) => scp_handles.push(h),
                     Err(e) => {
                         tracing::error!(
-                            "Failed to start DIMSE SCP for pipeline '{}', endpoint '{}': {}",
-                            pipeline_name,
-                            endpoint_name,
+                            "Failed to start DIMSE SCP on {}:{}: {}",
+                            bind_addr,
+                            port,
                             e
                         );
                     }
@@ -199,193 +503,30 @@ impl ProtocolAdapter for DimseAdapter {
     }
 }
 
-impl DimseAdapter {
-    /// Start a single DIMSE SCP for the given pipeline and endpoint
-    async fn start_scp(
-        pipeline_name: &str,
-        endpoint_name: &str,
-        options: &std::collections::HashMap<String, serde_json::Value>,
-        network_config: Option<&crate::models::network::config::NetworkConfig>,
-        shutdown: CancellationToken,
-    ) -> anyhow::Result<JoinHandle<()>> {
-        use dimse::{DimseConfig, DEFAULT_DIMSE_PORT};
-        use std::net::IpAddr;
-
-        let local_aet = options
-            .get("local_aet")
-            .and_then(|v| v.as_str())
-            .unwrap_or("HARMONY_SCP")
-            .to_string();
-
-        // Use network's TCP bind address, with endpoint override option for backward compatibility
-        let bind_addr = options
-            .get("bind_addr")
-            .and_then(|v| v.as_str())
-            .and_then(|s| s.parse::<IpAddr>().ok())
-            .or_else(|| {
-                network_config
-                    .and_then(|nc| nc.tcp_config.as_ref())
-                    .and_then(|tcp| tcp.bind_address.parse::<IpAddr>().ok())
-            })
-            .unwrap_or_else(|| IpAddr::from(std::net::Ipv4Addr::new(0, 0, 0, 0)));
-
-        // Use network's TCP port, with endpoint/backend override for backward compatibility
-        // For persistent backends, use incoming_store_port; for endpoints, use port
-        let port = options
-            .get("incoming_store_port")
-            .or_else(|| options.get("port"))
-            .and_then(|v| v.as_u64())
-            .map(|p| p as u16)
-            .or_else(|| {
-                network_config
-                    .and_then(|nc| nc.tcp_config.as_ref())
-                    .map(|tcp| tcp.bind_port)
-            })
-            .unwrap_or(DEFAULT_DIMSE_PORT);
-
-        let key = format!("{}@{}:{}#{}", local_aet, bind_addr, port, endpoint_name);
-
-        // Check if already started
-        if !Self::register_scp(key.clone()) {
-            tracing::info!(
-                "DIMSE SCP '{}' at {}:{} already running, skipping duplicate",
-                local_aet,
-                bind_addr,
-                port
-            );
-            // Return a no-op handle
-            return Ok(tokio::spawn(async {}));
-        }
-
-        let mut dimse_config = DimseConfig {
-            local_aet: local_aet.clone(),
-            bind_addr,
-            port,
-            ..Default::default()
-        };
-
-        // Determine storage_dir: prefer options, else storage adapter, else ./tmp/dimse
-        if let Some(dir) = options.get("storage_dir").and_then(|v| v.as_str()) {
-            dimse_config.storage_dir = std::path::PathBuf::from(dir);
-        } else if let Some(storage) = crate::globals::get_storage() {
-            let p = storage
-                .ensure_dir_str("dimse")
-                .unwrap_or_else(|_| std::path::PathBuf::from("./tmp/dimse"));
-            dimse_config.storage_dir = p;
-        } else {
-            dimse_config.storage_dir = std::path::PathBuf::from("./tmp/dimse");
-        }
-
-        // Feature toggles
-        if let Some(b) = options.get("enable_echo").and_then(|v| v.as_bool()) {
-            dimse_config.enable_echo = b;
-        }
-        if let Some(b) = options.get("enable_find").and_then(|v| v.as_bool()) {
-            dimse_config.enable_find = b;
-        }
-        if let Some(b) = options.get("enable_move").and_then(|v| v.as_bool()) {
-            dimse_config.enable_move = b;
-        }
-        if let Some(b) = options.get("enable_get").and_then(|v| v.as_bool()) {
-            dimse_config.enable_get = b;
-        }
-        if let Some(b) = options.get("enable_store").and_then(|v| v.as_bool()) {
-            dimse_config.enable_store = b;
-        }
-
-        // Max PDU size configuration
-        if let Some(max_pdu_val) = options.get("max_pdu").and_then(|v| v.as_u64()) {
-            if (16384..=131072).contains(&max_pdu_val) {
-                dimse_config.max_pdu = max_pdu_val as u32;
-            }
-        }
-
-        // AET table for C-MOVE destinations
-        // Format: { "AET_NAME": { "ae_title": "...", "host": "...", "port": ... }, ... }
-        if let Some(aet_table_val) = options.get("aet_table") {
-            if let Some(aet_obj) = aet_table_val.as_object() {
-                for (aet_name, node_val) in aet_obj {
-                    if let Some(node_obj) = node_val.as_object() {
-                        let ae_title = node_obj
-                            .get("ae_title")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or(aet_name)
-                            .to_string();
-                        let host = node_obj
-                            .get("host")
-                            .and_then(|v| v.as_str())
-                            .unwrap_or("localhost")
-                            .to_string();
-                        let port = node_obj
-                            .get("port")
-                            .and_then(|v| v.as_u64())
-                            .map(|p| p as u16)
-                            .unwrap_or(11112);
-
-                        dimse_config.aet_table.insert(
-                            aet_name.clone(),
-                            dimse::RemoteNode::new(ae_title, host, port),
-                        );
-                        tracing::debug!(
-                            "Added AET '{}' to table: {}:{}",
-                            aet_name,
-                            dimse_config.aet_table[aet_name].host,
-                            dimse_config.aet_table[aet_name].port
-                        );
-                    }
-                }
-            }
-        }
-
-        let pipeline = pipeline_name.to_string();
-        let endpoint = endpoint_name.to_string();
-
-        // Determine if we should use DCMTK storescp or internal SCP
-        let is_persistent_backend = options
-            .get("persistent_store_scp")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false);
-        let use_dcmtk_store = options
-            .get("use_dcmtk_store")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(is_persistent_backend);
-
-        if use_dcmtk_store {
-            // Spawn DCMTK storescp process
-            Self::start_dcmtk_scp(
-                key,
-                local_aet,
-                port,
-                dimse_config,
-                pipeline,
-                endpoint,
-                shutdown,
-            )
-            .await
-        } else {
-            // Use internal SCP with pipeline query provider
-            Self::start_internal_scp(
-                key,
-                local_aet,
-                bind_addr,
-                port,
-                dimse_config,
-                pipeline,
-                endpoint,
-                shutdown,
-            )
-            .await
-        }
+/// Build a multiplexing query provider from the given operation routes.
+fn build_provider(
+    routes: Vec<(String, String, Vec<DimseOp>)>,
+) -> Arc<dyn dimse::scp::QueryProvider> {
+    if routes.len() == 1 && routes[0].2.is_empty() {
+        // Single endpoint with no explicit ops -- use a direct provider
+        // (backward compat: the pipeline handles everything)
+        Arc::new(query_provider::PipelineQueryProvider::new(
+            routes[0].0.clone(),
+            routes[0].1.clone(),
+        ))
+    } else {
+        Arc::new(query_provider::MultiplexingQueryProvider::new(routes))
     }
+}
 
+impl DimseAdapter {
     /// Start DCMTK storescp process
     async fn start_dcmtk_scp(
         key: String,
         local_aet: String,
         port: u16,
         dimse_config: dimse::DimseConfig,
-        pipeline: String,
-        endpoint: String,
+        routes: Vec<(String, String, Vec<DimseOp>)>,
         shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
         use tokio::process::Command;
@@ -422,13 +563,10 @@ impl DimseAdapter {
                 }
                 Err(e) => {
                     tracing::error!(
-                        "Failed to spawn storescp: {} — falling back to internal SCP",
+                        "Failed to spawn storescp: {} -- falling back to internal SCP",
                         e
                     );
-                    // Fallback to internal SCP
-                    let provider: Arc<dyn dimse::scp::QueryProvider> = Arc::new(
-                        query_provider::PipelineQueryProvider::new(pipeline, endpoint),
-                    );
+                    let provider = build_provider(routes);
                     let scp = dimse::DimseScp::new(dimse_config, provider);
                     if let Err(e2) = scp.run(shutdown).await {
                         tracing::error!("DIMSE SCP '{}' failed: {}", local_aet, e2);
@@ -447,21 +585,18 @@ impl DimseAdapter {
         Ok(handle)
     }
 
-    /// Start internal DIMSE SCP with pipeline query provider
+    /// Start internal DIMSE SCP with a (possibly multiplexed) query provider
     async fn start_internal_scp(
         key: String,
         local_aet: String,
-        bind_addr: std::net::IpAddr,
+        bind_addr: IpAddr,
         port: u16,
         dimse_config: dimse::DimseConfig,
-        pipeline: String,
-        endpoint: String,
+        routes: Vec<(String, String, Vec<DimseOp>)>,
         shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
         let handle = tokio::spawn(async move {
-            let provider: Arc<dyn dimse::scp::QueryProvider> = Arc::new(
-                query_provider::PipelineQueryProvider::new(pipeline, endpoint),
-            );
+            let provider = build_provider(routes);
             let scp = dimse::DimseScp::new(dimse_config, provider);
 
             tracing::info!(
@@ -487,7 +622,7 @@ impl DimseAdapter {
     }
 
     /// Wait for SCP to be ready by attempting TCP connection
-    async fn wait_for_scp_ready(bind_addr: std::net::IpAddr, port: u16) {
+    async fn wait_for_scp_ready(bind_addr: IpAddr, port: u16) {
         let target = if bind_addr.is_unspecified() {
             format!("127.0.0.1:{}", port)
         } else {
@@ -553,8 +688,8 @@ mod tests {
             guard.clear();
         }
 
-        let key1 = "TEST_AET@0.0.0.0:11112#endpoint1".to_string();
-        let key2 = "TEST_AET@0.0.0.0:11113#endpoint2".to_string();
+        let key1 = "0.0.0.0:11112".to_string();
+        let key2 = "0.0.0.0:11113".to_string();
 
         // First registration should succeed
         assert!(DimseAdapter::register_scp(key1.clone()));
@@ -572,5 +707,121 @@ mod tests {
         // Cleanup
         DimseAdapter::unregister_scp(&key1);
         DimseAdapter::unregister_scp(&key2);
+    }
+
+    #[test]
+    fn test_enabled_ops_extraction() {
+        let mut opts = HashMap::new();
+        opts.insert(
+            "enable_find".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        opts.insert(
+            "enable_store".to_string(),
+            serde_json::Value::Bool(true),
+        );
+        opts.insert(
+            "enable_get".to_string(),
+            serde_json::Value::Bool(false),
+        );
+
+        let ops = DimseAdapter::enabled_ops(&opts);
+        assert!(ops.contains(&DimseOp::Find));
+        assert!(ops.contains(&DimseOp::Store));
+        assert!(!ops.contains(&DimseOp::Get));
+        assert!(!ops.contains(&DimseOp::Move));
+    }
+
+    #[test]
+    fn test_resolve_bind_addr_defaults() {
+        let opts = HashMap::new();
+        let addr = DimseAdapter::resolve_bind_addr(&opts, None);
+        assert_eq!(addr, IpAddr::from(std::net::Ipv4Addr::new(0, 0, 0, 0)));
+    }
+
+    #[test]
+    fn test_resolve_bind_addr_from_options() {
+        let mut opts = HashMap::new();
+        opts.insert(
+            "bind_addr".to_string(),
+            serde_json::Value::String("127.0.0.1".to_string()),
+        );
+        let addr = DimseAdapter::resolve_bind_addr(&opts, None);
+        assert_eq!(addr, IpAddr::from(std::net::Ipv4Addr::new(127, 0, 0, 1)));
+    }
+
+    #[test]
+    fn test_resolve_port_defaults() {
+        let opts = HashMap::new();
+        let port = DimseAdapter::resolve_port(&opts, None);
+        assert_eq!(port, dimse::DEFAULT_DIMSE_PORT);
+    }
+
+    #[test]
+    fn test_resolve_port_from_options() {
+        let mut opts = HashMap::new();
+        opts.insert(
+            "port".to_string(),
+            serde_json::Value::Number(serde_json::Number::from(4242u16)),
+        );
+        let port = DimseAdapter::resolve_port(&opts, None);
+        assert_eq!(port, 4242);
+    }
+
+    #[test]
+    fn test_build_merged_config_single_endpoint() {
+        let ep = ScpEndpointConfig {
+            pipeline_name: "p1".into(),
+            endpoint_name: "e1".into(),
+            options: {
+                let mut m = HashMap::new();
+                m.insert("local_aet".into(), serde_json::json!("MY_SCP"));
+                m.insert("enable_find".into(), serde_json::json!(true));
+                m.insert("enable_echo".into(), serde_json::json!(true));
+                m
+            },
+        };
+
+        let addr = IpAddr::from(std::net::Ipv4Addr::LOCALHOST);
+        let cfg = DimseAdapter::build_merged_config(addr, 11112, &[&ep]);
+
+        assert_eq!(cfg.local_aet, "MY_SCP");
+        assert!(cfg.enable_find);
+        assert!(cfg.enable_echo);
+        assert!(!cfg.enable_store);
+        assert!(!cfg.enable_get);
+    }
+
+    #[test]
+    fn test_build_merged_config_union_of_ops() {
+        let ep1 = ScpEndpointConfig {
+            pipeline_name: "p1".into(),
+            endpoint_name: "e1".into(),
+            options: {
+                let mut m = HashMap::new();
+                m.insert("local_aet".into(), serde_json::json!("SCP"));
+                m.insert("enable_find".into(), serde_json::json!(true));
+                m.insert("enable_echo".into(), serde_json::json!(true));
+                m
+            },
+        };
+        let ep2 = ScpEndpointConfig {
+            pipeline_name: "p2".into(),
+            endpoint_name: "e2".into(),
+            options: {
+                let mut m = HashMap::new();
+                m.insert("local_aet".into(), serde_json::json!("SCP"));
+                m.insert("enable_store".into(), serde_json::json!(true));
+                m
+            },
+        };
+
+        let addr = IpAddr::from(std::net::Ipv4Addr::LOCALHOST);
+        let cfg = DimseAdapter::build_merged_config(addr, 11112, &[&ep1, &ep2]);
+
+        assert!(cfg.enable_find, "find from ep1");
+        assert!(cfg.enable_echo, "echo from ep1");
+        assert!(cfg.enable_store, "store from ep2");
+        assert!(!cfg.enable_get, "get not enabled by either");
     }
 }

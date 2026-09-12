@@ -13,7 +13,7 @@ use dimse::Result as DimseResult;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 static CURRENT_STORE_DIR: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 
@@ -604,6 +604,135 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
     }
 }
 
+/// DIMSE operation types used as routing keys for the multiplexing provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DimseOp {
+    Find,
+    Move,
+    Get,
+    Store,
+}
+
+/// A query provider that multiplexes multiple pipelines on a single SCP listener.
+///
+/// When several `dicom_scp` endpoints share the same `(bind_addr, port)`, each
+/// endpoint typically enables a different subset of DIMSE operations (e.g., one
+/// pipeline handles C-FIND while another handles C-STORE). This provider routes
+/// each operation to the pipeline that registered for it.
+///
+/// If multiple endpoints register for the same operation, the first registration
+/// wins (a warning is logged during construction).
+pub struct MultiplexingQueryProvider {
+    /// Maps each DIMSE operation to the pipeline provider that handles it.
+    op_routes: HashMap<DimseOp, Arc<PipelineQueryProvider>>,
+    /// Fallback provider used when no specific route is registered for an
+    /// operation. This is the first provider added, providing backward
+    /// compatibility with single-endpoint configurations.
+    fallback: Arc<PipelineQueryProvider>,
+}
+
+impl MultiplexingQueryProvider {
+    /// Build a multiplexing provider from a list of `(pipeline, endpoint, enabled_ops)`.
+    ///
+    /// `enabled_ops` is derived from the endpoint's `DimseConfig` feature flags
+    /// (enable_find, enable_store, etc.). The first endpoint to claim an
+    /// operation wins; duplicates are logged as warnings.
+    pub fn new(
+        routes: Vec<(String, String, Vec<DimseOp>)>,
+    ) -> Self {
+        assert!(!routes.is_empty(), "MultiplexingQueryProvider requires at least one route");
+
+        let mut op_routes: HashMap<DimseOp, Arc<PipelineQueryProvider>> = HashMap::new();
+        let mut fallback: Option<Arc<PipelineQueryProvider>> = None;
+
+        for (pipeline, endpoint, ops) in routes {
+            let provider = Arc::new(PipelineQueryProvider::new(
+                pipeline.clone(),
+                endpoint.clone(),
+            ));
+
+            if fallback.is_none() {
+                fallback = Some(Arc::clone(&provider));
+            }
+
+            for op in ops {
+                if let Some(existing) = op_routes.get(&op) {
+                    tracing::warn!(
+                        "DIMSE operation {:?} already registered by pipeline '{}' endpoint '{}', \
+                         ignoring duplicate from pipeline '{}' endpoint '{}'",
+                        op,
+                        existing.pipeline,
+                        existing.endpoint,
+                        pipeline,
+                        endpoint,
+                    );
+                } else {
+                    tracing::debug!(
+                        "DIMSE operation {:?} routed to pipeline '{}' endpoint '{}'",
+                        op,
+                        pipeline,
+                        endpoint,
+                    );
+                    op_routes.insert(op, Arc::clone(&provider));
+                }
+            }
+        }
+
+        Self {
+            op_routes,
+            fallback: fallback.expect("at least one route"),
+        }
+    }
+
+    /// Get the provider for a given operation, falling back to the default.
+    fn provider_for(&self, op: DimseOp) -> &PipelineQueryProvider {
+        self.op_routes
+            .get(&op)
+            .map(|p| p.as_ref())
+            .unwrap_or(self.fallback.as_ref())
+    }
+}
+
+#[async_trait]
+impl dimse::scp::QueryProvider for MultiplexingQueryProvider {
+    async fn find(
+        &self,
+        query_level: QueryLevel,
+        parameters: &HashMap<String, String>,
+        max_results: u32,
+    ) -> DimseResult<Vec<DatasetStream>> {
+        self.provider_for(DimseOp::Find)
+            .find(query_level, parameters, max_results)
+            .await
+    }
+
+    async fn locate(
+        &self,
+        query_level: QueryLevel,
+        parameters: &HashMap<String, String>,
+    ) -> DimseResult<Vec<DatasetStream>> {
+        self.provider_for(DimseOp::Move)
+            .locate(query_level, parameters)
+            .await
+    }
+
+    async fn get(
+        &self,
+        query_level: QueryLevel,
+        parameters: &HashMap<String, String>,
+    ) -> DimseResult<Vec<DatasetStream>> {
+        self.provider_for(DimseOp::Get)
+            .get(query_level, parameters)
+            .await
+    }
+
+    async fn store(&self, dataset: DatasetStream) -> DimseResult<()> {
+        self.provider_for(DimseOp::Store)
+            .store(dataset)
+            .await
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -678,4 +807,81 @@ mod tests {
     }
 
     // Note: test_store_dir_functions removed - uses global static that conflicts with parallel test execution
+
+    // ── MultiplexingQueryProvider tests ──────────────────────────────────────
+
+    #[test]
+    fn test_multiplexing_provider_routes_to_correct_pipeline() {
+        let routes = vec![
+            (
+                "find_pipeline".into(),
+                "find_ep".into(),
+                vec![DimseOp::Find],
+            ),
+            (
+                "store_pipeline".into(),
+                "store_ep".into(),
+                vec![DimseOp::Store],
+            ),
+        ];
+        let mux = MultiplexingQueryProvider::new(routes);
+
+        // Find should route to find_pipeline
+        let find_provider = mux.provider_for(DimseOp::Find);
+        assert_eq!(find_provider.pipeline, "find_pipeline");
+        assert_eq!(find_provider.endpoint, "find_ep");
+
+        // Store should route to store_pipeline
+        let store_provider = mux.provider_for(DimseOp::Store);
+        assert_eq!(store_provider.pipeline, "store_pipeline");
+        assert_eq!(store_provider.endpoint, "store_ep");
+    }
+
+    #[test]
+    fn test_multiplexing_provider_fallback_for_unregistered_op() {
+        let routes = vec![(
+            "only_pipeline".into(),
+            "only_ep".into(),
+            vec![DimseOp::Find],
+        )];
+        let mux = MultiplexingQueryProvider::new(routes);
+
+        // Get is not registered, should fall back to the first provider
+        let get_provider = mux.provider_for(DimseOp::Get);
+        assert_eq!(get_provider.pipeline, "only_pipeline");
+    }
+
+    #[test]
+    fn test_multiplexing_provider_first_registration_wins() {
+        let routes = vec![
+            (
+                "first_pipeline".into(),
+                "first_ep".into(),
+                vec![DimseOp::Find],
+            ),
+            (
+                "second_pipeline".into(),
+                "second_ep".into(),
+                vec![DimseOp::Find], // duplicate
+            ),
+        ];
+        let mux = MultiplexingQueryProvider::new(routes);
+
+        let find_provider = mux.provider_for(DimseOp::Find);
+        assert_eq!(find_provider.pipeline, "first_pipeline");
+    }
+
+    #[test]
+    fn test_multiplexing_provider_single_pipeline_all_ops() {
+        let routes = vec![(
+            "all_in_one".into(),
+            "ep".into(),
+            vec![DimseOp::Find, DimseOp::Store, DimseOp::Get, DimseOp::Move],
+        )];
+        let mux = MultiplexingQueryProvider::new(routes);
+
+        for op in [DimseOp::Find, DimseOp::Store, DimseOp::Get, DimseOp::Move] {
+            assert_eq!(mux.provider_for(op).pipeline, "all_in_one");
+        }
+    }
 }
