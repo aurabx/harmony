@@ -434,7 +434,14 @@ async fn handle_streaming_request(
         endpoint.options.as_ref().unwrap_or(&HashMap::new()),
     )
     .await
-    .map_err(|_| StatusCode::BAD_REQUEST)?;
+    .map_err(|err| {
+        tracing::error!(
+            "Streaming request for pipeline '{}' rejected: could not read the HTTP request: {}",
+            pipeline_name,
+            err
+        );
+        StatusCode::BAD_REQUEST
+    })?;
 
     // 2. Build envelope via service
     let envelope = service
@@ -443,7 +450,15 @@ async fn handle_streaming_request(
             endpoint.options.as_ref().unwrap_or(&HashMap::new()),
         )
         .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        .map_err(|err| {
+            tracing::error!(
+                "Streaming request for pipeline '{}' rejected: endpoint '{}' could not build a request envelope: {}",
+                pipeline_name,
+                endpoint_name,
+                err
+            );
+            StatusCode::BAD_REQUEST
+        })?;
 
     // 3. Execute streaming pipeline
     let response_stream = PipelineExecutor::execute_streaming(envelope, &pipeline_name, pipeline, &config, &ctx)
