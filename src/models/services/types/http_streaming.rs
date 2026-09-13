@@ -147,11 +147,17 @@ impl ServiceType for HttpStreamingEndpoint {
 
     async fn build_protocol_envelope(
         &self,
-        _ctx: crate::models::protocol::ProtocolCtx,
-        _options: &HashMap<String, Value>,
+        ctx: crate::models::protocol::ProtocolCtx,
+        options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
+        // Only the response of a streaming endpoint is streamed. The request is an
+        // ordinary HTTP request, so delegate to HttpEndpoint for consistent parsing.
+        if ctx.protocol == crate::models::protocol::Protocol::Http {
+            let http = crate::models::services::types::http::HttpEndpoint {};
+            return http.build_protocol_envelope(ctx, options).await;
+        }
         Err(Error::from(
-            "HttpStreamingEndpoint doesn't support protocol envelope building",
+            "HttpStreamingEndpoint only supports Protocol::Http envelope building",
         ))
     }
 }
@@ -521,5 +527,74 @@ mod tests {
             enable_compression: None,
         };
         assert!(endpoint.validate(&HashMap::new()).is_err());
+    }
+
+    // ── build_protocol_envelope ──────────────────────────────────────────────
+
+    fn streaming_endpoint() -> HttpStreamingEndpoint {
+        HttpStreamingEndpoint {
+            default_format: None,
+            buffer_size: None,
+            enable_compression: None,
+        }
+    }
+
+    /// A Harmony instance behind dicom_to_http sends its query as a plain HTTP
+    /// POST. If the endpoint cannot build an envelope from it, the router
+    /// rejects every streaming request with 400.
+    #[tokio::test]
+    async fn test_build_protocol_envelope_accepts_post_from_dicom_to_http() {
+        let mut headers = http::HeaderMap::new();
+        headers.insert("content-type", "application/json".parse().unwrap());
+        headers.insert("x-dimse-op", "get".parse().unwrap());
+        headers.insert("x-query-level", "STUDY".parse().unwrap());
+        let body = serde_json::json!({
+            "0020000D": { "vr": "UI", "Value": ["1.2.3"] }
+        });
+        let body_bytes = serde_json::to_vec(&body).unwrap();
+        let uri: http::Uri = "/stream".parse().unwrap();
+
+        let ctx = crate::adapters::http::common::build_protocol_ctx(
+            &Method::POST,
+            &uri,
+            &headers,
+            body_bytes.clone(),
+            "/stream",
+            "http",
+        );
+
+        let envelope = streaming_endpoint()
+            .build_protocol_envelope(ctx, &HashMap::new())
+            .await
+            .expect("an HTTP POST should build a request envelope");
+
+        assert_eq!(envelope.request_details.method, "POST");
+        assert_eq!(
+            envelope.request_details.headers.get("x-dimse-op").map(String::as_str),
+            Some("get")
+        );
+        assert_eq!(
+            envelope.request_details.headers.get("x-query-level").map(String::as_str),
+            Some("STUDY")
+        );
+        assert_eq!(envelope.original_data, body_bytes);
+        assert_eq!(envelope.normalized_data, Some(body));
+    }
+
+    #[tokio::test]
+    async fn test_build_protocol_envelope_rejects_non_http_protocol() {
+        let ctx = crate::models::protocol::ProtocolCtx {
+            protocol: crate::models::protocol::Protocol::Dimse,
+            payload: vec![],
+            meta: HashMap::new(),
+            attrs: serde_json::json!({}),
+            command: None,
+        };
+
+        let result = streaming_endpoint()
+            .build_protocol_envelope(ctx, &HashMap::new())
+            .await;
+
+        assert!(result.is_err(), "only HTTP contexts are supported");
     }
 }
