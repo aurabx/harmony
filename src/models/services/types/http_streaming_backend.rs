@@ -404,7 +404,7 @@ impl HttpStreamingBackend {
     /// 
     /// Also handles JSON array responses - if the entire content is a JSON array,
     /// each element is treated as a separate item.
-    fn parse_ndjson_stream(
+    pub(crate) fn parse_ndjson_stream(
         byte_stream: impl Stream<Item = Result<Bytes, reqwest::Error>> + Send + 'static,
         request_details: crate::models::envelope::envelope::RequestDetails,
         command: Option<Command>,

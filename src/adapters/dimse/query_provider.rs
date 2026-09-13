@@ -958,4 +958,130 @@ mod tests {
             assert_eq!(mux.provider_for(op).pipeline, "all_in_one");
         }
     }
+
+    // ── Streaming bridge hand-off ────────────────────────────────────────────
+    //
+    // Harmony B turns each retrieved DICOM file into a ResponseEnvelope and
+    // writes the stream as NDJSON. Harmony A reads the NDJSON and converts each
+    // envelope back into a dataset for the SCP caller. This test runs a real
+    // sample instance through all of those stages in process.
+
+    fn bridge_request_details() -> crate::models::envelope::envelope::RequestDetails {
+        crate::models::envelope::envelope::RequestDetails {
+            method: "POST".to_string(),
+            uri: "/stream".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata: HashMap::new(),
+            content_metadata: None,
+        }
+    }
+
+    fn element_text(object: &dicom_object::InMemDicomObject, name: &str) -> String {
+        object
+            .element_by_name(name)
+            .unwrap_or_else(|e| panic!("{} missing: {}", name, e))
+            .to_str()
+            .unwrap_or_else(|e| panic!("{} is not text: {}", name, e))
+            .trim_end_matches(|c: char| c == '\0' || c == ' ')
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn test_streaming_bridge_round_trip_preserves_instance() {
+        use crate::models::services::streaming::StreamMetadata;
+        use crate::models::services::types::dicom_scu_streaming::DicomScuStreamingBackend;
+        use crate::models::services::types::http_streaming::{HttpStreamingEndpoint, StreamFormat};
+        use crate::models::services::types::http_streaming_backend::HttpStreamingBackend;
+        use bytes::Bytes;
+        use futures_util::StreamExt;
+
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source_path = manifest_dir.join("samples/dicom/study_1/series_1/CT.1.1.dcm");
+
+        // The producer deletes each file after reading it, so give it a copy.
+        let tmp_root = manifest_dir.join("tmp");
+        std::fs::create_dir_all(&tmp_root).expect("create ./tmp");
+        let work_dir = tempfile::tempdir_in(&tmp_root).expect("create work dir");
+        let copy_path = work_dir.path().join("instance.dcm");
+        std::fs::copy(&source_path, &copy_path).expect("copy sample instance");
+
+        // Harmony B: retrieved file → ResponseEnvelope
+        let retrieved: std::pin::Pin<
+            Box<dyn futures_util::Stream<Item = Result<DatasetStream, DimseError>> + Send>,
+        > = Box::pin(futures_util::stream::iter(vec![Ok(DatasetStream::from_file(
+            copy_path, false,
+        ))]));
+        let envelopes = DicomScuStreamingBackend::convert_dimse_stream_to_envelopes(
+            retrieved,
+            bridge_request_details(),
+            StreamMetadata::new("dimse-get"),
+            None,
+        );
+
+        // Harmony B: envelopes → NDJSON response body
+        let writer = HttpStreamingEndpoint {
+            default_format: None,
+            buffer_size: None,
+            enable_compression: None,
+        };
+        let response = writer
+            .build_streaming_response(Box::pin(envelopes), StreamFormat::Ndjson, &HashMap::new())
+            .expect("NDJSON response should build");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read NDJSON body");
+
+        // Harmony A: NDJSON body → ResponseEnvelope. The body arrives in small
+        // chunks, as an HTTP client receives it, so the line spans chunk boundaries.
+        let chunks: Vec<Result<Bytes, reqwest::Error>> = body
+            .chunks(256)
+            .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+            .collect();
+        let parsed: Vec<_> = HttpStreamingBackend::parse_ndjson_stream(
+            futures_util::stream::iter(chunks),
+            bridge_request_details(),
+            None,
+        )
+        .collect()
+        .await;
+        assert_eq!(parsed.len(), 1, "one instance in, one envelope out");
+        let envelope = parsed
+            .into_iter()
+            .next()
+            .unwrap()
+            .expect("NDJSON line should parse");
+
+        // Harmony A SCP: envelope → dataset
+        let provider = PipelineQueryProvider::new("bridge", "bridge");
+        let datasets = provider
+            .response_to_datasets(envelope)
+            .await
+            .expect("envelope should convert to a dataset");
+        assert_eq!(datasets.len(), 1, "one envelope in, one dataset out");
+        let received = datasets[0].to_object().await.expect("dataset should parse");
+
+        let source = dicom_object::open_file(&source_path).expect("open sample instance");
+        for name in ["SOPInstanceUID", "StudyInstanceUID", "SeriesInstanceUID", "SOPClassUID"] {
+            assert_eq!(
+                element_text(&received, name),
+                element_text(&source, name),
+                "{} changed in the round trip",
+                name
+            );
+        }
+        let source_pixels = source
+            .element_by_name("PixelData")
+            .expect("source pixel data")
+            .to_bytes()
+            .expect("source pixel bytes");
+        let received_pixels = received
+            .element_by_name("PixelData")
+            .expect("received pixel data")
+            .to_bytes()
+            .expect("received pixel bytes");
+        assert_eq!(received_pixels, source_pixels, "pixel data changed in the round trip");
+    }
 }

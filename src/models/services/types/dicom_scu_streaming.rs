@@ -430,7 +430,7 @@ impl StreamingBackend for DicomScuStreamingBackend {
 
 impl DicomScuStreamingBackend {
     /// Convert a DIMSE DatasetStream to a stream of ResponseEnvelopes
-    fn convert_dimse_stream_to_envelopes(
+    pub(crate) fn convert_dimse_stream_to_envelopes(
         dimse_stream: Pin<Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>>,
         request_details: crate::models::envelope::envelope::RequestDetails,
         _stream_metadata: StreamMetadata,
