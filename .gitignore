@@ -71,3 +71,17 @@ examples/cstore-filesystem/data/
 /.claude
 /.mcp.json
 /opencode.json
+
+# BEGIN Automatic-managed
+# Files generated and managed by Automatic. Regenerated on sync; do not edit inside this block.
+/.agents/
+/.automatic/
+/.claude/
+/.codex/
+/.mcp.json
+/.opencode/
+/AGENTS.md
+/CLAUDE.md
+/opencode.json
+# END Automatic-managed
+/docker
