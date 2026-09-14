@@ -223,7 +223,6 @@ The validator enforces strict requirements:
 - **Code Style**: rustfmt (default) + clippy linting required
 - **Logging**: tracing with env-filter; use `RUST_LOG=harmony=debug,info` locally
 - **Output Directory**: Use `./tmp` directory for temporary files (not system `/tmp`)
-- **Dynamic Loading**: libloading supports custom endpoints/middleware (see `examples/custom_endpoint`)
 - Items are only ready for production use if they are fully tested and contain no bugs.
 - Clippy is not to be run as part of patches unless specifically requested
 - Try not to mix concerns. 
