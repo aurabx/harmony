@@ -1,12 +1,15 @@
 pub mod custom;
 pub mod dicom;
 pub mod dicom_scp;
+pub mod dicom_scu_streaming;
 pub mod dicomweb;
 pub mod storage;
 pub mod echo;
 pub mod fhir;
 pub mod http;
 pub mod http3;
+pub mod http_streaming;
+pub mod http_streaming_backend;
 pub mod jmix;
 pub mod jmix_backend;
 pub mod mock_dicom;

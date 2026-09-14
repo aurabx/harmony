@@ -1,0 +1,110 @@
+# Harmony Proxy - DICOM Streaming Configuration Example
+#
+# This configuration demonstrates streaming DICOM instances from a PACS
+# through the pipeline, with each instance processed independently by middleware.
+#
+# Use Case: Stream large DICOM studies (100+ instances) with low memory usage
+# and progressive processing.
+
+schema_version = "1.2.0"
+
+[proxy]
+id = "harmony-streaming-demo"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+jwks_cache_duration_hours = 24
+
+[logging]
+log_level = "info"
+log_to_file = true
+log_file_path = "./tmp/harmony-streaming.log"
+
+[runbeam]
+enabled = false
+
+[management]
+enabled = true
+base_path = "admin"
+network = "management"
+
+# Network Configurations
+[network.default]
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+[network.management]
+enable_wireguard = false
+interface = "wg0"
+
+[network.management.http]
+bind_address = "127.0.0.1"
+bind_port = 9090
+
+# Streaming DICOM Backend
+[backends.pacs_streaming]
+service = "dicom_scu_streaming"
+
+[backends.pacs_streaming.options]
+aet = "ORTHANC"              # Remote PACS AE Title
+host = "localhost"            # PACS host
+port = 4242                   # PACS port
+local_aet = "HARMONY_STREAM"  # Our AE Title
+use_tls = false
+
+# HTTP Endpoint (will be extended to http_streaming in future)
+[endpoints.http_api]
+service = "http"
+
+# Pipeline: Stream DICOM instances via HTTP
+# NOTE: This is a foundational example. The http_streaming endpoint 
+# will be implemented in a follow-up to support SSE/NDJSON/multipart formats.
+[pipelines.dicom_streaming]
+description = "Stream DICOM instances from PACS"
+networks = ["default"]
+endpoints = ["http_api"]
+backends = ["pacs_streaming"]
+middleware = []
+
+# Example with Transform Middleware (per-instance processing)
+[pipelines.dicom_streaming_transform]
+description = "Stream DICOM instances with per-instance transforms"
+networks = ["default"]
+endpoints = ["http_api"]
+backends = ["pacs_streaming"]
+middleware = ["transform_dicom"]
+
+# Transform middleware - applied to EACH instance independently
+[middleware.transform_dicom]
+type = "transform"
+
+[middleware.transform_dicom.options]
+spec_path = "transforms/dicom-identifier-extract.json"
+apply = "right"  # Transform on the way back from backend
+fail_on_error = false
+
+# Service definitions
+[services.dicom_scu_streaming]
+module = ""
+
+[services.http]
+module = ""
+
+# Example Usage:
+#
+# Start the proxy:
+#   cargo run -- --config examples/dicom-streaming/streaming-config.toml
+#
+# Stream DICOM instances (C-GET):
+#   curl -X POST http://localhost:8080/dimse-streaming \
+#     -H "Content-Type: application/json" \
+#     -d '{"0020000D": {"vr": "UI", "Value": ["1.2.3.4.5.6"]}}'
+#
+# Notes:
+# - Each DICOM instance is yielded as a separate ResponseEnvelope
+# - Middleware processes each instance independently
+# - Memory usage is constant regardless of study size
+# - Currently returns aggregated JSON response (streaming endpoint coming soon)

@@ -228,3 +228,72 @@ impl ServiceFactory for ManagementServiceFactory {
         Box::new(crate::management::ManagementEndpoint {})
     }
 }
+
+// ============================================================================
+// HTTP Streaming Endpoint
+// ============================================================================
+
+pub struct HttpStreamingServiceFactory;
+
+impl ServiceFactory for HttpStreamingServiceFactory {
+    fn service_name(&self) -> &str {
+        "http_streaming"
+    }
+
+    fn create(&self) -> Box<dyn ServiceType<ReqBody = Value>> {
+        Box::new(
+            crate::models::services::types::http_streaming::HttpStreamingEndpoint {
+                default_format: None,
+                buffer_size: None,
+                enable_compression: None,
+            },
+        )
+    }
+}
+
+// ============================================================================
+// DICOM SCU Streaming Backend
+// ============================================================================
+
+pub struct DicomScuStreamingServiceFactory;
+
+impl ServiceFactory for DicomScuStreamingServiceFactory {
+    fn service_name(&self) -> &str {
+        "dicom_scu_streaming"
+    }
+
+    fn create(&self) -> Box<dyn ServiceType<ReqBody = Value>> {
+        Box::new(
+            crate::models::services::types::dicom_scu_streaming::DicomScuStreamingBackend {
+                local_aet: None,
+                aet: None,
+                host: None,
+                port: None,
+                use_tls: None,
+            },
+        )
+    }
+}
+
+// ============================================================================
+// HTTP Streaming Backend
+// ============================================================================
+
+pub struct HttpStreamingBackendServiceFactory;
+
+impl ServiceFactory for HttpStreamingBackendServiceFactory {
+    fn service_name(&self) -> &str {
+        "http_streaming_backend"
+    }
+
+    fn create(&self) -> Box<dyn ServiceType<ReqBody = Value>> {
+        Box::new(
+            crate::models::services::types::http_streaming_backend::HttpStreamingBackend {
+                base_url: None,
+                format: None,
+                chunk_timeout_secs: None,
+                max_chunk_size: None,
+            },
+        )
+    }
+}

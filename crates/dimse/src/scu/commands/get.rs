@@ -149,16 +149,19 @@ pub async fn handle_get(
             }
         }
 
-        // Only clean up directories that we created ourselves
+        // Note: When should_cleanup=true, individual files are cleaned up by DatasetStream::Drop
+        // after they are consumed. We only need to clean up the empty directory afterward.
+        // However, we can't know when all streams are consumed from here, so we skip directory
+        // cleanup entirely - the files will be deleted by DatasetStream::Drop, and the empty
+        // directory will remain (which is acceptable for temp directories).
+        // 
+        // If should_cleanup=false, the caller owns the directory and is responsible for cleanup.
         if should_cleanup {
-            if let Err(e) = tokio::fs::remove_dir_all(&cleanup_dir).await {
-                warn!(
-                    "Failed to cleanup C-GET temp directory {:?}: {}",
-                    cleanup_dir, e
-                );
-            } else {
-                debug!("Cleaned up C-GET temp directory: {:?}", cleanup_dir);
-            }
+            // Don't delete the directory here - files are still being streamed.
+            // The individual files will be cleaned up by DatasetStream::Drop.
+            // We could use a more sophisticated approach (e.g., Arc<TempDir>) to clean up
+            // the directory after all streams are dropped, but for now just leave it.
+            debug!("C-GET temp directory {:?} will be cleaned up by DatasetStream::Drop", cleanup_dir);
         }
 
         // drop sender to close stream

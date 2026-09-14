@@ -428,6 +428,28 @@ impl MiddlewareFactory for WebhookFactory {
 }
 
 // ============================================================================
+// DICOM to HTTP Middleware
+// ============================================================================
+
+pub struct DicomToHttpFactory;
+
+impl MiddlewareFactory for DicomToHttpFactory {
+    fn type_name(&self) -> &str {
+        "dicom_to_http"
+    }
+
+    fn create(
+        &self,
+        _options: &HashMap<String, Value>,
+        _config: Option<&Config>,
+    ) -> Result<Box<dyn Middleware>, String> {
+        Ok(Box::new(
+            crate::models::middleware::types::dicom_to_http::DicomToHttpMiddleware::new(),
+        ))
+    }
+}
+
+// ============================================================================
 // Mesh Auth Middleware
 // ============================================================================
 

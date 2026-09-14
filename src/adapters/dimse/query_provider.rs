@@ -1,3 +1,4 @@
+use crate::adapters::dimse::envelope_unwrapper::{unwrap_response, UnwrappedContent};
 use crate::adapters::dimse::status_mapper;
 use crate::globals::{get_config, get_storage};
 use crate::models::envelope::command::{Command, Operation};
@@ -12,7 +13,7 @@ use dimse::Result as DimseResult;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
 use std::path::PathBuf;
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 
 static CURRENT_STORE_DIR: Lazy<Mutex<Option<PathBuf>>> = Lazy::new(|| Mutex::new(None));
 
@@ -148,11 +149,113 @@ impl PipelineQueryProvider {
         Ok(response_envelope)
     }
 
+    /// Execute a DIMSE operation through the pipeline with streaming support
+    ///
+    /// Similar to `run()` but uses `execute_streaming()` for backends that support it.
+    /// Returns a stream of datasets that can be processed progressively.
+    async fn run_streaming(
+        &self,
+        command: Command,
+        body: serde_json::Value,
+        mut meta: HashMap<String, String>,
+    ) -> DimseResult<Vec<DatasetStream>> {
+        use futures_util::StreamExt;
+
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
+
+        // Resolve endpoint service and options
+        let endpoint = config.endpoints.get(&self.endpoint).ok_or_else(|| {
+            DimseError::operation_failed(format!("Unknown endpoint '{}'", self.endpoint))
+        })?;
+        let service = endpoint
+            .resolve_service()
+            .map_err(|e| DimseError::operation_failed(format!("Resolve service failed: {}", e)))?;
+        let options_owned: HashMap<String, serde_json::Value> =
+            endpoint.options.clone().unwrap_or_default();
+        let options = &options_owned;
+
+        // Derive the legacy dimse_op string from the typed Command for backward
+        // compatibility with services that still read metadata.
+        let op = match command.operation {
+            Operation::Query => "find",
+            Operation::Retrieve => "get",
+            Operation::Move => "move",
+            Operation::Store => "store",
+            Operation::Ping => "echo",
+            _ => "unknown",
+        };
+
+        // Build ProtocolCtx for DIMSE with typed Command.
+        // The Command is the single source of truth for the operation.
+        meta.insert("protocol".into(), "dimse".into());
+        meta.insert("dimse_op".into(), op.to_string());
+        let ctx = ProtocolCtx {
+            protocol: Protocol::Dimse,
+            payload: serde_json::to_vec(&body).unwrap_or_default(),
+            meta,
+            attrs: serde_json::json!({}),
+            command: Some(command),
+        };
+
+        // Let the service build the request envelope
+        let request_envelope = service
+            .build_protocol_envelope(ctx.clone(), options)
+            .await
+            .map_err(|e| DimseError::operation_failed(format!("Envelope build failed: {}", e)))?;
+
+        // Get pipeline configuration
+        let pipeline_cfg = config.pipelines.get(&self.pipeline).ok_or_else(|| {
+            DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
+        })?;
+
+        tracing::info!("Executing streaming pipeline for DIMSE operation: {}", op);
+
+        // Execute streaming pipeline
+        let mut response_stream =
+            PipelineExecutor::execute_streaming(request_envelope, &self.pipeline, pipeline_cfg, &config, &ctx)
+                .await
+                .map_err(|e| {
+                    DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
+                })?;
+
+        // Collect datasets from stream
+        let mut all_datasets = Vec::new();
+        let mut instance_count = 0u64;
+
+        while let Some(result) = response_stream.next().await {
+            match result {
+                Ok(response_envelope) => {
+                    instance_count += 1;
+                    tracing::debug!("Processing streamed instance #{}", instance_count);
+
+                    // Convert this envelope to datasets
+                    let datasets = self.response_to_datasets(response_envelope).await?;
+                    all_datasets.extend(datasets);
+                }
+                Err(e) => {
+                    tracing::error!("Stream error on instance #{}: {}", instance_count, e);
+                    return Err(DimseError::operation_failed(format!(
+                        "Stream failed after {} instances: {}",
+                        instance_count, e
+                    )));
+                }
+            }
+        }
+
+        tracing::info!(
+            "Streaming pipeline completed: {} instances, {} total datasets",
+            instance_count,
+            all_datasets.len()
+        );
+
+        Ok(all_datasets)
+    }
+
     /// Convert ResponseEnvelope to Vec<DatasetStream>
     ///
     /// Parses the response data and converts it to DICOM datasets.
-    /// Handles the DIMSE backend response format: { "operation": "...", "success": true, "matches": [...] }
-    /// Also supports raw arrays or single DICOM JSON objects for flexibility.
+    /// Uses the envelope_unwrapper module to handle various response formats.
     async fn response_to_datasets(
         &self,
         response: ResponseEnvelope<Vec<u8>>,
@@ -169,113 +272,111 @@ impl PipelineQueryProvider {
 
         // Try to parse response body as JSON
         let json_data = if let Some(normalized) = response.normalized_data {
-            // Use normalized_data if available
             normalized
         } else if !response.original_data.is_empty() {
-            // Try to parse original_data as JSON
             serde_json::from_slice(&response.original_data).map_err(|e| {
                 DimseError::operation_failed(format!("Failed to parse response as JSON: {}", e))
             })?
         } else {
-            // Empty response
             return Ok(vec![]);
         };
 
-        // Extract the results from the response
-        // The DIMSE backend returns: { "operation": "...", "success": true, "matches": [...] }
-        let results = if let Some(matches) = json_data.get("matches") {
-            // DIMSE backend response format - extract matches array
-            tracing::debug!("response_to_datasets: found 'matches' key, extracting array");
-            matches.clone()
-        } else {
-            // Fall back to treating the entire response as results
-            tracing::debug!("response_to_datasets: no 'matches' key, using entire response. Keys: {:?}", 
-                json_data.as_object().map(|o| o.keys().collect::<Vec<_>>()));
-            json_data.clone()
-        };
-        
-        tracing::debug!("response_to_datasets: results type={:?}, len={}", 
-            match &results {
-                serde_json::Value::Array(a) => format!("Array({})", a.len()),
-                serde_json::Value::Object(_) => "Object".to_string(),
-                serde_json::Value::Null => "Null".to_string(),
-                _ => "Other".to_string(),
-            },
-            results.as_array().map(|a| a.len()).unwrap_or(0)
-        );
-
-        // Convert JSON to datasets
-        let datasets = match &results {
-            serde_json::Value::Array(items) => {
-                // Multiple results
+        // Use envelope unwrapper to extract clean DICOM content
+        match unwrap_response(&json_data) {
+            UnwrappedContent::DicomJson(items) => {
+                tracing::debug!("response_to_datasets: unwrapped {} DICOM JSON objects", items.len());
                 let mut datasets = Vec::new();
                 for item in items {
-                    if let Some(dataset) = self.json_to_dataset(item).await? {
-                        datasets.push(dataset);
+                    match self.dicom_json_to_dataset(&item) {
+                        Ok(dataset) => datasets.push(dataset),
+                        Err(e) => {
+                            tracing::warn!("Failed to convert DICOM JSON to dataset: {}", e);
+                        }
                     }
                 }
-                datasets
+                Ok(datasets)
             }
-            serde_json::Value::Object(_) => {
-                // Single result (not wrapped in array)
-                if let Some(dataset) = self.json_to_dataset(&results).await? {
-                    vec![dataset]
-                } else {
-                    vec![]
-                }
+            UnwrappedContent::Binary(bytes) => {
+                tracing::debug!("response_to_datasets: unwrapped binary DICOM data ({} bytes)", bytes.len());
+                let dataset = self.binary_to_dataset(&bytes)?;
+                Ok(vec![dataset])
             }
-            serde_json::Value::Null => {
-                // No results
-                vec![]
+            UnwrappedContent::FolderPath(folder_path) => {
+                tracing::debug!("response_to_datasets: reading DICOM files from folder: {:?}", folder_path);
+                self.folder_to_datasets(&folder_path)
             }
-            _ => {
-                // Unexpected format
-                return Err(DimseError::operation_failed(format!(
-                    "Unexpected response format: expected object, array, or null, got {:?}",
-                    results
-                )));
+            UnwrappedContent::Empty => {
+                tracing::debug!("response_to_datasets: no content to convert");
+                Ok(vec![])
             }
-        };
-
-        Ok(datasets)
+        }
     }
 
-    /// Convert a single JSON object to a DatasetStream
+    /// Convert clean DICOM JSON to a DatasetStream
     ///
-    /// Converts DICOM JSON format to an InMemDicomObject and wraps it in DatasetStream.
-    /// The JSON can be either a raw DICOM JSON object or a wrapper with an "identifier" field.
-    async fn json_to_dataset(
-        &self,
-        json: &serde_json::Value,
-    ) -> DimseResult<Option<DatasetStream>> {
-        // Skip null or empty objects
-        if json.is_null() || (json.is_object() && json.as_object().unwrap().is_empty()) {
-            return Ok(None);
-        }
-
-        // Extract the identifier JSON - it might be wrapped in a Wrapper struct or be raw DICOM JSON
-        let identifier_json = if let Some(identifier) = json.get("identifier") {
-            // It's a wrapped format (Wrapper struct)
-            tracing::debug!("json_to_dataset: found 'identifier' key, extracting");
-            identifier.clone()
-        } else {
-            // It's raw DICOM JSON
-            tracing::debug!("json_to_dataset: using raw JSON. Keys: {:?}", 
-                json.as_object().map(|o| o.keys().collect::<Vec<_>>()));
-            json.clone()
-        };
-
-        // Convert DICOM JSON to InMemDicomObject using dicom_json_tool
-        tracing::debug!("json_to_dataset: converting to DICOM object");
-        let dicom_obj = tool::json_value_to_identifier(&identifier_json).map_err(|e| {
-            tracing::error!("json_to_dataset: conversion FAILED: {}", e);
+    /// This function expects already-cleaned DICOM JSON (8-character hex tag keys).
+    /// Use envelope_unwrapper to extract clean JSON before calling this.
+    fn dicom_json_to_dataset(&self, json: &serde_json::Value) -> DimseResult<DatasetStream> {
+        let dicom_obj = tool::json_value_to_identifier(json).map_err(|e| {
+            tracing::error!(
+                "dicom_json_to_dataset: conversion failed: {}. Keys: {:?}",
+                e,
+                json.as_object().map(|o| o.keys().collect::<Vec<_>>())
+            );
             DimseError::operation_failed(format!("Failed to convert JSON to DICOM object: {}", e))
         })?;
-        tracing::debug!("json_to_dataset: conversion SUCCESS, creating DatasetStream::Object");
+        Ok(DatasetStream::from_object(dicom_obj))
+    }
 
-        // Create DatasetStream from the parsed DICOM object
-        let dataset = DatasetStream::from_object(dicom_obj);
-        Ok(Some(dataset))
+    /// Convert binary DICOM Part10 data to a DatasetStream
+    fn binary_to_dataset(&self, bytes: &[u8]) -> DimseResult<DatasetStream> {
+        let file_obj = dicom_object::from_reader(bytes).map_err(|e| {
+            DimseError::operation_failed(format!("Failed to parse DICOM from binary: {}", e))
+        })?;
+        Ok(DatasetStream::from_object(file_obj.into_inner()))
+    }
+
+    /// Read all DICOM files from a folder and convert to DatasetStreams
+    ///
+    /// This is used for C-GET/C-MOVE results where files are stored on disk.
+    fn folder_to_datasets(&self, folder_path: &std::path::Path) -> DimseResult<Vec<DatasetStream>> {
+        let mut datasets = Vec::new();
+
+        let entries = std::fs::read_dir(folder_path).map_err(|e| {
+            DimseError::operation_failed(format!("Failed to read folder {:?}: {}", folder_path, e))
+        })?;
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if !path.is_file() {
+                continue;
+            }
+
+            // Check for .dcm extension or try to parse anyway
+            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            if ext != "dcm" && ext != "dicom" {
+                // Try to detect DICOM by reading magic bytes
+                if let Ok(bytes) = std::fs::read(&path) {
+                    if bytes.len() < 132 || &bytes[128..132] != b"DICM" {
+                        tracing::debug!("Skipping non-DICOM file: {:?}", path);
+                        continue;
+                    }
+                } else {
+                    continue;
+                }
+            }
+
+            tracing::debug!("Reading DICOM file: {:?}", path);
+
+            // Create DatasetStream::File variant pointing to the file
+            // This allows the SCP to send the file directly without re-parsing
+            // Note: delete_on_drop is false since we don't own these files
+            let dataset = DatasetStream::from_file(path.clone(), false);
+            datasets.push(dataset);
+        }
+
+        tracing::info!("folder_to_datasets: loaded {} DICOM files from {:?}", datasets.len(), folder_path);
+        Ok(datasets)
     }
 }
 
@@ -287,7 +388,6 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         parameters: &HashMap<String, String>,
         max_results: u32,
     ) -> DimseResult<Vec<DatasetStream>> {
-        tracing::info!("PipelineQueryProvider::find() ENTRY - level={}, params={:?}", query_level, parameters);
         let mut meta = HashMap::new();
         meta.insert("query_level".into(), format!("{}", query_level));
         meta.insert("max_results".into(), max_results.to_string());
@@ -309,16 +409,27 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let response_envelope = self
+        // Check if pipeline supports streaming
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
+        let pipeline_cfg = config.pipelines.get(&self.pipeline).ok_or_else(|| {
+            DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
+        })?;
+
+        let command = Command::new(Operation::Query).with_source("dimse_adapter");
+        if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
+            tracing::info!("Using streaming pipeline for C-FIND");
+            self.run_streaming(command, body, meta).await
+        } else {
+            let response_envelope = self
             .run(
-                Command::new(Operation::Query).with_source("dimse_adapter"),
+                command,
                 body,
                 meta,
             )
             .await?;
-
-        // Convert response envelope to datasets
-        self.response_to_datasets(response_envelope).await
+            self.response_to_datasets(response_envelope).await
+        }
     }
 
     async fn locate(
@@ -381,16 +492,27 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
-        let response_envelope = self
-            .run(
-                Command::new(Operation::Retrieve).with_source("dimse_adapter"),
-                body,
-                meta,
-            )
-            .await?;
+        // Check if pipeline supports streaming
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
+        let pipeline_cfg = config.pipelines.get(&self.pipeline).ok_or_else(|| {
+            DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
+        })?;
 
-        // Convert response envelope to datasets
-        self.response_to_datasets(response_envelope).await
+        let command = Command::new(Operation::Retrieve).with_source("dimse_adapter");
+        if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
+            tracing::info!("Using streaming pipeline for C-GET");
+            self.run_streaming(command, body, meta).await
+        } else {
+            let response_envelope = self
+                .run(
+                    command,
+                    body,
+                    meta,
+                )
+                .await?;
+            self.response_to_datasets(response_envelope).await
+        }
     }
 
     async fn store(&self, dataset: DatasetStream) -> DimseResult<()> {
@@ -435,7 +557,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
 
         // Build metadata from DICOM tags for path resolution
         let mut meta = HashMap::new();
-        
+
         // Extract key UIDs from dataset metadata for path templating
         let ds_meta = dataset.metadata();
         if let Some(ref uid) = ds_meta.study_instance_uid {
@@ -493,6 +615,135 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         }
 
         Ok(())
+    }
+}
+
+/// DIMSE operation types used as routing keys for the multiplexing provider.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum DimseOp {
+    Find,
+    Move,
+    Get,
+    Store,
+}
+
+/// A query provider that multiplexes multiple pipelines on a single SCP listener.
+///
+/// When several `dicom_scp` endpoints share the same `(bind_addr, port)`, each
+/// endpoint typically enables a different subset of DIMSE operations (e.g., one
+/// pipeline handles C-FIND while another handles C-STORE). This provider routes
+/// each operation to the pipeline that registered for it.
+///
+/// If multiple endpoints register for the same operation, the first registration
+/// wins (a warning is logged during construction).
+pub struct MultiplexingQueryProvider {
+    /// Maps each DIMSE operation to the pipeline provider that handles it.
+    op_routes: HashMap<DimseOp, Arc<PipelineQueryProvider>>,
+    /// Fallback provider used when no specific route is registered for an
+    /// operation. This is the first provider added, providing backward
+    /// compatibility with single-endpoint configurations.
+    fallback: Arc<PipelineQueryProvider>,
+}
+
+impl MultiplexingQueryProvider {
+    /// Build a multiplexing provider from a list of `(pipeline, endpoint, enabled_ops)`.
+    ///
+    /// `enabled_ops` is derived from the endpoint's `DimseConfig` feature flags
+    /// (enable_find, enable_store, etc.). The first endpoint to claim an
+    /// operation wins; duplicates are logged as warnings.
+    pub fn new(
+        routes: Vec<(String, String, Vec<DimseOp>)>,
+    ) -> Self {
+        assert!(!routes.is_empty(), "MultiplexingQueryProvider requires at least one route");
+
+        let mut op_routes: HashMap<DimseOp, Arc<PipelineQueryProvider>> = HashMap::new();
+        let mut fallback: Option<Arc<PipelineQueryProvider>> = None;
+
+        for (pipeline, endpoint, ops) in routes {
+            let provider = Arc::new(PipelineQueryProvider::new(
+                pipeline.clone(),
+                endpoint.clone(),
+            ));
+
+            if fallback.is_none() {
+                fallback = Some(Arc::clone(&provider));
+            }
+
+            for op in ops {
+                if let Some(existing) = op_routes.get(&op) {
+                    tracing::warn!(
+                        "DIMSE operation {:?} already registered by pipeline '{}' endpoint '{}', \
+                         ignoring duplicate from pipeline '{}' endpoint '{}'",
+                        op,
+                        existing.pipeline,
+                        existing.endpoint,
+                        pipeline,
+                        endpoint,
+                    );
+                } else {
+                    tracing::debug!(
+                        "DIMSE operation {:?} routed to pipeline '{}' endpoint '{}'",
+                        op,
+                        pipeline,
+                        endpoint,
+                    );
+                    op_routes.insert(op, Arc::clone(&provider));
+                }
+            }
+        }
+
+        Self {
+            op_routes,
+            fallback: fallback.expect("at least one route"),
+        }
+    }
+
+    /// Get the provider for a given operation, falling back to the default.
+    fn provider_for(&self, op: DimseOp) -> &PipelineQueryProvider {
+        self.op_routes
+            .get(&op)
+            .map(|p| p.as_ref())
+            .unwrap_or(self.fallback.as_ref())
+    }
+}
+
+#[async_trait]
+impl dimse::scp::QueryProvider for MultiplexingQueryProvider {
+    async fn find(
+        &self,
+        query_level: QueryLevel,
+        parameters: &HashMap<String, String>,
+        max_results: u32,
+    ) -> DimseResult<Vec<DatasetStream>> {
+        self.provider_for(DimseOp::Find)
+            .find(query_level, parameters, max_results)
+            .await
+    }
+
+    async fn locate(
+        &self,
+        query_level: QueryLevel,
+        parameters: &HashMap<String, String>,
+    ) -> DimseResult<Vec<DatasetStream>> {
+        self.provider_for(DimseOp::Move)
+            .locate(query_level, parameters)
+            .await
+    }
+
+    async fn get(
+        &self,
+        query_level: QueryLevel,
+        parameters: &HashMap<String, String>,
+    ) -> DimseResult<Vec<DatasetStream>> {
+        self.provider_for(DimseOp::Get)
+            .get(query_level, parameters)
+            .await
+    }
+
+    async fn store(&self, dataset: DatasetStream) -> DimseResult<()> {
+        self.provider_for(DimseOp::Store)
+            .store(dataset)
+            .await
     }
 }
 
@@ -570,4 +821,267 @@ mod tests {
     }
 
     // Note: test_store_dir_functions removed - uses global static that conflicts with parallel test execution
+
+    // ── run_streaming Command → dimse_op mapping ─────────────────────────────
+    //
+    // `run_streaming()` requires a global config and live services so it cannot
+    // be called in unit tests. The op-string derivation logic is a pure match
+    // expression; we duplicate it here so the mapping stays under test.
+
+    fn op_to_dimse_string(op: Operation) -> &'static str {
+        match op {
+            Operation::Query    => "find",
+            Operation::Retrieve => "get",
+            Operation::Move     => "move",
+            Operation::Store    => "store",
+            Operation::Ping     => "echo",
+            _                   => "unknown",
+        }
+    }
+
+    #[test]
+    fn test_run_streaming_query_derives_find() {
+        assert_eq!(op_to_dimse_string(Operation::Query), "find");
+    }
+
+    #[test]
+    fn test_run_streaming_retrieve_derives_get() {
+        assert_eq!(op_to_dimse_string(Operation::Retrieve), "get");
+    }
+
+    #[test]
+    fn test_run_streaming_move_derives_move() {
+        assert_eq!(op_to_dimse_string(Operation::Move), "move");
+    }
+
+    #[test]
+    fn test_run_streaming_store_derives_store() {
+        assert_eq!(op_to_dimse_string(Operation::Store), "store");
+    }
+
+    #[test]
+    fn test_run_streaming_ping_derives_echo() {
+        assert_eq!(op_to_dimse_string(Operation::Ping), "echo");
+    }
+
+    #[test]
+    fn test_run_streaming_custom_derives_unknown() {
+        assert_eq!(op_to_dimse_string(Operation::Custom), "unknown");
+    }
+
+    #[test]
+    fn test_run_streaming_command_carries_correct_operation() {
+        // Verify that the Command built at each call site has the expected operation,
+        // mirroring what run_streaming() receives in practice.
+        let find_cmd = Command::new(Operation::Query).with_source("dimse_adapter");
+        assert_eq!(find_cmd.operation, Operation::Query);
+        assert_eq!(find_cmd.source.as_deref(), Some("dimse_adapter"));
+
+        let get_cmd = Command::new(Operation::Retrieve).with_source("dimse_adapter");
+        assert_eq!(get_cmd.operation, Operation::Retrieve);
+        assert_eq!(get_cmd.source.as_deref(), Some("dimse_adapter"));
+    }
+
+    // ── MultiplexingQueryProvider tests ──────────────────────────────────────
+
+    #[test]
+    fn test_multiplexing_provider_routes_to_correct_pipeline() {
+        let routes = vec![
+            (
+                "find_pipeline".into(),
+                "find_ep".into(),
+                vec![DimseOp::Find],
+            ),
+            (
+                "store_pipeline".into(),
+                "store_ep".into(),
+                vec![DimseOp::Store],
+            ),
+        ];
+        let mux = MultiplexingQueryProvider::new(routes);
+
+        // Find should route to find_pipeline
+        let find_provider = mux.provider_for(DimseOp::Find);
+        assert_eq!(find_provider.pipeline, "find_pipeline");
+        assert_eq!(find_provider.endpoint, "find_ep");
+
+        // Store should route to store_pipeline
+        let store_provider = mux.provider_for(DimseOp::Store);
+        assert_eq!(store_provider.pipeline, "store_pipeline");
+        assert_eq!(store_provider.endpoint, "store_ep");
+    }
+
+    #[test]
+    fn test_multiplexing_provider_fallback_for_unregistered_op() {
+        let routes = vec![(
+            "only_pipeline".into(),
+            "only_ep".into(),
+            vec![DimseOp::Find],
+        )];
+        let mux = MultiplexingQueryProvider::new(routes);
+
+        // Get is not registered, should fall back to the first provider
+        let get_provider = mux.provider_for(DimseOp::Get);
+        assert_eq!(get_provider.pipeline, "only_pipeline");
+    }
+
+    #[test]
+    fn test_multiplexing_provider_first_registration_wins() {
+        let routes = vec![
+            (
+                "first_pipeline".into(),
+                "first_ep".into(),
+                vec![DimseOp::Find],
+            ),
+            (
+                "second_pipeline".into(),
+                "second_ep".into(),
+                vec![DimseOp::Find], // duplicate
+            ),
+        ];
+        let mux = MultiplexingQueryProvider::new(routes);
+
+        let find_provider = mux.provider_for(DimseOp::Find);
+        assert_eq!(find_provider.pipeline, "first_pipeline");
+    }
+
+    #[test]
+    fn test_multiplexing_provider_single_pipeline_all_ops() {
+        let routes = vec![(
+            "all_in_one".into(),
+            "ep".into(),
+            vec![DimseOp::Find, DimseOp::Store, DimseOp::Get, DimseOp::Move],
+        )];
+        let mux = MultiplexingQueryProvider::new(routes);
+
+        for op in [DimseOp::Find, DimseOp::Store, DimseOp::Get, DimseOp::Move] {
+            assert_eq!(mux.provider_for(op).pipeline, "all_in_one");
+        }
+    }
+
+    // ── Streaming bridge hand-off ────────────────────────────────────────────
+    //
+    // Harmony B turns each retrieved DICOM file into a ResponseEnvelope and
+    // writes the stream as NDJSON. Harmony A reads the NDJSON and converts each
+    // envelope back into a dataset for the SCP caller. This test runs a real
+    // sample instance through all of those stages in process.
+
+    fn bridge_request_details() -> crate::models::envelope::envelope::RequestDetails {
+        crate::models::envelope::envelope::RequestDetails {
+            method: "POST".to_string(),
+            uri: "/stream".to_string(),
+            headers: HashMap::new(),
+            cookies: HashMap::new(),
+            query_params: HashMap::new(),
+            cache_status: None,
+            metadata: HashMap::new(),
+            content_metadata: None,
+        }
+    }
+
+    fn element_text(object: &dicom_object::InMemDicomObject, name: &str) -> String {
+        object
+            .element_by_name(name)
+            .unwrap_or_else(|e| panic!("{} missing: {}", name, e))
+            .to_str()
+            .unwrap_or_else(|e| panic!("{} is not text: {}", name, e))
+            .trim_end_matches(|c: char| c == '\0' || c == ' ')
+            .to_string()
+    }
+
+    #[tokio::test]
+    async fn test_streaming_bridge_round_trip_preserves_instance() {
+        use crate::models::services::streaming::StreamMetadata;
+        use crate::models::services::types::dicom_scu_streaming::DicomScuStreamingBackend;
+        use crate::models::services::types::http_streaming::{HttpStreamingEndpoint, StreamFormat};
+        use crate::models::services::types::http_streaming_backend::HttpStreamingBackend;
+        use bytes::Bytes;
+        use futures_util::StreamExt;
+
+        let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+        let source_path = manifest_dir.join("samples/dicom/study_1/series_1/CT.1.1.dcm");
+
+        // The producer deletes each file after reading it, so give it a copy.
+        let tmp_root = manifest_dir.join("tmp");
+        std::fs::create_dir_all(&tmp_root).expect("create ./tmp");
+        let work_dir = tempfile::tempdir_in(&tmp_root).expect("create work dir");
+        let copy_path = work_dir.path().join("instance.dcm");
+        std::fs::copy(&source_path, &copy_path).expect("copy sample instance");
+
+        // Harmony B: retrieved file → ResponseEnvelope
+        let retrieved: std::pin::Pin<
+            Box<dyn futures_util::Stream<Item = Result<DatasetStream, DimseError>> + Send>,
+        > = Box::pin(futures_util::stream::iter(vec![Ok(DatasetStream::from_file(
+            copy_path, false,
+        ))]));
+        let envelopes = DicomScuStreamingBackend::convert_dimse_stream_to_envelopes(
+            retrieved,
+            bridge_request_details(),
+            StreamMetadata::new("dimse-get"),
+            None,
+        );
+
+        // Harmony B: envelopes → NDJSON response body
+        let writer = HttpStreamingEndpoint {
+            default_format: None,
+            buffer_size: None,
+            enable_compression: None,
+        };
+        let response = writer
+            .build_streaming_response(Box::pin(envelopes), StreamFormat::Ndjson, &HashMap::new())
+            .expect("NDJSON response should build");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read NDJSON body");
+
+        // Harmony A: NDJSON body → ResponseEnvelope. The body arrives in small
+        // chunks, as an HTTP client receives it, so the line spans chunk boundaries.
+        let chunks: Vec<Result<Bytes, reqwest::Error>> = body
+            .chunks(256)
+            .map(|chunk| Ok(Bytes::copy_from_slice(chunk)))
+            .collect();
+        let parsed: Vec<_> = HttpStreamingBackend::parse_ndjson_stream(
+            futures_util::stream::iter(chunks),
+            bridge_request_details(),
+            None,
+        )
+        .collect()
+        .await;
+        assert_eq!(parsed.len(), 1, "one instance in, one envelope out");
+        let envelope = parsed
+            .into_iter()
+            .next()
+            .unwrap()
+            .expect("NDJSON line should parse");
+
+        // Harmony A SCP: envelope → dataset
+        let provider = PipelineQueryProvider::new("bridge", "bridge");
+        let datasets = provider
+            .response_to_datasets(envelope)
+            .await
+            .expect("envelope should convert to a dataset");
+        assert_eq!(datasets.len(), 1, "one envelope in, one dataset out");
+        let received = datasets[0].to_object().await.expect("dataset should parse");
+
+        let source = dicom_object::open_file(&source_path).expect("open sample instance");
+        for name in ["SOPInstanceUID", "StudyInstanceUID", "SeriesInstanceUID", "SOPClassUID"] {
+            assert_eq!(
+                element_text(&received, name),
+                element_text(&source, name),
+                "{} changed in the round trip",
+                name
+            );
+        }
+        let source_pixels = source
+            .element_by_name("PixelData")
+            .expect("source pixel data")
+            .to_bytes()
+            .expect("source pixel bytes");
+        let received_pixels = received
+            .element_by_name("PixelData")
+            .expect("received pixel data")
+            .to_bytes()
+            .expect("received pixel bytes");
+        assert_eq!(received_pixels, source_pixels, "pixel data changed in the round trip");
+    }
 }

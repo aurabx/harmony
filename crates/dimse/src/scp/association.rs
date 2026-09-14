@@ -10,7 +10,7 @@ use tracing::{error, info, warn};
 use crate::{DimseError, Result};
 
 use super::DimseScp;
-use super::pdu_handler;
+use super::pdu_handler::{self, PendingCommand};
 
 /// Handle a single association
 pub async fn handle_association(
@@ -62,7 +62,7 @@ async fn handle_association_inner(
     );
 
     // Buffer for accumulating identifier data across multiple PDUs
-    let mut pending_command: Option<(u16, u16)> = None; // (command_field, message_id)
+    let mut pending_command: Option<PendingCommand> = None;
     let mut accumulated_identifier = Vec::new();
 
     // Process PDUs until association is released or aborted

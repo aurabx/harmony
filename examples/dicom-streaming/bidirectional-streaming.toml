@@ -1,0 +1,257 @@
+# Harmony Proxy - Bidirectional DICOM Streaming Configuration
+#
+# This configuration demonstrates the complete streaming architecture:
+# - Proxy A: Receives DIMSE requests, streams DICOM instances over HTTP/3
+# - Proxy B: Receives HTTP stream, reconstructs DICOM instances, forwards via DIMSE
+#
+# Use Case: Secure DICOM streaming between sites over HTTP/3 with per-instance
+# middleware processing (transforms, auth, etc.)
+
+schema_version = "1.2.0"
+
+################################################################################
+# COMMON CONFIGURATION (both proxies)
+################################################################################
+
+[proxy]
+id = "harmony-streaming-proxy"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+jwks_cache_duration_hours = 24
+
+[logging]
+log_level = "info"
+log_to_file = true
+log_file_path = "./tmp/harmony-streaming.log"
+
+[runbeam]
+enabled = false
+
+[management]
+enabled = true
+base_path = "admin"
+network = "management"
+
+################################################################################
+# PROXY A (SENDER): DIMSE → HTTP Streaming
+################################################################################
+
+# Network for HTTP streaming endpoint
+[network.sender_network]
+enable_wireguard = false
+interface = "wg0"
+
+[network.sender_network.http]
+bind_address = "0.0.0.0"
+bind_port = 8443
+
+[network.management]
+enable_wireguard = false
+interface = "wg0"
+
+[network.management.http]
+bind_address = "127.0.0.1"
+bind_port = 9090
+
+# DICOM SCP Endpoint - Receives incoming DIMSE requests
+[endpoints.dicom_listener]
+service = "dicom_scp"
+
+[endpoints.dicom_listener.options]
+local_aet = "SENDER_SCP"
+bind_addr = "0.0.0.0"
+port = 11112
+enable_echo = true
+enable_find = true
+enable_get = true
+
+# HTTP Streaming Endpoint - Converts stream to HTTP formats
+[endpoints.http_stream_sender]
+service = "http_streaming"
+
+[endpoints.http_stream_sender.options]
+format = "ndjson"  # Options: "sse", "ndjson", "multipart", "auto"
+enable_compression = false
+
+# DICOM SCU Streaming Backend - Streams instances from PACS
+[backends.local_pacs]
+service = "dicom_scu_streaming"
+
+[backends.local_pacs.options]
+aet = "ORTHANC"
+host = "localhost"
+port = 4242
+local_aet = "SENDER_SCU"
+dimse_retrieve_mode = "get"  # Use C-GET for streaming
+use_tls = false
+
+# Pipeline: DIMSE SCP → Stream from PACS → HTTP Stream Out
+[pipelines.sender_bridge]
+description = "Receive DIMSE, stream from PACS, send via HTTP"
+networks = ["sender_network"]
+endpoints = ["dicom_listener"]
+backends = ["local_pacs"]
+middleware = ["sender_auth", "sender_transform"]
+
+# Optional: JWT Authentication on outgoing stream
+[middleware.sender_auth]
+type = "jwt_auth"
+
+[middleware.sender_auth.options]
+jwks_url = "https://auth.example.com/.well-known/jwks.json"
+apply_to = "right"  # Validate before sending stream
+
+# Optional: Transform each instance before streaming
+[middleware.sender_transform]
+type = "transform"
+
+[middleware.sender_transform.options]
+spec_path = "transforms/sender-metadata.json"
+apply = "right"  # Transform instances from backend
+fail_on_error = false
+
+################################################################################
+# PROXY B (RECEIVER): HTTP Streaming → DIMSE
+################################################################################
+
+# Network for receiving HTTP streams
+[network.receiver_network]
+enable_wireguard = false
+interface = "wg0"
+
+[network.receiver_network.http]
+bind_address = "0.0.0.0"
+bind_port = 8080
+
+# HTTP Endpoint - Receives stream requests
+[endpoints.http_api]
+service = "http"
+
+# HTTP Streaming Backend - Consumes HTTP stream from Proxy A
+[backends.remote_stream]
+service = "http_streaming_backend"
+
+[backends.remote_stream.options]
+base_url = "https://proxy-a.example.com:8443"
+format = "auto"  # Auto-detect from Content-Type
+request_timeout_secs = 300
+enable_compression = false
+
+# DICOM SCU Backend - Forwards instances to remote PACS
+[backends.remote_pacs]
+service = "dicom_scu"
+
+[backends.remote_pacs.options]
+aet = "REMOTE_PACS"
+host = "pacs.hospital.org"
+port = 4242
+local_aet = "RECEIVER_SCU"
+use_tls = true
+
+# Pipeline: HTTP Request → Stream from Proxy A → Forward to PACS
+[pipelines.receiver_bridge]
+description = "Receive HTTP request, stream from remote proxy, forward via DIMSE"
+networks = ["receiver_network"]
+endpoints = ["http_api"]
+backends = ["remote_stream", "remote_pacs"]
+middleware = ["receiver_auth", "receiver_transform"]
+
+# Optional: Validate incoming stream authentication
+[middleware.receiver_auth]
+type = "jwt_auth"
+
+[middleware.receiver_auth.options]
+jwks_url = "https://auth.example.com/.well-known/jwks.json"
+apply_to = "left"  # Validate incoming request
+
+# Optional: Transform each instance before forwarding
+[middleware.receiver_transform]
+type = "transform"
+
+[middleware.receiver_transform.options]
+spec_path = "transforms/receiver-metadata.json"
+apply = "both"  # Can transform on ingress and/or egress
+fail_on_error = false
+
+################################################################################
+# SERVICE DEFINITIONS
+################################################################################
+
+[services.dicom_scp]
+module = ""
+
+[services.dicom_scu_streaming]
+module = ""
+
+[services.http_streaming]
+module = ""
+
+[services.http_streaming_backend]
+module = ""
+
+[services.http]
+module = ""
+
+[services.dicom_scu]
+module = ""
+
+################################################################################
+# USAGE EXAMPLES
+################################################################################
+
+# Proxy A (Sender):
+# cargo run -- --config examples/dicom-streaming/bidirectional-streaming.toml
+#
+# Test receiving DIMSE request (external PACS sends C-FIND to Proxy A):
+# echoscu SENDER_SCP 11112
+#
+# Proxy A will:
+# 1. Receive C-FIND via DICOM SCP
+# 2. Query local PACS via dicom_scu_streaming (C-GET)
+# 3. Stream instances as NDJSON over HTTP to Proxy B
+# 4. Each instance processed through middleware independently
+
+# Proxy B (Receiver):
+# Configure with receiver_network and receiver_bridge pipeline
+#
+# Trigger stream request to Proxy A:
+# curl -X POST http://proxy-b:8080/dicom-stream \
+#   -H "Content-Type: application/json" \
+#   -H "Authorization: Bearer $JWT_TOKEN" \
+#   -d '{"StudyInstanceUID": "1.2.3.4.5.6"}'
+#
+# Proxy B will:
+# 1. Receive HTTP POST
+# 2. Request stream from Proxy A (http_streaming_backend)
+# 3. Reconstruct each DICOM instance from NDJSON stream
+# 4. Process each through middleware
+# 5. Forward to remote PACS via dicom_scu
+
+################################################################################
+# ARCHITECTURAL NOTES
+################################################################################
+
+# Memory Usage:
+# - Constant memory regardless of study size
+# - Each instance buffered independently (~1-2MB per instance)
+# - No full study buffering required
+
+# Latency:
+# - Progressive streaming - first instance available immediately
+# - Sub-second latency for first instance
+# - Middleware processes in parallel with streaming
+
+# Fault Tolerance:
+# - Per-instance error handling
+# - Failed instances logged, stream continues
+# - HTTP streaming backend handles connection interrupts
+
+# Security:
+# - TLS 1.3 for HTTP streaming (configure via reverse proxy)
+# - JWT authentication per-instance (optional)
+# - Transform middleware for data masking/anonymization
+
+# Formats:
+# - NDJSON: Newline-delimited JSON (recommended, efficient)
+# - SSE: Server-Sent Events (browser-compatible)
+# - Multipart: MIME multipart (legacy support)

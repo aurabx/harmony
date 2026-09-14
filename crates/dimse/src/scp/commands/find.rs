@@ -8,56 +8,11 @@ use dicom_ul::ServerAssociation;
 use tokio::net::TcpStream;
 use tracing::{debug, error, info};
 
-use crate::types::QueryLevel;
 use crate::{DimseError, Result};
 
 use crate::scp::DimseScp;
 use crate::scp::response_builder;
-
-/// Extract query parameters from identifier dataset
-fn extract_query_parameters(
-    identifier: &InMemDicomObject<StandardDataDictionary>,
-) -> (QueryLevel, std::collections::HashMap<String, String>) {
-    // Extract query level from QueryRetrieveLevel (0008,0052)
-    let query_level_str = identifier
-        .element_by_name("QueryRetrieveLevel")
-        .ok()
-        .and_then(|e| e.to_str().ok())
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "STUDY".to_string());
-
-    let query_level = query_level_str
-        .parse::<QueryLevel>()
-        .unwrap_or(QueryLevel::Study);
-
-    // Extract query parameters from the identifier
-    let mut parameters = std::collections::HashMap::new();
-
-    // Common DICOM query tags
-    let query_tags = vec![
-        ("PatientID", "00100020"),
-        ("PatientName", "00100010"),
-        ("StudyInstanceUID", "0020000D"),
-        ("SeriesInstanceUID", "0020000E"),
-        ("SOPInstanceUID", "00080018"),
-        ("StudyDate", "00080020"),
-        ("StudyTime", "00080030"),
-        ("Modality", "00080060"),
-        ("AccessionNumber", "00080050"),
-    ];
-
-    for (name, _tag) in query_tags {
-        if let Ok(elem) = identifier.element_by_name(name) {
-            if let Ok(value) = elem.to_str() {
-                if !value.is_empty() {
-                    parameters.insert(name.to_string(), value.to_string());
-                }
-            }
-        }
-    }
-
-    (query_level, parameters)
-}
+use super::extract_query_parameters;
 
 /// Handle C-FIND request
 pub async fn handle_c_find(

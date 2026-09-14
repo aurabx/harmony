@@ -87,6 +87,7 @@ async fn test_scp_starts_and_stops() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -143,6 +144,7 @@ async fn test_scp_accepts_c_echo() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -203,6 +205,7 @@ async fn test_scp_accepts_c_find() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -319,6 +322,7 @@ async fn test_scp_accepts_c_store() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -381,6 +385,7 @@ async fn test_scp_config_validation() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let result = config.validate();
@@ -419,6 +424,7 @@ async fn test_scp_multiple_associations() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -508,6 +514,7 @@ async fn test_scp_accepts_c_move() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -591,6 +598,7 @@ async fn test_scp_accepts_c_get() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -660,6 +668,7 @@ async fn test_scp_rejects_unknown_aet() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -721,6 +730,7 @@ async fn test_scp_handles_rapid_connections() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -795,6 +805,7 @@ async fn test_scp_handles_connection_drop() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -858,6 +869,7 @@ async fn test_scp_respects_small_pdu_from_client() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -925,6 +937,7 @@ async fn test_scp_find_with_small_client_pdu() {
         tls: None,
         preferred_transfer_syntaxes: vec![],
         external_store_scp: false,
+        aet_table: HashMap::new(),
     };
 
     let provider: Arc<dyn QueryProvider> = Arc::new(MockQueryProvider);
@@ -962,5 +975,10 @@ async fn test_scp_find_with_small_client_pdu() {
     assert!(
         !stderr.contains("Association Rejected"),
         "C-FIND with small PDU should not be rejected"
+    );
+    assert!(
+        !stderr.contains("PDU") || !stderr.contains("error"),
+        "Should not have PDU-related errors: {}",
+        stderr
     );
 }

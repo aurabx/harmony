@@ -6,6 +6,9 @@ use crate::models::middleware::middleware::{build_middleware_instances_for_pipel
 use crate::models::middleware::types::mesh_auth::MeshAuthMiddleware;
 use crate::models::pipelines::config::Pipeline;
 use crate::models::protocol::ProtocolCtx;
+use crate::models::services::streaming::{ResponseStream, StreamingBackend};
+use crate::utils::Error;
+use futures_util::StreamExt;
 use std::collections::HashMap;
 
 /// Error type for pipeline execution
@@ -49,6 +52,25 @@ impl From<&str> for PipelineError {
 pub struct PipelineExecutor;
 
 impl PipelineExecutor {
+    /// Check if the pipeline uses a streaming backend
+    ///
+    /// Returns true if the first backend in the pipeline is a streaming backend.
+    /// Streaming backends include: dicom_scu_streaming, http_streaming_backend
+    pub fn is_streaming_pipeline(pipeline: &Pipeline, config: &Config) -> bool {
+        if let Some(backend_name) = pipeline.backends.first() {
+            if let Some(backend) = config.backends.get(backend_name) {
+                matches!(
+                    backend.service.to_lowercase().as_str(),
+                    "dicom_scu_streaming" | "http_streaming_backend"
+                )
+            } else {
+                false
+            }
+        } else {
+            false
+        }
+    }
+
     /// Execute a request through the complete pipeline
     ///
     /// # Flow
@@ -102,6 +124,162 @@ impl PipelineExecutor {
 
         tracing::info!("Pipeline execution completed successfully");
         Ok(response)
+    }
+
+    /// Execute a request through the pipeline with streaming backend support
+    ///
+    /// This method is similar to `execute()` but supports backends that yield
+    /// streams of ResponseEnvelopes. Each envelope in the stream is processed
+    /// independently through the middleware chain.
+    ///
+    /// # Flow
+    /// 1. Endpoint service preprocessing (same as non-streaming)
+    /// 2. Incoming middleware chain (same as non-streaming)
+    /// 3. Backend streaming invocation (yields stream of ResponseEnvelopes)
+    /// 4. For each ResponseEnvelope in stream:
+    ///    - Apply outgoing middleware chain
+    ///    - Apply endpoint post-processing
+    /// 5. Return stream of processed ResponseEnvelopes
+    ///
+    /// # Arguments
+    /// * `envelope` - The request envelope to process
+    /// * `pipeline_name` - The pipeline key/name in the config
+    /// * `pipeline` - Pipeline configuration (endpoints, backends, middleware)
+    /// * `config` - Full application configuration
+    /// * `ctx` - Protocol context for protocol-specific metadata
+    ///
+    /// # Returns
+    /// Stream of ResponseEnvelopes on success, PipelineError on failure
+    ///
+    /// # Example
+    /// ```ignore
+    /// let mut stream = PipelineExecutor::execute_streaming(envelope, pipeline_name, pipeline, config, ctx).await?;
+    ///
+    /// while let Some(result) = stream.next().await {
+    ///     match result {
+    ///         Ok(response_envelope) => {
+    ///             // Process individual envelope (e.g., send to client)
+    ///         }
+    ///         Err(e) => {
+    ///             // Handle error
+    ///         }
+    ///     }
+    /// }
+    /// ```
+    #[tracing::instrument(skip(envelope, pipeline_name, pipeline, config, ctx), fields(
+        protocol = ?ctx.protocol,
+        pipeline = pipeline_name
+    ))]
+    pub async fn execute_streaming(
+        envelope: RequestEnvelope<Vec<u8>>,
+        pipeline_name: &str,
+        pipeline: &Pipeline,
+        config: &Config,
+        ctx: &ProtocolCtx,
+    ) -> Result<ResponseStream, PipelineError> {
+        tracing::info!("Executing streaming pipeline '{}' for protocol: {:?}", pipeline_name, ctx.protocol);
+
+        // 1. Endpoint service preprocessing (same as non-streaming)
+        let envelope = Self::process_endpoint_incoming(envelope, pipeline, config).await?;
+
+        // 2. Incoming middleware chain (same as non-streaming)
+        let envelope = Self::process_incoming_middleware(envelope, pipeline_name, pipeline, config).await?;
+
+        // 3. Get streaming backend and invoke it
+        let backend_name = pipeline.backends.first()
+            .ok_or_else(|| PipelineError::ConfigError("No backends in pipeline".to_string()))?;
+
+        let backend = config.backends.get(backend_name)
+            .ok_or_else(|| PipelineError::ConfigError(format!("Backend '{}' not found", backend_name)))?;
+
+        // 4. Get response stream from backend
+        // We create the backend instance directly to access StreamingBackend trait
+        let response_stream = match backend.service.to_lowercase().as_str() {
+            "dicom_scu_streaming" => {
+                // Create a DicomScuStreamingBackend instance
+                let streaming_backend = crate::models::services::types::dicom_scu_streaming::DicomScuStreamingBackend {
+                    local_aet: None,
+                    aet: None,
+                    host: None,
+                    port: None,
+                    use_tls: None,
+                };
+
+                streaming_backend
+                    .backend_outgoing_stream(
+                        envelope,
+                        backend.options.as_ref().unwrap_or(&HashMap::new()),
+                    )
+                    .await
+                    .map_err(|e| PipelineError::BackendError(format!("Streaming backend failed: {}", e)))?
+            }
+            "http_streaming_backend" => {
+                // Create an HttpStreamingBackend instance
+                let streaming_backend = crate::models::services::types::http_streaming_backend::HttpStreamingBackend {
+                    base_url: None,
+                    format: None,
+                    chunk_timeout_secs: None,
+                    max_chunk_size: None,
+                };
+
+                streaming_backend
+                    .backend_outgoing_stream(
+                        envelope,
+                        backend.options.as_ref().unwrap_or(&HashMap::new()),
+                    )
+                    .await
+                    .map_err(|e| PipelineError::BackendError(format!("Streaming backend failed: {}", e)))?
+            }
+            _ => {
+                return Err(PipelineError::BackendError(
+                    format!(
+                        "Backend '{}' (service type: '{}') does not support streaming",
+                        backend_name, backend.service
+                    )
+                ));
+            }
+        };
+
+        // 5. Process each response through outgoing middleware and endpoint processing
+        // We need to clone these for the async move closure
+        let pipeline_clone = pipeline.clone();
+        let config_clone = config.clone();
+        let ctx_clone = ctx.clone();
+
+        let processed_stream = response_stream.then(move |result| {
+            let pipeline = pipeline_clone.clone();
+            let config = config_clone.clone();
+            let ctx = ctx_clone.clone();
+
+            async move {
+                match result {
+                    Ok(response_envelope) => {
+                        // Apply outgoing middleware
+                        let mut processed = Self::process_outgoing_middleware(
+                            response_envelope,
+                            &pipeline,
+                            &config,
+                        ).await
+                        .map_err(|e| Error::from(e.to_string()))?;
+
+                        // Apply endpoint post-processing
+                        Self::process_endpoint_outgoing(
+                            &mut processed,
+                            &pipeline,
+                            &config,
+                            &ctx,
+                        ).await
+                        .map_err(|e| Error::from(e.to_string()))?;
+
+                        Ok(processed)
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+        });
+
+        tracing::info!("Streaming pipeline setup completed");
+        Ok(Box::pin(processed_stream))
     }
 
     /// Resolve target_details from backend configuration
@@ -167,7 +345,7 @@ impl PipelineExecutor {
             .and_then(|opts| opts.get("base_url"))
             .and_then(|v| v.as_str())
         {
-        // Fallback to base_url in options (legacy configuration)
+            // Fallback to base_url in options (legacy configuration)
             target.base_url = base_url.to_string();
         }
 
@@ -194,6 +372,7 @@ impl PipelineExecutor {
         envelope.target_details = Some(target);
         Ok(envelope)
     }
+
 
     /// Process endpoint incoming request
     async fn process_endpoint_incoming(
@@ -340,7 +519,7 @@ impl PipelineExecutor {
                         "Injecting MeshAuth ingress middleware for mesh '{}'",
                         mesh_name
                     );
-                    
+
                     let ingress_mw = Self::create_mesh_auth_ingress(mesh_name, mesh)?;
                     // Prepend for ingress - validate JWT first
                     middleware_instances.insert(0, Box::new(ingress_mw));
@@ -370,7 +549,7 @@ impl PipelineExecutor {
                             .and_then(|v| v.as_str())
                             .map(|s| s.to_string())
                     });
-                
+
                 tracing::debug!(
                     "Backend '{}' destination URL: {:?}",
                     backend_name,
@@ -398,7 +577,7 @@ impl PipelineExecutor {
                                 mesh_name,
                                 dest_url
                             );
-                            
+
                             let egress_mw = Self::create_mesh_auth_egress(&mesh_name, mesh)?;
                             // Append for egress - generate JWT last (before backend)
                             middleware_instances.push(Box::new(egress_mw));
@@ -426,9 +605,9 @@ impl PipelineExecutor {
         use crate::models::mesh::config::IngressEgressMode;
 
         for egress in config.egress.values() {
-            if egress.pipeline == pipeline_name 
-                && egress.enabled 
-                && egress.mode == IngressEgressMode::Mesh 
+            if egress.pipeline == pipeline_name
+                && egress.enabled
+                && egress.mode == IngressEgressMode::Mesh
             {
                 return true;
             }

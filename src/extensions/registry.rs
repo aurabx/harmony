@@ -286,6 +286,7 @@ fn register_builtin_middleware(registry: &mut UnifiedRegistry) {
     registry.register_middleware_factory(Box::new(DicomToDicomwebFactory));
     registry.register_middleware_factory(Box::new(DicomFlattenFactory));
     registry.register_middleware_factory(Box::new(DicomUnflattenFactory));
+    registry.register_middleware_factory(Box::new(DicomToHttpFactory));
 
     // Transform middleware
     registry.register_middleware_factory(Box::new(TransformFactory));
@@ -328,6 +329,11 @@ fn register_builtin_services(registry: &mut UnifiedRegistry) {
 
     // Management services
     registry.register_service_factory(Box::new(ManagementServiceFactory));
+
+    // Streaming services
+    registry.register_service_factory(Box::new(HttpStreamingServiceFactory));
+    registry.register_service_factory(Box::new(DicomScuStreamingServiceFactory));
+    registry.register_service_factory(Box::new(HttpStreamingBackendServiceFactory));
 }
 
 #[cfg(test)]

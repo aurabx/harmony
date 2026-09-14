@@ -349,57 +349,21 @@ impl DicomScuBackend {
             }
         }
 
+        // Allow configuring max_pdu for DICOM associations via backend options
+        if let Some(max_pdu_val) = options.get("max_pdu").and_then(|v| v.as_u64()) {
+            if (16384..=131072).contains(&max_pdu_val) {
+                dimse_config.max_pdu = max_pdu_val as u32;
+            }
+        }
+
         // Create SCU client
         let scu = DimseScu::new(dimse_config);
 
-        // Resolve DIMSE operation from Command or legacy metadata
-        // 
-        // Priority:
-        // 1. envelope.command (set by endpoint or transform) - uses resolve_operation()
-        //    which also checks legacy metadata as fallback
-        // 2. Path-based detection (for direct HTTP->DICOM calls)
-        // 3. Default to "get" for data retrieval
-        //
-        // For Retrieve operations, dimse_retrieve_mode can switch between get/move
-        let valid_ops = ["echo", "find", "get", "move", "store"];
-
-        // Map universal Operation to DIMSE operation string
-        let normalized_op = match envelope.resolve_operation() {
-            Some(Operation::Query) => "find".to_string(),
-            Some(Operation::Retrieve) => "get".to_string(),
-            Some(Operation::Move) => "move".to_string(),
-            Some(Operation::Store) => "store".to_string(),
-            Some(Operation::Ping) => "echo".to_string(),
-            Some(op) => {
-                return Err(Error::from(format!(
-                    "Operation '{}' not supported by DICOM SCU backend. Supported: Query, Retrieve, Store, Ping",
-                    op
-                )));
-            }
-            None => {
-                // Final fallback: check path or default to "get"
-                let path_op = envelope
-                    .request_details
-                    .metadata
-                    .get("path")
-                    .map(|s| s.trim_start_matches('/').to_lowercase())
-                    .filter(|p| valid_ops.contains(&p.as_str()));
-
-                match path_op {
-                    Some(op) => op,
-                    None => {
-                        // Apply dimse_retrieve_mode for default retrieval
-                        options
-                            .get("dimse_retrieve_mode")
-                            .and_then(|v| v.as_str())
-                            .map(|s| s.to_lowercase())
-                            .unwrap_or_else(|| "get".to_string())
-                    }
-                }
-            }
-        };
+        // Resolve DIMSE operation — see resolve_dimse_op() for full priority order.
+        let normalized_op = resolve_dimse_op(&envelope, options);
 
         // Validate the resolved operation
+        let valid_ops = ["echo", "find", "get", "move", "store"];
         if !valid_ops.contains(&normalized_op.as_str()) {
             return Err(Error::from(format!(
                 "Invalid DIMSE operation: '{}'. Valid operations are: {}",
@@ -1139,5 +1103,239 @@ impl DicomScuBackend {
 
         envelope.normalized_data = Some(result);
         Ok(envelope.clone())
+    }
+}
+
+/// Resolve the DIMSE operation string from a request envelope and backend options.
+///
+/// Priority (highest first):
+/// 1. `envelope.command.operation` — the canonical typed operation
+/// 2. `x-dimse-op` HTTP header — set by `dicom_to_http` middleware on the sending side
+/// 3. `dimse_op` metadata key — set by the DIMSE SCP adapter
+/// 4. Last non-empty segment of the request URI / `full_path` metadata
+///    (catches `/find`, `/get`, `/store` as path-routed endpoints)
+/// 5. `dimse_retrieve_mode` backend option, then `"get"` as a last resort
+pub(crate) fn resolve_dimse_op(
+    envelope: &RequestEnvelope<Vec<u8>>,
+    options: &HashMap<String, Value>,
+) -> String {
+    const VALID_OPS: &[&str] = &["echo", "find", "get", "move", "store"];
+
+    // 1. Typed Command
+    match envelope.resolve_operation() {
+        Some(Operation::Query) => return "find".to_string(),
+        Some(Operation::Retrieve) => return "get".to_string(),
+        Some(Operation::Move) => return "move".to_string(),
+        Some(Operation::Store) => return "store".to_string(),
+        Some(Operation::Ping) => return "echo".to_string(),
+        Some(_) | None => {} // fall through
+    }
+
+    // 2. x-dimse-op header (set by dicom_to_http middleware)
+    if let Some(op) = envelope
+        .request_details
+        .headers
+        .get("x-dimse-op")
+        .map(|s| s.trim_start_matches('/').to_lowercase())
+        .filter(|p| VALID_OPS.contains(&p.as_str()))
+    {
+        return op;
+    }
+
+    // 3. dimse_op metadata key (set by DIMSE SCP adapter)
+    if let Some(op) = envelope
+        .request_details
+        .metadata
+        .get("dimse_op")
+        .map(|s| s.trim_start_matches('/').to_lowercase())
+        .filter(|p| VALID_OPS.contains(&p.as_str()))
+    {
+        return op;
+    }
+
+    // 4. Subpath metadata (the portion after the endpoint prefix)
+    if let Some(op) = envelope
+        .request_details
+        .metadata
+        .get("path")
+        .map(|s| s.trim_start_matches('/').to_lowercase())
+        .filter(|p| VALID_OPS.contains(&p.as_str()))
+    {
+        return op;
+    }
+
+    // 4b. Last segment of the full URI path (covers /find, /get, /store as prefixes)
+    let full_path = envelope
+        .request_details
+        .metadata
+        .get("full_path")
+        .cloned()
+        .unwrap_or_else(|| envelope.request_details.uri.clone());
+
+    if let Some(op) = full_path
+        .split('?')
+        .next()
+        .unwrap_or("")
+        .split('/')
+        .filter(|s| !s.is_empty())
+        .last()
+        .map(|s| s.to_lowercase())
+        .filter(|p| VALID_OPS.contains(&p.as_str()))
+    {
+        return op;
+    }
+
+    // 5. dimse_retrieve_mode option, then "get"
+    options
+        .get("dimse_retrieve_mode")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_lowercase())
+        .unwrap_or_else(|| "get".to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::envelope::command::{Command, Operation};
+    use crate::models::envelope::envelope::RequestEnvelopeBuilder;
+
+    fn make_envelope(uri: &str) -> RequestEnvelope<Vec<u8>> {
+        RequestEnvelopeBuilder::new()
+            .method("POST")
+            .uri(uri)
+            .headers(HashMap::new())
+            .cookies(HashMap::new())
+            .query_params(HashMap::new())
+            .cache_status(None)
+            .metadata(HashMap::new())
+            .original_data(vec![])
+            .build()
+            .unwrap()
+    }
+
+    fn with_meta(env: &mut RequestEnvelope<Vec<u8>>, key: &str, val: &str) {
+        env.request_details.metadata.insert(key.to_string(), val.to_string());
+    }
+
+    fn with_header(env: &mut RequestEnvelope<Vec<u8>>, key: &str, val: &str) {
+        env.request_details.headers.insert(key.to_string(), val.to_string());
+    }
+
+    fn opts() -> HashMap<String, Value> {
+        HashMap::new()
+    }
+
+    // ── 1. Command takes priority ─────────────────────────────────────────────
+
+    #[test]
+    fn test_command_query_maps_to_find() {
+        let mut env = make_envelope("/whatever");
+        env.command = Some(Command::new(Operation::Query));
+        assert_eq!(resolve_dimse_op(&env, &opts()), "find");
+    }
+
+    #[test]
+    fn test_command_retrieve_maps_to_get() {
+        let mut env = make_envelope("/whatever");
+        env.command = Some(Command::new(Operation::Retrieve));
+        assert_eq!(resolve_dimse_op(&env, &opts()), "get");
+    }
+
+    #[test]
+    fn test_command_ping_maps_to_echo() {
+        let mut env = make_envelope("/whatever");
+        env.command = Some(Command::new(Operation::Ping));
+        assert_eq!(resolve_dimse_op(&env, &opts()), "echo");
+    }
+
+    // ── 2. x-dimse-op header ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_header_find() {
+        let mut env = make_envelope("/find");
+        with_header(&mut env, "x-dimse-op", "find");
+        assert_eq!(resolve_dimse_op(&env, &opts()), "find");
+    }
+
+    #[test]
+    fn test_header_get() {
+        let mut env = make_envelope("/get");
+        with_header(&mut env, "x-dimse-op", "get");
+        assert_eq!(resolve_dimse_op(&env, &opts()), "get");
+    }
+
+    #[test]
+    fn test_header_invalid_falls_through() {
+        let mut env = make_envelope("/find");
+        with_header(&mut env, "x-dimse-op", "scan");
+        // Falls through to URI last-segment: "find"
+        assert_eq!(resolve_dimse_op(&env, &opts()), "find");
+    }
+
+    // ── 3. dimse_op metadata ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_meta_dimse_op_find() {
+        let mut env = make_envelope("/");
+        with_meta(&mut env, "dimse_op", "find");
+        assert_eq!(resolve_dimse_op(&env, &opts()), "find");
+    }
+
+    // ── 4. Path-based (the bug scenario) ──────────────────────────────────────
+
+    #[test]
+    fn test_uri_find_when_subpath_empty() {
+        // POST /find with path_prefix="/find" -> subpath=""
+        let mut env = make_envelope("/find");
+        with_meta(&mut env, "path", "");
+        with_meta(&mut env, "full_path", "/find");
+        assert_eq!(resolve_dimse_op(&env, &opts()), "find");
+    }
+
+    #[test]
+    fn test_uri_get_when_subpath_empty() {
+        let mut env = make_envelope("/get");
+        with_meta(&mut env, "path", "");
+        with_meta(&mut env, "full_path", "/get");
+        assert_eq!(resolve_dimse_op(&env, &opts()), "get");
+    }
+
+    #[test]
+    fn test_uri_store_when_subpath_empty() {
+        let mut env = make_envelope("/store");
+        with_meta(&mut env, "path", "");
+        with_meta(&mut env, "full_path", "/store");
+        assert_eq!(resolve_dimse_op(&env, &opts()), "store");
+    }
+
+    #[test]
+    fn test_subpath_find_takes_priority() {
+        let mut env = make_envelope("/api/find");
+        with_meta(&mut env, "path", "find");
+        assert_eq!(resolve_dimse_op(&env, &opts()), "find");
+    }
+
+    #[test]
+    fn test_query_string_ignored() {
+        let mut env = make_envelope("/find?PatientName=Kirk");
+        with_meta(&mut env, "path", "");
+        with_meta(&mut env, "full_path", "/find?PatientName=Kirk");
+        assert_eq!(resolve_dimse_op(&env, &opts()), "find");
+    }
+
+    // ── 5. Default fallback ──────────────────────────────────────────────────
+
+    #[test]
+    fn test_defaults_to_get() {
+        let env = make_envelope("/api/dicom");
+        assert_eq!(resolve_dimse_op(&env, &opts()), "get");
+    }
+
+    #[test]
+    fn test_retrieve_mode_overrides_default() {
+        let env = make_envelope("/api/dicom");
+        let mut options = opts();
+        options.insert("dimse_retrieve_mode".to_string(), Value::String("move".to_string()));
+        assert_eq!(resolve_dimse_op(&env, &options), "move");
     }
 }
