@@ -366,7 +366,14 @@ async fn handle_request_with_mesh(
         endpoint.options.as_ref().unwrap_or(&HashMap::new()),
     )
     .await
-    .map_err(|_| StatusCode::BAD_REQUEST)?;
+    .map_err(|err| {
+        tracing::error!(
+            "Request for pipeline '{}' rejected: could not read the HTTP request: {}",
+            pipeline_name,
+            err
+        );
+        StatusCode::BAD_REQUEST
+    })?;
 
     // 1b. Attach mesh context if present
     if let Some(ref mesh_ctx) = mesh_context {
@@ -380,7 +387,15 @@ async fn handle_request_with_mesh(
             endpoint.options.as_ref().unwrap_or(&HashMap::new()),
         )
         .await
-        .map_err(|_| StatusCode::BAD_REQUEST)?;
+        .map_err(|err| {
+            tracing::error!(
+                "Request for pipeline '{}' rejected: endpoint '{}' could not build a request envelope: {}",
+                pipeline_name,
+                endpoint_name,
+                err
+            );
+            StatusCode::BAD_REQUEST
+        })?;
 
     // 3. Execute pipeline (using standard PipelineExecutor)
     let response_envelope = PipelineExecutor::execute(envelope, &pipeline_name, pipeline, &config, &ctx)
