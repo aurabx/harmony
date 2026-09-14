@@ -490,9 +490,6 @@ impl DicomScuStreamingBackend {
                     // Set normalized_data for middleware
                     response.normalized_data = Some(json);
 
-                    // Cleanup temp file
-                    let _ = std::fs::remove_file(path);
-
                     Ok(response)
                 }
                 Ok(DatasetStream::Memory { ref data, ref metadata }) => {
