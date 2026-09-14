@@ -35,10 +35,7 @@ cargo build
 # Build (release)
 cargo build --release
 
-# Run main service with test config
-cargo run -- --config examples/test-config.toml
-
-# Run with alternate config
+# Run main service with a config file
 cargo run -- --config <path/to/config.toml>
 
 # Run all tests
@@ -86,8 +83,8 @@ cargo clippy --all-targets -- -D warnings
 
 1. **Local Development Setup**:
    ```bash
-   # Use the test configuration as baseline
-   cargo run -- --config examples/test-config.toml
+   # Point at your own config file
+   cargo run -- --config <path/to/config.toml>
    ```
 
 2. **Configuration Requirements** (from .junie/guidelines.md):
@@ -107,8 +104,7 @@ cargo clippy --all-targets -- -D warnings
    ├── config/             # Configuration validation
    └── backends/dicom/     # DICOM-specific validation
    examples/
-   ├── test-config.toml    # Working test configuration
-   └── custom_endpoint/    # Example custom endpoint crate
+   └── dicom-streaming/    # DICOM SCP/SCU streaming example configs
    tests/
    └── config_validation.rs # Integration tests
    ```
@@ -167,7 +163,7 @@ Harmony supports hot-reloading configuration changes without requiring a full ap
 Enabled by default - just edit and save your config file:
 
 ```bash
-cargo run -- --config examples/test-config.toml
+cargo run -- --config <path/to/config.toml>
 # Edit config file in another window
 # Changes detected and applied automatically
 ```
@@ -208,16 +204,17 @@ See [docs/config-reload.md](docs/config-reload.md) for full architecture details
 The validator enforces strict requirements:
 
 - **Networks**: Must not be empty; each network needs `http.bind_address` and non-zero `http.bind_port`
+- **Interface**: Every network must have a non-empty `interface` value. The field defaults to `"wg0"` if omitted, so validation passes without an explicit value; only an explicitly empty `interface = ""` fails.
 - **Groups**: At least one group; each group must reference existing networks
 - **Middleware**: Names must be recognized (`jwt_auth`, `auth_sidecar`, `aurabox_connect`, `transform`)
-- **WireGuard**: If `enable_wireguard=true`, `interface` must be non-empty
+- **WireGuard**: If `enable_wireguard=true`, the TCP bind port (`http.bind_port` or `tcp_config.bind_port`) must be non-zero
 
 ## Known Pitfalls
 
 - Tests may fail against current validator - update test fixtures to include required groups/middleware configs
 - Unknown middleware names cause immediate failure - extend configuration if adding new middleware
 - Transform middleware requires valid JOLT specification files in JSON format
-- For WireGuard networks, `interface` field is mandatory when `enable_wireguard=true`
+- The `interface` field on `[network.<name>]` is validated on every network, not only WireGuard ones. It defaults to `"wg0"` when omitted, so most configs pass; an explicit `interface = ""` rejects the config with `Invalid network '<name>': interface is empty`.
 - Default binary config path: `/etc/harmony/harmony-config.toml`
 
 ## Development Conventions
@@ -226,7 +223,6 @@ The validator enforces strict requirements:
 - **Code Style**: rustfmt (default) + clippy linting required
 - **Logging**: tracing with env-filter; use `RUST_LOG=harmony=debug,info` locally
 - **Output Directory**: Use `./tmp` directory for temporary files (not system `/tmp`)
-- **Dynamic Loading**: libloading supports custom endpoints/middleware (see `examples/custom_endpoint`)
 - Items are only ready for production use if they are fully tested and contain no bugs.
 - Clippy is not to be run as part of patches unless specifically requested
 - Try not to mix concerns. 
@@ -253,7 +249,7 @@ This proxy is part of the larger Runbeam ecosystem:
 - Uses shared `/samples` directory across implementations
 - Compatible with Rust CLI tools that may consume its output
 
-For troubleshooting configuration issues, always check that `examples/test-config.toml` works as a baseline, then adapt your configuration to match its structure.
+For troubleshooting configuration issues, start from a minimal known-good config and add sections one at a time; run `cargo test --test config_validation` to check that the validator accepts the result.
 
 ## Path Filter Middleware
 
