@@ -4,7 +4,7 @@ use dicom_encoding::text::SpecificCharacterSet;
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
-use dicom_ul::ServerAssociation;
+use dicom_ul::association::server::AsyncServerAssociation;
 use tokio::net::TcpStream;
 use tracing::{debug, error, info, warn};
 
@@ -19,7 +19,7 @@ use super::extract_query_parameters;
 /// Handle C-GET request
 pub async fn handle_c_get(
     scp: &DimseScp,
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     message_id: u16,
     identifier_data: Vec<u8>,
     presentation_context_id: u8,

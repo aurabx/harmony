@@ -4,6 +4,7 @@ use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 
 use dicom_ul::association::server::{AcceptAny, ServerAssociationOptions};
+use dicom_ul::prelude::*;
 use dicom_ul::Pdu;
 use tracing::{error, info, warn};
 
@@ -57,7 +58,7 @@ async fn handle_association_inner(
     info!(
         "Association established with {} (calling AET: {}, requestor_max_pdu: {})",
         peer_addr,
-        association.client_ae_title(),
+        association.peer_ae_title(),
         association.requestor_max_pdu_length()
     );
 

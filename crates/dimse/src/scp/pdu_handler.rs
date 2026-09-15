@@ -5,7 +5,7 @@ use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
 use dicom_dictionary_std::{tags, uids};
-use dicom_ul::ServerAssociation;
+use dicom_ul::association::server::AsyncServerAssociation;
 use tokio::net::TcpStream;
 use tracing::debug;
 
@@ -25,7 +25,7 @@ pub struct PendingCommand {
 /// Handle P-DATA PDU containing DIMSE command
 pub async fn handle_pdata(
     scp: &DimseScp,
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     pdata: Vec<dicom_ul::pdu::PDataValue>,
     pending_command: &mut Option<PendingCommand>,
     accumulated_identifier: &mut Vec<u8>,

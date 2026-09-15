@@ -2,7 +2,7 @@
 
 use dicom_dictionary_std::uids;
 use dicom_ul::association::client::ClientAssociationOptions;
-use dicom_ul::ClientAssociation;
+use dicom_ul::association::client::AsyncClientAssociation;
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 
@@ -14,7 +14,7 @@ pub async fn establish_association(
     config: &DimseConfig,
     node: &RemoteNode,
     sop_class_uids: &[&str],
-) -> Result<ClientAssociation<TcpStream>> {
+) -> Result<AsyncClientAssociation<TcpStream>> {
     node.validate()?;
 
     let addr = format!("{}:{}", node.host, node.port);
@@ -62,7 +62,7 @@ pub async fn establish_association(
 /// Release an association gracefully
 /// Note: This consumes the association since release() takes ownership
 pub async fn release_association(
-    association: ClientAssociation<TcpStream>,
+    association: AsyncClientAssociation<TcpStream>,
 ) -> Result<()> {
     association
         .release()
@@ -73,7 +73,7 @@ pub async fn release_association(
 
 /// Abort an association
 /// Note: This consumes the association since abort() takes ownership
-pub async fn abort_association(association: ClientAssociation<TcpStream>) {
+pub async fn abort_association(association: AsyncClientAssociation<TcpStream>) {
     if let Err(e) = association.abort().await {
         warn!("Failed to abort association: {}", e);
     }
@@ -81,7 +81,7 @@ pub async fn abort_association(association: ClientAssociation<TcpStream>) {
 
 /// Get presentation context ID for a SOP class from an established association
 pub fn get_presentation_context_id(
-    association: &ClientAssociation<TcpStream>,
+    association: &AsyncClientAssociation<TcpStream>,
     sop_class_uid: &str,
 ) -> Result<u8> {
     // Find the presentation context ID for this SOP class

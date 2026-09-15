@@ -1,6 +1,6 @@
 //! C-ECHO command handler
 
-use dicom_ul::ServerAssociation;
+use dicom_ul::association::server::AsyncServerAssociation;
 use tokio::net::TcpStream;
 use tracing::debug;
 
@@ -12,7 +12,7 @@ use crate::scp::response_builder;
 /// Handle C-ECHO request
 pub async fn handle_c_echo(
     scp: &DimseScp,
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     message_id: u16,
     presentation_context_id: u8,
 ) -> Result<()> {
