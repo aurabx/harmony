@@ -12,16 +12,20 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use futures::StreamExt;
 use tokio::net::TcpListener;
 use std::sync::atomic::{AtomicU32, Ordering};
 use tracing::{debug, error, info, warn};
 
 use crate::config::DimseConfig;
 use crate::router::{DimseRequest, DimseRequestPayload, DimseResponse, Router};
-use crate::types::{DatasetStream, QueryLevel};
+use crate::types::{BoxDatasetStream, DatasetStream, QueryLevel, RetrieveStream};
 use crate::{DimseError, Result};
 
-/// Trait for providing query capabilities to the SCP
+/// Trait for providing query capabilities to the SCP.
+///
+/// Query and retrieve results are streams, so the SCP can answer the client
+/// with each dataset as it arrives instead of waiting for the whole result.
 #[async_trait]
 pub trait QueryProvider: Send + Sync {
     /// Find datasets matching the given query
@@ -30,21 +34,21 @@ pub trait QueryProvider: Send + Sync {
         query_level: QueryLevel,
         parameters: &std::collections::HashMap<String, String>,
         max_results: u32,
-    ) -> Result<Vec<DatasetStream>>;
+    ) -> Result<BoxDatasetStream>;
 
     /// Locate datasets for move operations
     async fn locate(
         &self,
         query_level: QueryLevel,
         parameters: &std::collections::HashMap<String, String>,
-    ) -> Result<Vec<DatasetStream>>;
+    ) -> Result<BoxDatasetStream>;
 
-    /// Retrieve datasets for get operations (C-GET)
+    /// Retrieve datasets for get and move operations (C-GET, C-MOVE)
     async fn get(
         &self,
         query_level: QueryLevel,
         parameters: &std::collections::HashMap<String, String>,
-    ) -> Result<Vec<DatasetStream>>;
+    ) -> Result<RetrieveStream>;
 
     /// Store a dataset (for C-STORE operations)
     async fn store(&self, dataset: DatasetStream) -> Result<()>;
@@ -208,26 +212,45 @@ impl DimseScp {
                     .find(query.query_level, &query.parameters, query.max_results)
                     .await
                 {
-                    Ok(datasets) => {
-                        debug!("Found {} matching datasets", datasets.len());
-
-                        // Send each dataset as a pending response
-                        for (i, dataset) in datasets.iter().enumerate() {
-                            let is_final = i == datasets.len() - 1;
-                            let response =
-                                DimseResponse::find(request_id, Some(dataset.clone()), is_final);
-
-                            if let Some(ref stream_tx) = request.stream_tx {
-                                stream_tx.send(response).await.map_err(|_| {
-                                    DimseError::router("Failed to send stream response")
-                                })?;
+                    Ok(mut datasets) => {
+                        // Each dataset goes out as a pending response. The last one is
+                        // only known once the stream ends, so one dataset is held back.
+                        let mut held: Option<DatasetStream> = None;
+                        let mut count = 0usize;
+                        while let Some(item) = datasets.next().await {
+                            let dataset = match item {
+                                Ok(dataset) => dataset,
+                                Err(e) => {
+                                    warn!("C-FIND result skipped: {}", e);
+                                    continue;
+                                }
+                            };
+                            if let Some(previous) = held.replace(dataset) {
+                                count += 1;
+                                let response =
+                                    DimseResponse::find(request_id, Some(previous), false);
+                                if let Some(ref stream_tx) = request.stream_tx {
+                                    stream_tx.send(response).await.map_err(|_| {
+                                        DimseError::router("Failed to send stream response")
+                                    })?;
+                                }
                             }
                         }
+                        debug!("Found {} matching datasets", count + usize::from(held.is_some()));
 
-                        // Send final empty response if no datasets found
-                        if datasets.is_empty() {
-                            let response = DimseResponse::find(request_id, None, true);
-                            self.send_response(request, response, router).await?;
+                        match held {
+                            Some(last) => {
+                                let response = DimseResponse::find(request_id, Some(last), true);
+                                if let Some(ref stream_tx) = request.stream_tx {
+                                    stream_tx.send(response).await.map_err(|_| {
+                                        DimseError::router("Failed to send stream response")
+                                    })?;
+                                }
+                            }
+                            None => {
+                                let response = DimseResponse::find(request_id, None, true);
+                                self.send_response(request, response, router).await?;
+                            }
                         }
                     }
                     Err(e) => {
@@ -258,7 +281,7 @@ impl DimseScp {
                     .await
                 {
                     Ok(datasets) => {
-                        let total = datasets.len() as u32;
+                        let total = datasets.count().await as u32;
                         debug!("Located {} datasets for move", total);
 
                         // Send final status response
@@ -293,38 +316,65 @@ impl DimseScp {
                     .get(query.query_level, &query.parameters)
                     .await
                 {
-                    Ok(datasets) => {
-                        let total = datasets.len() as u32;
-                        debug!("Retrieved {} datasets for get", total);
+                    Ok(retrieve) => {
+                        let total = retrieve.expected_total.map(u32::from);
+                        let mut datasets = retrieve.datasets;
+                        debug!("Retrieving datasets for get (expected total: {:?})", total);
 
-                        // Send each dataset as a pending response
-                        for (i, dataset) in datasets.iter().enumerate() {
-                            let is_final = i == datasets.len() - 1;
-                            let remaining = total - (i as u32) - 1;
-                            let completed = (i as u32) + 1;
-
-                            let response = DimseResponse::get_response(
-                                request_id,
-                                Some(dataset.clone()),
-                                remaining,
-                                completed,
-                                0, // failed
-                                0, // warning
-                                is_final,
-                            );
-
-                            if let Some(ref stream_tx) = request.stream_tx {
-                                stream_tx.send(response).await.map_err(|_| {
-                                    DimseError::router("Failed to send stream response")
-                                })?;
+                        // One dataset is held back so the last response can be marked final.
+                        let mut held: Option<DatasetStream> = None;
+                        let mut completed = 0u32;
+                        while let Some(item) = datasets.next().await {
+                            let dataset = match item {
+                                Ok(dataset) => dataset,
+                                Err(e) => {
+                                    warn!("C-GET dataset skipped: {}", e);
+                                    continue;
+                                }
+                            };
+                            if let Some(previous) = held.replace(dataset) {
+                                completed += 1;
+                                let remaining = total.map_or(0, |t| t.saturating_sub(completed));
+                                let response = DimseResponse::get_response(
+                                    request_id,
+                                    Some(previous),
+                                    remaining,
+                                    completed,
+                                    0, // failed
+                                    0, // warning
+                                    false,
+                                );
+                                if let Some(ref stream_tx) = request.stream_tx {
+                                    stream_tx.send(response).await.map_err(|_| {
+                                        DimseError::router("Failed to send stream response")
+                                    })?;
+                                }
                             }
                         }
 
-                        // Send final empty response if no datasets found
-                        if datasets.is_empty() {
-                            let response =
-                                DimseResponse::get_response(request_id, None, 0, 0, 0, 0, true);
-                            self.send_response(request, response, router).await?;
+                        match held {
+                            Some(last) => {
+                                completed += 1;
+                                let response = DimseResponse::get_response(
+                                    request_id,
+                                    Some(last),
+                                    0,
+                                    completed,
+                                    0, // failed
+                                    0, // warning
+                                    true,
+                                );
+                                if let Some(ref stream_tx) = request.stream_tx {
+                                    stream_tx.send(response).await.map_err(|_| {
+                                        DimseError::router("Failed to send stream response")
+                                    })?;
+                                }
+                            }
+                            None => {
+                                let response =
+                                    DimseResponse::get_response(request_id, None, 0, 0, 0, 0, true);
+                                self.send_response(request, response, router).await?;
+                            }
                         }
                     }
                     Err(e) => {

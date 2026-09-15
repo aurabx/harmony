@@ -450,7 +450,7 @@ mod tests {
     #[test]
     fn test_build_move_response_with_sub_operations() {
         let counts = SubOperationCounts {
-            remaining: 10,
+            remaining: Some(10),
             completed: 5,
             failed: 2,
             warning: 1,
@@ -498,7 +498,7 @@ mod tests {
     #[test]
     fn test_build_get_response_with_sub_operations() {
         let counts = SubOperationCounts {
-            remaining: 0,
+            remaining: None,
             completed: 3,
             failed: 0,
             warning: 0,
@@ -532,6 +532,9 @@ mod tests {
             .uint16()
             .unwrap();
         assert_eq!(completed, 3);
+
+        // A final response carries no remaining count
+        assert!(response.element(tags::NUMBER_OF_REMAINING_SUBOPERATIONS).is_err());
     }
 
     #[test]
@@ -563,7 +566,7 @@ mod tests {
     #[test]
     fn test_sub_operation_counts_default() {
         let counts = SubOperationCounts::default();
-        assert_eq!(counts.remaining, 0);
+        assert_eq!(counts.remaining, None);
         assert_eq!(counts.completed, 0);
         assert_eq!(counts.failed, 0);
         assert_eq!(counts.warning, 0);

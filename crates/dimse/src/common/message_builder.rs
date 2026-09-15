@@ -44,10 +44,15 @@ pub mod priority {
     pub const HIGH: u16 = 0x0001;
 }
 
-/// Sub-operation counts for C-MOVE and C-GET responses
+/// Sub-operation counts for C-MOVE and C-GET responses.
+///
+/// `remaining` is optional because the standard requires it in Pending
+/// responses and forbids it in the final Success, Warning and Failure
+/// responses (PS3.4 C.4.2.1.4 and C.4.3.1.4). Leave it `None` when the total
+/// is unknown or when building a final response.
 #[derive(Debug, Clone, Default)]
 pub struct SubOperationCounts {
-    pub remaining: u16,
+    pub remaining: Option<u16>,
     pub completed: u16,
     pub failed: u16,
     pub warning: u16,
@@ -161,11 +166,13 @@ impl DimseMessageBuilder {
 
     /// Add sub-operation counts (for C-MOVE and C-GET responses)
     pub fn sub_operation_counts(mut self, counts: &SubOperationCounts) -> Self {
-        self.obj.put(DataElement::new(
-            tags::NUMBER_OF_REMAINING_SUBOPERATIONS,
-            VR::US,
-            PrimitiveValue::from(counts.remaining),
-        ));
+        if let Some(remaining) = counts.remaining {
+            self.obj.put(DataElement::new(
+                tags::NUMBER_OF_REMAINING_SUBOPERATIONS,
+                VR::US,
+                PrimitiveValue::from(remaining),
+            ));
+        }
         self.obj.put(DataElement::new(
             tags::NUMBER_OF_COMPLETED_SUBOPERATIONS,
             VR::US,
@@ -376,7 +383,7 @@ mod tests {
     #[test]
     fn test_builder_with_sub_operations() {
         let counts = SubOperationCounts {
-            remaining: 5,
+            remaining: Some(5),
             completed: 3,
             failed: 1,
             warning: 0,

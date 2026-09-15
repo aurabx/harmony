@@ -8,7 +8,7 @@ use crate::pipeline::executor::PipelineExecutor;
 use async_trait::async_trait;
 use dicom_json_tool as tool;
 use dimse::error::DimseError;
-use dimse::types::{DatasetStream, QueryLevel};
+use dimse::types::{dataset_stream_from_vec, BoxDatasetStream, DatasetStream, QueryLevel, RetrieveStream};
 use dimse::Result as DimseResult;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -152,13 +152,15 @@ impl PipelineQueryProvider {
     /// Execute a DIMSE operation through the pipeline with streaming support
     ///
     /// Similar to `run()` but uses `execute_streaming()` for backends that support it.
-    /// Returns a stream of datasets that can be processed progressively.
+    /// Returns the datasets as a stream. Each streamed envelope is converted as
+    /// it arrives, so the caller can act on the first dataset while the backend
+    /// is still producing the rest.
     async fn run_streaming(
         &self,
         command: Command,
         body: serde_json::Value,
         mut meta: HashMap<String, String>,
-    ) -> DimseResult<Vec<DatasetStream>> {
+    ) -> DimseResult<BoxDatasetStream> {
         use futures_util::StreamExt;
 
         let config =
@@ -212,44 +214,45 @@ impl PipelineQueryProvider {
         tracing::info!("Executing streaming pipeline for DIMSE operation: {}", op);
 
         // Execute streaming pipeline
-        let mut response_stream =
+        let response_stream =
             PipelineExecutor::execute_streaming(request_envelope, &self.pipeline, pipeline_cfg, &config, &ctx)
                 .await
                 .map_err(|e| {
                     DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
                 })?;
 
-        // Collect datasets from stream
-        let mut all_datasets = Vec::new();
-        let mut instance_count = 0u64;
-
-        while let Some(result) = response_stream.next().await {
-            match result {
-                Ok(response_envelope) => {
-                    instance_count += 1;
-                    tracing::debug!("Processing streamed instance #{}", instance_count);
-
-                    // Convert this envelope to datasets
-                    let datasets = self.response_to_datasets(response_envelope).await?;
-                    all_datasets.extend(datasets);
+        // Each envelope becomes zero or more datasets as it arrives. Nothing is
+        // collected here.
+        let datasets = response_stream
+            .enumerate()
+            .then(|(index, result)| async move {
+                let instance = index as u64 + 1;
+                match result {
+                    Ok(response_envelope) => {
+                        tracing::debug!("Processing streamed instance #{}", instance);
+                        match Self::response_to_datasets(response_envelope).await {
+                            Ok(datasets) => datasets.into_iter().map(Ok).collect::<Vec<_>>(),
+                            Err(e) => {
+                                tracing::error!(
+                                    "Streamed instance #{} could not be converted: {}",
+                                    instance, e
+                                );
+                                vec![Err(e)]
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        tracing::error!("Stream error on instance #{}: {}", instance, e);
+                        vec![Err(DimseError::operation_failed(format!(
+                            "Stream failed after {} instances: {}",
+                            index, e
+                        )))]
+                    }
                 }
-                Err(e) => {
-                    tracing::error!("Stream error on instance #{}: {}", instance_count, e);
-                    return Err(DimseError::operation_failed(format!(
-                        "Stream failed after {} instances: {}",
-                        instance_count, e
-                    )));
-                }
-            }
-        }
+            })
+            .flat_map(futures_util::stream::iter);
 
-        tracing::info!(
-            "Streaming pipeline completed: {} instances, {} total datasets",
-            instance_count,
-            all_datasets.len()
-        );
-
-        Ok(all_datasets)
+        Ok(Box::pin(datasets))
     }
 
     /// Convert ResponseEnvelope to Vec<DatasetStream>
@@ -257,7 +260,6 @@ impl PipelineQueryProvider {
     /// Parses the response data and converts it to DICOM datasets.
     /// Uses the envelope_unwrapper module to handle various response formats.
     async fn response_to_datasets(
-        &self,
         response: ResponseEnvelope<Vec<u8>>,
     ) -> DimseResult<Vec<DatasetStream>> {
         // Check HTTP status and map errors
@@ -287,7 +289,7 @@ impl PipelineQueryProvider {
                 tracing::debug!("response_to_datasets: unwrapped {} DICOM JSON objects", items.len());
                 let mut datasets = Vec::new();
                 for item in items {
-                    match self.dicom_json_to_dataset(&item) {
+                    match Self::dicom_json_to_dataset(&item) {
                         Ok(dataset) => datasets.push(dataset),
                         Err(e) => {
                             tracing::warn!("Failed to convert DICOM JSON to dataset: {}", e);
@@ -298,12 +300,12 @@ impl PipelineQueryProvider {
             }
             UnwrappedContent::Binary(bytes) => {
                 tracing::debug!("response_to_datasets: unwrapped binary DICOM data ({} bytes)", bytes.len());
-                let dataset = self.binary_to_dataset(&bytes)?;
+                let dataset = Self::binary_to_dataset(&bytes)?;
                 Ok(vec![dataset])
             }
             UnwrappedContent::FolderPath(folder_path) => {
                 tracing::debug!("response_to_datasets: reading DICOM files from folder: {:?}", folder_path);
-                self.folder_to_datasets(&folder_path)
+                Self::folder_to_datasets(&folder_path)
             }
             UnwrappedContent::Empty => {
                 tracing::debug!("response_to_datasets: no content to convert");
@@ -316,7 +318,7 @@ impl PipelineQueryProvider {
     ///
     /// This function expects already-cleaned DICOM JSON (8-character hex tag keys).
     /// Use envelope_unwrapper to extract clean JSON before calling this.
-    fn dicom_json_to_dataset(&self, json: &serde_json::Value) -> DimseResult<DatasetStream> {
+    fn dicom_json_to_dataset(json: &serde_json::Value) -> DimseResult<DatasetStream> {
         let dicom_obj = tool::json_value_to_identifier(json).map_err(|e| {
             tracing::error!(
                 "dicom_json_to_dataset: conversion failed: {}. Keys: {:?}",
@@ -329,7 +331,7 @@ impl PipelineQueryProvider {
     }
 
     /// Convert binary DICOM Part10 data to a DatasetStream
-    fn binary_to_dataset(&self, bytes: &[u8]) -> DimseResult<DatasetStream> {
+    fn binary_to_dataset(bytes: &[u8]) -> DimseResult<DatasetStream> {
         let file_obj = dicom_object::from_reader(bytes).map_err(|e| {
             DimseError::operation_failed(format!("Failed to parse DICOM from binary: {}", e))
         })?;
@@ -339,7 +341,7 @@ impl PipelineQueryProvider {
     /// Read all DICOM files from a folder and convert to DatasetStreams
     ///
     /// This is used for C-GET/C-MOVE results where files are stored on disk.
-    fn folder_to_datasets(&self, folder_path: &std::path::Path) -> DimseResult<Vec<DatasetStream>> {
+    fn folder_to_datasets(folder_path: &std::path::Path) -> DimseResult<Vec<DatasetStream>> {
         let mut datasets = Vec::new();
 
         let entries = std::fs::read_dir(folder_path).map_err(|e| {
@@ -387,7 +389,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
         max_results: u32,
-    ) -> DimseResult<Vec<DatasetStream>> {
+    ) -> DimseResult<BoxDatasetStream> {
         let mut meta = HashMap::new();
         meta.insert("query_level".into(), format!("{}", query_level));
         meta.insert("max_results".into(), max_results.to_string());
@@ -421,14 +423,9 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             tracing::info!("Using streaming pipeline for C-FIND");
             self.run_streaming(command, body, meta).await
         } else {
-            let response_envelope = self
-            .run(
-                command,
-                body,
-                meta,
-            )
-            .await?;
-            self.response_to_datasets(response_envelope).await
+            let response_envelope = self.run(command, body, meta).await?;
+            let datasets = Self::response_to_datasets(response_envelope).await?;
+            Ok(dataset_stream_from_vec(datasets))
         }
     }
 
@@ -436,7 +433,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         &self,
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
-    ) -> DimseResult<Vec<DatasetStream>> {
+    ) -> DimseResult<BoxDatasetStream> {
         let mut meta = HashMap::new();
         meta.insert("query_level".into(), format!("{}", query_level));
 
@@ -465,14 +462,15 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             .await?;
 
         // Convert response envelope to datasets
-        self.response_to_datasets(response_envelope).await
+        let datasets = Self::response_to_datasets(response_envelope).await?;
+        Ok(dataset_stream_from_vec(datasets))
     }
 
     async fn get(
         &self,
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
-    ) -> DimseResult<Vec<DatasetStream>> {
+    ) -> DimseResult<RetrieveStream> {
         let mut meta = HashMap::new();
         meta.insert("query_level".into(), format!("{}", query_level));
 
@@ -502,16 +500,13 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let command = Command::new(Operation::Retrieve).with_source("dimse_adapter");
         if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
             tracing::info!("Using streaming pipeline for C-GET");
-            self.run_streaming(command, body, meta).await
+            // The bridge does not know the instance count up front, so the SCP
+            // sends no Pending responses for this retrieval.
+            Ok(RetrieveStream::new(self.run_streaming(command, body, meta).await?))
         } else {
-            let response_envelope = self
-                .run(
-                    command,
-                    body,
-                    meta,
-                )
-                .await?;
-            self.response_to_datasets(response_envelope).await
+            let response_envelope = self.run(command, body, meta).await?;
+            let datasets = Self::response_to_datasets(response_envelope).await?;
+            Ok(RetrieveStream::from_vec(datasets))
         }
     }
 
@@ -714,7 +709,7 @@ impl dimse::scp::QueryProvider for MultiplexingQueryProvider {
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
         max_results: u32,
-    ) -> DimseResult<Vec<DatasetStream>> {
+    ) -> DimseResult<BoxDatasetStream> {
         self.provider_for(DimseOp::Find)
             .find(query_level, parameters, max_results)
             .await
@@ -724,7 +719,7 @@ impl dimse::scp::QueryProvider for MultiplexingQueryProvider {
         &self,
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
-    ) -> DimseResult<Vec<DatasetStream>> {
+    ) -> DimseResult<BoxDatasetStream> {
         self.provider_for(DimseOp::Move)
             .locate(query_level, parameters)
             .await
@@ -734,7 +729,7 @@ impl dimse::scp::QueryProvider for MultiplexingQueryProvider {
         &self,
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
-    ) -> DimseResult<Vec<DatasetStream>> {
+    ) -> DimseResult<RetrieveStream> {
         self.provider_for(DimseOp::Get)
             .get(query_level, parameters)
             .await
@@ -1055,9 +1050,7 @@ mod tests {
             .expect("NDJSON line should parse");
 
         // Harmony A SCP: envelope → dataset
-        let provider = PipelineQueryProvider::new("bridge", "bridge");
-        let datasets = provider
-            .response_to_datasets(envelope)
+        let datasets = PipelineQueryProvider::response_to_datasets(envelope)
             .await
             .expect("envelope should convert to a dataset");
         assert_eq!(datasets.len(), 1, "one envelope in, one dataset out");

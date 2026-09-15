@@ -4,7 +4,7 @@
 //! retrieves data from the provider, and sends C-STORE sub-operations.
 
 use dimse::scp::QueryProvider;
-use dimse::types::{DatasetStream, QueryLevel};
+use dimse::types::{dataset_stream_from_vec, BoxDatasetStream, DatasetStream, QueryLevel, RetrieveStream};
 use dimse::{DimseConfig, DimseScp, RemoteNode};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
@@ -49,23 +49,23 @@ impl QueryProvider for DataQueryProvider {
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
         _max_results: u32,
-    ) -> dimse::Result<Vec<DatasetStream>> {
-        Ok(Vec::new())
+    ) -> dimse::Result<BoxDatasetStream> {
+        Ok(dataset_stream_from_vec(Vec::new()))
     }
 
     async fn locate(
         &self,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
-    ) -> dimse::Result<Vec<DatasetStream>> {
-        Ok(Vec::new())
+    ) -> dimse::Result<BoxDatasetStream> {
+        Ok(dataset_stream_from_vec(Vec::new()))
     }
 
     async fn get(
         &self,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
-    ) -> dimse::Result<Vec<DatasetStream>> {
+    ) -> dimse::Result<RetrieveStream> {
         // Create a simple DICOM dataset in memory
         let mut obj = InMemDicomObject::new_empty();
         
@@ -92,7 +92,7 @@ impl QueryProvider for DataQueryProvider {
 
         // Use DatasetStream::Object for simplicity
         let ds = DatasetStream::from_object(obj);
-        Ok(vec![ds])
+        Ok(RetrieveStream::from_vec(vec![ds]))
     }
 
     async fn store(&self, _dataset: DatasetStream) -> dimse::Result<()> {

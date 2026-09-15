@@ -1,6 +1,7 @@
 //! Common types for DIMSE operations
 
 use bytes::Bytes;
+use futures::stream::BoxStream;
 use dicom_dictionary_std::uids;
 use dicom_object::meta::FileMetaTableBuilder;
 use dicom_object::InMemDicomObject;
@@ -34,6 +35,46 @@ pub enum DatasetStream {
         /// Associated metadata
         metadata: DatasetMetadata,
     },
+}
+
+/// A stream of datasets produced by a query provider, one item per dataset.
+pub type BoxDatasetStream = BoxStream<'static, crate::error::Result<DatasetStream>>;
+
+/// Wrap already collected datasets as a stream.
+pub fn dataset_stream_from_vec(datasets: Vec<DatasetStream>) -> BoxDatasetStream {
+    Box::pin(futures::stream::iter(datasets.into_iter().map(Ok)))
+}
+
+/// The result of a retrieve query: the datasets, and how many of them there
+/// are when the provider knows that up front.
+///
+/// A C-GET or C-MOVE SCP needs the total to report the remaining count in its
+/// Pending responses. A provider that streams from a remote source usually
+/// does not know it, and then the SCP sends no Pending responses.
+pub struct RetrieveStream {
+    /// Number of datasets the stream is expected to yield, when known.
+    pub expected_total: Option<u16>,
+    /// The datasets, in the order they should be sent.
+    pub datasets: BoxDatasetStream,
+}
+
+impl RetrieveStream {
+    /// A retrieve result whose size is not known up front.
+    pub fn new(datasets: BoxDatasetStream) -> Self {
+        Self {
+            expected_total: None,
+            datasets,
+        }
+    }
+
+    /// A retrieve result from already collected datasets. The total is known,
+    /// unless it does not fit the 16-bit count the protocol carries.
+    pub fn from_vec(datasets: Vec<DatasetStream>) -> Self {
+        Self {
+            expected_total: u16::try_from(datasets.len()).ok(),
+            datasets: dataset_stream_from_vec(datasets),
+        }
+    }
 }
 
 /// Metadata associated with a DICOM dataset
