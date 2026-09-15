@@ -138,9 +138,8 @@ pub async fn handle_c_get(
             SubOperationResult::Warning => counts.warning += 1,
             SubOperationResult::Failed => counts.failed += 1,
         }
-        counts.remaining = expected_total.map(|total| {
-            total.saturating_sub(counts.completed + counts.warning + counts.failed)
-        });
+        counts.remaining = expected_total
+            .map(|total| total.saturating_sub(counts.completed + counts.warning + counts.failed));
     }
 
     // The final response never carries a remaining count.

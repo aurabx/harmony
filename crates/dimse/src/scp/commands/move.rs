@@ -170,9 +170,8 @@ pub async fn handle_c_move(
                 );
             }
         }
-        counts.remaining = expected_total.map(|total| {
-            total.saturating_sub(counts.completed + counts.warning + counts.failed)
-        });
+        counts.remaining = expected_total
+            .map(|total| total.saturating_sub(counts.completed + counts.warning + counts.failed));
     }
 
     // The final response never carries a remaining count.

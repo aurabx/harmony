@@ -140,17 +140,20 @@ async fn perform_get(
             node.ae_title
         );
     } else {
-        debug!("C-GET: {} storage presentation contexts accepted", accepted_storage);
+        debug!(
+            "C-GET: {} storage presentation contexts accepted",
+            accepted_storage
+        );
     }
 
-    let pc_id = match native_connection::get_presentation_context_id(&association, retrieve_sop_class)
-    {
-        Ok(id) => id,
-        Err(e) => {
-            native_connection::abort_association(association).await;
-            return Err(e);
-        }
-    };
+    let pc_id =
+        match native_connection::get_presentation_context_id(&association, retrieve_sop_class) {
+            Ok(id) => id,
+            Err(e) => {
+                native_connection::abort_association(association).await;
+                return Err(e);
+            }
+        };
 
     let message_id = next_message_id();
     let identifier =
@@ -163,9 +166,13 @@ async fn perform_get(
     );
 
     debug!("Sending C-GET request (message ID: {})", message_id);
-    if let Err(e) =
-        command_builder::encode_and_send_request(&mut association, request, Some(&identifier), pc_id)
-            .await
+    if let Err(e) = command_builder::encode_and_send_request(
+        &mut association,
+        request,
+        Some(&identifier),
+        pc_id,
+    )
+    .await
     {
         native_connection::abort_association(association).await;
         return Err(e);
@@ -316,7 +323,10 @@ async fn handle_store_request(
     let sop_instance_uid = command_uid(command, tags::AFFECTED_SOP_INSTANCE_UID);
 
     let Some(dataset_bytes) = dataset else {
-        warn!("C-STORE-RQ for instance {} carried no dataset", sop_instance_uid);
+        warn!(
+            "C-STORE-RQ for instance {} carried no dataset",
+            sop_instance_uid
+        );
         send_store_response(
             association,
             store_message_id,
@@ -407,7 +417,10 @@ async fn handle_store_request(
 /// Instance UID and return the file-backed dataset that replaces it.
 async fn write_instance_file(dir: &Path, dataset: DatasetStream) -> Result<DatasetStream> {
     let metadata = dataset.metadata().clone();
-    let stem = file_stem_for(metadata.sop_instance_uid.as_deref().unwrap_or(""), &metadata.id);
+    let stem = file_stem_for(
+        metadata.sop_instance_uid.as_deref().unwrap_or(""),
+        &metadata.id,
+    );
     let path = dir.join(format!("{}.dcm", stem));
 
     let bytes = dataset.to_part10_bytes()?;
@@ -484,10 +497,7 @@ fn transfer_syntax_for(
 }
 
 /// A UID string from a command set, empty when absent.
-fn command_uid(
-    command: &InMemDicomObject<StandardDataDictionary>,
-    tag: dicom_core::Tag,
-) -> String {
+fn command_uid(command: &InMemDicomObject<StandardDataDictionary>, tag: dicom_core::Tag) -> String {
     command
         .element(tag)
         .ok()
@@ -522,7 +532,10 @@ mod tests {
     #[test]
     fn file_stem_keeps_digits_and_dots_only() {
         let id = uuid::Uuid::nil();
-        assert_eq!(file_stem_for("1.2.840.113619.2.55.3", &id), "1.2.840.113619.2.55.3");
+        assert_eq!(
+            file_stem_for("1.2.840.113619.2.55.3", &id),
+            "1.2.840.113619.2.55.3"
+        );
         assert_eq!(file_stem_for("../1.2.3", &id), "..1.2.3");
         assert_eq!(file_stem_for("1.2.3\0", &id), "1.2.3");
     }

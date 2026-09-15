@@ -99,7 +99,10 @@ impl QueryProvider for GatedProvider {
 async fn wait_for_port(port: u16, timeout_ms: u64) -> bool {
     let deadline = std::time::Instant::now() + Duration::from_millis(timeout_ms);
     while std::time::Instant::now() < deadline {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
             return true;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
