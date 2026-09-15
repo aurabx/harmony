@@ -86,6 +86,7 @@ async fn test_scp_starts_and_stops() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -143,6 +144,7 @@ async fn test_scp_accepts_c_echo() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -204,6 +206,7 @@ async fn test_scp_accepts_c_find() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -321,6 +324,7 @@ async fn test_scp_accepts_c_store() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -384,6 +388,7 @@ async fn test_scp_config_validation() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -423,6 +428,7 @@ async fn test_scp_multiple_associations() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -513,6 +519,7 @@ async fn test_scp_accepts_c_move() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -597,6 +604,7 @@ async fn test_scp_accepts_c_get() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -667,6 +675,7 @@ async fn test_scp_rejects_unknown_aet() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -729,6 +738,7 @@ async fn test_scp_handles_rapid_connections() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -804,6 +814,7 @@ async fn test_scp_handles_connection_drop() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -868,6 +879,7 @@ async fn test_scp_respects_small_pdu_from_client() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -936,6 +948,7 @@ async fn test_scp_find_with_small_client_pdu() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };

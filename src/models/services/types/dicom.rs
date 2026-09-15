@@ -933,35 +933,77 @@ impl DicomScuBackend {
                         let mut file_count = 0usize;
 
                         while let Some(item) = stream.next().await {
-                            if let Ok(dimse::types::DatasetStream::File { ref path, .. }) = item {
-                                if !is_fs_backend {
-                                    if let Some(storage) = get_storage() {
-                                        let bytes = tokio::fs::read(path)
-                                            .await
-                                            .unwrap_or_else(|_| Vec::new());
-                                        let src = Path::new(path);
-                                        let base = src
-                                            .file_stem()
-                                            .and_then(|s| s.to_str())
-                                            .unwrap_or("instance");
-                                        let mut name = base.to_string();
-                                        if !name.ends_with(".dcm") {
-                                            name.push_str(".dcm");
+                            match item {
+                                Ok(dimse::types::DatasetStream::File { ref path, .. }) => {
+                                    if !is_fs_backend {
+                                        if let Some(storage) = get_storage() {
+                                            let bytes = tokio::fs::read(path)
+                                                .await
+                                                .unwrap_or_else(|_| Vec::new());
+                                            let src = Path::new(path);
+                                            let base = src
+                                                .file_stem()
+                                                .and_then(|s| s.to_str())
+                                                .unwrap_or("instance");
+                                            let mut name = base.to_string();
+                                            if !name.ends_with(".dcm") {
+                                                name.push_str(".dcm");
+                                            }
+                                            let rel = format!("dimse/{}/{}", folder_id, name);
+                                            let _ = storage.write_file_str(&rel, &bytes).await;
+                                            let _ = tokio::fs::remove_file(path).await;
                                         }
-                                        let rel = format!("dimse/{}/{}", folder_id, name);
-                                        let _ = storage.write_file_str(&rel, &bytes).await;
-                                        let _ = tokio::fs::remove_file(path).await;
+                                    }
+                                    file_count += 1;
+
+                                    // Also capture identifier metadata
+                                    if let Ok(obj) = dicom_object::open_file(path) {
+                                        if let Ok(json) =
+                                            dicom_json_tool::identifier_to_json_value(&obj)
+                                        {
+                                            instances.push(json);
+                                        }
                                     }
                                 }
-                                file_count += 1;
-
-                                // Also capture identifier metadata
-                                if let Ok(obj) = dicom_object::open_file(path) {
-                                    if let Ok(json) =
-                                        dicom_json_tool::identifier_to_json_value(&obj)
-                                    {
-                                        instances.push(json);
+                                Ok(ref dataset @ dimse::types::DatasetStream::Object { ref object, ref metadata }) => {
+                                    // Without an output directory the native C-GET SCU hands
+                                    // instances over in memory. Persist them under the same
+                                    // storage folder the file-backed path uses.
+                                    match dataset.to_part10_bytes() {
+                                        Ok(bytes) => {
+                                            if !is_fs_backend {
+                                                if let Some(storage) = get_storage() {
+                                                    let stem: String = metadata
+                                                        .sop_instance_uid
+                                                        .as_deref()
+                                                        .unwrap_or("")
+                                                        .chars()
+                                                        .filter(|c| c.is_ascii_digit() || *c == '.')
+                                                        .collect();
+                                                    let stem = if stem.chars().any(|c| c.is_ascii_digit()) {
+                                                        stem
+                                                    } else {
+                                                        metadata.id.to_string()
+                                                    };
+                                                    let rel = format!("dimse/{}/{}.dcm", folder_id, stem);
+                                                    let _ = storage.write_file_str(&rel, &bytes).await;
+                                                }
+                                            }
+                                            file_count += 1;
+                                            if let Ok(json) =
+                                                dicom_json_tool::identifier_to_json_value(object)
+                                            {
+                                                instances.push(json);
+                                            }
+                                        }
+                                        Err(e) => {
+                                            tracing::warn!("Skipping C-GET instance that cannot be encoded: {}", e);
+                                        }
                                     }
+                                }
+                                Ok(_) => {}
+                                Err(e) => {
+                                    tracing::warn!("C-GET stream error: {}", e);
                                 }
                             }
                         }
