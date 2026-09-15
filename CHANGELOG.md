@@ -1,5 +1,19 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+- (AURA-2391) Native C-GET SCU on dicom-ul 0.10 with SCP/SCU role negotiation. Instances stream out as they are received; without an output directory nothing touches disk.
+- (AURA-2391) `transfer_syntaxes` option on `dicom_scu_streaming` to choose the transfer syntaxes proposed for C-GET storage contexts.
+
+### Changed
+- (AURA-2391) `dimse::scp::QueryProvider` returns streams. The SCP sends C-GET, C-MOVE and C-FIND results to the client as the pipeline produces them instead of collecting the whole result first.
+- (AURA-2391) dicom-rs crates upgraded from 0.9 to 0.10.
+- DCMTK is now needed only for C-MOVE on the SCU side.
+
+### Fixed
+- (AURA-2391) Final C-GET and C-MOVE responses no longer carry the Number of Remaining Sub-operations attribute, which PS3.4 forbids outside Pending responses.
+
 ## [0.12.3] - 2026-01-30
 
 ### Fixed

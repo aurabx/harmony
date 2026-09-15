@@ -28,7 +28,7 @@ Welcome to Harmony Proxy's documentation. Harmony is a general-purpose data mesh
 - **[content-types.md](content-types.md)** - Multi-content-type support (JSON, XML, CSV, form data, multipart, binary)
 
 ## Healthcare Protocols
-- **[dimse-integration.md](dimse-integration.md)** - DICOM DIMSE SCU/SCP operations (requires DCMTK)
+- **[dimse-integration.md](dimse-integration.md)** - DICOM DIMSE SCU/SCP operations (DCMTK needed for C-MOVE only)
 - **[dimse-extraction.md](dimse-extraction.md)** - Plan and process for extracting the `dimse` crate into a standalone `harmony-dimse` repository
 - **[fhir_imagingstudy.md](fhir_imagingstudy.md)** - FHIR ImagingStudy resource integration
 

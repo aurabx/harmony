@@ -11,7 +11,7 @@ Harmony uses a **protocol adapter architecture** where each protocol (HTTP, HTTP
 Prerequisites
 - Rust (stable; repository currently targets recent stable toolchains)
 - macOS or Linux
-- DCMTK (required for DICOM SCU operations: C-GET and C-MOVE; optional for persistent C-STORE SCP)
+- DCMTK (required for DICOM C-MOVE on the SCU side and for the integration tests; C-ECHO, C-FIND, C-STORE and C-GET are native)
   - macOS (Homebrew): `brew install dcmtk`
   - Debian/Ubuntu: `sudo apt-get install dcmtk`
 - Optional: WireGuard kernel module if you plan to use WireGuard features

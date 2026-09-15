@@ -263,7 +263,7 @@ persistent_store_scp = true
 use_tls = false
 ``` path=null start=null
 
-**Prerequisites**: Requires DCMTK installed (see [dimse-integration.md](dimse-integration.md))
+**Prerequisites**: DCMTK is needed for C-MOVE only (see [dimse-integration.md](dimse-integration.md))
 
 **Supported Operations**:
 - `C-ECHO`: Test connectivity

@@ -65,8 +65,22 @@ use_tls = false                   # Enable TLS (default: false)
 ```
 
 **Operations:**
-- **C-GET**: Recommended for streaming. Each instance yielded as received.
+- **C-GET**: Recommended for streaming. The backend runs the C-GET itself on
+  dicom-ul, so each instance is yielded the moment its C-STORE sub-operation
+  has been received, before the retrieval is complete. Nothing is written to
+  disk. At most 8 instances wait in memory ahead of the consumer; beyond that
+  the backend stops answering the PACS until the consumer catches up.
 - **C-FIND**: Queries only (metadata). Instances yielded as query results.
+
+**Transfer syntaxes:** the `transfer_syntaxes` option lists the transfer
+syntaxes proposed for the storage presentation contexts of the C-GET, most
+preferred first. Instances arrive in one of them. The default is Explicit VR
+Little Endian and Implicit VR Little Endian.
+
+```toml
+[backends.pacs_streaming.options]
+transfer_syntaxes = ["1.2.840.10008.1.2.1", "1.2.840.10008.1.2"]
+```
 
 **Envelope Structure:**
 - `original_data`: Raw DICOM bytes
@@ -165,7 +179,16 @@ X-Stream-Sequence: 1
 
 #### dicom_scp (Endpoint)
 
-Receives DIMSE requests. Does NOT support streaming directly - use with `dicom_scu_streaming` backend.
+Receives DIMSE requests. C-GET, C-MOVE and C-FIND results are sent to the
+client as the pipeline produces them: each C-STORE sub-operation goes out as
+soon as its dataset arrives from the backend, so a large study never sits in
+memory on the proxy.
+
+C-GET and C-MOVE Pending responses carry the number of remaining
+sub-operations, which the proxy does not know when the datasets come from a
+streaming backend. Pending responses are therefore sent only when the total
+is known up front, which the standard allows. The final response reports the
+completed, warning and failed counts and never carries a remaining count.
 
 ```toml
 [endpoints.dicom_listener]
@@ -469,10 +492,13 @@ max_concurrent_instances = 5  # Default: 10
 instance_buffer_size = 1      # Default: 1 (no buffering)
 ```
 
-**Backpressure Handling** (TODO):
-- Automatic when client consumes slowly
-- Upstream backend pauses when buffer full
-- No instance loss, guaranteed delivery
+**Backpressure Handling**:
+- `dicom_scu_streaming` C-GET: automatic. The backend answers each C-STORE
+  sub-operation only after the instance has been accepted downstream, and holds
+  at most 8 instances ahead of the consumer. A slow client therefore slows the
+  PACS instead of growing memory on the proxy.
+- `http_streaming_backend`: the HTTP response body is read as the consumer
+  pulls, so a slow client applies TCP backpressure to the upstream proxy.
 
 ## Error Handling
 
@@ -602,7 +628,7 @@ ERROR Transform middleware rejected instance (missing required field)
 **Causes**:
 1. Using non-streaming backend (`dicom_scu` instead of `dicom_scu_streaming`)
 2. Middleware buffering instances (custom middleware issue)
-3. Client not consuming stream (backpressure TODO not implemented)
+3. A backend or endpoint that collects results before returning them
 
 **Verify Streaming Backend**:
 ```bash
