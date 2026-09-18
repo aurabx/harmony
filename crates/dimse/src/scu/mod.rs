@@ -3,6 +3,7 @@
 pub mod commands;
 pub mod connection;
 pub mod native_connection;
+pub mod storage_sop_classes;
 pub mod command_builder;
 
 use tokio_stream::wrappers::ReceiverStream;

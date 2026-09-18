@@ -3,7 +3,7 @@
 //! These tests verify the SCP can handle real DICOM associations and commands.
 
 use dimse::scp::QueryProvider;
-use dimse::types::{DatasetStream, QueryLevel};
+use dimse::types::{dataset_stream_from_vec, BoxDatasetStream, DatasetStream, QueryLevel, RetrieveStream};
 use dimse::{DimseConfig, DimseScp};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
@@ -36,25 +36,25 @@ impl QueryProvider for MockQueryProvider {
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
         _max_results: u32,
-    ) -> dimse::Result<Vec<DatasetStream>> {
+    ) -> dimse::Result<BoxDatasetStream> {
         // Return empty results for now
-        Ok(Vec::new())
+        Ok(dataset_stream_from_vec(Vec::new()))
     }
 
     async fn locate(
         &self,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
-    ) -> dimse::Result<Vec<DatasetStream>> {
-        Ok(Vec::new())
+    ) -> dimse::Result<BoxDatasetStream> {
+        Ok(dataset_stream_from_vec(Vec::new()))
     }
 
     async fn get(
         &self,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
-    ) -> dimse::Result<Vec<DatasetStream>> {
-        Ok(Vec::new())
+    ) -> dimse::Result<RetrieveStream> {
+        Ok(RetrieveStream::from_vec(Vec::new()))
     }
 
     async fn store(&self, _dataset: DatasetStream) -> dimse::Result<()> {
@@ -86,6 +86,7 @@ async fn test_scp_starts_and_stops() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -143,6 +144,7 @@ async fn test_scp_accepts_c_echo() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -204,6 +206,7 @@ async fn test_scp_accepts_c_find() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -321,6 +324,7 @@ async fn test_scp_accepts_c_store() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -384,6 +388,7 @@ async fn test_scp_config_validation() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -423,6 +428,7 @@ async fn test_scp_multiple_associations() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -513,6 +519,7 @@ async fn test_scp_accepts_c_move() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -597,6 +604,7 @@ async fn test_scp_accepts_c_get() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -667,6 +675,7 @@ async fn test_scp_rejects_unknown_aet() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -729,6 +738,7 @@ async fn test_scp_handles_rapid_connections() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -804,6 +814,7 @@ async fn test_scp_handles_connection_drop() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -868,6 +879,7 @@ async fn test_scp_respects_small_pdu_from_client() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };
@@ -936,6 +948,7 @@ async fn test_scp_find_with_small_client_pdu() {
         association_timeout_ms: 30000,
         tls: None,
         preferred_transfer_syntaxes: vec![],
+        storage_transfer_syntaxes: vec![],
         external_store_scp: false,
         aet_table: HashMap::new(),
     };

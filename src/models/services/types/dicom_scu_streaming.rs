@@ -200,6 +200,39 @@ impl DicomScuStreamingBackend {
         query
     }
 
+    /// The `transfer_syntaxes` option: the transfer syntaxes proposed on the
+    /// storage presentation contexts of a C-GET, most preferred first. Retrieved
+    /// instances arrive in one of them. Defaults to the uncompressed syntaxes.
+    fn storage_transfer_syntaxes(
+        options: &HashMap<String, Value>,
+    ) -> Result<Vec<String>, ConfigError> {
+        let invalid = |reason: String| ConfigError::InvalidEndpoint {
+            name: "dicom_scu_streaming".to_string(),
+            reason,
+        };
+
+        let Some(value) = options.get("transfer_syntaxes") else {
+            return Ok(DimseConfig::default().storage_transfer_syntaxes);
+        };
+        let items = value.as_array().ok_or_else(|| {
+            invalid("'transfer_syntaxes' must be an array of transfer syntax UIDs".to_string())
+        })?;
+
+        let mut list = Vec::with_capacity(items.len());
+        for item in items {
+            let uid = item.as_str().ok_or_else(|| {
+                invalid(format!(
+                    "'transfer_syntaxes' entries must be strings, found {}",
+                    item
+                ))
+            })?;
+            list.push(uid.trim().to_string());
+        }
+        dimse::config::validate_storage_transfer_syntaxes(&list)
+            .map_err(|e| invalid(format!("'transfer_syntaxes': {}", e)))?;
+        Ok(list)
+    }
+
     /// Parse query level from string (e.g. from HTTP header)
     fn parse_query_level(level_str: &str) -> Option<QueryLevel> {
         match level_str.to_uppercase().as_str() {
@@ -217,6 +250,7 @@ impl ServiceType for DicomScuStreamingBackend {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
         // Validate remote connection parameters
         self.create_remote_node(options)?;
+        Self::storage_transfer_syntaxes(options)?;
         Ok(())
     }
 
@@ -332,8 +366,11 @@ impl StreamingBackend for DicomScuStreamingBackend {
             .get_local_aet(options)
             .unwrap_or_else(|| "HARMONY_STREAM".to_string());
 
+        let storage_transfer_syntaxes = Self::storage_transfer_syntaxes(options)
+            .map_err(|e| Error::from(format!("Invalid transfer_syntaxes option: {:?}", e)))?;
         let dimse_config = DimseConfig {
             local_aet: local_aet.clone(),
+            storage_transfer_syntaxes,
             ..Default::default()
         };
 
@@ -429,6 +466,48 @@ impl StreamingBackend for DicomScuStreamingBackend {
 }
 
 impl DicomScuStreamingBackend {
+    /// One retrieved instance as a response envelope: the Part 10 bytes as the
+    /// body with an `application/dicom` content type, its DICOM JSON as the
+    /// normalized data for middleware, and the SOP UIDs as headers and metadata.
+    fn instance_envelope(
+        bytes: Vec<u8>,
+        object: &dicom_object::InMemDicomObject,
+        metadata: &dimse::types::DatasetMetadata,
+        sequence: u64,
+        request_details: &crate::models::envelope::envelope::RequestDetails,
+        command: &Option<Command>,
+    ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
+        let json = dicom_json_tool::identifier_to_json_value(object)
+            .map_err(|e| Error::from(format!("Failed to convert DICOM to JSON: {}", e)))?;
+
+        let mut headers = HashMap::new();
+        headers.insert("content-type".to_string(), "application/dicom".to_string());
+        if let Some(ref sop_instance_uid) = metadata.sop_instance_uid {
+            headers.insert("x-dicom-sop-instance-uid".to_string(), sop_instance_uid.clone());
+        }
+        if let Some(ref sop_class_uid) = metadata.sop_class_uid {
+            headers.insert("x-dicom-sop-class-uid".to_string(), sop_class_uid.clone());
+        }
+
+        let mut envelope_metadata = HashMap::new();
+        envelope_metadata.insert("stream_sequence".to_string(), sequence.to_string());
+        envelope_metadata.insert("instance_metadata".to_string(), "true".to_string());
+        if let Some(ref sop_instance_uid) = metadata.sop_instance_uid {
+            envelope_metadata.insert("sop_instance_uid".to_string(), sop_instance_uid.clone());
+        }
+
+        let mut response = ResponseEnvelope::from_backend_with_command(
+            request_details.clone(),
+            200,
+            headers,
+            bytes,
+            Some(envelope_metadata),
+            command.clone(),
+        );
+        response.normalized_data = Some(json);
+        Ok(response)
+    }
+
     /// Convert a DIMSE DatasetStream to a stream of ResponseEnvelopes
     pub(crate) fn convert_dimse_stream_to_envelopes(
         dimse_stream: Pin<Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>>,
@@ -445,52 +524,12 @@ impl DicomScuStreamingBackend {
                 Ok(DatasetStream::File { ref path, ref metadata, .. }) => {
                     debug!("Processing DICOM file: {:?}", path);
 
-                    // Read DICOM file
                     let bytes = std::fs::read(path)
                         .map_err(|e| Error::from(format!("Failed to read DICOM file: {}", e)))?;
-
-                    // Parse DICOM object for metadata
-                    let obj = dicom_object::open_file(path)
+                    let object = dicom_object::open_file(path)
                         .map_err(|e| Error::from(format!("Failed to parse DICOM file: {}", e)))?;
 
-                    // Convert to JSON for middleware processing
-                    let json = dicom_json_tool::identifier_to_json_value(&obj)
-                        .map_err(|e| Error::from(format!("Failed to convert DICOM to JSON: {}", e)))?;
-
-                    // Create headers with DICOM metadata
-                    let mut headers = HashMap::new();
-                    headers.insert("content-type".to_string(), "application/dicom".to_string());
-
-                    if let Some(ref sop_instance_uid) = metadata.sop_instance_uid {
-                        headers.insert("x-dicom-sop-instance-uid".to_string(), sop_instance_uid.clone());
-                    }
-                    if let Some(ref sop_class_uid) = metadata.sop_class_uid {
-                        headers.insert("x-dicom-sop-class-uid".to_string(), sop_class_uid.clone());
-                    }
-
-                    // Create envelope metadata
-                    let mut envelope_metadata = HashMap::new();
-                    envelope_metadata.insert("stream_sequence".to_string(), sequence.to_string());
-                    envelope_metadata.insert("instance_metadata".to_string(), "true".to_string());
-
-                    if let Some(ref sop_instance_uid) = metadata.sop_instance_uid {
-                        envelope_metadata.insert("sop_instance_uid".to_string(), sop_instance_uid.clone());
-                    }
-
-                    // Create ResponseEnvelope for this instance
-                    let mut response = ResponseEnvelope::from_backend_with_command(
-                        request_details.clone(),
-                        200,
-                        headers,
-                        bytes,
-                        Some(envelope_metadata),
-                        command.clone(),
-                    );
-
-                    // Set normalized_data for middleware
-                    response.normalized_data = Some(json);
-
-                    Ok(response)
+                    Self::instance_envelope(bytes, &object, metadata, sequence, &request_details, &command)
                 }
                 Ok(DatasetStream::Memory { ref data, ref metadata }) => {
                     debug!("Processing in-memory DICOM dataset");
@@ -525,27 +564,21 @@ impl DicomScuStreamingBackend {
 
                     Ok(response)
                 }
-                Ok(DatasetStream::Object { ref object, .. }) => {
-                    debug!("Processing DICOM object directly");
-
-                    let json = dicom_json_tool::identifier_to_json_value(object)
-                        .map_err(|e| Error::from(format!("Failed to convert DICOM to JSON: {}", e)))?;
-
-                    let mut headers = HashMap::new();
-                    headers.insert("content-type".to_string(), "application/json".to_string());
-
-                    let mut response = ResponseEnvelope::from_backend_with_command(
-                        request_details.clone(),
-                        200,
-                        headers,
-                        serde_json::to_vec(&json).unwrap_or_default(),
-                        None,
-                        command.clone(),
+                Ok(ref dataset @ DatasetStream::Object { ref object, ref metadata }) => {
+                    // The native C-GET SCU hands instances over in memory. They go out
+                    // in the same shape as file-backed ones so the wire format does not
+                    // depend on which SCU produced them.
+                    debug!(
+                        "Processing in-memory DICOM instance {}",
+                        metadata.sop_instance_uid.as_deref().unwrap_or("<unknown>")
                     );
 
-                    response.normalized_data = Some(json);
+                    let bytes = dataset
+                        .to_part10_bytes()
+                        .map_err(|e| Error::from(format!("Failed to encode DICOM instance: {}", e)))?
+                        .to_vec();
 
-                    Ok(response)
+                    Self::instance_envelope(bytes, object, metadata, sequence, &request_details, &command)
                 }
                 Err(e) => {
                     warn!("DIMSE stream error: {}", e);

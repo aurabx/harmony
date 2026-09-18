@@ -4,20 +4,21 @@ use dicom_encoding::text::SpecificCharacterSet;
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
-use dicom_ul::ServerAssociation;
+use dicom_ul::association::server::AsyncServerAssociation;
+use futures::StreamExt;
 use tokio::net::TcpStream;
 use tracing::{debug, error, info};
 
 use crate::{DimseError, Result};
 
-use crate::scp::DimseScp;
-use crate::scp::response_builder;
 use super::extract_query_parameters;
+use crate::scp::response_builder;
+use crate::scp::DimseScp;
 
 /// Handle C-FIND request
 pub async fn handle_c_find(
     scp: &DimseScp,
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     message_id: u16,
     identifier_data: Vec<u8>,
     presentation_context_id: u8,
@@ -76,36 +77,9 @@ pub async fn handle_c_find(
         query_level, parameters
     );
 
-    // Query the provider
-    match scp.query_provider.find(query_level, &parameters, 0).await {
-        Ok(datasets) => {
-            debug!("Found {} matching datasets", datasets.len());
-
-            // Send each dataset as a pending response (status 0xFF00)
-            for dataset in &datasets {
-                response_builder::send_find_response(
-                    association,
-                    message_id,
-                    0xFF00, // Pending
-                    Some(dataset),
-                    presentation_context_id,
-                )
-                .await?;
-            }
-
-            // Send final success response (status 0x0000)
-            response_builder::send_find_response(
-                association,
-                message_id,
-                0x0000, // Success
-                None,
-                presentation_context_id,
-            )
-            .await?;
-
-            info!("C-FIND completed with {} results", datasets.len());
-            Ok(())
-        }
+    // Query the provider. Matches are sent as they arrive.
+    let mut datasets = match scp.query_provider.find(query_level, &parameters, 0).await {
+        Ok(datasets) => datasets,
         Err(e) => {
             error!("C-FIND query failed: {}", e);
             // Send failure response (status 0xC000)
@@ -117,7 +91,48 @@ pub async fn handle_c_find(
                 presentation_context_id,
             )
             .await?;
-            Ok(())
+            return Ok(());
+        }
+    };
+
+    let mut sent = 0usize;
+    let mut failed = 0usize;
+    while let Some(item) = datasets.next().await {
+        match item {
+            Ok(dataset) => {
+                // Send each dataset as a pending response (status 0xFF00)
+                response_builder::send_find_response(
+                    association,
+                    message_id,
+                    0xFF00, // Pending
+                    Some(&dataset),
+                    presentation_context_id,
+                )
+                .await?;
+                sent += 1;
+            }
+            Err(e) => {
+                error!("C-FIND result could not be produced: {}", e);
+                failed += 1;
+            }
         }
     }
+
+    // A result that could not be produced makes the whole query a failure,
+    // otherwise the client would take a partial answer for a complete one.
+    let status = if failed > 0 { 0xC000 } else { 0x0000 };
+    response_builder::send_find_response(
+        association,
+        message_id,
+        status,
+        None,
+        presentation_context_id,
+    )
+    .await?;
+
+    info!(
+        "C-FIND completed with status 0x{:04X} ({} results, {} failed)",
+        status, sent, failed
+    );
+    Ok(())
 }

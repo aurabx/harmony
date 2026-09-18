@@ -4,21 +4,26 @@ use dicom_encoding::text::SpecificCharacterSet;
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
-use dicom_ul::ServerAssociation;
+use dicom_ul::association::server::AsyncServerAssociation;
+use futures::StreamExt;
 use tokio::net::TcpStream;
 use tracing::{debug, error, info};
 
 use crate::{DimseError, Result};
 
-use crate::scp::DimseScp;
 use crate::scp::response_builder::{self, SubOperationCounts};
+use crate::scp::DimseScp;
 
 use super::extract_query_parameters;
+
+/// Send a Pending response after this many sub-operations. Pending responses
+/// carry the remaining count, so they are only sent when the total is known.
+const PENDING_RESPONSE_INTERVAL: u16 = 10;
 
 /// Handle C-MOVE request
 pub async fn handle_c_move(
     scp: &DimseScp,
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     message_id: u16,
     identifier_data: Vec<u8>,
     presentation_context_id: u8,
@@ -74,9 +79,7 @@ pub async fn handle_c_move(
     .map_err(|e| DimseError::parse(format!("Failed to parse identifier dataset: {}", e)))?;
 
     // Resolve Destination AET
-    let dest_node = scp.config.aet_table.get(&move_destination);
-
-    if dest_node.is_none() {
+    let Some(dest_node) = scp.config.aet_table.get(&move_destination) else {
         error!("Unknown C-MOVE destination AET: {}", move_destination);
         response_builder::send_move_response(
             association,
@@ -87,8 +90,7 @@ pub async fn handle_c_move(
         )
         .await?;
         return Ok(());
-    }
-    let dest_node = dest_node.unwrap();
+    };
 
     // Extract parameters
     let (query_level, parameters) = extract_query_parameters(&identifier);
@@ -98,9 +100,10 @@ pub async fn handle_c_move(
         move_destination, query_level, parameters
     );
 
-    // Retrieve datasets
-    let datasets = match scp.query_provider.get(query_level, &parameters).await {
-        Ok(ds) => ds,
+    // Start the retrieval. Each dataset is stored to the destination as soon
+    // as it arrives.
+    let retrieve = match scp.query_provider.get(query_level, &parameters).await {
+        Ok(retrieve) => retrieve,
         Err(e) => {
             error!("C-MOVE query failed: {}", e);
             response_builder::send_move_response(
@@ -115,23 +118,27 @@ pub async fn handle_c_move(
         }
     };
 
-    let total = datasets.len();
-    debug!("C-MOVE found {} datasets to move", total);
+    let expected_total = retrieve.expected_total;
+    let mut datasets = retrieve.datasets;
+    debug!(
+        "C-MOVE streaming sub-operations (expected total: {:?})",
+        expected_total
+    );
 
     let mut counts = SubOperationCounts {
-        remaining: total as u16,
-        completed: 0,
-        failed: 0,
-        warning: 0,
+        remaining: expected_total,
+        ..SubOperationCounts::default()
     };
+    let mut sub_operation: u16 = 0;
 
     // Initialize SCU
     let scu = crate::DimseScu::new(scp.config.clone());
 
-    // Iterate and move datasets
-    for (i, dataset) in datasets.into_iter().enumerate() {
-        // Send pending response every 10 items
-        if i > 0 && i % 10 == 0 {
+    while let Some(item) = datasets.next().await {
+        if expected_total.is_some()
+            && sub_operation > 0
+            && sub_operation % PENDING_RESPONSE_INTERVAL == 0
+        {
             response_builder::send_move_response(
                 association,
                 message_id,
@@ -141,32 +148,44 @@ pub async fn handle_c_move(
             )
             .await?;
         }
+        sub_operation = sub_operation.wrapping_add(1);
 
-        // Perform C-STORE to destination using SCU
-        match scu.store(dest_node, dataset).await {
-            Ok(success) => {
-                if success {
-                    counts.completed += 1;
-                } else {
+        match item {
+            Ok(dataset) => match scu.store(dest_node, dataset).await {
+                Ok(true) => counts.completed += 1,
+                Ok(false) => {
                     counts.failed += 1;
                     error!("C-STORE to {} failed", move_destination);
                 }
-            }
+                Err(e) => {
+                    counts.failed += 1;
+                    error!("C-STORE to {} failed: {}", move_destination, e);
+                }
+            },
             Err(e) => {
-                error!("C-STORE to {} failed: {}", move_destination, e);
                 counts.failed += 1;
+                error!(
+                    "C-MOVE sub-operation {} has no dataset: {}",
+                    sub_operation, e
+                );
             }
         }
-
-        counts.remaining -= 1;
+        counts.remaining = expected_total
+            .map(|total| total.saturating_sub(counts.completed + counts.warning + counts.failed));
     }
 
-    // Send final response
+    // The final response never carries a remaining count.
+    counts.remaining = None;
     let status = if counts.failed > 0 {
         0xB000 // Warning (one or more failures)
     } else {
         0x0000 // Success
     };
+
+    info!(
+        "C-MOVE completed with status 0x{:04X} ({} completed, {} failed)",
+        status, counts.completed, counts.failed
+    );
 
     response_builder::send_move_response(
         association,
@@ -177,6 +196,5 @@ pub async fn handle_c_move(
     )
     .await?;
 
-    info!("C-MOVE completed with status 0x{:04X}", status);
     Ok(())
 }

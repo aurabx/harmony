@@ -1,7 +1,8 @@
 //! Response building and encoding helpers for DIMSE operations
 
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
-use dicom_ul::{Pdu, ServerAssociation};
+use dicom_ul::association::server::AsyncServerAssociation;
+use dicom_ul::Pdu;
 use tokio::net::TcpStream;
 
 use crate::common::{
@@ -32,7 +33,7 @@ pub fn build_command_response(
 /// This function properly fragments large datasets according to the negotiated
 /// maximum PDU size from the requestor (client).
 pub async fn encode_and_send_response(
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     response: InMemDicomObject<StandardDataDictionary>,
     dataset: Option<&DatasetStream>,
     presentation_context_id: u8,
@@ -116,7 +117,7 @@ pub async fn encode_and_send_response(
 
 /// Build and send a C-ECHO response
 pub async fn send_echo_response(
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     message_id: u16,
     presentation_context_id: u8,
 ) -> Result<()> {
@@ -136,7 +137,7 @@ pub async fn send_echo_response(
 
 /// Build and send a C-FIND response
 pub async fn send_find_response(
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     message_id: u16,
     status_code: u16,
     dataset: Option<&DatasetStream>,
@@ -167,7 +168,7 @@ pub async fn send_find_response(
 
 /// Build and send a C-MOVE response
 pub async fn send_move_response(
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     message_id: u16,
     status_code: u16,
     counts: SubOperationCounts,
@@ -189,7 +190,7 @@ pub async fn send_move_response(
 
 /// Build and send a C-GET response
 pub async fn send_get_response(
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     message_id: u16,
     status_code: u16,
     counts: SubOperationCounts,
@@ -211,7 +212,7 @@ pub async fn send_get_response(
 
 /// Send a C-STORE-RQ as a sub-operation (for C-GET responses)
 pub async fn send_store_suboperation(
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     message_id: u16,
     dataset: &DatasetStream,
     sop_class_uid: &str,
@@ -292,7 +293,7 @@ pub async fn send_store_suboperation(
 }
 
 /// Receive a C-STORE-RSP (after sending sub-operation)
-pub async fn receive_store_response(association: &mut ServerAssociation<TcpStream>) -> Result<u16> {
+pub async fn receive_store_response(association: &mut AsyncServerAssociation<TcpStream>) -> Result<u16> {
     loop {
         match association.receive().await {
             Ok(Pdu::PData { data }) => {
@@ -360,7 +361,7 @@ pub async fn receive_store_response(association: &mut ServerAssociation<TcpStrea
 
 /// Build and send a C-STORE response
 pub async fn send_store_response(
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     message_id: u16,
     status_code: u16,
     presentation_context_id: u8,
@@ -449,7 +450,7 @@ mod tests {
     #[test]
     fn test_build_move_response_with_sub_operations() {
         let counts = SubOperationCounts {
-            remaining: 10,
+            remaining: Some(10),
             completed: 5,
             failed: 2,
             warning: 1,
@@ -497,7 +498,7 @@ mod tests {
     #[test]
     fn test_build_get_response_with_sub_operations() {
         let counts = SubOperationCounts {
-            remaining: 0,
+            remaining: None,
             completed: 3,
             failed: 0,
             warning: 0,
@@ -531,6 +532,9 @@ mod tests {
             .uint16()
             .unwrap();
         assert_eq!(completed, 3);
+
+        // A final response carries no remaining count
+        assert!(response.element(tags::NUMBER_OF_REMAINING_SUBOPERATIONS).is_err());
     }
 
     #[test]
@@ -562,7 +566,7 @@ mod tests {
     #[test]
     fn test_sub_operation_counts_default() {
         let counts = SubOperationCounts::default();
-        assert_eq!(counts.remaining, 0);
+        assert_eq!(counts.remaining, None);
         assert_eq!(counts.completed, 0);
         assert_eq!(counts.failed, 0);
         assert_eq!(counts.warning, 0);

@@ -6,7 +6,7 @@ pub mod get;
 pub mod r#move;
 pub mod store;
 
-use dicom_ul::ServerAssociation;
+use dicom_ul::association::server::AsyncServerAssociation;
 use tokio::net::TcpStream;
 
 use crate::DimseError;
@@ -66,7 +66,7 @@ pub fn extract_query_parameters(
 /// Dispatch a DIMSE command to the appropriate handler
 pub async fn dispatch_command(
     scp: &DimseScp,
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     command_field: u16,
     message_id: u16,
     identifier_data: Vec<u8>,

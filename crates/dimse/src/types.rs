@@ -1,6 +1,9 @@
 //! Common types for DIMSE operations
 
 use bytes::Bytes;
+use futures::stream::BoxStream;
+use dicom_dictionary_std::uids;
+use dicom_object::meta::FileMetaTableBuilder;
 use dicom_object::InMemDicomObject;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -32,6 +35,46 @@ pub enum DatasetStream {
         /// Associated metadata
         metadata: DatasetMetadata,
     },
+}
+
+/// A stream of datasets produced by a query provider, one item per dataset.
+pub type BoxDatasetStream = BoxStream<'static, crate::error::Result<DatasetStream>>;
+
+/// Wrap already collected datasets as a stream.
+pub fn dataset_stream_from_vec(datasets: Vec<DatasetStream>) -> BoxDatasetStream {
+    Box::pin(futures::stream::iter(datasets.into_iter().map(Ok)))
+}
+
+/// The result of a retrieve query: the datasets, and how many of them there
+/// are when the provider knows that up front.
+///
+/// A C-GET or C-MOVE SCP needs the total to report the remaining count in its
+/// Pending responses. A provider that streams from a remote source usually
+/// does not know it, and then the SCP sends no Pending responses.
+pub struct RetrieveStream {
+    /// Number of datasets the stream is expected to yield, when known.
+    pub expected_total: Option<u16>,
+    /// The datasets, in the order they should be sent.
+    pub datasets: BoxDatasetStream,
+}
+
+impl RetrieveStream {
+    /// A retrieve result whose size is not known up front.
+    pub fn new(datasets: BoxDatasetStream) -> Self {
+        Self {
+            expected_total: None,
+            datasets,
+        }
+    }
+
+    /// A retrieve result from already collected datasets. The total is known,
+    /// unless it does not fit the 16-bit count the protocol carries.
+    pub fn from_vec(datasets: Vec<DatasetStream>) -> Self {
+        Self {
+            expected_total: u16::try_from(datasets.len()).ok(),
+            datasets: dataset_stream_from_vec(datasets),
+        }
+    }
 }
 
 /// Metadata associated with a DICOM dataset
@@ -176,39 +219,7 @@ impl DatasetStream {
 
     /// Create a new dataset from a parsed DICOM object
     pub fn from_object(object: InMemDicomObject) -> Self {
-        let mut metadata = DatasetMetadata::new();
-
-        // Extract metadata from DICOM object
-        if let Ok(sop_class) = object.element_by_name("SOPClassUID") {
-            if let Ok(value) = sop_class.to_str() {
-                metadata.sop_class_uid = Some(value.to_string());
-            }
-        }
-
-        if let Ok(sop_instance) = object.element_by_name("SOPInstanceUID") {
-            if let Ok(value) = sop_instance.to_str() {
-                metadata.sop_instance_uid = Some(value.to_string());
-            }
-        }
-
-        if let Ok(study_instance) = object.element_by_name("StudyInstanceUID") {
-            if let Ok(value) = study_instance.to_str() {
-                metadata.study_instance_uid = Some(value.to_string());
-            }
-        }
-
-        if let Ok(series_instance) = object.element_by_name("SeriesInstanceUID") {
-            if let Ok(value) = series_instance.to_str() {
-                metadata.series_instance_uid = Some(value.to_string());
-            }
-        }
-
-        if let Ok(patient_id) = object.element_by_name("PatientID") {
-            if let Ok(value) = patient_id.to_str() {
-                metadata.patient_id = Some(value.to_string());
-            }
-        }
-
+        let metadata = DatasetMetadata::from_object(&object);
         Self::Object { object, metadata }
     }
 
@@ -255,6 +266,43 @@ impl DatasetStream {
                         format!("Failed to serialize DICOM object: {}", e)
                     ))?;
                 
+                Ok(Bytes::from(buffer))
+            }
+        }
+    }
+
+    /// Encode the dataset as a DICOM Part 10 file: preamble, magic code, file
+    /// meta group and data set.
+    ///
+    /// `File` and `Memory` datasets already hold a file image and are returned
+    /// as they are. `Object` datasets are written with the transfer syntax
+    /// recorded in their metadata, or Explicit VR Little Endian when none is
+    /// recorded.
+    pub fn to_part10_bytes(&self) -> crate::error::Result<Bytes> {
+        match self {
+            Self::Memory { data, .. } => Ok(data.clone()),
+            Self::File { path, .. } => Ok(Bytes::from(std::fs::read(path)?)),
+            Self::Object { object, metadata } => {
+                let ts_uid = metadata
+                    .transfer_syntax
+                    .as_deref()
+                    .unwrap_or(uids::EXPLICIT_VR_LITTLE_ENDIAN);
+                let file = object
+                    .clone()
+                    .with_meta(FileMetaTableBuilder::new().transfer_syntax(ts_uid))
+                    .map_err(|e| {
+                        crate::error::DimseError::internal(format!(
+                            "Failed to build file meta information: {}",
+                            e
+                        ))
+                    })?;
+                let mut buffer = Vec::new();
+                file.write_all(&mut buffer).map_err(|e| {
+                    crate::error::DimseError::internal(format!(
+                        "Failed to encode DICOM file: {}",
+                        e
+                    ))
+                })?;
                 Ok(Bytes::from(buffer))
             }
         }
@@ -334,6 +382,24 @@ impl DatasetStream {
 }
 
 impl DatasetMetadata {
+    /// Read the identifying UIDs of a parsed DICOM object into fresh metadata.
+    pub fn from_object(object: &InMemDicomObject) -> Self {
+        let text = |name: &str| {
+            object
+                .element_by_name(name)
+                .ok()
+                .and_then(|e| e.to_str().ok())
+                .map(|s| s.to_string())
+        };
+        let mut metadata = Self::new();
+        metadata.sop_class_uid = text("SOPClassUID");
+        metadata.sop_instance_uid = text("SOPInstanceUID");
+        metadata.study_instance_uid = text("StudyInstanceUID");
+        metadata.series_instance_uid = text("SeriesInstanceUID");
+        metadata.patient_id = text("PatientID");
+        metadata
+    }
+
     /// Create new metadata with a unique ID and current timestamp
     pub fn new() -> Self {
         Self {
@@ -516,6 +582,70 @@ mod tests {
             Some(&"DOE^JOHN".to_string())
         );
         assert_eq!(query.max_results, 100);
+    }
+
+    fn sample_object() -> InMemDicomObject {
+        use dicom_core::{DataElement, PrimitiveValue, VR};
+        use dicom_dictionary_std::tags;
+
+        let mut object = InMemDicomObject::new_empty();
+        object.put(DataElement::new(
+            tags::SOP_CLASS_UID,
+            VR::UI,
+            PrimitiveValue::from(uids::SECONDARY_CAPTURE_IMAGE_STORAGE),
+        ));
+        object.put(DataElement::new(
+            tags::SOP_INSTANCE_UID,
+            VR::UI,
+            PrimitiveValue::from("1.2.3.4.5.6"),
+        ));
+        object.put(DataElement::new(
+            tags::PATIENT_NAME,
+            VR::PN,
+            PrimitiveValue::from("Test^Patient"),
+        ));
+        object
+    }
+
+    #[test]
+    fn metadata_from_object_reads_the_uids() {
+        let metadata = DatasetMetadata::from_object(&sample_object());
+        assert_eq!(
+            metadata.sop_class_uid.as_deref(),
+            Some(uids::SECONDARY_CAPTURE_IMAGE_STORAGE)
+        );
+        assert_eq!(metadata.sop_instance_uid.as_deref(), Some("1.2.3.4.5.6"));
+        assert!(metadata.study_instance_uid.is_none());
+    }
+
+    #[test]
+    fn to_part10_bytes_writes_a_readable_file_in_the_recorded_transfer_syntax() {
+        let mut dataset = DatasetStream::from_object(sample_object());
+        dataset.metadata_mut().transfer_syntax = Some(uids::IMPLICIT_VR_LITTLE_ENDIAN.to_string());
+
+        let bytes = dataset.to_part10_bytes().expect("encode Part 10");
+        assert!(bytes.len() > 132);
+        assert!(bytes[..128].iter().all(|b| *b == 0), "preamble must be zeroed");
+        assert_eq!(&bytes[128..132], b"DICM");
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dir.path().join("instance.dcm");
+        std::fs::write(&path, &bytes).expect("write file");
+        let reopened = dicom_object::open_file(&path).expect("reopen Part 10 file");
+        assert_eq!(
+            reopened.meta().transfer_syntax(),
+            uids::IMPLICIT_VR_LITTLE_ENDIAN
+        );
+        assert_eq!(
+            reopened.meta().media_storage_sop_instance_uid(),
+            "1.2.3.4.5.6"
+        );
+        let name = reopened
+            .element_by_name("PatientName")
+            .expect("patient name")
+            .to_str()
+            .expect("text");
+        assert_eq!(name.trim(), "Test^Patient");
     }
 
     #[test]

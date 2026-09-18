@@ -4,22 +4,34 @@ use dicom_encoding::text::SpecificCharacterSet;
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
-use dicom_ul::ServerAssociation;
+use dicom_ul::association::server::AsyncServerAssociation;
+use futures::StreamExt;
 use tokio::net::TcpStream;
 use tracing::{debug, error, info, warn};
 
 use crate::types::DatasetStream;
 use crate::{DimseError, Result};
 
-use crate::scp::DimseScp;
 use crate::scp::response_builder::{self, SubOperationCounts};
+use crate::scp::DimseScp;
 
 use super::extract_query_parameters;
+
+/// Send a Pending response after this many sub-operations. Pending responses
+/// carry the remaining count, so they are only sent when the total is known.
+const PENDING_RESPONSE_INTERVAL: u16 = 10;
+
+/// Outcome of one C-STORE sub-operation towards the client.
+enum SubOperationResult {
+    Completed,
+    Warning,
+    Failed,
+}
 
 /// Handle C-GET request
 pub async fn handle_c_get(
     scp: &DimseScp,
-    association: &mut ServerAssociation<TcpStream>,
+    association: &mut AsyncServerAssociation<TcpStream>,
     message_id: u16,
     identifier_data: Vec<u8>,
     presentation_context_id: u8,
@@ -63,9 +75,10 @@ pub async fn handle_c_get(
         query_level, parameters
     );
 
-    // Retrieve datasets
-    let datasets = match scp.query_provider.get(query_level, &parameters).await {
-        Ok(ds) => ds,
+    // Start the retrieval. Datasets arrive as a stream and each one is sent to
+    // the client as soon as it is available.
+    let retrieve = match scp.query_provider.get(query_level, &parameters).await {
+        Ok(retrieve) => retrieve,
         Err(e) => {
             error!("C-GET query failed: {}", e);
             response_builder::send_get_response(
@@ -80,20 +93,24 @@ pub async fn handle_c_get(
         }
     };
 
-    let total = datasets.len();
-    debug!("C-GET found {} datasets to retrieve", total);
+    let expected_total = retrieve.expected_total;
+    let mut datasets = retrieve.datasets;
+    debug!(
+        "C-GET streaming sub-operations (expected total: {:?})",
+        expected_total
+    );
 
     let mut counts = SubOperationCounts {
-        remaining: total as u16,
-        completed: 0,
-        failed: 0,
-        warning: 0,
+        remaining: expected_total,
+        ..SubOperationCounts::default()
     };
+    let mut sub_operation: u16 = 0;
 
-    // Iterate and send sub-operations
-    for (i, dataset) in datasets.into_iter().enumerate() {
-        // Send pending response every 10 items to keep association alive/informed
-        if i > 0 && i % 10 == 0 {
+    while let Some(item) = datasets.next().await {
+        if expected_total.is_some()
+            && sub_operation > 0
+            && sub_operation % PENDING_RESPONSE_INTERVAL == 0
+        {
             response_builder::send_get_response(
                 association,
                 message_id,
@@ -103,81 +120,44 @@ pub async fn handle_c_get(
             )
             .await?;
         }
+        sub_operation = sub_operation.wrapping_add(1);
 
-        // Parse dataset to get SOP Class UID
-        // We need this to select the presentation context for the C-STORE sub-operation
-        let (sop_class_uid, sop_instance_uid) = match parse_dataset_uids(&dataset).await {
-            Ok(uids) => uids,
+        let outcome = match item {
+            Ok(dataset) => send_sub_operation(association, sub_operation, &dataset).await?,
             Err(e) => {
-                error!("Failed to parse dataset UIDs: {}", e);
-                counts.failed += 1;
-                counts.remaining -= 1;
-                continue;
+                error!(
+                    "C-GET sub-operation {} has no dataset: {}",
+                    sub_operation, e
+                );
+                SubOperationResult::Failed
             }
         };
 
-        // Find presentation context for this SOP Class
-        let storage_pc_id = association
-            .presentation_contexts()
-            .iter()
-            .find(|pc| pc.abstract_syntax == sop_class_uid)
-            .map(|pc| pc.id);
-
-        if let Some(storage_pc_id) = storage_pc_id {
-            // Send C-STORE-RQ sub-operation
-            match response_builder::send_store_suboperation(
-                association,
-                (i as u16) + 1, // New Message ID for sub-operation
-                &dataset,
-                &sop_class_uid,
-                &sop_instance_uid,
-                storage_pc_id,
-            )
-            .await
-            {
-                Ok(_) => {
-                    // Wait for C-STORE-RSP
-                    match response_builder::receive_store_response(association).await {
-                        Ok(status) => {
-                            if status == 0x0000 {
-                                counts.completed += 1;
-                            } else if status & 0xB000 == 0xB000 {
-                                counts.warning += 1;
-                                warn!("C-STORE sub-operation warning status: 0x{:04X}", status);
-                            } else {
-                                counts.failed += 1;
-                                error!("C-STORE sub-operation failed with status: 0x{:04X}", status);
-                            }
-                        }
-                        Err(e) => {
-                            error!("Failed to receive C-STORE response: {}", e);
-                            counts.failed += 1;
-                        }
-                    }
-                }
-                Err(e) => {
-                    error!("Failed to send C-STORE sub-operation: {}", e);
-                    counts.failed += 1;
-                }
-            }
-        } else {
-            error!("No presentation context accepted for SOP Class: {}", sop_class_uid);
-            counts.failed += 1;
+        match outcome {
+            SubOperationResult::Completed => counts.completed += 1,
+            SubOperationResult::Warning => counts.warning += 1,
+            SubOperationResult::Failed => counts.failed += 1,
         }
-
-        counts.remaining -= 1;
+        counts.remaining = expected_total
+            .map(|total| total.saturating_sub(counts.completed + counts.warning + counts.failed));
     }
 
-    // Send final response
+    // The final response never carries a remaining count.
+    counts.remaining = None;
     let status = if counts.failed > 0 {
         if counts.completed > 0 {
-             0xB000 // One or more failures (Warning)
+            0xB000 // One or more failures (Warning)
         } else {
-             0xA702 // Unable to perform sub-operations (Refused)
+            0xA702 // Unable to perform sub-operations (Refused)
         }
     } else {
         0x0000 // Success
     };
+
+    info!(
+        "C-GET completed with status 0x{:04X} ({} completed, {} warning, {} failed)",
+        status, counts.completed, counts.warning, counts.failed
+    );
 
     response_builder::send_get_response(
         association,
@@ -188,25 +168,93 @@ pub async fn handle_c_get(
     )
     .await?;
 
-    info!("C-GET completed with status 0x{:04X}", status);
     Ok(())
+}
+
+/// Send one dataset to the client as a C-STORE sub-operation and wait for its
+/// response. A lost client connection is returned as an error so the C-GET
+/// stops instead of failing every remaining instance one by one.
+async fn send_sub_operation(
+    association: &mut AsyncServerAssociation<TcpStream>,
+    message_id: u16,
+    dataset: &DatasetStream,
+) -> Result<SubOperationResult> {
+    // The SOP Class UID selects the presentation context for the sub-operation
+    let (sop_class_uid, sop_instance_uid) = match parse_dataset_uids(dataset).await {
+        Ok(uids) => uids,
+        Err(e) => {
+            error!("Failed to parse dataset UIDs: {}", e);
+            return Ok(SubOperationResult::Failed);
+        }
+    };
+
+    let Some(storage_pc_id) = association
+        .presentation_contexts()
+        .iter()
+        .find(|pc| pc.abstract_syntax == sop_class_uid)
+        .map(|pc| pc.id)
+    else {
+        error!(
+            "No presentation context accepted for SOP Class: {}",
+            sop_class_uid
+        );
+        return Ok(SubOperationResult::Failed);
+    };
+
+    if let Err(e) = response_builder::send_store_suboperation(
+        association,
+        message_id,
+        dataset,
+        &sop_class_uid,
+        &sop_instance_uid,
+        storage_pc_id,
+    )
+    .await
+    {
+        if matches!(e, DimseError::Network(_)) {
+            return Err(e);
+        }
+        error!("Failed to send C-STORE sub-operation: {}", e);
+        return Ok(SubOperationResult::Failed);
+    }
+
+    match response_builder::receive_store_response(association).await {
+        Ok(0x0000) => Ok(SubOperationResult::Completed),
+        Ok(status) if status & 0xF000 == 0xB000 => {
+            warn!("C-STORE sub-operation warning status: 0x{:04X}", status);
+            Ok(SubOperationResult::Warning)
+        }
+        Ok(status) => {
+            error!("C-STORE sub-operation failed with status: 0x{:04X}", status);
+            Ok(SubOperationResult::Failed)
+        }
+        Err(e) => {
+            if matches!(e, DimseError::Network(_)) {
+                return Err(e);
+            }
+            error!("Failed to receive C-STORE response: {}", e);
+            Ok(SubOperationResult::Failed)
+        }
+    }
 }
 
 /// Helper to extract UIDs from DatasetStream
 async fn parse_dataset_uids(dataset: &DatasetStream) -> Result<(String, String)> {
     let obj = dataset.to_object().await?;
-    
-    let sop_class = obj.element_by_name("SOPClassUID")
+
+    let sop_class = obj
+        .element_by_name("SOPClassUID")
         .ok()
         .and_then(|e| e.to_str().ok())
         .map(|s| s.to_string())
         .ok_or_else(|| DimseError::parse("Missing SOPClassUID"))?;
-        
-    let sop_instance = obj.element_by_name("SOPInstanceUID")
+
+    let sop_instance = obj
+        .element_by_name("SOPInstanceUID")
         .ok()
         .and_then(|e| e.to_str().ok())
         .map(|s| s.to_string())
         .ok_or_else(|| DimseError::parse("Missing SOPInstanceUID"))?;
-        
+
     Ok((sop_class, sop_instance))
 }

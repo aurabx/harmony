@@ -185,6 +185,65 @@ async fn test_scu_get() {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+async fn test_scu_get_in_memory() {
+    if !dcmtk_available() {
+        eprintln!("Skipping test: DCMTK not available");
+        return;
+    }
+
+    let qr_scp = DcmtkQrScp::start("get_in_memory").await.expect("start QR SCP");
+
+    let patient_id = "GET_MEM_123";
+    let study_uid = mkuid("study");
+    let series_uid = mkuid("series");
+    let sop_uid = mkuid("sop");
+
+    let test_file = qr_scp.base_dir().join("test.dcm");
+    create_test_dicom_file(&test_file, patient_id, &study_uid, &series_uid, &sop_uid)
+        .expect("create test DICOM");
+    qr_scp.store_file(&test_file).await.expect("store file");
+
+    let remote = RemoteNode::new("QR_SCP", "127.0.0.1", qr_scp.port());
+    let config = DimseConfig {
+        local_aet: "HARMONY_SCU".to_string(),
+        ..Default::default()
+    };
+    let scu = DimseScu::new(config);
+
+    let query = GetQuery::new(QueryLevel::Study).with_parameter("StudyInstanceUID", &study_uid);
+
+    // No output directory: instances must arrive in memory, not on disk.
+    let mut stream = scu
+        .get_request(&remote, query, None)
+        .await
+        .expect("C-GET should start");
+
+    let mut results = Vec::new();
+    while let Some(result) = stream.next().await {
+        results.push(result.expect("C-GET item"));
+    }
+
+    assert_eq!(results.len(), 1, "one instance stored, one expected back");
+    let dataset = &results[0];
+    assert!(
+        matches!(dataset, dimse::types::DatasetStream::Object { .. }),
+        "in-memory C-GET must yield parsed objects, got {:?}",
+        dataset
+    );
+    let metadata = dataset.metadata();
+    assert_eq!(metadata.sop_instance_uid.as_deref(), Some(sop_uid.as_str()));
+    assert_eq!(metadata.study_instance_uid.as_deref(), Some(study_uid.as_str()));
+    assert!(
+        metadata.transfer_syntax.is_some(),
+        "the negotiated transfer syntax must be recorded"
+    );
+
+    // The instance can be written back out as a complete Part 10 file.
+    let bytes = dataset.to_part10_bytes().expect("Part 10 encoding");
+    assert_eq!(&bytes[128..132], b"DICM");
+}
+
+#[tokio::test(flavor = "multi_thread")]
 async fn test_scu_move() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");

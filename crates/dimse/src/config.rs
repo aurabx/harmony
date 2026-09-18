@@ -1,5 +1,7 @@
 //! Configuration types for DIMSE services
 
+use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
+use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
@@ -49,6 +51,13 @@ pub struct DimseConfig {
     /// Preferred transfer syntaxes (in order of preference)
     #[serde(default = "default_transfer_syntaxes")]
     pub preferred_transfer_syntaxes: Vec<String>,
+
+    /// Transfer syntaxes proposed for the storage presentation contexts of an
+    /// outbound C-GET, in order of preference. Retrieved instances arrive in
+    /// one of these. Compressed syntaxes are not proposed by default because
+    /// the streaming bridge rebuilds each instance from DICOM JSON.
+    #[serde(default = "default_storage_transfer_syntaxes")]
+    pub storage_transfer_syntaxes: Vec<String>,
 
     /// Maximum number of concurrent associations
     #[serde(default = "default_max_associations")]
@@ -139,6 +148,7 @@ impl Default for DimseConfig {
             storage_dir: default_storage_dir(),
             tls: None,
             preferred_transfer_syntaxes: default_transfer_syntaxes(),
+            storage_transfer_syntaxes: default_storage_transfer_syntaxes(),
             max_associations: default_max_associations(),
             enable_echo: true,
             enable_find: true,
@@ -188,6 +198,18 @@ impl DimseConfig {
             return Err(crate::error::DimseError::config(
                 "Max PDU size must be between 16384 and 131072 bytes",
             ));
+        }
+
+        // Validate the transfer syntaxes proposed for C-GET storage contexts.
+        // An empty list is rejected when a C-GET is attempted, not here, so
+        // that SCP-only configurations are not affected.
+        for ts_uid in &self.storage_transfer_syntaxes {
+            if TransferSyntaxRegistry.get(ts_uid).is_none() {
+                return Err(crate::error::DimseError::config(format!(
+                    "Unknown transfer syntax in storage_transfer_syntaxes: {}",
+                    ts_uid
+                )));
+            }
         }
 
         // Validate storage directory
@@ -253,6 +275,26 @@ impl RemoteNode {
     }
 }
 
+/// Check a list of transfer syntaxes meant for C-GET storage presentation
+/// contexts: it must not be empty and every entry must be a transfer syntax
+/// the registry knows.
+pub fn validate_storage_transfer_syntaxes(list: &[String]) -> crate::error::Result<()> {
+    if list.is_empty() {
+        return Err(crate::error::DimseError::config(
+            "transfer_syntaxes must list at least one transfer syntax UID",
+        ));
+    }
+    for ts_uid in list {
+        if TransferSyntaxRegistry.get(ts_uid).is_none() {
+            return Err(crate::error::DimseError::config(format!(
+                "Unknown transfer syntax: {}",
+                ts_uid
+            )));
+        }
+    }
+    Ok(())
+}
+
 // Default value functions
 fn default_bind_addr() -> IpAddr {
     IpAddr::V4(Ipv4Addr::new(0, 0, 0, 0))
@@ -287,6 +329,13 @@ fn default_transfer_syntaxes() -> Vec<String> {
         "1.2.840.10008.1.2".to_string(),   // Implicit VR Little Endian
         "1.2.840.10008.1.2.1".to_string(), // Explicit VR Little Endian
         "1.2.840.10008.1.2.2".to_string(), // Explicit VR Big Endian
+    ]
+}
+
+fn default_storage_transfer_syntaxes() -> Vec<String> {
+    vec![
+        "1.2.840.10008.1.2.1".to_string(), // Explicit VR Little Endian
+        "1.2.840.10008.1.2".to_string(),   // Implicit VR Little Endian
     ]
 }
 

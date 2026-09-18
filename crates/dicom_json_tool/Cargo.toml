@@ -5,12 +5,12 @@ edition = "2021"
 description = "Convert between DICOM (DIMSE identifier datasets) and DICOM JSON (Part 18) with optional command/query metadata wrapper"
 
 [dependencies]
-dicom-object = { version = "0.9" }
-dicom-core = "0.9"
-dicom-dictionary-std = "0.9"
-dicom-encoding = "0.9"
-dicom-parser = "0.9"
-dicom-json = "0.9"
+dicom-object = { version = "0.10" }
+dicom-core = "0.10"
+dicom-dictionary-std = "0.10"
+dicom-encoding = "0.10"
+dicom-parser = "0.10"
+dicom-json = "0.10"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 thiserror = "1.0"

@@ -4,7 +4,7 @@ use async_trait::async_trait;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
-use crate::types::{DatasetStream, QueryLevel};
+use crate::types::{BoxDatasetStream, DatasetStream, QueryLevel, RetrieveStream};
 use crate::Result;
 
 use super::QueryProvider;
@@ -27,30 +27,30 @@ impl QueryProvider for DefaultQueryProvider {
         _query_level: QueryLevel,
         _parameters: &std::collections::HashMap<String, String>,
         _max_results: u32,
-    ) -> Result<Vec<DatasetStream>> {
+    ) -> Result<BoxDatasetStream> {
         // TODO: Implement actual query logic
         warn!("DefaultQueryProvider::find not yet implemented");
-        Ok(vec![])
+        Ok(Box::pin(futures::stream::empty()))
     }
 
     async fn locate(
         &self,
         _query_level: QueryLevel,
         _parameters: &std::collections::HashMap<String, String>,
-    ) -> Result<Vec<DatasetStream>> {
+    ) -> Result<BoxDatasetStream> {
         // TODO: Implement actual locate logic
         warn!("DefaultQueryProvider::locate not yet implemented");
-        Ok(vec![])
+        Ok(Box::pin(futures::stream::empty()))
     }
 
     async fn get(
         &self,
         _query_level: QueryLevel,
         _parameters: &std::collections::HashMap<String, String>,
-    ) -> Result<Vec<DatasetStream>> {
+    ) -> Result<RetrieveStream> {
         // TODO: Implement actual get logic
         warn!("DefaultQueryProvider::get not yet implemented");
-        Ok(vec![])
+        Ok(RetrieveStream::from_vec(vec![]))
     }
 
     async fn store(&self, dataset: DatasetStream) -> Result<()> {

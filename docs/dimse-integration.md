@@ -1,6 +1,6 @@
 # DIMSE Integration
 
-**Last Updated**: 2026-02-08
+**Last Updated**: 2026-09-16
 
 Harmony integrates DIMSE via:
 - **DimseAdapter**: Native DICOM DIMSE network operations (SCP) using `dicom-ul` Rust library
@@ -8,9 +8,9 @@ Harmony integrates DIMSE via:
 
 ## Prerequisites
 
-- **DCMTK is required** for DICOM SCU operations (C-GET and C-MOVE commands)
-- **Native Rust SCP**: The SCP (endpoint listener) is implemented natively in Rust
-- **DCMTK tools**: Install for backend SCU functionality and integration testing
+- **Native Rust SCP and SCU**: the SCP listener and the C-ECHO, C-FIND, C-STORE and C-GET SCU operations are implemented on `dicom-ul`, with no external process
+- **DCMTK is required** for C-MOVE on the SCU side (`movescu`) and for the integration tests
+- **DCMTK tools**: Install for C-MOVE and integration testing
   - macOS (Homebrew): `brew install dcmtk`
   - Debian/Ubuntu: `sudo apt-get install dcmtk`
 
@@ -161,12 +161,12 @@ curl -X POST http://localhost:8080/dicom/find \
 
 ### ✅ Completed
 - **Native DIMSE SCP**: Endpoint (SCP) implementation uses `dicom-ul` Rust library (no external dependencies)
-- **DCMTK-based SCU**: Backend (SCU) operations (C-ECHO, C-FIND, C-GET, C-MOVE) use DCMTK CLI tools
+- **Native SCU**: Backend (SCU) operations C-ECHO, C-FIND, C-STORE and C-GET use `dicom-ul`. C-GET negotiates the SCP role for the storage SOP classes and streams each instance as it is received. C-MOVE still uses the DCMTK `movescu` tool.
 - **SCP Operations**: C-ECHO, C-FIND, C-STORE supported via native Rust implementation
 - **Persistent Store SCP**: Supports persistent Store SCP mode for C-STORE delivery
 - **Dual Service Support**: Single service type supports both backend and endpoint usage
 - **Configuration Integration**: Seamlessly integrated with existing service architecture
-- **Streaming**: All operations support streaming datasets/results
+- **Streaming**: C-GET, C-MOVE and C-FIND results stream through the SCP as the pipeline produces them; the `QueryProvider` trait returns streams
 - **Validation**: Proper configuration validation for both usage patterns
 
 ### 📋 Planned Enhancements
@@ -180,7 +180,7 @@ See `examples/default/pipelines/dimse-integration.toml` for a complete configura
 
 ## Notes and Tips
 
-- DCMTK requirement: Harmony relies on the DCMTK CLI for DIMSE networking. Ensure DCMTK is installed and on PATH before using DICOM endpoints/backends.
+- DCMTK requirement: only C-MOVE on the SCU side shells out to DCMTK (`movescu`). Ensure DCMTK is installed and on PATH before using C-MOVE.
 - DCMTK CLI tag format: when passing keys via `-k`, use plain tag form `gggg,eeee` without parentheses. For example, set the QueryRetrieveLevel and keys like:
   - `-k 0008,0052=STUDY`
   - `-k 0020,000D=<StudyInstanceUID>`
@@ -188,7 +188,7 @@ See `examples/default/pipelines/dimse-integration.toml` for a complete configura
 - C-MOVE destination listener: `movescu` must listen for incoming C-STORE. Harmony config exposes `incoming_store_port`; the SCU uses DCMTK’s `+P <port>` option and `-aem <DEST_AET>`. Ensure the QR SCP’s HostTable includes the destination AET with the same host/port.
 - Test artifacts under `./tmp`:
   - C-FIND: `./tmp/dcmtk_find_<uuid>/rsp*.dcm`
-  - C-GET:  `./tmp/dcmtk_get_<uuid>/*`
+  - C-GET:  none unless an output directory is given; the `dicom_scu` backend writes `./tmp/dimse/<folder>/<SOPInstanceUID>.dcm`
   - C-MOVE: `./tmp/dcmtk_move_<uuid>/*`
   - Last MOVE debug payload: `./tmp/movescu_last.json`
 - Debugging: set `HARMONY_TEST_DEBUG=1` to attach the last `movescu` arguments/stdout/stderr to HTTP responses (where applicable).
@@ -207,9 +207,10 @@ See `examples/default/pipelines/dimse-integration.toml` for a complete configura
   - Use Study Root for MOVE (`-S`) when matching by `StudyInstanceUID`.
   - Check movescu debug at `./tmp/movescu_last.json` for args, stdout, stderr, and status.
 
-- C-MOVE/C-GET produce no files even though DCMTK reports success
+- C-MOVE produces no files even though DCMTK reports success
   - DCMTK may write files without a `.dcm` extension (e.g., `SC.<SOPInstanceUID>`). Tools or code expecting only `.dcm` names might miss them.
   - In Harmony, we stream back all files in the DCMTK output directory, regardless of extension.
+  - C-GET does not use DCMTK. With an output directory, each instance is written as `<SOPInstanceUID>.dcm`.
 
 - DCMTK `-k` key errors like "bad key format"
   - Use `gggg,eeee` format without parentheses. Examples: `0008,0052=STUDY`, `0020,000D=<UID>`, `0010,0020=<PatientID>`.

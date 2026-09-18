@@ -6,7 +6,8 @@ use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
 
-use dicom_ul::{ClientAssociation, Pdu};
+use dicom_ul::association::client::AsyncClientAssociation;
+use dicom_ul::Pdu;
 use tokio::net::TcpStream;
 
 use crate::common::{
@@ -36,7 +37,7 @@ pub fn build_command_request(
 /// This function properly fragments large datasets according to the negotiated
 /// maximum PDU size.
 pub async fn encode_and_send_request(
-    association: &mut ClientAssociation<TcpStream>,
+    association: &mut AsyncClientAssociation<TcpStream>,
     request: InMemDicomObject<StandardDataDictionary>,
     dataset: Option<&InMemDicomObject<StandardDataDictionary>>,
     presentation_context_id: u8,
@@ -104,7 +105,7 @@ pub async fn encode_and_send_request(
 
 /// Receive a full DIMSE message (Command + optional Dataset) handling split PDUs
 pub async fn receive_dimse_message(
-    association: &mut ClientAssociation<TcpStream>,
+    association: &mut AsyncClientAssociation<TcpStream>,
 ) -> Result<(InMemDicomObject<StandardDataDictionary>, Option<Vec<u8>>, u8)> {
     use dicom_encoding::text::SpecificCharacterSet;
     use dicom_object::InMemDicomObject;
@@ -299,7 +300,7 @@ pub fn extract_message_id_being_responded_to(
 pub fn parse_dataset_bytes(
     dataset_bytes: Vec<u8>,
     presentation_context_id: u8,
-    association: &ClientAssociation<TcpStream>,
+    association: &AsyncClientAssociation<TcpStream>,
 ) -> Result<InMemDicomObject<StandardDataDictionary>> {
     use dicom_encoding::text::SpecificCharacterSet;
     
@@ -390,7 +391,7 @@ pub fn build_identifier_dataset(
 
 /// Send C-STORE-RSP response from client (when receiving C-STORE-RQ during C-GET)
 pub async fn send_store_response_from_client(
-    association: &mut ClientAssociation<TcpStream>,
+    association: &mut AsyncClientAssociation<TcpStream>,
     message_id: u16,
     status_code: u16,
     presentation_context_id: u8,
