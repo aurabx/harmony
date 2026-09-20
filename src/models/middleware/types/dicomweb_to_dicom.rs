@@ -310,6 +310,108 @@ impl DICOMwebToDICOMMiddleware {
     }
 }
 
+/// Parse the `boundary` parameter from a `multipart/related` Content-Type value.
+///
+/// The parameter may appear anywhere after the media type and may be quoted.
+/// Returns `None` when no `boundary=` parameter is found.
+pub(crate) fn parse_multipart_boundary(content_type: &str) -> Option<String> {
+    for part in content_type.split(';') {
+        let trimmed = part.trim();
+        // Case-insensitive match on the parameter name only.
+        let lower = trimmed.to_ascii_lowercase();
+        if let Some(rest) = lower.strip_prefix("boundary=") {
+            // Recover the original-case value from `trimmed`, respecting quotes.
+            let raw = &trimmed[trimmed.len() - rest.len()..];
+            let value = raw.trim_matches('"').trim();
+            if value.is_empty() {
+                return None;
+            }
+            return Some(value.to_string());
+        }
+    }
+    None
+}
+
+/// Extract each `application/dicom` body from a `multipart/related` payload.
+///
+/// The bridge uses this to strip the STOW-RS multipart wrapper before forwarding
+/// the DICOM payload to the DIMSE store handler. Parts whose Content-Type header
+/// is not `application/dicom` are skipped. The order of the returned parts matches
+/// the order they appear in the body.
+///
+/// Errors:
+/// - The Content-Type header is missing the `boundary` parameter.
+/// - The body is empty.
+/// - Multipart parsing yields zero `application/dicom` parts.
+pub(crate) async fn extract_multipart_dicom_parts(
+    body: &[u8],
+    content_type: &str,
+) -> Result<Vec<Vec<u8>>, Error> {
+    if body.is_empty() {
+        return Err(Error::from(
+            "STOW-RS multipart body is empty",
+        ));
+    }
+
+    let boundary = parse_multipart_boundary(content_type).ok_or_else(|| {
+        Error::from(
+            "STOW-RS Content-Type has no boundary parameter",
+        )
+    })?;
+
+    // multer expects a stream of Result<Bytes, _>. Feed the whole buffer as one chunk.
+    use bytes::Bytes;
+    use futures_util::stream;
+    use multer::Multipart;
+
+    let body_bytes = Bytes::copy_from_slice(body);
+    let stream = stream::once(async move { Ok::<Bytes, std::io::Error>(body_bytes) });
+    let mut multipart = Multipart::new(stream, boundary);
+
+    let mut parts: Vec<Vec<u8>> = Vec::new();
+    let mut skipped: usize = 0;
+    while let Some(field) = multipart
+        .next_field()
+        .await
+        .map_err(|e| Error::from(format!("STOW-RS multipart parse error: {}", e)))?
+    {
+        // multer exposes the part's Content-Type header via .content_type().
+        let ct = field
+            .content_type()
+            .map(|m| m.essence_str().to_ascii_lowercase())
+            .unwrap_or_default();
+
+        if ct != "application/dicom" {
+            skipped += 1;
+            tracing::debug!(
+                "STOW-RS multipart: skipping part with content-type '{}'",
+                ct
+            );
+            // Drain the part body so multer advances to the next one.
+            let _ = field
+                .bytes()
+                .await
+                .map_err(|e| Error::from(format!("STOW-RS multipart drain error: {}", e)))?;
+            continue;
+        }
+
+        let data = field
+            .bytes()
+            .await
+            .map_err(|e| Error::from(format!("STOW-RS multipart part read error: {}", e)))?;
+        parts.push(data.to_vec());
+    }
+
+    if parts.is_empty() {
+        return Err(Error::from(format!(
+            "STOW-RS multipart body has no application/dicom parts (skipped {} other part(s))",
+            skipped
+        )));
+    }
+
+    Ok(parts)
+}
+
 #[async_trait::async_trait]
 impl Middleware for DICOMwebToDICOMMiddleware {
     async fn left(
@@ -2091,5 +2193,148 @@ mod tests {
         );
         // Original data should still be present
         assert!(nd.get("matches").is_some());
+    }
+
+    // ==================== STOW-RS multipart parsing tests ====================
+
+    /// Build a multipart/related body from a list of (content-type, body) parts.
+    fn build_multipart_related_body(boundary: &str, parts: &[(&str, &[u8])]) -> Vec<u8> {
+        let mut buf: Vec<u8> = Vec::new();
+        for (ct, body) in parts {
+            buf.extend_from_slice(format!("--{}\r\n", boundary).as_bytes());
+            buf.extend_from_slice(format!("Content-Type: {}\r\n\r\n", ct).as_bytes());
+            buf.extend_from_slice(body);
+            buf.extend_from_slice(b"\r\n");
+        }
+        buf.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
+        buf
+    }
+
+    #[test]
+    fn test_parse_multipart_boundary_quoted() {
+        let ct = "multipart/related; type=\"application/dicom\"; boundary=\"abc123\"";
+        assert_eq!(
+            parse_multipart_boundary(ct).as_deref(),
+            Some("abc123"),
+            "quoted boundary should be extracted without quotes"
+        );
+    }
+
+    #[test]
+    fn test_parse_multipart_boundary_unquoted() {
+        let ct = "multipart/related; boundary=simpleboundary";
+        assert_eq!(
+            parse_multipart_boundary(ct).as_deref(),
+            Some("simpleboundary")
+        );
+    }
+
+    #[test]
+    fn test_parse_multipart_boundary_absent() {
+        let ct = "multipart/related; type=\"application/dicom\"";
+        assert!(
+            parse_multipart_boundary(ct).is_none(),
+            "no boundary parameter must yield None"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_extract_multipart_dicom_parts_single_part() {
+        let boundary = "harmonytest";
+        let dicom_bytes: &[u8] = b"\x00\x01\x02FAKE-DICOM-PAYLOAD-1\x03\x04";
+        let body = build_multipart_related_body(
+            boundary,
+            &[("application/dicom", dicom_bytes)],
+        );
+        let ct = format!(
+            "multipart/related; type=\"application/dicom\"; boundary={}",
+            boundary
+        );
+
+        let parts = extract_multipart_dicom_parts(&body, &ct)
+            .await
+            .expect("single part must parse");
+
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].as_slice(), dicom_bytes);
+    }
+
+    #[tokio::test]
+    async fn test_extract_multipart_dicom_parts_two_parts_preserves_order() {
+        let boundary = "harmonytest";
+        let first: &[u8] = b"FIRST-DICOM-PART";
+        let second: &[u8] = b"SECOND-DICOM-PART-with-more-bytes";
+        let body = build_multipart_related_body(
+            boundary,
+            &[
+                ("application/dicom", first),
+                ("application/dicom", second),
+            ],
+        );
+        let ct = format!("multipart/related; boundary={}", boundary);
+
+        let parts = extract_multipart_dicom_parts(&body, &ct)
+            .await
+            .expect("two parts must parse");
+
+        assert_eq!(parts.len(), 2, "both parts must be extracted");
+        assert_eq!(parts[0].as_slice(), first, "first part must come first");
+        assert_eq!(parts[1].as_slice(), second, "second part must come second");
+    }
+
+    #[tokio::test]
+    async fn test_extract_multipart_dicom_parts_missing_boundary_rejected() {
+        let ct = "multipart/related; type=\"application/dicom\"";
+        let body: &[u8] = b"anything";
+
+        let err = extract_multipart_dicom_parts(body, ct)
+            .await
+            .expect_err("missing boundary must return an error");
+
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("boundary"),
+            "error should name the missing boundary parameter, got: {}",
+            msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_extract_multipart_dicom_parts_empty_body_rejected() {
+        let ct = "multipart/related; boundary=harmonytest";
+        let body: &[u8] = b"";
+
+        let err = extract_multipart_dicom_parts(body, ct)
+            .await
+            .expect_err("empty body must return an error");
+
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("empty"),
+            "error should say the body is empty, got: {}",
+            msg
+        );
+    }
+
+    #[tokio::test]
+    async fn test_extract_multipart_dicom_parts_skips_non_dicom_parts() {
+        let boundary = "harmonytest";
+        let json_part: &[u8] = br#"{"unexpected":"metadata"}"#;
+        let dicom_bytes: &[u8] = b"REAL-DICOM-PAYLOAD";
+        let body = build_multipart_related_body(
+            boundary,
+            &[
+                ("application/json", json_part),
+                ("application/dicom", dicom_bytes),
+            ],
+        );
+        let ct = format!("multipart/related; boundary={}", boundary);
+
+        let parts = extract_multipart_dicom_parts(&body, &ct)
+            .await
+            .expect("skipping non-dicom part should still succeed");
+
+        assert_eq!(parts.len(), 1, "only the application/dicom part is kept");
+        assert_eq!(parts[0].as_slice(), dicom_bytes);
     }
 }
