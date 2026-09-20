@@ -282,6 +282,7 @@ fn register_builtin_middleware(registry: &mut UnifiedRegistry) {
 
     // DICOM middleware
     registry.register_middleware_factory(Box::new(JmixBuilderFactory));
+    registry.register_middleware_factory(Box::new(DimseToJmixFactory));
     registry.register_middleware_factory(Box::new(DicomwebBridgeFactory));
     registry.register_middleware_factory(Box::new(DicomToDicomwebFactory));
     registry.register_middleware_factory(Box::new(DicomFlattenFactory));

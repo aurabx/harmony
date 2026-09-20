@@ -21,6 +21,7 @@ pub fn builtin_middleware_types() -> &'static [&'static str] {
         "json_extractor",
         "json",
         "jmix_builder",
+        "dimse_to_jmix",
         "dicomweb_bridge",
         "dicomweb",
         "dicom_to_dicomweb",
