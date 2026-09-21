@@ -6,6 +6,7 @@
 use crate::models::protocol::{Protocol, ProtocolCtx};
 use http::{HeaderMap, Method, Uri};
 use std::collections::HashMap;
+use std::net::SocketAddr;
 
 /// Build a `ProtocolCtx` from HTTP request components.
 ///
@@ -19,6 +20,8 @@ use std::collections::HashMap;
 /// * `body` - Request body bytes
 /// * `path_prefix` - Optional path prefix to strip (from endpoint options)
 /// * `protocol_label` - Protocol label for metadata (e.g., "http" or "http3")
+/// * `remote_addr` - Peer socket address, if the adapter exposes it. The IP is
+///   recorded under `meta["remote_addr"]` and the port under `meta["remote_port"]`.
 pub fn build_protocol_ctx(
     method: &Method,
     uri: &Uri,
@@ -26,6 +29,7 @@ pub fn build_protocol_ctx(
     body: Vec<u8>,
     path_prefix: &str,
     protocol_label: &str,
+    remote_addr: Option<SocketAddr>,
 ) -> ProtocolCtx {
     let path_only = uri.path().to_string();
 
@@ -124,6 +128,13 @@ pub fn build_protocol_ctx(
     meta_map.insert("path_with_query".to_string(), subpath_with_query);
     meta_map.insert("full_path".to_string(), full_path_with_query);
 
+    // Peer address, when the adapter exposed it. IP-only under "remote_addr" so
+    // the policies middleware can parse it directly; the port is kept separate.
+    if let Some(peer) = remote_addr {
+        meta_map.insert("remote_addr".to_string(), peer.ip().to_string());
+        meta_map.insert("remote_port".to_string(), peer.port().to_string());
+    }
+
     // Extract DIMSE operation from header if present (for DICOM-to-HTTP bridging)
     if let Some(dimse_op) = headers.get("x-dimse-op").and_then(|v| v.to_str().ok()) {
         meta_map.insert("dimse_op".to_string(), dimse_op.to_string());
@@ -176,13 +187,14 @@ mod tests {
         let headers = HeaderMap::new();
         let body = vec![];
 
-        let ctx = build_protocol_ctx(&method, &uri, &headers, body, "", "http");
+        let ctx = build_protocol_ctx(&method, &uri, &headers, body, "", "http", None);
 
         assert_eq!(ctx.protocol, Protocol::Http);
         assert_eq!(ctx.meta.get("protocol").unwrap(), "http");
         assert_eq!(ctx.meta.get("path").unwrap(), "api/test");
         assert_eq!(ctx.meta.get("full_path").unwrap(), "/api/test?foo=bar");
         assert_eq!(ctx.attrs["method"], "GET");
+        assert!(ctx.meta.get("remote_addr").is_none());
     }
 
     #[test]
@@ -192,7 +204,7 @@ mod tests {
         let headers = HeaderMap::new();
         let body = b"hello".to_vec();
 
-        let ctx = build_protocol_ctx(&method, &uri, &headers, body.clone(), "/api/v1", "http3");
+        let ctx = build_protocol_ctx(&method, &uri, &headers, body.clone(), "/api/v1", "http3", None);
 
         assert_eq!(ctx.meta.get("protocol").unwrap(), "http3");
         assert_eq!(ctx.meta.get("path").unwrap(), "users");
@@ -207,7 +219,7 @@ mod tests {
         headers.insert(COOKIE, "session=abc123; user=john".parse().unwrap());
         let body = vec![];
 
-        let ctx = build_protocol_ctx(&method, &uri, &headers, body, "", "http");
+        let ctx = build_protocol_ctx(&method, &uri, &headers, body, "", "http", None);
 
         let cookies = &ctx.attrs["cookies"];
         assert_eq!(cookies["session"], "abc123");
@@ -221,13 +233,41 @@ mod tests {
         let headers = HeaderMap::new();
         let body = vec![];
 
-        let ctx = build_protocol_ctx(&method, &uri, &headers, body, "", "http");
+        let ctx = build_protocol_ctx(&method, &uri, &headers, body, "", "http", None);
 
         let query = &ctx.attrs["query_params"];
         assert!(query["q"].is_array());
         assert_eq!(query["q"][0], "test");
         // Multiple values for same key
         assert!(query["page"].is_array());
+    }
+
+    #[test]
+    fn test_build_protocol_ctx_records_remote_addr() {
+        let method = Method::GET;
+        let uri: Uri = "/test".parse().unwrap();
+        let headers = HeaderMap::new();
+        let body = vec![];
+        let peer: SocketAddr = "203.0.113.42:51234".parse().unwrap();
+
+        let ctx = build_protocol_ctx(&method, &uri, &headers, body, "", "http", Some(peer));
+
+        assert_eq!(ctx.meta.get("remote_addr").unwrap(), "203.0.113.42");
+        assert_eq!(ctx.meta.get("remote_port").unwrap(), "51234");
+    }
+
+    #[test]
+    fn test_build_protocol_ctx_records_remote_addr_ipv6() {
+        let method = Method::GET;
+        let uri: Uri = "/test".parse().unwrap();
+        let headers = HeaderMap::new();
+        let body = vec![];
+        let peer: SocketAddr = "[2001:db8::1]:443".parse().unwrap();
+
+        let ctx = build_protocol_ctx(&method, &uri, &headers, body, "", "http", Some(peer));
+
+        assert_eq!(ctx.meta.get("remote_addr").unwrap(), "2001:db8::1");
+        assert_eq!(ctx.meta.get("remote_port").unwrap(), "443");
     }
 
     #[test]

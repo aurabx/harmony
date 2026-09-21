@@ -332,6 +332,8 @@ pub async fn handle_connection(
 
                 // Build ProtocolCtx using shared helper
                 let path_prefix = get_path_prefix(options);
+                // HTTP/3: peer address plumbing not yet wired through this adapter,
+                // so no remote_addr is recorded. IP-based policies skip on HTTP/3.
                 let ctx = build_protocol_ctx(
                     &method,
                     &uri,
@@ -339,6 +341,7 @@ pub async fn handle_connection(
                     body_bytes,
                     path_prefix,
                     "http3",
+                    None,
                 );
 
                 // Resolve service again (we dropped it earlier when leaving scope)

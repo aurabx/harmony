@@ -561,6 +561,7 @@ mod tests {
             body_bytes.clone(),
             "/stream",
             "http",
+            None,
         );
 
         let envelope = streaming_endpoint()
