@@ -355,8 +355,21 @@ impl MiddlewareFactory for PoliciesFactory {
             &cfg.policies,
             &cfg.rules,
         )?;
+
+        // Look up the middleware instance name that build_middleware_instances_for_pipeline
+        // injects. Two pipelines that reference the same middleware instance share the
+        // same rate-limit bucket count and cleanup task; requests to the same pipeline
+        // now accumulate state instead of resetting on every request.
+        let instance_key = options
+            .get("__instance_name")
+            .and_then(|v| v.as_str())
+            .unwrap_or("__policies_default");
+
         Ok(Box::new(
-            crate::models::middleware::types::policies::PoliciesMiddleware::new(parsed_config)?,
+            crate::models::middleware::types::policies::PoliciesMiddleware::with_instance_key(
+                parsed_config,
+                instance_key,
+            )?,
         ))
     }
 }

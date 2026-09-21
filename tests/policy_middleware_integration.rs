@@ -393,9 +393,19 @@ async fn test_policy_ip_allow_matches() {
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
-/// Test rate limiting enforces limits
+/// Test rate limiting enforces limits.
+///
+/// Prior to the middleware-instance-state fix, the `PoliciesMiddleware` was
+/// rebuilt on every request, so the rate-limit bucket reset each call and no
+/// enforcement was visible from an HTTP-shaped test. The rate-limit rule
+/// itself falls back to `"unknown"` for `client_ip` when `remote_addr` is
+/// missing, so with a shared bucket the third request to the same rule
+/// under the same fallback key exceeds `max_requests=2` and returns 429.
 #[tokio::test]
 async fn test_policy_rate_limit_enforcement() {
+    // Reset the process-wide bucket registry so other tests in the binary
+    // do not leak state into this one.
+    harmony::models::middleware::types::policies::clear_rate_limit_registry_for_tests();
     let config_toml = r#"
         [proxy]
         id = "policy-rate-limit-test"
@@ -482,14 +492,7 @@ async fn test_policy_rate_limit_enforcement() {
 
     let app = build_network_router(config_arc, "default").await;
 
-    // NOTE: Rate limiting requires `remote_addr` metadata which is not populated
-    // in oneshot test environment. In production, the HTTP adapter would populate
-    // remote_addr from the socket connection. Testing that rate_limit rules work
-    // correctly is done in unit tests with mocked envelopes.
-    // This integration test verifies that the allow_all rule works and doesn't
-    // crash when rate_limit rules are present.
-
-    // First request - should succeed (allow_all passes)
+    // First and second requests fit inside max_requests=2 and succeed.
     let response1 = app
         .clone()
         .oneshot(
@@ -503,7 +506,6 @@ async fn test_policy_rate_limit_enforcement() {
         .unwrap();
     assert_eq!(response1.status(), StatusCode::OK);
 
-    // Second request - should succeed
     let response2 = app
         .clone()
         .oneshot(
@@ -517,7 +519,8 @@ async fn test_policy_rate_limit_enforcement() {
         .unwrap();
     assert_eq!(response2.status(), StatusCode::OK);
 
-    // Third request - should still succeed because rate_limit can't match without remote_addr
+    // Third request exceeds max_requests=2 in the shared bucket for the
+    // "unknown" client IP fallback and is rejected with 429.
     let response3 = app
         .clone()
         .oneshot(
@@ -529,8 +532,7 @@ async fn test_policy_rate_limit_enforcement() {
         )
         .await
         .unwrap();
-    // Without remote_addr, rate_limit doesn't match, but allow_all does, so request succeeds
-    assert_eq!(response3.status(), StatusCode::OK);
+    assert_eq!(response3.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 /// Test path matching with allow mode
