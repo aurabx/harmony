@@ -426,3 +426,61 @@ async fn test_backward_compatibility() {
     let pipeline = config.pipelines.get("regular").unwrap();
     assert!(!PipelineExecutor::is_streaming_pipeline(pipeline, &config));
 }
+
+/// Regression: a DIMSE SCP endpoint fronted by http_streaming_backend must be
+/// classified as a streaming pipeline. C-STORE previously ignored this and
+/// invoked the non-streaming executor, which the streaming backend refused.
+/// The store handler now routes through `execute_streaming` when this returns
+/// true, so this assertion pins the contract the fix relies on.
+#[tokio::test]
+async fn test_cstore_dimse_with_http_streaming_backend_is_streaming() {
+    let config_toml = r#"
+        [proxy]
+        id = "cstore-streaming-test"
+
+        [storage]
+        backend = "filesystem"
+        [storage.options]
+        path = "./tmp"
+
+        [network.default]
+        enable_wireguard = false
+        interface = "wg0"
+        [network.default.http]
+        bind_address = "127.0.0.1"
+        bind_port = 8080
+
+        [pipelines.store_pipeline]
+        networks = ["default"]
+        endpoints = ["dicom_scp"]
+        backends = ["http_stream"]
+        middleware = []
+
+        [endpoints.dicom_scp]
+        service = "dicom_scp"
+        [endpoints.dicom_scp.options]
+        local_aet = "STORE_SCP"
+        port = 11112
+        enable_store = true
+
+        [backends.http_stream]
+        service = "http_streaming_backend"
+        [backends.http_stream.options]
+        base_url = "http://localhost:9999"
+        format = "ndjson"
+
+        [services.dicom_scp]
+        module = ""
+        [services.http_streaming_backend]
+        module = ""
+    "#;
+
+    let config: Config = toml::from_str(config_toml).unwrap();
+    config.validate().unwrap();
+
+    let pipeline = config.pipelines.get("store_pipeline").unwrap();
+    assert!(
+        PipelineExecutor::is_streaming_pipeline(pipeline, &config),
+        "store pipeline with http_streaming_backend must classify as streaming"
+    );
+}
