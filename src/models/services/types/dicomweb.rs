@@ -522,6 +522,85 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
 
         use crate::models::envelope::command::{Command, Operation};
 
+        // STOW-RS: extract each application/dicom part from the multipart wrapper
+        // before dispatching downstream. The DIMSE store handler expects a single
+        // DICOM object (Part 10 or bare dataset); passing the raw multipart body
+        // through would cause the DICM magic-byte check and dataset parser to fail.
+        if method == "POST" && matches!(parts.as_slice(), ["studies"] | ["studies", _]) {
+            let content_type = envelope
+                .request_details
+                .headers
+                .get("content-type")
+                .or_else(|| envelope.request_details.headers.get("Content-Type"))
+                .cloned()
+                .unwrap_or_default();
+
+            if content_type.to_ascii_lowercase().contains("multipart/related") {
+                match crate::models::middleware::types::dicomweb_to_dicom::extract_multipart_dicom_parts(
+                    &envelope.original_data,
+                    &content_type,
+                )
+                .await
+                {
+                    Ok(parts_bytes) => {
+                        let count = parts_bytes.len();
+                        let parts_b64: Vec<Value> = parts_bytes
+                            .iter()
+                            .map(|p| {
+                                Value::String(
+                                    base64::engine::general_purpose::STANDARD.encode(p),
+                                )
+                            })
+                            .collect();
+
+                        // Merge into normalized_data without discarding existing keys.
+                        let mut nd_map = envelope
+                            .normalized_data
+                            .take()
+                            .and_then(|v| v.as_object().cloned())
+                            .unwrap_or_default();
+                        nd_map.insert(
+                            "dicom_store_parts".to_string(),
+                            Value::Array(parts_b64),
+                        );
+                        nd_map.insert(
+                            "dicom_store_parts_count".to_string(),
+                            Value::Number(serde_json::Number::from(count)),
+                        );
+                        envelope.normalized_data = Some(Value::Object(nd_map));
+
+                        // Set the Store command so downstream middleware and backend
+                        // route this correctly, then let normal flow continue.
+                        envelope.command =
+                            Some(Command::new(Operation::Store).with_source("dicomweb_endpoint"));
+                        tracing::debug!(
+                            "STOW-RS: extracted {} application/dicom part(s) from multipart body",
+                            count
+                        );
+                        return Ok(envelope);
+                    }
+                    Err(e) => {
+                        tracing::warn!("STOW-RS multipart extraction failed: {}", e);
+                        let mut hdrs = HashMap::new();
+                        hdrs.insert(
+                            "content-type".to_string(),
+                            "application/json".to_string(),
+                        );
+                        let body = serde_json::json!({
+                            "error": "Bad Request",
+                            "message": format!("STOW-RS multipart parsing failed: {}", e)
+                        });
+                        set_response(http::StatusCode::BAD_REQUEST, hdrs, None, Some(body));
+                        envelope
+                            .request_details
+                            .metadata
+                            .insert("skip_backends".to_string(), "true".to_string());
+                        return Ok(envelope);
+                    }
+                }
+            }
+        }
+
         let operation = match (method.as_str(), parts.as_slice()) {
             // === STOW-RS: Store ===
             ("POST", ["studies"]) => Some(Operation::Store),
