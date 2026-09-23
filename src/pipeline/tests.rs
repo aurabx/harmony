@@ -548,3 +548,196 @@ async fn test_command_present_on_response_without_backends() {
         "Response should have a command even when backends are skipped"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Auto-injected ingress mesh_auth
+// ---------------------------------------------------------------------------
+
+mod mesh_ingress_auto_injection {
+    use super::*;
+    use crate::models::mesh::config::{Mesh, MeshAuthType, MeshProtocol, MeshProvider};
+    use crate::models::middleware::types::mesh_auth::MeshClaims;
+    use crate::models::middleware::AuthFailure;
+    use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use std::sync::Arc;
+
+    const MESH_NAME: &str = "auto_mesh";
+    const MESH_SECRET: &str = "auto-injected-mesh-secret";
+
+    /// Upstream that counts every request it receives.
+    async fn start_counting_backend() -> (String, Arc<AtomicUsize>) {
+        let hits = Arc::new(AtomicUsize::new(0));
+        let hits_for_handler = hits.clone();
+        let app = axum::Router::new().route(
+            "/{*path}",
+            axum::routing::any(move || {
+                let hits = hits_for_handler.clone();
+                async move {
+                    hits.fetch_add(1, Ordering::SeqCst);
+                    axum::Json(serde_json::json!({ "backend": "reached" }))
+                }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (base_url, hits)
+    }
+
+    /// Config with an enabled mesh and a pipeline that does NOT list mesh_auth.
+    /// Any ingress auth must come from the executor's auto-injection.
+    fn mesh_config(backend_base_url: &str) -> Config {
+        let mut config = Config::default();
+        config.endpoints.insert(
+            "mesh_endpoint".to_string(),
+            Endpoint {
+                service: "http".to_string(),
+                options: Some(HashMap::new()),
+                peer_ref: None,
+                connection: None,
+                authentication: None,
+            },
+        );
+        config.backends.insert(
+            "upstream".to_string(),
+            Backend {
+                service: "http".to_string(),
+                target_ref: None,
+                connection: None,
+                authentication: None,
+                timeout_secs: None,
+                max_retries: None,
+                options: Some(HashMap::from([(
+                    "base_url".to_string(),
+                    serde_json::json!(backend_base_url),
+                )])),
+            },
+        );
+        config.mesh.insert(
+            MESH_NAME.to_string(),
+            Mesh {
+                id: None,
+                mesh_type: MeshProtocol::Http,
+                provider: MeshProvider::Local,
+                auth_type: MeshAuthType::Jwt,
+                jwt_secret: Some(MESH_SECRET.to_string()),
+                jwt_private_key_path: None,
+                jwt_public_key_path: None,
+                jwks_url: None,
+                ingress: vec![],
+                egress: vec![],
+                description: None,
+                enabled: true,
+            },
+        );
+        config
+    }
+
+    /// Envelope as it looks when the request arrived through mesh routing.
+    fn mesh_envelope(authorization: Option<String>) -> RequestEnvelope<Vec<u8>> {
+        let mut headers = HashMap::new();
+        if let Some(value) = authorization {
+            headers.insert("authorization".to_string(), value);
+        }
+        let mut envelope = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/resource")
+            .headers(headers)
+            .original_data(Vec::new())
+            .build()
+            .unwrap();
+        envelope
+            .request_details
+            .metadata
+            .insert("mesh_name".to_string(), MESH_NAME.to_string());
+        envelope
+    }
+
+    fn sign_token(secret: &str) -> String {
+        let now = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let claims = MeshClaims {
+            sub: Some("peer-proxy".to_string()),
+            iss: MESH_NAME.to_string(),
+            aud: None,
+            iat: now,
+            exp: now + 300,
+            mesh_id: MESH_NAME.to_string(),
+        };
+        encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap()
+    }
+
+    async fn run(authorization: Option<String>) -> (Result<(), PipelineError>, usize) {
+        let (backend_url, hits) = start_counting_backend().await;
+        let config = mesh_config(&backend_url);
+        let pipeline = create_test_pipeline(
+            vec!["mesh_endpoint".to_string()],
+            vec!["upstream".to_string()],
+        );
+        let ctx = create_test_protocol_ctx(Protocol::Http);
+
+        let result = PipelineExecutor::execute(
+            mesh_envelope(authorization),
+            "mesh_pipeline",
+            &pipeline,
+            &config,
+            &ctx,
+        )
+        .await
+        .map(|_| ());
+        (result, hits.load(Ordering::SeqCst))
+    }
+
+    fn assert_auth_failure(result: Result<(), PipelineError>, expected: &str) {
+        match result {
+            Err(PipelineError::MiddlewareError(err)) => {
+                let failure = err
+                    .downcast_ref::<AuthFailure>()
+                    .unwrap_or_else(|| panic!("expected AuthFailure, got: {}", err));
+                assert_eq!(failure.0, expected);
+            }
+            Err(other) => panic!("expected MiddlewareError(AuthFailure), got: {}", other),
+            Ok(()) => panic!("expected the request to be rejected"),
+        }
+    }
+
+    #[tokio::test]
+    async fn auto_injected_ingress_rejects_missing_token_before_backend() {
+        let (result, hits) = run(None).await;
+        assert_auth_failure(result, "Missing mesh Authorization header");
+        assert_eq!(hits, 0, "backend must not be called without a mesh token");
+    }
+
+    #[tokio::test]
+    async fn auto_injected_ingress_rejects_wrong_secret_before_backend() {
+        let token = sign_token("not-the-mesh-secret");
+        let (result, hits) = run(Some(format!("Bearer {}", token))).await;
+        assert_auth_failure(result, "Invalid mesh JWT");
+        assert_eq!(
+            hits, 0,
+            "backend must not be called with an invalid mesh token"
+        );
+    }
+
+    #[tokio::test]
+    async fn auto_injected_ingress_accepts_valid_token() {
+        let token = sign_token(MESH_SECRET);
+        let (result, hits) = run(Some(format!("Bearer {}", token))).await;
+        assert!(
+            result.is_ok(),
+            "valid token should pass: {:?}",
+            result.err()
+        );
+        assert_eq!(hits, 1, "backend should be called exactly once");
+    }
+}
