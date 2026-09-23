@@ -33,6 +33,35 @@ impl std::fmt::Display for PipelineError {
 
 impl std::error::Error for PipelineError {}
 
+/// A request body that the request-side middleware chain wrote to
+/// `original_data` in place of the bytes the endpoint received.
+#[derive(Debug, PartialEq)]
+enum RequestBodyRewrite {
+    Empty,
+    Json(Vec<u8>),
+    Binary(Vec<u8>),
+}
+
+impl RequestBodyRewrite {
+    fn into_bytes(self) -> Vec<u8> {
+        match self {
+            RequestBodyRewrite::Empty => Vec::new(),
+            RequestBodyRewrite::Json(bytes) | RequestBodyRewrite::Binary(bytes) => bytes,
+        }
+    }
+}
+
+/// True for `application/json` and any `+json` structured-syntax media type.
+fn is_json_media_type(content_type: &str) -> bool {
+    let media_type = content_type
+        .split(';')
+        .next()
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    media_type == "application/json" || media_type.ends_with("+json")
+}
+
 impl From<String> for PipelineError {
     fn from(msg: String) -> Self {
         PipelineError::ServiceError(msg)
@@ -409,7 +438,7 @@ impl PipelineExecutor {
     /// - For ingress: MeshAuth validation is prepended (first middleware)
     /// - For egress: MeshAuth JWT generation is appended (last middleware, before backend)
     async fn process_incoming_middleware(
-        envelope: RequestEnvelope<Vec<u8>>,
+        mut envelope: RequestEnvelope<Vec<u8>>,
         pipeline_name: &str,
         pipeline: &Pipeline,
         config: &Config,
@@ -426,9 +455,10 @@ impl PipelineExecutor {
             left_chain
         );
 
-        // Convert to JSON envelope for middleware processing
-        let normalized_data = envelope.normalized_data.clone();
-        let json_value = normalized_data.unwrap_or_else(|| {
+        // Convert to JSON envelope for middleware processing. `json_value` is
+        // also kept as the baseline that tells us whether any middleware
+        // replaced `original_data` (see `request_body_rewrite`).
+        let json_value = envelope.normalized_data.take().unwrap_or_else(|| {
             serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null)
         });
 
@@ -444,7 +474,7 @@ impl PipelineExecutor {
             .target_details(envelope.target_details.clone())
             .command(envelope.command.clone())
             .original_data(json_value.clone())
-            .normalized_data(Some(json_value))
+            .normalized_data(Some(json_value.clone()))
             .normalized_snapshot(envelope.normalized_snapshot.clone())
             .build()
             .expect("Failed to build json_envelope");
@@ -472,10 +502,27 @@ impl PipelineExecutor {
         let middleware_chain = MiddlewareChain::new(middleware_instances);
 
         // Process through middleware chain
-        let processed_json_envelope = middleware_chain
+        let mut processed_json_envelope = middleware_chain
             .left(json_envelope)
             .await
             .map_err(PipelineError::MiddlewareError)?;
+
+        // A middleware that replaced `original_data` produced the new request
+        // body. Otherwise the received bytes go to the backend untouched.
+        let written_body = std::mem::take(&mut processed_json_envelope.original_data);
+        let body = match Self::request_body_rewrite(&json_value, written_body)? {
+            None => envelope.original_data,
+            Some(rewrite) => {
+                Self::align_body_headers(
+                    &mut processed_json_envelope.request_details.headers,
+                    &rewrite,
+                );
+                if let Some(target) = processed_json_envelope.target_details.as_mut() {
+                    Self::align_body_headers(&mut target.headers, &rewrite);
+                }
+                rewrite.into_bytes()
+            }
+        };
 
         // Convert back to Vec<u8> envelope
         let processed_envelope = RequestEnvelope::builder()
@@ -489,13 +536,82 @@ impl PipelineExecutor {
             .backend_request_details(processed_json_envelope.backend_request_details)
             .target_details(processed_json_envelope.target_details)
             .command(processed_json_envelope.command)
-            .original_data(envelope.original_data)
+            .original_data(body)
             .normalized_data(processed_json_envelope.normalized_data)
             .normalized_snapshot(processed_json_envelope.normalized_snapshot)
             .build()
             .expect("Failed to build processed_envelope");
 
         Ok(processed_envelope)
+    }
+
+    /// Decide what request body the middleware chain asked for.
+    ///
+    /// Middleware opt in to replacing the body by writing `original_data`.
+    /// `baseline` is the value the chain started with, so an unchanged
+    /// `written` value means no middleware replaced the body and `None` is
+    /// returned: the received bytes must then pass through unchanged.
+    ///
+    /// A replaced body maps to bytes as follows:
+    /// - `null` is an empty body (for example a DIMSE query turned into a GET).
+    /// - An object with a string `body_b64` is a binary body in base64. This
+    ///   matches the convention `ResponseEnvelope::to_bytes` uses.
+    /// - Any other value is serialised as JSON.
+    fn request_body_rewrite(
+        baseline: &serde_json::Value,
+        written: serde_json::Value,
+    ) -> Result<Option<RequestBodyRewrite>, PipelineError> {
+        if &written == baseline {
+            return Ok(None);
+        }
+        if written.is_null() {
+            return Ok(Some(RequestBodyRewrite::Empty));
+        }
+        if let Some(b64) = written.get("body_b64").and_then(|v| v.as_str()) {
+            use base64::Engine;
+            let bytes = base64::engine::general_purpose::STANDARD
+                .decode(b64)
+                .map_err(|e| {
+                    PipelineError::MiddlewareError(Box::new(std::io::Error::new(
+                        std::io::ErrorKind::InvalidData,
+                        format!(
+                            "Middleware set original_data.body_b64 to invalid base64: {}",
+                            e
+                        ),
+                    )))
+                })?;
+            return Ok(Some(RequestBodyRewrite::Binary(bytes)));
+        }
+        let bytes = serde_json::to_vec(&written).map_err(|e| {
+            PipelineError::MiddlewareError(Box::new(std::io::Error::new(
+                std::io::ErrorKind::InvalidData,
+                format!("Failed to serialise middleware request body as JSON: {}", e),
+            )))
+        })?;
+        Ok(Some(RequestBodyRewrite::Json(bytes)))
+    }
+
+    /// Make body-describing headers match a body that middleware replaced.
+    ///
+    /// The received Content-Length and Content-Encoding describe the old bytes,
+    /// so they are removed. A JSON body gets `application/json` unless the
+    /// headers already name a JSON media type (such as `application/fhir+json`).
+    /// A binary body keeps whatever Content-Type the middleware set.
+    fn align_body_headers(headers: &mut HashMap<String, String>, rewrite: &RequestBodyRewrite) {
+        headers.retain(|name, _| {
+            !name.eq_ignore_ascii_case("content-length")
+                && !name.eq_ignore_ascii_case("content-encoding")
+        });
+
+        if let RequestBodyRewrite::Json(_) = rewrite {
+            let already_json = headers.iter().any(|(name, value)| {
+                name.eq_ignore_ascii_case("content-type") && is_json_media_type(value)
+            });
+            if !already_json {
+                headers.retain(|name, _| !name.eq_ignore_ascii_case("content-type"));
+                headers.insert("content-type".to_string(), "application/json".to_string());
+            }
+        }
     }
 
     /// Inject MeshAuth middleware based on mesh context
@@ -1047,6 +1163,94 @@ mod tests {
     fn test_pipeline_error_from_string() {
         let err: PipelineError = "test".into();
         assert_eq!(err.to_string(), "Service error: test");
+    }
+
+    #[test]
+    fn test_request_body_rewrite_unchanged_value_keeps_received_bytes() {
+        let baseline = serde_json::json!({"a": 1});
+        let rewrite = PipelineExecutor::request_body_rewrite(&baseline, baseline.clone()).unwrap();
+        assert_eq!(rewrite, None);
+    }
+
+    #[test]
+    fn test_request_body_rewrite_maps_null_json_and_base64() {
+        let baseline = serde_json::json!({"a": 1});
+
+        let empty =
+            PipelineExecutor::request_body_rewrite(&baseline, serde_json::Value::Null).unwrap();
+        assert_eq!(empty, Some(RequestBodyRewrite::Empty));
+
+        let json =
+            PipelineExecutor::request_body_rewrite(&baseline, serde_json::json!({"b": 2})).unwrap();
+        assert_eq!(json, Some(RequestBodyRewrite::Json(br#"{"b":2}"#.to_vec())));
+
+        let binary = PipelineExecutor::request_body_rewrite(
+            &baseline,
+            serde_json::json!({"body_b64": "AP8Q"}),
+        )
+        .unwrap();
+        assert_eq!(
+            binary,
+            Some(RequestBodyRewrite::Binary(vec![0x00, 0xFF, 0x10]))
+        );
+    }
+
+    #[test]
+    fn test_request_body_rewrite_rejects_invalid_base64() {
+        let result = PipelineExecutor::request_body_rewrite(
+            &serde_json::Value::Null,
+            serde_json::json!({"body_b64": "not base64!"}),
+        );
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn test_align_body_headers_for_json_body() {
+        let mut headers = HashMap::from([
+            ("Content-Type".to_string(), "application/xml".to_string()),
+            ("content-length".to_string(), "42".to_string()),
+            ("Content-Encoding".to_string(), "gzip".to_string()),
+            ("x-keep".to_string(), "yes".to_string()),
+        ]);
+        PipelineExecutor::align_body_headers(&mut headers, &RequestBodyRewrite::Json(vec![]));
+
+        let expected = HashMap::from([
+            ("content-type".to_string(), "application/json".to_string()),
+            ("x-keep".to_string(), "yes".to_string()),
+        ]);
+        assert_eq!(headers, expected);
+    }
+
+    #[test]
+    fn test_align_body_headers_keeps_existing_json_media_type() {
+        let mut headers = HashMap::from([(
+            "content-type".to_string(),
+            "application/fhir+json; charset=utf-8".to_string(),
+        )]);
+        PipelineExecutor::align_body_headers(&mut headers, &RequestBodyRewrite::Json(vec![]));
+        assert_eq!(
+            headers.get("content-type").map(String::as_str),
+            Some("application/fhir+json; charset=utf-8")
+        );
+    }
+
+    #[test]
+    fn test_align_body_headers_keeps_binary_content_type() {
+        let mut headers = HashMap::from([
+            (
+                "content-type".to_string(),
+                "multipart/related; boundary=x".to_string(),
+            ),
+            ("content-length".to_string(), "42".to_string()),
+        ]);
+        PipelineExecutor::align_body_headers(&mut headers, &RequestBodyRewrite::Binary(vec![]));
+        assert_eq!(
+            headers,
+            HashMap::from([(
+                "content-type".to_string(),
+                "multipart/related; boundary=x".to_string()
+            )])
+        );
     }
 
     #[tokio::test]
