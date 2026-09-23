@@ -118,6 +118,18 @@ impl ServiceHandler<Value> for JmixBackend {
             target
         };
 
+        // Normalise the target URI before path_prefix is applied.
+        //
+        // When a DIMSE endpoint feeds this backend (for example via the
+        // dimse_to_jmix middleware) the incoming envelope URI is a
+        // protocol URI like `dimse://scp/store`, not an HTTP path. The
+        // executor propagates that URI into target_details.uri, and any
+        // downstream path_prefix concatenation would produce an invalid
+        // URL such as `/api/dimse://scp/store`. Rewrite recognised
+        // protocol URIs to their JMIX HTTP equivalent here so path_prefix
+        // and full_url() both see a well-formed path.
+        target_details.uri = map_backend_uri(&target_details.uri)?;
+
         // Apply path_prefix from backend options if present
         // This prepends a path to the request URI (e.g., "/api/jmix" + "/123" = "/api/jmix/123")
         if let Some(path_prefix) = options
@@ -250,6 +262,51 @@ impl ServiceHandler<Value> for JmixBackend {
             .body(body)
             .map_err(|_| Error::from("Failed to construct JMIX backend response"))
     }
+}
+
+/// Normalise a target URI for the JMIX HTTP backend.
+///
+/// The executor sets `target_details.uri` from the incoming request's path.
+/// For HTTP-facing endpoints that is already an HTTP path. For endpoints
+/// whose protocol is not HTTP (DIMSE C-STORE, for example) the URI carries
+/// a protocol scheme and would produce an invalid HTTP URL if concatenated
+/// with `path_prefix`. This helper rewrites the recognised protocol URIs
+/// to their JMIX HTTP equivalents and rejects unknown ones.
+fn map_backend_uri(uri: &str) -> Result<String, Error> {
+    // HTTP-shaped paths (or an empty URI) pass through unchanged.
+    if uri.is_empty() || uri.starts_with('/') {
+        return Ok(uri.to_string());
+    }
+
+    // Absolute HTTP(S) URLs are accepted verbatim; downstream `full_url()`
+    // already knows how to handle them.
+    let lowered = uri.to_ascii_lowercase();
+    if lowered.starts_with("http://") || lowered.starts_with("https://") {
+        return Ok(uri.to_string());
+    }
+
+    // Recognised non-HTTP schemes: map to the JMIX resource that carries
+    // the same intent.
+    if lowered.starts_with("dimse://scp/store") {
+        return Ok("/jmix".to_string());
+    }
+
+    // Any other scheme is a bug in the pipeline wiring: concatenating a
+    // path_prefix onto it would produce a garbage URL. Refuse loudly so
+    // the failure is visible in logs instead of arriving as a 404 or
+    // connection error from the upstream.
+    if let Some(idx) = lowered.find("://") {
+        let scheme = &lowered[..idx];
+        return Err(Error::from(format!(
+            "JMIX backend received URI with unsupported scheme '{}': {}. \
+             Add a mapping in map_backend_uri or fix the pipeline wiring.",
+            scheme, uri
+        )));
+    }
+
+    // Not a scheme URI and not a path. Treat as a relative path — matches
+    // the historical behaviour for callers that pass bare identifiers.
+    Ok(format!("/{}", uri))
 }
 
 /// HTTP request helper for JmixBackend
@@ -385,5 +442,64 @@ mod tests {
         let options = HashMap::new();
         let routes = backend.build_router(&options);
         assert!(routes.is_empty(), "Backends should not define routes");
+    }
+
+    // ── map_backend_uri ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_map_backend_uri_passes_through_http_path() {
+        // A plain HTTP path is what the executor produces for HTTP endpoints;
+        // it must survive intact so path_prefix concatenation still works.
+        assert_eq!(
+            map_backend_uri("/api/jmix/1234").expect("path passes through"),
+            "/api/jmix/1234"
+        );
+    }
+
+    #[test]
+    fn test_map_backend_uri_passes_through_absolute_http_url() {
+        assert_eq!(
+            map_backend_uri("https://example.com/api/jmix").expect("http url passes"),
+            "https://example.com/api/jmix"
+        );
+    }
+
+    #[test]
+    fn test_map_backend_uri_rewrites_dimse_cstore_to_jmix() {
+        // The DIMSE C-STORE envelope URI is not an HTTP path. When a DIMSE
+        // pipeline forwards to a JMIX backend the aggregation middleware
+        // has already put the ZIP bytes into original_data, but the URI
+        // is still the DIMSE placeholder. Rewrite it to /jmix so the
+        // subsequent path_prefix ("/api") produces "/api/jmix".
+        assert_eq!(
+            map_backend_uri("dimse://scp/store").expect("dimse rewrites"),
+            "/jmix"
+        );
+    }
+
+    #[test]
+    fn test_map_backend_uri_rejects_unknown_scheme() {
+        let err = map_backend_uri("hl7://mllp/store").expect_err(
+            "unknown scheme must not be concatenated with path_prefix",
+        );
+        let msg = format!("{}", err);
+        assert!(
+            msg.contains("hl7"),
+            "error should name the offending scheme: {}",
+            msg
+        );
+    }
+
+    #[test]
+    fn test_map_backend_uri_bare_identifier_gets_leading_slash() {
+        assert_eq!(
+            map_backend_uri("abc-123").expect("bare id becomes path"),
+            "/abc-123"
+        );
+    }
+
+    #[test]
+    fn test_map_backend_uri_empty_is_root() {
+        assert_eq!(map_backend_uri("").expect("empty ok"), "");
     }
 }

@@ -7,6 +7,7 @@ pub mod dicom_to_http;
 pub mod dicom_flatten;
 pub mod dicom_unflatten;
 pub mod dicomweb_to_dicom;
+pub mod dimse_to_jmix;
 pub mod jmix_builder;
 pub mod jmix_index;
 pub mod json_extractor;

@@ -153,6 +153,30 @@ impl MiddlewareFactory for JmixBuilderFactory {
 }
 
 // ============================================================================
+// DIMSE to JMIX Aggregation Middleware
+// ============================================================================
+
+pub struct DimseToJmixFactory;
+
+impl MiddlewareFactory for DimseToJmixFactory {
+    fn type_name(&self) -> &str {
+        "dimse_to_jmix"
+    }
+
+    fn create(
+        &self,
+        options: &HashMap<String, Value>,
+        _config: Option<&Config>,
+    ) -> Result<Box<dyn Middleware>, String> {
+        let cfg =
+            crate::models::middleware::types::dimse_to_jmix::parse_config(options)?;
+        Ok(Box::new(
+            crate::models::middleware::types::dimse_to_jmix::DimseToJmixMiddleware::new(cfg),
+        ))
+    }
+}
+
+// ============================================================================
 // DICOMweb Bridge Middleware
 // ============================================================================
 
