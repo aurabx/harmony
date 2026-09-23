@@ -154,6 +154,14 @@ impl ServiceType for HttpEndpoint {
         if let Some(proto) = ctx.meta.get("protocol") {
             metadata.insert("protocol".into(), proto.clone());
         }
+        // Peer address recorded by the HTTP adapter's ConnectInfo extractor.
+        // Downstream policies (rate limit, ip_allow, ip_deny) key on this.
+        if let Some(addr) = ctx.meta.get("remote_addr") {
+            metadata.insert("remote_addr".into(), addr.clone());
+        }
+        if let Some(port) = ctx.meta.get("remote_port") {
+            metadata.insert("remote_port".into(), port.clone());
+        }
 
         let method = attrs
             .get("method")

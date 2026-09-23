@@ -6,13 +6,15 @@ use async_trait::async_trait;
 use chrono::Utc;
 use ipnetwork::IpNetwork;
 use matchit::Router;
+use once_cell::sync::Lazy;
 use regex::Regex;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::net::IpAddr;
 use std::str::FromStr;
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use tokio::sync::RwLock;
+use tokio::task::JoinHandle;
 
 /// Result of evaluating a single rule
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -114,6 +116,61 @@ impl CompiledIpRule {
     }
 }
 
+/// Shared rate-limit state for a single policy instance key.
+///
+/// Held in a process-wide registry so multiple `PoliciesMiddleware` instances
+/// built for the same pipeline share their bucket counts. The `_cleanup`
+/// JoinHandle is retained to keep exactly one cleanup task alive per key for
+/// the lifetime of the process.
+struct SharedRateLimitState {
+    buckets: Arc<RwLock<HashMap<String, RateLimitState>>>,
+    _cleanup: JoinHandle<()>,
+}
+
+static RATE_LIMIT_REGISTRY: Lazy<Mutex<HashMap<String, Arc<SharedRateLimitState>>>> =
+    Lazy::new(|| Mutex::new(HashMap::new()));
+
+/// Look up or create the shared rate-limit state for a given instance key.
+///
+/// The cleanup task is spawned exactly once per key. Subsequent lookups return
+/// the same `Arc<RwLock<..>>` so bucket counts persist across `PoliciesMiddleware`
+/// instances rebuilt on each pipeline request.
+fn get_or_init_rate_limit_state(
+    instance_key: &str,
+) -> Arc<RwLock<HashMap<String, RateLimitState>>> {
+    let mut registry = RATE_LIMIT_REGISTRY
+        .lock()
+        .expect("Rate limit registry mutex poisoned");
+
+    if let Some(shared) = registry.get(instance_key) {
+        return shared.buckets.clone();
+    }
+
+    let buckets: Arc<RwLock<HashMap<String, RateLimitState>>> =
+        Arc::new(RwLock::new(HashMap::new()));
+
+    let cleanup = PoliciesMiddleware::spawn_cleanup_task(buckets.clone(), instance_key.to_string());
+
+    let shared = Arc::new(SharedRateLimitState {
+        buckets: buckets.clone(),
+        _cleanup: cleanup,
+    });
+    registry.insert(instance_key.to_string(), shared);
+    buckets
+}
+
+/// Test-only helper: clear the rate-limit registry.
+///
+/// Exposed for the crate's own tests and integration tests that need to reset
+/// bucket state between runs. Not part of the public API.
+#[doc(hidden)]
+pub fn clear_rate_limit_registry_for_tests() {
+    let mut registry = RATE_LIMIT_REGISTRY
+        .lock()
+        .expect("Rate limit registry mutex poisoned");
+    registry.clear();
+}
+
 /// Policies middleware implementation
 pub struct PoliciesMiddleware {
     policies: Vec<Policy>,
@@ -121,12 +178,29 @@ pub struct PoliciesMiddleware {
     compiled_ip_rules: HashMap<usize, CompiledIpRule>, // policy_idx -> rule_idx key
     // Pre-compiled path rules for performance
     compiled_path_rules: HashMap<usize, CompiledPathRule>,
-    // Rate limit state tracking (client_ip + rule_key -> state)
+    // Rate limit state tracking (client_ip + rule_key -> state).
+    // Shared across all instances constructed with the same instance_key via
+    // the process-wide RATE_LIMIT_REGISTRY.
     rate_limit_state: Arc<RwLock<HashMap<String, RateLimitState>>>,
 }
 
 impl PoliciesMiddleware {
+    /// Construct a `PoliciesMiddleware` whose rate-limit state is not shared with
+    /// any other instance.
+    ///
+    /// Used by tests and any caller that does not have a stable pipeline / instance
+    /// identifier. Each call receives a fresh bucket map and its own cleanup task.
     pub fn new(config: PoliciesConfig) -> Result<Self, String> {
+        let unique_key = format!("anon-{}", uuid::Uuid::new_v4());
+        Self::with_instance_key(config, &unique_key)
+    }
+
+    /// Construct a `PoliciesMiddleware` that shares rate-limit state with any other
+    /// instance built with the same `instance_key`.
+    ///
+    /// The middleware factory calls this with the middleware instance name from
+    /// configuration so rebuilds across requests keep the running counts.
+    pub fn with_instance_key(config: PoliciesConfig, instance_key: &str) -> Result<Self, String> {
         if config.policies.is_empty() {
             return Err("Policies middleware requires at least one policy".to_string());
         }
@@ -246,14 +320,15 @@ impl PoliciesMiddleware {
         }
 
         tracing::info!(
-            "PoliciesMiddleware initialized with {} enabled policies",
-            enabled_policies.len()
+            "PoliciesMiddleware initialized with {} enabled policies (instance_key={})",
+            enabled_policies.len(),
+            instance_key
         );
 
-        let rate_limit_state = Arc::new(RwLock::new(HashMap::new()));
-
-        // Spawn background task to cleanup expired rate limit entries
-        Self::spawn_cleanup_task(rate_limit_state.clone());
+        // Share bucket state across all PoliciesMiddleware instances built with
+        // the same instance_key. The registry starts the cleanup task exactly
+        // once per key.
+        let rate_limit_state = get_or_init_rate_limit_state(instance_key);
 
         Ok(Self {
             policies: enabled_policies,
@@ -263,9 +338,16 @@ impl PoliciesMiddleware {
         })
     }
 
-    /// Spawn a background task to periodically clean up expired rate limit entries
-    fn spawn_cleanup_task(state: Arc<RwLock<HashMap<String, RateLimitState>>>) {
-        tokio::spawn(async move {
+    /// Spawn a background task to periodically clean up expired rate limit entries.
+    ///
+    /// Only called once per instance key by `get_or_init_rate_limit_state`; the
+    /// returned `JoinHandle` is held by the registry to keep the task alive.
+    fn spawn_cleanup_task(
+        state: Arc<RwLock<HashMap<String, RateLimitState>>>,
+        instance_key: String,
+    ) -> JoinHandle<()> {
+        let task_key = instance_key.clone();
+        let handle = tokio::spawn(async move {
             let mut interval = tokio::time::interval(tokio::time::Duration::from_secs(60));
 
             loop {
@@ -275,22 +357,29 @@ impl PoliciesMiddleware {
                 let current_time = Utc::now().timestamp();
                 let initial_size = state_map.len();
 
-                // Remove entries older than 5 minutes (300 seconds)
-                // This is conservative - keeps entries longer than most rate limit windows
+                // Remove entries older than 5 minutes (300 seconds).
+                // Conservative window - outlasts most rate limit windows so a
+                // slow client's count is not wiped mid-window.
                 state_map.retain(|_key, state| current_time - state.window_start < 300);
 
                 let removed = initial_size - state_map.len();
                 if removed > 0 {
                     tracing::debug!(
-                        "Rate limit cleanup: removed {} expired entries, {} remaining",
+                        "Rate limit cleanup: removed {} expired entries, {} remaining (instance_key={})",
                         removed,
-                        state_map.len()
+                        state_map.len(),
+                        task_key
                     );
                 }
             }
         });
 
-        tracing::info!("Rate limit cleanup task started (runs every 60 seconds)");
+        tracing::info!(
+            "Rate limit cleanup task started for instance_key={} (runs every 60 seconds)",
+            instance_key
+        );
+
+        handle
     }
 
     /// Evaluate a single rule against the request envelope
@@ -1850,6 +1939,112 @@ mod tests {
         let envelope = create_test_envelope("10.0.0.10");
         let result = middleware.left(envelope).await;
         assert!(result.is_err(), "3rd request should be denied");
+    }
+
+    /// Two `PoliciesMiddleware` instances built with the same instance_key must
+    /// share their rate-limit bucket counts. Simulates the executor rebuilding
+    /// the middleware on every request.
+    #[tokio::test]
+    async fn test_rate_limit_shared_across_instances_with_same_key() {
+        clear_rate_limit_registry_for_tests();
+
+        fn build_config() -> PoliciesConfig {
+            PoliciesConfig {
+                policies: vec![Policy {
+                    id: Some("test_policy".to_string()),
+                    name: Some("Test Policy".to_string()),
+                    enabled: true,
+                    rules: vec![
+                        Rule {
+                            id: Some("allow_rule".to_string()),
+                            name: Some("Allow All".to_string()),
+                            rule_type: "allow_all".to_string(),
+                            weight: 100,
+                            enabled: true,
+                            options: HashMap::new(),
+                        },
+                        Rule {
+                            id: Some("rate_limit".to_string()),
+                            name: Some("Rate Limit".to_string()),
+                            rule_type: "rate_limit".to_string(),
+                            weight: 50,
+                            enabled: true,
+                            options: {
+                                let mut opts = HashMap::new();
+                                opts.insert("max_requests".to_string(), serde_json::json!(3));
+                                opts.insert("window_seconds".to_string(), serde_json::json!(60));
+                                opts
+                            },
+                        },
+                    ],
+                }],
+            }
+        }
+
+        let key = "shared-key-test";
+
+        // First instance records two requests from 10.0.0.42.
+        let mw_a = PoliciesMiddleware::with_instance_key(build_config(), key).unwrap();
+        for _ in 0..2 {
+            let env = create_test_envelope("10.0.0.42");
+            mw_a.left(env).await.unwrap();
+        }
+
+        // Second instance (fresh construction, same instance_key) sees the
+        // running count. Third request from the same IP is allowed, fourth is
+        // denied by the shared bucket.
+        let mw_b = PoliciesMiddleware::with_instance_key(build_config(), key).unwrap();
+
+        let env = create_test_envelope("10.0.0.42");
+        mw_b.left(env).await.unwrap();
+
+        let env = create_test_envelope("10.0.0.42");
+        let result = mw_b.left(env).await;
+        assert!(
+            result.is_err(),
+            "4th request across two instances with the same key must be rate-limited"
+        );
+
+        // Instances built with a different key do not inherit the bucket.
+        let mw_c =
+            PoliciesMiddleware::with_instance_key(build_config(), "different-key").unwrap();
+        let env = create_test_envelope("10.0.0.42");
+        mw_c.left(env).await.expect(
+            "different instance_key must not share state with the previous key",
+        );
+    }
+
+    /// The registry must spawn exactly one cleanup task per instance key. The
+    /// task is not directly observable, but we can assert the shared state is
+    /// the same `Arc` across instances built with the same key.
+    #[tokio::test]
+    async fn test_rate_limit_registry_reuses_state_for_same_key() {
+        clear_rate_limit_registry_for_tests();
+
+        let key = "single-task-key";
+        let cfg = PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("p".to_string()),
+                name: None,
+                enabled: true,
+                rules: vec![Rule {
+                    id: None,
+                    name: None,
+                    rule_type: "allow_all".to_string(),
+                    weight: 100,
+                    enabled: true,
+                    options: HashMap::new(),
+                }],
+            }],
+        };
+
+        let a = PoliciesMiddleware::with_instance_key(cfg.clone(), key).unwrap();
+        let b = PoliciesMiddleware::with_instance_key(cfg, key).unwrap();
+
+        assert!(
+            Arc::ptr_eq(&a.rate_limit_state, &b.rate_limit_state),
+            "Instances with the same key must share the same bucket map Arc"
+        );
     }
 
     #[tokio::test]
