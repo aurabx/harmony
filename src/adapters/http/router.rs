@@ -5,23 +5,27 @@ use crate::models::middleware::{
     AccessDenied, AuthFailure, ContentTypeDenied, MethodDenied, PathDenied, RateLimitExceeded,
 };
 use crate::pipeline::{PipelineError, PipelineExecutor};
+use crate::router::route_table::{method_list, RouteLookup, RouteTable};
 use axum::body::Body;
 use axum::extract::Request;
-use axum::response::Response;
+use axum::response::{IntoResponse, Response};
+use axum::routing::any;
 use axum::Router;
-use http::{Method, StatusCode};
-use std::collections::{HashMap, HashSet};
+use http::StatusCode;
+use std::collections::HashMap;
 use std::sync::Arc;
 
 /// Build network router for HTTP adapter
 ///
-/// This replaces the old router/dispatcher logic but uses PipelineExecutor.
+/// Harmony picks the endpoint for each request itself, from a
+/// [`RouteTable`] of every endpoint route on the network. axum only sees one
+/// catch-all, so overlapping endpoint paths (a collection and an item below
+/// it) cannot make route registration fail. See `router::route_table` for
+/// the matching rule.
+///
 /// Mesh routing takes priority: if a request matches a mesh ingress URL,
 /// it is routed to the ingress's endpoint regardless of other route matches.
 pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Router {
-    let mut app = Router::new();
-    let mut route_registry: HashSet<(Method, String)> = HashSet::new();
-
     // Build mesh registry for priority routing (with remote reference resolution)
     let resolver = crate::globals::get_provider_resolver();
     let mesh_registry = Arc::new(
@@ -34,157 +38,36 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
         network_name,
         config.pipelines.len()
     );
-    for (name, pipeline) in &config.pipelines {
-        tracing::debug!(
-            "Pipeline '{}': networks={:?}, endpoints={:?}",
-            name,
-            pipeline.networks,
-            pipeline.endpoints
+
+    // Config validation rejects these problems at load time. A config that
+    // skipped validation still gets a working router without the bad routes.
+    let (table, problems) = RouteTable::build(&config, network_name);
+    for problem in &problems {
+        tracing::error!(
+            "Route not registered on network '{}': {}",
+            network_name,
+            problem
         );
     }
-
-    for (pipeline_name, pipeline) in &config.pipelines {
-        if !pipeline.networks.contains(&network_name.to_string()) {
-            tracing::debug!(
-                "Skipping pipeline '{}' - not on network '{}'",
-                pipeline_name,
-                network_name
-            );
-            continue;
-        }
-
+    for entry in table.entries() {
         tracing::info!(
-            "Processing pipeline '{}' for network '{}'",
-            pipeline_name,
-            network_name
+            "✅ Registered route: {} [{}] -> endpoint '{}' (pipeline '{}')",
+            entry.pattern,
+            method_list(&entry.methods),
+            entry.owner.endpoint,
+            entry.owner.pipeline
         );
-
-        // Collect routes for this pipeline
-        let mut planned: Vec<(String, crate::router::route_config::RouteConfig)> = Vec::new();
-        let mut has_conflict = false;
-
-        for endpoint_name in &pipeline.endpoints {
-            tracing::debug!("Looking for endpoint '{}'", endpoint_name);
-            if let Some(endpoint) = config.endpoints.get(endpoint_name) {
-                tracing::debug!(
-                    "Found endpoint '{}' with service '{}'",
-                    endpoint_name,
-                    endpoint.service
-                );
-                let service = match endpoint.resolve_service() {
-                    Ok(service) => service,
-                    Err(err) => {
-                        tracing::error!(
-                            "Failed to resolve service for endpoint '{}': {}",
-                            endpoint_name,
-                            err
-                        );
-                        continue;
-                    }
-                };
-
-                let opts_map: HashMap<String, serde_json::Value> =
-                    endpoint.options.clone().unwrap_or_default();
-
-                // Note: DIMSE SCPs are now started by DimseAdapter in the orchestrator (src/lib.rs)
-                // HTTP router no longer launches DIMSE listeners
-
-                let route_configs = service.build_router(&opts_map);
-                tracing::debug!(
-                    "Service '{}' generated {} route configs",
-                    endpoint.service,
-                    route_configs.len()
-                );
-                for route_config in &route_configs {
-                    tracing::debug!("Route: {} {:?}", route_config.path, route_config.methods);
-                }
-
-                for route_config in route_configs.clone() {
-                    for m in &route_config.methods {
-                        let key = (m.clone(), route_config.path.clone());
-                        if route_registry.contains(&key) {
-                            tracing::warn!(
-                                "Dropping pipeline '{}' due to route conflict: {} {}",
-                                pipeline_name,
-                                m,
-                                route_config.path
-                            );
-                            has_conflict = true;
-                            break;
-                        }
-                    }
-                    if has_conflict {
-                        break;
-                    }
-                    planned.push((endpoint_name.clone(), route_config));
-                }
-                if has_conflict {
-                    break;
-                }
-            } else {
-                tracing::warn!("Endpoint '{}' not found in config", endpoint_name);
-            }
-        }
-
-        if has_conflict {
-            continue;
-        }
-
-        // Register routes
-        for (endpoint_name, route_config) in planned {
-            if let Some(_endpoint) = config.endpoints.get(&endpoint_name) {
-                let path = route_config.path.clone();
-                let methods = route_config.methods.clone();
-
-                let mut method_router = axum::routing::MethodRouter::new();
-                let mut added_any = false;
-
-                for method in methods.clone() {
-                    let key = (method.clone(), path.clone());
-                    if route_registry.contains(&key) {
-                        tracing::warn!("Skipping duplicate route: {} {}", method, path);
-                        continue;
-                    }
-
-                    let endpoint_name2 = endpoint_name.clone();
-                    let pipeline_name2 = pipeline_name.clone();
-                    let config_ref = config.clone();
-
-                    let handler = move |mut req: Request| {
-                        let endpoint_name = endpoint_name2.clone();
-                        let pipeline_name = pipeline_name2.clone();
-                        let config_ref = config_ref.clone();
-                        async move {
-                            handle_request(&mut req, config_ref, endpoint_name, pipeline_name).await
-                        }
-                    };
-
-                    method_router = match method {
-                        http::Method::GET => method_router.get(handler),
-                        http::Method::POST => method_router.post(handler),
-                        http::Method::PUT => method_router.put(handler),
-                        http::Method::DELETE => method_router.delete(handler),
-                        http::Method::PATCH => method_router.patch(handler),
-                        http::Method::HEAD => method_router.head(handler),
-                        http::Method::OPTIONS => method_router.options(handler),
-                        _ => method_router,
-                    };
-
-                    route_registry.insert(key);
-                    added_any = true;
-                }
-
-                if added_any {
-                    tracing::info!("✅ Registered route: {}", path);
-                    app = app.route(&path, method_router);
-                }
-            }
-        }
-
-        // Note: DIMSE SCPs (including persistent Store SCPs for backends) are now
-        // started by DimseAdapter in the orchestrator (src/lib.rs)
-        // HTTP router no longer launches DIMSE listeners
     }
+
+    let table = Arc::new(table);
+    let dispatch = move |req: Request| {
+        let table = table.clone();
+        let config = config.clone();
+        async move { dispatch_request(req, table, config).await }
+    };
+    let mut app = Router::new()
+        .route("/", any(dispatch.clone()))
+        .route("/{*path}", any(dispatch));
 
     // Add mesh routing layer - this runs FIRST before normal route matching
     // If request matches a mesh ingress URL, it's handled here and normal routes are bypassed
@@ -204,6 +87,29 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
     }
 
     app
+}
+
+/// Send one request to the endpoint the route table picks for it.
+async fn dispatch_request(
+    mut req: Request,
+    table: Arc<RouteTable>,
+    config: Arc<Config>,
+) -> Response<Body> {
+    let (endpoint_name, pipeline_name) = match table.lookup(req.method(), req.uri().path()) {
+        RouteLookup::Found(entry) => (entry.owner.endpoint.clone(), entry.owner.pipeline.clone()),
+        RouteLookup::MethodNotAllowed(allowed) => {
+            return (
+                StatusCode::METHOD_NOT_ALLOWED,
+                [(http::header::ALLOW, method_list(&allowed))],
+            )
+                .into_response();
+        }
+        RouteLookup::NotFound => return StatusCode::NOT_FOUND.into_response(),
+    };
+
+    handle_request(&mut req, config, endpoint_name, pipeline_name)
+        .await
+        .into_response()
 }
 
 /// Mesh routing middleware layer.

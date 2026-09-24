@@ -28,7 +28,7 @@ async fn test_streaming_pipeline_detection() {
 
         [pipelines.regular_pipeline]
         networks = ["default"]
-        endpoints = ["http_test"]
+        endpoints = ["http_regular"]
         backends = ["echo_backend"]
         middleware = []
 
@@ -36,6 +36,13 @@ async fn test_streaming_pipeline_detection() {
         service = "http"
         [endpoints.http_test.options]
         path_prefix = "/test"
+
+        # Two pipelines on one network cannot share an endpoint: both would
+        # claim the same paths, which fails config load (AURA-2443).
+        [endpoints.http_regular]
+        service = "http"
+        [endpoints.http_regular.options]
+        path_prefix = "/regular"
 
         [backends.streaming_backend]
         service = "dicom_scu_streaming"
