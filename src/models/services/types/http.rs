@@ -5,7 +5,7 @@ use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::models::services::upstream_headers::{
     upstream_request_headers, InboundAuthorizationPolicy,
 };
-use crate::router::route_config::RouteConfig;
+use crate::router::route_config::{standard_methods, RouteConfig};
 use crate::utils::Error;
 use async_trait::async_trait;
 use axum::{body::Body, response::Response};
@@ -59,23 +59,13 @@ impl ServiceType for HttpEndpoint {
             // Handle exact path match
             RouteConfig {
                 path: path_prefix.to_string(),
-                methods: vec![
-                    http::Method::GET,
-                    http::Method::POST,
-                    http::Method::PUT,
-                    http::Method::DELETE,
-                ],
+                methods: standard_methods(),
                 description: Some("Handles HTTP requests at exact path".to_string()),
             },
             // Handle subpaths (e.g., /dicom/echo, /api/v1/users)
             RouteConfig {
                 path: wildcard_path,
-                methods: vec![
-                    http::Method::GET,
-                    http::Method::POST,
-                    http::Method::PUT,
-                    http::Method::DELETE,
-                ],
+                methods: standard_methods(),
                 description: Some("Handles HTTP requests with subpaths".to_string()),
             },
         ]
@@ -569,6 +559,7 @@ impl HttpEndpoint {
             "DELETE" => client.delete(&full_url),
             "PATCH" => client.patch(&full_url),
             "HEAD" => client.head(&full_url),
+            "OPTIONS" => client.request(reqwest::Method::OPTIONS, &full_url),
             method => {
                 return Err(Error::from(format!("Unsupported HTTP method: {}", method)));
             }

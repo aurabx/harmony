@@ -11,10 +11,9 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 
-use crate::router::route_config::RouteConfig;
+use crate::router::route_config::{standard_methods, RouteConfig};
 use crate::utils::Error;
 use tracing::{debug, info};
-use http::Method;
 
 /// HTTP streaming endpoint configuration
 ///
@@ -129,7 +128,7 @@ impl ServiceType for HttpStreamingEndpoint {
             format!("{}/{{*wildcard}}", prefix_trimmed)
         };
 
-        let methods = vec![Method::GET, Method::POST, Method::PUT, Method::DELETE];
+        let methods = standard_methods();
 
         vec![
             RouteConfig {
@@ -489,6 +488,7 @@ impl HttpStreamingEndpoint {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use http::Method;
 
     #[test]
     fn test_stream_format_from_accept() {

@@ -71,6 +71,10 @@ A basic HTTP endpoint handled by `HttpAdapter`.
 - Preserves headers, query parameters, and body
 - Sets a `Command` on the envelope based on the HTTP method (GET→Retrieve, POST→Store, PUT→Update, PATCH→Patch, DELETE→Delete, HEAD/OPTIONS→Ping). See [commands.md](commands.md).
 
+**Methods**: GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS all reach the pipeline, on `path_prefix` and on every path below it. The endpoint does not restrict methods. Use a `method` rule in the policies middleware to limit them (see [policies-middleware.md](policies-middleware.md)). The `echo` and `http_streaming` endpoints accept the same methods.
+
+TRACE and CONNECT are not routed and get `405 Method Not Allowed`. TRACE reflects the request, including credential headers, back to the client. CONNECT asks for a raw TCP tunnel, which a pipeline cannot carry.
+
 **Configuration**:
 ```toml
 [endpoints.<name>]
@@ -96,6 +100,8 @@ Extends the HTTP endpoint with FHIR-specific handling.
 - Provides FHIR-aware request/response handling
 - Takes a `ResponseEnvelope` and converts it into a FHIR-compliant HTTP response
 - Sets a `Command` based on FHIR interaction type: search→Query, read→Retrieve, create→Store, `_search`→Query, metadata→Ping, and others. See [commands.md](commands.md).
+
+**Methods**: GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS on every path below `path_prefix`.
 
 **Configuration**:
 ```toml
