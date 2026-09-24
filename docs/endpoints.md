@@ -85,6 +85,8 @@ service = "http"
 path_prefix = "/api"
 ```
 
+**Paths**: the endpoint serves `path_prefix` and every path below it. `path_prefix` may contain parameters, such as `/v1/checkout/sessions/{id}/complete`. Endpoints on one network may overlap. The most specific endpoint serves each request, so an item endpoint at `/v1/orders/{id}` takes `/v1/orders/42` from a collection endpoint at `/v1/orders`. Two endpoints with the same path shape on one network fail config load. See [router.md](router.md#http-route-matching) for the full rule.
+
 ### FHIR
 
 Extends the HTTP endpoint with FHIR-specific handling.

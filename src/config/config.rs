@@ -18,6 +18,7 @@ use crate::models::pipelines::config::Pipeline;
 use crate::models::services::services::initialise_service_registry;
 use crate::models::services::services::ServiceConfig;
 use crate::models::targets::config::TargetConfig;
+use crate::router::route_table::RouteTable;
 use crate::storage::StorageConfig;
 use once_cell::sync::Lazy;
 use serde::Deserialize;
@@ -142,6 +143,10 @@ pub struct Config {
     /// Backends that could not be resolved due to missing targets (not serialized)
     #[serde(skip)]
     pub unresolved_backends: std::collections::HashSet<String>,
+    /// Endpoint name -> the config file that defined it (not serialized).
+    /// Filled by `Config::load` so route conflicts can name the files.
+    #[serde(skip)]
+    pub endpoint_sources: HashMap<String, String>,
 }
 
 impl Config {
@@ -176,6 +181,10 @@ impl Config {
                         options
                     }),
                 },
+            );
+            self.endpoint_sources.insert(
+                "management".to_string(),
+                "the built-in management API ([management] section)".to_string(),
             );
         }
 
@@ -375,6 +384,7 @@ impl Config {
                 name: "config".to_string(),
                 reason: format!("Failed to parse config file '{}': {}", config_path, e),
             })?;
+        config.record_endpoint_sources(config_path);
 
         // Resolve paths
         let base_dir = path.parent().ok_or_else(|| ConfigError::InvalidProxy {
@@ -417,6 +427,13 @@ impl Config {
         config.validate()?;
 
         Ok(config)
+    }
+
+    /// Record `file` as the source of every endpoint defined in this config.
+    fn record_endpoint_sources(&mut self, file: &str) {
+        for name in self.endpoints.keys() {
+            self.endpoint_sources.insert(name.clone(), file.to_string());
+        }
     }
 
     pub fn from_args(cli: Cli) -> Self {
@@ -488,8 +505,11 @@ impl Config {
                     Ok(contents) => {
                         // Apply environment variable substitution
                         let (contents_substituted, _audit) = substitute_env_vars(&contents);
-                        match toml::from_str(&contents_substituted) {
-                            Ok(config) => configs.push(config),
+                        match toml::from_str::<Config>(&contents_substituted) {
+                            Ok(mut config) => {
+                                config.record_endpoint_sources(&path.to_string_lossy());
+                                configs.push(config);
+                            }
                             Err(e) => {
                                 tracing::error!("Failed to parse config file {:?}: {}", path, e);
                             }
@@ -512,6 +532,7 @@ impl Config {
             base.provider.extend(config.provider);
             base.network.extend(config.network);
             base.endpoints.extend(config.endpoints);
+            base.endpoint_sources.extend(config.endpoint_sources);
             base.backends.extend(config.backends);
             // Debug log pipelines being merged
             for (name, pipeline) in &config.pipelines {
@@ -604,6 +625,7 @@ impl Config {
         self.validate_middleware_types()?;
         self.validate_pipelines()?;
         self.validate_endpoints()?;
+        self.validate_routes()?;
         self.validate_backends()?;
         self.validate_targets()?;
         self.validate_peers()?;
@@ -852,6 +874,39 @@ impl Config {
                     name: name.clone(),
                     reason: format!("Service validation failed: {:?}", err),
                 })?;
+        }
+        Ok(())
+    }
+
+    /// Reject networks whose HTTP routes cannot all be served.
+    ///
+    /// Endpoints may overlap; the most specific one wins (see
+    /// `router::route_table`). Two routes with the same shape and a shared
+    /// method, or a path that is not a valid route pattern, fail the load
+    /// here so the router never meets them at startup or on reload.
+    fn validate_routes(&self) -> Result<(), ConfigError> {
+        let mut networks: Vec<&String> = self.network.keys().collect();
+        networks.sort();
+        for network in networks {
+            let (_, problems) = RouteTable::build(self, network);
+            if !problems.is_empty() {
+                // Report each endpoint (or pair of endpoints) once, not once
+                // for each of its routes.
+                let mut reported = Vec::new();
+                let mut messages = Vec::new();
+                for problem in &problems {
+                    let owners = problem.owners();
+                    if !reported.contains(&owners) {
+                        reported.push(owners);
+                        messages.push(problem.to_string());
+                    }
+                }
+                let reason = messages.join("; ");
+                return Err(ConfigError::InvalidNetwork {
+                    name: network.clone(),
+                    reason,
+                });
+            }
         }
         Ok(())
     }

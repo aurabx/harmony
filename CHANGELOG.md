@@ -13,6 +13,7 @@
 
 ### Fixed
 - (AURA-2391) Final C-GET and C-MOVE responses no longer carry the Number of Remaining Sub-operations attribute, which PS3.4 forbids outside Pending responses.
+- (AURA-2443) HTTP endpoints whose paths overlap on one network, such as `/v1/checkout/sessions` and `/v1/checkout/sessions/{id}/complete`, no longer make Harmony panic at startup. Each request goes to the most specific endpoint (see docs/router.md). Routes with the same shape and a shared method, including one endpoint listed in two pipelines on the same network, and invalid route paths now fail config load with an error naming both endpoints and their files. Before, the router dropped one of the pipelines at random.
 
 ## [0.12.3] - 2026-01-30
 

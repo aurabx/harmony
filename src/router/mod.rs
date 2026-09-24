@@ -1,4 +1,5 @@
 pub mod route_config;
+pub mod route_table;
 
 // Phase 6 cleanup complete (2025-10-18):
 // - dispatcher.rs: Deleted (use HttpAdapter instead)
