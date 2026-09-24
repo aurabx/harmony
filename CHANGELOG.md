@@ -13,6 +13,7 @@
 
 ### Fixed
 - (AURA-2391) Final C-GET and C-MOVE responses no longer carry the Number of Remaining Sub-operations attribute, which PS3.4 forbids outside Pending responses.
+- (AURA-2440) `http`, `http_streaming` and `echo` endpoints now route GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS to the pipeline. Before, PATCH and OPTIONS (and PUT and DELETE on `echo`) got 405 from the router, so policies and backends never saw them. The `http` backend now forwards OPTIONS. TRACE and CONNECT are still not routed.
 
 ## [0.12.3] - 2026-01-30
 

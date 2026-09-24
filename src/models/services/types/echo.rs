@@ -2,11 +2,10 @@ use crate::config::config::ConfigError;
 use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
-use crate::router::route_config::RouteConfig;
+use crate::router::route_config::{standard_methods, RouteConfig};
 use crate::utils::Error;
 use async_trait::async_trait;
 use axum::{body::Body, response::Response};
-use http::Method;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -48,13 +47,13 @@ impl ServiceType for EchoEndpoint {
             // Handle exact path match (e.g., /echo)
             RouteConfig {
                 path: path_prefix.to_string(),
-                methods: vec![Method::POST, Method::GET],
+                methods: standard_methods(),
                 description: Some("Handles Echo requests at exact path".to_string()),
             },
             // Handle subpaths (e.g., /echo/anything)
             RouteConfig {
                 path: format!("{}/{{*wildcard}}", path_prefix),
-                methods: vec![Method::POST, Method::GET],
+                methods: standard_methods(),
                 description: Some("Handles Echo requests with subpaths".to_string()),
             },
         ]
