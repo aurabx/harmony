@@ -16,6 +16,7 @@
 - (AURA-2391) Final C-GET and C-MOVE responses no longer carry the Number of Remaining Sub-operations attribute, which PS3.4 forbids outside Pending responses.
 - (AURA-2433, AURA-2411, AURA-2427) HTTP-based backends no longer forward the client's `Authorization` header upstream by default. Pass-through proxies must now set `forward_authorization = true`. The upstream no longer receives two `Authorization` headers when the backend or mesh egress sets its own.
 - (AURA-2427) `http_streaming_backend` no longer forwards `Host` and hop-by-hop headers. All HTTP-based backends now also strip headers named in the client's `Connection` header, plus `TE`, `Trailer`, `Proxy-Authorization` and `Proxy-Authenticate`.
+- (AURA-2438) An `ip_allow` rule in the policies middleware is now a required gate for its policy. Before, any other allow rule (for example a `method` rule in allow mode) admitted clients from outside the allowlist. A client IP that matches none of the policy's `ip_allow` rules now gets 403. A policy with an allowlist also denies requests with an unknown client IP, which includes all HTTP/3 requests for now. See docs/policies-middleware.md.
 
 ## [0.12.3] - 2026-01-30
 

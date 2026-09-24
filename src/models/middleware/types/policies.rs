@@ -382,6 +382,109 @@ impl PoliciesMiddleware {
         handle
     }
 
+    /// Enforce the IP allowlist of every policy that has one (AURA-2438).
+    ///
+    /// An enabled `ip_allow` rule is a required gate for the policy that holds
+    /// it. The client IP must fall inside at least one of that policy's
+    /// `ip_allow` rules. A policy without `ip_allow` rules has no gate. Without
+    /// this check any other allow rule, such as a method rule in allow mode,
+    /// admitted clients from outside the allowlist, because the combined result
+    /// only needs one allow and no deny.
+    ///
+    /// Fails closed: a policy with an allowlist denies a request whose envelope
+    /// has no parseable client IP. HTTP/3 does not record the peer address yet
+    /// (AURA-2417), so HTTP/3 requests always fail this gate.
+    ///
+    /// Returns `AccessDenied` (HTTP 403) for the first policy whose gate fails.
+    /// Reads the envelope only; it has no side effects besides logging.
+    fn check_ip_allowlists(
+        &self,
+        envelope: &RequestEnvelope<serde_json::Value>,
+    ) -> Result<(), Error> {
+        let raw_client_ip = envelope
+            .request_details
+            .metadata
+            .get("remote_addr")
+            .or_else(|| envelope.request_details.metadata.get("client_ip"));
+        let client_ip = raw_client_ip.and_then(|raw| IpAddr::from_str(raw).ok());
+
+        for (policy_idx, policy) in self.policies.iter().enumerate() {
+            let allowlist: Vec<(usize, &Rule)> = policy
+                .rules
+                .iter()
+                .enumerate()
+                .filter(|(_, r)| r.enabled && r.rule_type == "ip_allow")
+                .collect();
+            if allowlist.is_empty() {
+                continue;
+            }
+
+            let policy_label = policy
+                .id
+                .as_deref()
+                .or(policy.name.as_deref())
+                .unwrap_or("unnamed");
+            let rule_ids = allowlist
+                .iter()
+                .map(|(_, r)| r.id.as_deref().or(r.name.as_deref()).unwrap_or("unnamed"))
+                .collect::<Vec<_>>()
+                .join(", ");
+
+            let Some(ip) = client_ip else {
+                tracing::warn!(
+                    "Request DENIED - policy '{}' has an IP allowlist (rules: {}) but the client IP is unknown (remote_addr={:?}); failing closed",
+                    policy_label,
+                    rule_ids,
+                    raw_client_ip
+                );
+                return Err(Box::new(AccessDenied(format!(
+                    "Client IP is unknown and policy '{}' requires an IP allowlist match",
+                    policy_label
+                ))));
+            };
+
+            let matched_rule = allowlist.iter().find(|(rule_idx, _)| {
+                let key = policy_idx * 10000 + rule_idx;
+                match self.compiled_ip_rules.get(&key) {
+                    Some(compiled) => compiled.matches(&ip),
+                    None => {
+                        tracing::error!(
+                            "Compiled IP rule not found for key {} - this is a bug; treating as no match",
+                            key
+                        );
+                        false
+                    }
+                }
+            });
+
+            match matched_rule {
+                Some((_, rule)) => tracing::debug!(
+                    "IP allowlist gate passed: policy='{}', rule='{}', client_ip={}",
+                    policy_label,
+                    rule.id
+                        .as_deref()
+                        .or(rule.name.as_deref())
+                        .unwrap_or("unnamed"),
+                    ip
+                ),
+                None => {
+                    tracing::info!(
+                        "Request DENIED - client_ip={} is outside the IP allowlist of policy '{}' (rules: {})",
+                        ip,
+                        policy_label,
+                        rule_ids
+                    );
+                    return Err(Box::new(AccessDenied(format!(
+                        "Client IP is not in the IP allowlist of policy '{}'",
+                        policy_label
+                    ))));
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     /// Evaluate a single rule against the request envelope
     async fn evaluate_rule(
         &self,
@@ -1352,6 +1455,10 @@ impl Middleware for PoliciesMiddleware {
         &self,
         envelope: RequestEnvelope<serde_json::Value>,
     ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
+        // The allowlist gate runs before the other rules, so a client outside
+        // the allowlist never consumes rate-limit budget.
+        self.check_ip_allowlists(&envelope)?;
+
         let mut has_allow = false;
         let mut deny_rule: Option<&Rule> = None;
 
@@ -1409,7 +1516,8 @@ impl Middleware for PoliciesMiddleware {
         }
 
         // Apply evaluation logic:
-        // Request is ACCEPTED only if: has_allow = true AND deny_rule = None
+        // Request is ACCEPTED only if: the IP allowlist gate passed (above),
+        // has_allow = true AND deny_rule = None
         if let Some(rule) = deny_rule {
             let rule_name = rule.name.as_deref().unwrap_or("unnamed");
             tracing::warn!(
@@ -3249,6 +3357,276 @@ mod tests {
             .request_details
             .metadata
             .contains_key("skip_backends"));
+    }
+
+    // ============================================
+    // IP Allowlist Gate Tests (AURA-2438)
+    // ============================================
+
+    fn ip_rule(id: &str, rule_type: &str, cidrs: &[&str]) -> Rule {
+        let mut options = HashMap::new();
+        options.insert("ip_addresses".to_string(), serde_json::json!(cidrs));
+        Rule {
+            id: Some(id.to_string()),
+            name: None,
+            rule_type: rule_type.to_string(),
+            weight: 90,
+            enabled: true,
+            options,
+        }
+    }
+
+    fn method_rule(id: &str, mode: &str, methods: &[&str]) -> Rule {
+        let mut options = HashMap::new();
+        options.insert("mode".to_string(), serde_json::json!(mode));
+        options.insert("methods".to_string(), serde_json::json!(methods));
+        Rule {
+            id: Some(id.to_string()),
+            name: None,
+            rule_type: "method".to_string(),
+            weight: 80,
+            enabled: true,
+            options,
+        }
+    }
+
+    fn single_policy(rules: Vec<Rule>) -> PoliciesConfig {
+        PoliciesConfig {
+            policies: vec![Policy {
+                id: Some("gate_policy".to_string()),
+                name: None,
+                enabled: true,
+                rules,
+            }],
+        }
+    }
+
+    /// Envelope with an optional injected client IP under `remote_addr`.
+    fn gate_envelope(method: &str, client_ip: Option<&str>) -> RequestEnvelope<serde_json::Value> {
+        let mut builder = RequestEnvelopeBuilder::new()
+            .method(method)
+            .uri("/api/items")
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null));
+        if let Some(ip) = client_ip {
+            builder = builder.metadata_entry("remote_addr", ip);
+        }
+        builder.build().unwrap()
+    }
+
+    /// The shape of the harmony-examples `http-internal` policy: an allowlist
+    /// plus a method rule in allow mode that allows the common methods from
+    /// any address.
+    fn allowlist_with_method_allow() -> PoliciesConfig {
+        single_policy(vec![
+            ip_rule(
+                "internal_networks",
+                "ip_allow",
+                &["10.0.0.0/8", "192.168.0.0/16", "127.0.0.1/32"],
+            ),
+            method_rule("method_filter", "allow", &["GET", "POST", "PUT", "DELETE"]),
+        ])
+    }
+
+    fn assert_access_denied(result: Result<RequestEnvelope<serde_json::Value>, Error>) {
+        let err = result.expect_err("request should be denied");
+        assert!(
+            err.downcast_ref::<AccessDenied>().is_some(),
+            "expected AccessDenied (403), got: {}",
+            err
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ip_allowlist_gate_denies_outside_ip_even_when_method_allows() {
+        let middleware = PoliciesMiddleware::new(allowlist_with_method_allow()).unwrap();
+
+        let result = middleware
+            .left(gate_envelope("GET", Some("203.0.113.9")))
+            .await;
+
+        assert_access_denied(result);
+    }
+
+    #[tokio::test]
+    async fn test_ip_allowlist_gate_admits_inside_ip_with_allowed_method() {
+        let middleware = PoliciesMiddleware::new(allowlist_with_method_allow()).unwrap();
+
+        for ip in ["10.1.2.3", "192.168.7.7", "127.0.0.1"] {
+            let result = middleware.left(gate_envelope("GET", Some(ip))).await;
+            assert!(
+                result.is_ok(),
+                "IP {} is in the allowlist and should pass",
+                ip
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn test_ip_allowlist_gate_inside_ip_still_subject_to_method_rules() {
+        // Allow-mode method rule: a method outside its list is denied.
+        let middleware = PoliciesMiddleware::new(allowlist_with_method_allow()).unwrap();
+        let err = middleware
+            .left(gate_envelope("PATCH", Some("10.1.2.3")))
+            .await
+            .expect_err("PATCH is not in the allowed methods");
+        assert!(err.downcast_ref::<MethodDenied>().is_some(), "got: {}", err);
+
+        // Deny-mode method rule: a listed method is denied.
+        let middleware = PoliciesMiddleware::new(single_policy(vec![
+            ip_rule("internal_networks", "ip_allow", &["10.0.0.0/8"]),
+            method_rule("no_delete", "deny", &["DELETE"]),
+        ]))
+        .unwrap();
+        let err = middleware
+            .left(gate_envelope("DELETE", Some("10.1.2.3")))
+            .await
+            .expect_err("DELETE is denied by the method rule");
+        assert!(err.downcast_ref::<MethodDenied>().is_some(), "got: {}", err);
+        assert!(middleware
+            .left(gate_envelope("GET", Some("10.1.2.3")))
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_ip_allowlist_gate_fails_closed_on_unknown_client_ip() {
+        let middleware = PoliciesMiddleware::new(allowlist_with_method_allow()).unwrap();
+
+        // No remote_addr at all (for example an HTTP/3 request).
+        assert_access_denied(middleware.left(gate_envelope("GET", None)).await);
+
+        // A remote_addr that does not parse as an IP address.
+        assert_access_denied(
+            middleware
+                .left(gate_envelope("GET", Some("not-an-ip")))
+                .await,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_no_ip_allowlist_keeps_any_allow_semantics() {
+        let middleware = PoliciesMiddleware::new(single_policy(vec![method_rule(
+            "method_filter",
+            "allow",
+            &["GET"],
+        )]))
+        .unwrap();
+
+        // Any address, and no address at all, is admitted by the method rule.
+        assert!(middleware
+            .left(gate_envelope("GET", Some("203.0.113.9")))
+            .await
+            .is_ok());
+        assert!(middleware.left(gate_envelope("GET", None)).await.is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_ip_deny_rule_still_denies_inside_allowlist() {
+        let middleware = PoliciesMiddleware::new(single_policy(vec![
+            ip_rule("internal_networks", "ip_allow", &["10.0.0.0/8"]),
+            ip_rule("quarantine", "ip_deny", &["10.9.0.0/16"]),
+            method_rule("method_filter", "allow", &["GET"]),
+        ]))
+        .unwrap();
+
+        assert_access_denied(
+            middleware
+                .left(gate_envelope("GET", Some("10.9.1.1")))
+                .await,
+        );
+        assert!(middleware
+            .left(gate_envelope("GET", Some("10.8.1.1")))
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_ip_deny_rule_without_allowlist_unchanged() {
+        let middleware = PoliciesMiddleware::new(single_policy(vec![
+            ip_rule("blocklist", "ip_deny", &["203.0.113.0/24"]),
+            method_rule("method_filter", "allow", &["GET"]),
+        ]))
+        .unwrap();
+
+        assert_access_denied(
+            middleware
+                .left(gate_envelope("GET", Some("203.0.113.9")))
+                .await,
+        );
+        assert!(middleware
+            .left(gate_envelope("GET", Some("198.51.100.1")))
+            .await
+            .is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_several_ip_allow_rules_in_one_policy_form_a_union() {
+        let middleware = PoliciesMiddleware::new(single_policy(vec![
+            ip_rule("office", "ip_allow", &["192.168.0.0/16"]),
+            ip_rule("vpn", "ip_allow", &["10.0.0.0/8"]),
+            method_rule("method_filter", "allow", &["GET"]),
+        ]))
+        .unwrap();
+
+        assert!(middleware
+            .left(gate_envelope("GET", Some("192.168.1.1")))
+            .await
+            .is_ok());
+        assert!(middleware
+            .left(gate_envelope("GET", Some("10.1.1.1")))
+            .await
+            .is_ok());
+        assert_access_denied(middleware.left(gate_envelope("GET", Some("8.8.8.8"))).await);
+    }
+
+    #[tokio::test]
+    async fn test_ip_allowlists_in_separate_policies_must_each_match() {
+        let config = PoliciesConfig {
+            policies: vec![
+                Policy {
+                    id: Some("site_a".to_string()),
+                    name: None,
+                    enabled: true,
+                    rules: vec![ip_rule("site_a_nets", "ip_allow", &["10.0.0.0/8"])],
+                },
+                Policy {
+                    id: Some("site_b".to_string()),
+                    name: None,
+                    enabled: true,
+                    rules: vec![ip_rule("site_b_nets", "ip_allow", &["10.1.0.0/16"])],
+                },
+            ],
+        };
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+
+        // Inside both allowlists.
+        assert!(middleware
+            .left(gate_envelope("GET", Some("10.1.2.3")))
+            .await
+            .is_ok());
+        // Inside site_a only: site_b's allowlist gate denies.
+        assert_access_denied(
+            middleware
+                .left(gate_envelope("GET", Some("10.2.2.3")))
+                .await,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_disabled_ip_allow_rule_does_not_gate() {
+        let mut disabled = ip_rule("internal_networks", "ip_allow", &["10.0.0.0/8"]);
+        disabled.enabled = false;
+        let middleware = PoliciesMiddleware::new(single_policy(vec![
+            disabled,
+            method_rule("method_filter", "allow", &["GET"]),
+        ]))
+        .unwrap();
+
+        assert!(middleware
+            .left(gate_envelope("GET", Some("203.0.113.9")))
+            .await
+            .is_ok());
     }
 
     // ============================================

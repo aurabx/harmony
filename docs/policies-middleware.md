@@ -36,11 +36,13 @@ Policies middleware enables you to:
 ## Evaluation Logic
 
 **A request is ACCEPTED only if:**
-1. At least ONE allow rule matches (across all enabled policies/rules)
-2. AND zero deny rules match
+1. It passes the IP allowlist gate of every policy that has one (see [IP Allowlist Gate](#ip-allowlist-gate))
+2. AND at least ONE allow rule matches (across all enabled policies/rules)
+3. AND zero deny rules match
 
 ### Key Points
 
+- **IP allowlists are required gates**: A client outside a policy's `ip_allow` list is denied, whatever other rules allow
 - **All rules evaluated**: Not first-match-wins - every enabled rule is checked
 - **Weight determines order**: Higher weight = evaluated first (but doesn't stop evaluation)
 - **Implicit deny**: If no allow rules match, request is denied (403 Forbidden)
@@ -50,16 +52,64 @@ Policies middleware enables you to:
 
 ```
 1. Filter to enabled policies only
-2. For each policy:
+2. IP allowlist gate. For each policy with enabled ip_allow rules:
+   - Client IP unknown or unparseable → DENY (403, fail closed)
+   - Client IP outside every ip_allow rule of the policy → DENY (403)
+3. For each policy:
    a. Filter to enabled rules only
    b. Sort rules by weight (descending)
    c. Evaluate ALL rules in order
    d. Track: has_allow, has_deny
-3. Final decision:
+4. Final decision:
    - If has_deny = true → DENY (403)
    - Else if has_allow = false → DENY (implicit, 403)
    - Else → ALLOW (continue to backend)
 ```
+
+### IP Allowlist Gate
+
+An `ip_allow` rule restricts who may use the pipeline. Other allow rules cannot widen it.
+
+- **Gate per policy.** If a policy has one or more enabled `ip_allow` rules, the client IP must match at least one of them. Several `ip_allow` rules in one policy form a union.
+- **Every gated policy must pass.** If a middleware lists two policies that each have an allowlist, the client IP must match both.
+- **Fail closed.** If the client IP is unknown, a policy with an allowlist denies the request. This covers a missing `remote_addr` and a value that is not an IP address. HTTP/3 does not record the peer address yet (AURA-2417), so HTTP/3 requests fail the gate.
+- **Status.** A gate denial returns 403 Forbidden, the same status as an `ip_deny` match.
+- **Other rules still apply.** A request that passes the gate still needs an allow and no deny from the other rules. `ip_deny`, `path`, `method`, `rate_limit` and the rest behave as before.
+- **Evaluated first.** The gate runs before the other rules. A client outside the allowlist does not use any rate-limit budget.
+- **Policies without `ip_allow` rules are unchanged.** One matching allow rule and no deny still admits the request.
+- **Logs.** An outside client is logged at `info` with the policy id, the `ip_allow` rule ids and the client IP. An unknown client IP is logged at `warn`.
+
+The client IP comes from the envelope's `remote_addr` metadata (then `client_ip`). The HTTP adapter sets `remote_addr` from the TCP peer address for HTTP/1.1 and HTTP/2. It does not read `X-Forwarded-For`.
+
+**Example:**
+
+```toml
+[policies.http_proxy_security]
+id = "http_proxy_security"
+rules = ["internal_networks", "method_filter"]
+
+[rules.internal_networks]
+id = "internal_networks"
+type = "ip_allow"
+[rules.internal_networks.options]
+ip_addresses = ["10.0.0.0/8", "127.0.0.1/32"]
+
+[rules.method_filter]
+id = "method_filter"
+type = "method"
+[rules.method_filter.options]
+mode = "allow"
+methods = ["GET", "POST", "PUT", "DELETE"]
+```
+
+| Client IP | Method | Result |
+|-----------|--------|--------|
+| 10.1.2.3 | GET | ALLOW |
+| 10.1.2.3 | PATCH | DENY 405 (method rule) |
+| 203.0.113.9 | GET | DENY 403 (outside the allowlist) |
+| unknown (for example HTTP/3) | GET | DENY 403 (fail closed) |
+
+Before AURA-2438, the method rule's allow admitted 203.0.113.9, so the allowlist blocked nothing.
 
 ## Configuration Structure
 
@@ -140,8 +190,10 @@ ip_addresses = [
 **Behavior:**
 - Extracts client IP from `remote_addr` or `client_ip` metadata
 - Matches against pre-compiled CIDR networks (O(log n))
+- Acts as a required gate for its policy: a client IP that matches none of the policy's `ip_allow` rules is denied (403), even if another rule allows it
+- An unknown client IP is denied (403, fail closed)
 - On match: Rule evaluates to ALLOW
-- On no match: Rule evaluates to NO_MATCH (implicit deny if no other allows)
+- See [IP Allowlist Gate](#ip-allowlist-gate)
 
 **Use Cases:**
 - Internal network allowlisting
@@ -848,8 +900,9 @@ mode = "deny"
 ```
 
 **Result:**
-- Must be from US/GB AND from internal IP AND not accessing /admin
-- All conditions must be met (geo allow + IP allow + path not deny)
+- The client IP must be in 192.168.0.0/16. The `ip_allow` rule is a required gate.
+- The request must not target /admin.
+- The geo rule only adds an allow. It does not restrict on its own if another rule allows the request.
 
 ## Best Practices
 
