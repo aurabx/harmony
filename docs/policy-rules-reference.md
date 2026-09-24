@@ -72,7 +72,7 @@ ip_addresses = [
 ]
 ```
 
-An `ip_allow` rule is a required gate for its policy. A client IP outside every `ip_allow` rule in the policy gets 403, even if another rule allows the request. An unknown client IP also gets 403. See [IP Allowlist Gate](policies-middleware.md#ip-allowlist-gate).
+An `ip_allow` rule is a required gate for the middleware. A client IP must match at least one `ip_allow` rule, in any policy. Otherwise it gets 403, even if another rule allows the request. `ip_allow` rules form a union, within a policy and across policies. "Office OR VPN" can be two policies. An unknown client IP also gets 403. See [IP Allowlist Gate](policies-middleware.md#ip-allowlist-gate).
 
 ### IP Deny
 

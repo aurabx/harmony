@@ -382,25 +382,43 @@ impl PoliciesMiddleware {
         handle
     }
 
-    /// Enforce the IP allowlist of every policy that has one (AURA-2438).
+    /// Enforce the IP allowlist gate of the middleware (AURA-2438).
     ///
-    /// An enabled `ip_allow` rule is a required gate for the policy that holds
-    /// it. The client IP must fall inside at least one of that policy's
-    /// `ip_allow` rules. A policy without `ip_allow` rules has no gate. Without
-    /// this check any other allow rule, such as a method rule in allow mode,
-    /// admitted clients from outside the allowlist, because the combined result
-    /// only needs one allow and no deny.
+    /// Every enabled `ip_allow` rule in every policy of this middleware forms
+    /// one allowlist. The rules are a union, within a policy and across
+    /// policies, so "office OR VPN" can be two rules or two policies. If any
+    /// such rule exists, the client IP must match at least one of them. If none
+    /// exists, there is no gate. Without this check any other allow rule, such
+    /// as a method rule in allow mode, admitted clients from outside the
+    /// allowlist, because the combined result only needs one allow and no deny.
     ///
-    /// Fails closed: a policy with an allowlist denies a request whose envelope
-    /// has no parseable client IP. HTTP/3 does not record the peer address yet
-    /// (AURA-2417), so HTTP/3 requests always fail this gate.
+    /// Fails closed: when an allowlist exists, a request whose envelope has no
+    /// parseable client IP is denied. HTTP/3 does not record the peer address
+    /// yet (AURA-2417), so HTTP/3 requests always fail this gate.
     ///
-    /// Returns `AccessDenied` (HTTP 403) for the first policy whose gate fails.
-    /// Reads the envelope only; it has no side effects besides logging.
+    /// Returns `AccessDenied` (HTTP 403) when the gate fails. Reads the
+    /// envelope only; it has no side effects besides logging.
     fn check_ip_allowlists(
         &self,
         envelope: &RequestEnvelope<serde_json::Value>,
     ) -> Result<(), Error> {
+        let allowlist: Vec<(usize, usize, &Rule)> = self
+            .policies
+            .iter()
+            .enumerate()
+            .flat_map(|(policy_idx, policy)| {
+                policy
+                    .rules
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, r)| r.enabled && r.rule_type == "ip_allow")
+                    .map(move |(rule_idx, rule)| (policy_idx, rule_idx, rule))
+            })
+            .collect();
+        if allowlist.is_empty() {
+            return Ok(());
+        }
+
         let raw_client_ip = envelope
             .request_details
             .metadata
@@ -408,81 +426,70 @@ impl PoliciesMiddleware {
             .or_else(|| envelope.request_details.metadata.get("client_ip"));
         let client_ip = raw_client_ip.and_then(|raw| IpAddr::from_str(raw).ok());
 
-        for (policy_idx, policy) in self.policies.iter().enumerate() {
-            let allowlist: Vec<(usize, &Rule)> = policy
-                .rules
-                .iter()
-                .enumerate()
-                .filter(|(_, r)| r.enabled && r.rule_type == "ip_allow")
-                .collect();
-            if allowlist.is_empty() {
-                continue;
-            }
-
-            let policy_label = policy
-                .id
+        let rule_label = |rule: &Rule| -> String {
+            rule.id
                 .as_deref()
-                .or(policy.name.as_deref())
-                .unwrap_or("unnamed");
-            let rule_ids = allowlist
-                .iter()
-                .map(|(_, r)| r.id.as_deref().or(r.name.as_deref()).unwrap_or("unnamed"))
-                .collect::<Vec<_>>()
-                .join(", ");
+                .or(rule.name.as_deref())
+                .unwrap_or("unnamed")
+                .to_string()
+        };
+        let rule_ids = allowlist
+            .iter()
+            .map(|(_, _, r)| rule_label(r))
+            .collect::<Vec<_>>()
+            .join(", ");
 
-            let Some(ip) = client_ip else {
-                tracing::warn!(
-                    "Request DENIED - policy '{}' has an IP allowlist (rules: {}) but the client IP is unknown (remote_addr={:?}); failing closed",
-                    policy_label,
-                    rule_ids,
-                    raw_client_ip
-                );
-                return Err(Box::new(AccessDenied(format!(
-                    "Client IP is unknown and policy '{}' requires an IP allowlist match",
-                    policy_label
-                ))));
-            };
+        let Some(ip) = client_ip else {
+            tracing::warn!(
+                "Request DENIED - an IP allowlist is configured (rules: {}) but the client IP is unknown (remote_addr={:?}); failing closed",
+                rule_ids,
+                raw_client_ip
+            );
+            return Err(Box::new(AccessDenied(
+                "Client IP is unknown and an IP allowlist match is required".to_string(),
+            )));
+        };
 
-            let matched_rule = allowlist.iter().find(|(rule_idx, _)| {
-                let key = policy_idx * 10000 + rule_idx;
-                match self.compiled_ip_rules.get(&key) {
-                    Some(compiled) => compiled.matches(&ip),
-                    None => {
-                        tracing::error!(
-                            "Compiled IP rule not found for key {} - this is a bug; treating as no match",
-                            key
-                        );
-                        false
-                    }
-                }
-            });
-
-            match matched_rule {
-                Some((_, rule)) => tracing::debug!(
-                    "IP allowlist gate passed: policy='{}', rule='{}', client_ip={}",
-                    policy_label,
-                    rule.id
-                        .as_deref()
-                        .or(rule.name.as_deref())
-                        .unwrap_or("unnamed"),
-                    ip
-                ),
+        let matched_rule = allowlist.iter().find(|(policy_idx, rule_idx, _)| {
+            let key = policy_idx * 10000 + rule_idx;
+            match self.compiled_ip_rules.get(&key) {
+                Some(compiled) => compiled.matches(&ip),
                 None => {
-                    tracing::info!(
-                        "Request DENIED - client_ip={} is outside the IP allowlist of policy '{}' (rules: {})",
-                        ip,
-                        policy_label,
-                        rule_ids
+                    tracing::error!(
+                        "Compiled IP rule not found for key {} - this is a bug; treating as no match",
+                        key
                     );
-                    return Err(Box::new(AccessDenied(format!(
-                        "Client IP is not in the IP allowlist of policy '{}'",
-                        policy_label
-                    ))));
+                    false
                 }
+            }
+        });
+
+        match matched_rule {
+            Some((policy_idx, _, rule)) => {
+                let policy = &self.policies[*policy_idx];
+                tracing::debug!(
+                    "IP allowlist gate passed: policy='{}', rule='{}', client_ip={}",
+                    policy
+                        .id
+                        .as_deref()
+                        .or(policy.name.as_deref())
+                        .unwrap_or("unnamed"),
+                    rule_label(rule),
+                    ip
+                );
+                Ok(())
+            }
+            None => {
+                tracing::info!(
+                    "Request DENIED - client_ip={} matches none of the IP allowlist rules (rules: {})",
+                    ip,
+                    rule_ids
+                );
+                Err(Box::new(AccessDenied(
+                    "Client IP is not in the IP allowlist".to_string(),
+                )))
             }
         }
-
-        Ok(())
     }
 
     /// Evaluate a single rule against the request envelope
@@ -3581,20 +3588,28 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_ip_allowlists_in_separate_policies_must_each_match() {
+    async fn test_ip_allowlists_in_separate_policies_form_a_union() {
+        // "office OR VPN" as two policies, each with an allowlist and a method
+        // rule, so a request that passes the gate still has an allow rule.
         let config = PoliciesConfig {
             policies: vec![
                 Policy {
-                    id: Some("site_a".to_string()),
+                    id: Some("office".to_string()),
                     name: None,
                     enabled: true,
-                    rules: vec![ip_rule("site_a_nets", "ip_allow", &["10.0.0.0/8"])],
+                    rules: vec![
+                        ip_rule("office_nets", "ip_allow", &["10.0.0.0/8"]),
+                        method_rule("office_methods", "allow", &["GET"]),
+                    ],
                 },
                 Policy {
-                    id: Some("site_b".to_string()),
+                    id: Some("vpn".to_string()),
                     name: None,
                     enabled: true,
-                    rules: vec![ip_rule("site_b_nets", "ip_allow", &["10.1.0.0/16"])],
+                    rules: vec![
+                        ip_rule("vpn_nets", "ip_allow", &["10.1.0.0/16", "172.16.0.0/12"]),
+                        method_rule("vpn_methods", "allow", &["GET"]),
+                    ],
                 },
             ],
         };
@@ -3605,12 +3620,56 @@ mod tests {
             .left(gate_envelope("GET", Some("10.1.2.3")))
             .await
             .is_ok());
-        // Inside site_a only: site_b's allowlist gate denies.
+        // Inside the office allowlist only.
+        assert!(middleware
+            .left(gate_envelope("GET", Some("10.2.2.3")))
+            .await
+            .is_ok());
+        // Inside the VPN allowlist only.
+        assert!(middleware
+            .left(gate_envelope("GET", Some("172.16.5.5")))
+            .await
+            .is_ok());
+        // Inside neither allowlist.
         assert_access_denied(
             middleware
-                .left(gate_envelope("GET", Some("10.2.2.3")))
+                .left(gate_envelope("GET", Some("203.0.113.9")))
                 .await,
         );
+    }
+
+    #[tokio::test]
+    async fn test_ip_allowlist_in_one_policy_gates_the_whole_middleware() {
+        // The second policy has no allowlist, but its method rule does not
+        // bypass the first policy's allowlist.
+        let config = PoliciesConfig {
+            policies: vec![
+                Policy {
+                    id: Some("gated".to_string()),
+                    name: None,
+                    enabled: true,
+                    rules: vec![ip_rule("internal_networks", "ip_allow", &["10.0.0.0/8"])],
+                },
+                Policy {
+                    id: Some("methods".to_string()),
+                    name: None,
+                    enabled: true,
+                    rules: vec![method_rule("method_filter", "allow", &["GET"])],
+                },
+            ],
+        };
+        let middleware = PoliciesMiddleware::new(config).unwrap();
+
+        assert!(middleware
+            .left(gate_envelope("GET", Some("10.2.2.3")))
+            .await
+            .is_ok());
+        assert_access_denied(
+            middleware
+                .left(gate_envelope("GET", Some("203.0.113.9")))
+                .await,
+        );
+        assert_access_denied(middleware.left(gate_envelope("GET", None)).await);
     }
 
     #[tokio::test]
