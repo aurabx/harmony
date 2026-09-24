@@ -1,6 +1,6 @@
 # Configuration
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2026-09-24
 
 ## Environment Variable Substitution
 
@@ -202,6 +202,7 @@ Top-level config (typically `config.toml`):
   - `[network.<name>.http]`: HTTP/1.x and HTTP/2 listener settings
   - `[network.<name>.http3]`: HTTP/3 (QUIC) listener settings
 - `[logging]`: File logging and log level configuration
+- `[authentications.<name>]`: Credentials that targets, backends and middleware refer to by name. See [Authentications](#authentications).
 - `[runbeam]`: [DEPRECATED] Legacy Runbeam Cloud settings (use `[provider.runbeam]` instead)
 
 ### Pipeline Configuration Structure
@@ -244,6 +245,7 @@ Adapters are started automatically based on configuration:
 - If ingress/egress specify endpoint/backend overrides, those must exist in the pipeline
 - All referenced providers must be configured
 - Unknown middleware names cause validation failure
+- Every `authentication` reference must name a key in `[authentications]`. See [Authentications](#authentications).
 
 ### Examples
 
@@ -251,6 +253,44 @@ Adapters are started automatically based on configuration:
 - FHIR passthrough: examples/default/pipelines/fhir.toml
 - FHIR to DICOM flow: examples/default/pipelines/fhir-dicom.toml
 - Data mesh: examples/default/pipelines/data-mesh/ (includes mesh/, pipelines/, config.toml)
+
+## Authentications
+
+Define each credential once under `[authentications.<key>]`. Targets, backends, peers, endpoints and middleware instances then refer to it by key.
+
+```toml
+[authentications.fhir_bearer]
+id = "fhir_bearer"
+method = "bearer"            # bearer, basic, api_key or none
+[authentications.fhir_bearer.options]
+token = "$FHIR_TOKEN"
+
+[targets.fhir_server]
+connection.host = "fhir.example.com"
+connection.protocol = "https"
+authentication = "fhir_bearer"
+```
+
+A backend with `target_ref` inherits the target's `authentication`. A backend can set its own `authentication` to override it.
+
+### Reference format
+
+An `authentication` value is the bare key, like `target_ref` and `peer_ref`. Write `authentication = "fhir_bearer"`. Do not write `authentication = "authentications.fhir_bearer"`. The prefixed form is rejected.
+
+### Unresolved references fail the load
+
+Harmony checks every `authentication` reference when it loads the config. If a reference does not match a key in `[authentications]`, the load fails. The error names the item, the missing key and the keys that exist:
+
+```
+ERROR: Configuration reference resolution failed: Target 'fhir_server' references unknown authentication 'authentications.fhir_bearer'. Drop the "authentications." prefix: use "fhir_bearer" instead of "authentications.fhir_bearer". Available authentications: fhir_bearer
+```
+
+- At startup, and with `--validate-config`, Harmony prints the error on stderr and exits with code 1.
+- On hot reload, Harmony logs `Config reload failed` and keeps the previous config.
+
+Harmony reports every bad reference in one error, one per line.
+
+`[authentications]` must be in the top-level config file. Pipeline, transform and mesh files do not merge their `[authentications]` tables.
 
 ## Network Configuration
 
