@@ -2,6 +2,9 @@ use crate::config::config::ConfigError;
 use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
+use crate::models::services::upstream_headers::{
+    upstream_request_headers, InboundAuthorizationPolicy,
+};
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use async_trait::async_trait;
@@ -578,21 +581,13 @@ impl HttpEndpoint {
             "HTTP",
         );
 
-        // Add headers from target_details, but drop hop-by-hop and Host headers
-        for (key, value) in &target_details.headers {
-            let k = key.to_ascii_lowercase();
-            if matches!(
-                k.as_str(),
-                "host"
-                    | "connection"
-                    | "keep-alive"
-                    | "proxy-connection"
-                    | "transfer-encoding"
-                    | "upgrade"
-                    | "content-length"
-            ) {
-                continue; // let reqwest set correct values from URL/body
-            }
+        let auth_policy = InboundAuthorizationPolicy::from_backend_options(options)?;
+        for (key, value) in upstream_request_headers(
+            &target_details.headers,
+            &envelope.request_details.headers,
+            auth_policy,
+            "HTTP",
+        ) {
             request_builder = request_builder.header(key, value);
         }
 
@@ -636,7 +631,7 @@ impl HttpEndpoint {
         conn: &ConnectionConfig,
         target_details: &crate::models::envelope::envelope::TargetDetails,
         envelope: &RequestEnvelope<Vec<u8>>,
-        _options: &HashMap<String, Value>,
+        options: &HashMap<String, Value>,
     ) -> Result<(u16, HashMap<String, String>, Vec<u8>), Error> {
         use crate::clients::http3::Http3Client;
 
@@ -680,24 +675,12 @@ impl HttpEndpoint {
             format!("{}?{}", target_details.uri, query_string)
         };
 
-        // Filter headers (drop hop-by-hop headers)
-        let mut headers = HashMap::new();
-        for (key, value) in &target_details.headers {
-            let k = key.to_ascii_lowercase();
-            if matches!(
-                k.as_str(),
-                "host"
-                    | "connection"
-                    | "keep-alive"
-                    | "proxy-connection"
-                    | "transfer-encoding"
-                    | "upgrade"
-                    | "content-length"
-            ) {
-                continue;
-            }
-            headers.insert(key.clone(), value.clone());
-        }
+        let headers = upstream_request_headers(
+            &target_details.headers,
+            &envelope.request_details.headers,
+            InboundAuthorizationPolicy::from_backend_options(options)?,
+            "HTTP/3",
+        );
 
         tracing::debug!(
             "Sending HTTP/3 request to: {}:{}{}",

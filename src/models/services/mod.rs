@@ -4,3 +4,4 @@ pub mod path_utils;
 pub mod services;
 pub mod streaming;
 pub mod types;
+pub mod upstream_headers;

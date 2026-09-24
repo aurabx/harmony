@@ -6,6 +6,19 @@ use crate::models::connection::AuthenticationDefinition;
 use base64::{engine::general_purpose, Engine as _};
 use std::collections::HashMap;
 
+/// Return true when the backend options carry an authentication method of their own.
+///
+/// This mirrors what [`apply_backend_authentication`] reads: an
+/// `authentication_def` that parses and names a method other than `none` or
+/// an empty string. The upstream header filter uses it so the target's
+/// credential wins over one the client sent.
+pub fn has_backend_authentication(options: &HashMap<String, serde_json::Value>) -> bool {
+    options
+        .get("authentication_def")
+        .and_then(|value| serde_json::from_value::<AuthenticationDefinition>(value.clone()).ok())
+        .is_some_and(|auth_def| !matches!(auth_def.method.as_str(), "none" | ""))
+}
+
 /// Apply authentication headers to a reqwest RequestBuilder
 ///
 /// Supports the following authentication methods:
