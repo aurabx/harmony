@@ -2,6 +2,9 @@ use crate::config::config::ConfigError;
 use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope, TargetDetails};
 use crate::models::services::services::{ServiceHandler, ServiceType};
+use crate::models::services::upstream_headers::{
+    upstream_request_headers, InboundAuthorizationPolicy,
+};
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use async_trait::async_trait;
@@ -287,21 +290,13 @@ impl JmixBackend {
             "JMIX",
         );
 
-        // Add headers from target_details, but drop hop-by-hop and Host headers
-        for (key, value) in &target_details.headers {
-            let k = key.to_ascii_lowercase();
-            if matches!(
-                k.as_str(),
-                "host"
-                    | "connection"
-                    | "keep-alive"
-                    | "proxy-connection"
-                    | "transfer-encoding"
-                    | "upgrade"
-                    | "content-length"
-            ) {
-                continue; // let reqwest set correct values from URL/body
-            }
+        let auth_policy = InboundAuthorizationPolicy::from_backend_options(options)?;
+        for (key, value) in upstream_request_headers(
+            &target_details.headers,
+            &envelope.request_details.headers,
+            auth_policy,
+            "JMIX",
+        ) {
             request_builder = request_builder.header(key, value);
         }
 

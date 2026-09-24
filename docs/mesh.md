@@ -192,6 +192,7 @@ Mesh members authenticate with each other using JWT (JSON Web Tokens).
 
 - **Egress (outgoing requests)**: JWT is automatically generated and attached to the `Authorization` header
 - **Ingress (incoming requests)**: JWT in `Authorization` header is validated before processing
+- The ingress JWT is not forwarded to the local backend. See [Request Headers Sent Upstream](backends.md#request-headers-sent-upstream).
 
 ### JWT Claims
 
