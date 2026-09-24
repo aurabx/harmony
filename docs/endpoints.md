@@ -1,6 +1,6 @@
 # Endpoints
 
-**Last Updated**: 2026-02-08
+**Last Updated**: 2026-09-24
 
 Endpoints define protocol entry points into the Harmony pipeline. Each endpoint is associated with a **Service** that handles protocol-specific data conversion to/from the internal `Envelope` format.
 
@@ -32,8 +32,10 @@ Define a peer in your main configuration and reference it from the endpoint.
 [peers.hospital_a]
 connection.host = "hospital-a.example.com"
 connection.protocol = "dicom"
-authentication.method = "mutual_tls"
+authentication = "hospital_a_auth"  # Bare key from [authentications]
 ```
+
+A peer's `authentication` must be the bare key of an `[authentications]` entry. A reference that does not resolve stops the config from loading. See [Authentications](configuration.md#authentications).
 
 **pipelines/main.toml**:
 ```toml

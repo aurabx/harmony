@@ -1,6 +1,6 @@
 # Backends
 
-**Last Updated**: 2026-02-08
+**Last Updated**: 2026-09-24
 
 Backends enable the pipeline to communicate with external systems (targets). Backends operate within the unified `PipelineExecutor` and handle the "backend invocation" step of the pipeline.
 
@@ -28,12 +28,20 @@ Define a target in your main configuration and reference it from the backend. Th
 
 **config.toml**:
 ```toml
+[authentications.prod_api_token]
+id = "prod_api_token"
+method = "bearer"
+[authentications.prod_api_token.options]
+token = "$PROD_API_TOKEN"
+
 [targets.prod_api]
 connection.host = "api.example.com"
 connection.protocol = "https"
-authentication.method = "bearer"
+authentication = "prod_api_token"  # Bare key from [authentications]
 timeout_secs = 60
 ``` path=null start=null
+
+The backend inherits the target's `authentication`. The value must be the bare key. A reference that does not resolve stops the config from loading. See [Authentications](configuration.md#authentications).
 
 **pipelines/main.toml**:
 ```toml
