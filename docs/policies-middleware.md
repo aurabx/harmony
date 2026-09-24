@@ -36,13 +36,13 @@ Policies middleware enables you to:
 ## Evaluation Logic
 
 **A request is ACCEPTED only if:**
-1. It passes the IP allowlist gate of every policy that has one (see [IP Allowlist Gate](#ip-allowlist-gate))
+1. It passes the IP allowlist gate, if any policy has an `ip_allow` rule (see [IP Allowlist Gate](#ip-allowlist-gate))
 2. AND at least ONE allow rule matches (across all enabled policies/rules)
 3. AND zero deny rules match
 
 ### Key Points
 
-- **IP allowlists are required gates**: A client outside a policy's `ip_allow` list is denied, whatever other rules allow
+- **IP allowlists are a required gate**: A client that matches no `ip_allow` rule in any policy is denied, whatever other rules allow
 - **All rules evaluated**: Not first-match-wins - every enabled rule is checked
 - **Weight determines order**: Higher weight = evaluated first (but doesn't stop evaluation)
 - **Implicit deny**: If no allow rules match, request is denied (403 Forbidden)
@@ -52,9 +52,9 @@ Policies middleware enables you to:
 
 ```
 1. Filter to enabled policies only
-2. IP allowlist gate. For each policy with enabled ip_allow rules:
+2. IP allowlist gate. If any policy has enabled ip_allow rules:
    - Client IP unknown or unparseable → DENY (403, fail closed)
-   - Client IP outside every ip_allow rule of the policy → DENY (403)
+   - Client IP matches no ip_allow rule in any policy → DENY (403)
 3. For each policy:
    a. Filter to enabled rules only
    b. Sort rules by weight (descending)
@@ -70,14 +70,14 @@ Policies middleware enables you to:
 
 An `ip_allow` rule restricts who may use the pipeline. Other allow rules cannot widen it.
 
-- **Gate per policy.** If a policy has one or more enabled `ip_allow` rules, the client IP must match at least one of them. Several `ip_allow` rules in one policy form a union.
-- **Every gated policy must pass.** If a middleware lists two policies that each have an allowlist, the client IP must match both.
-- **Fail closed.** If the client IP is unknown, a policy with an allowlist denies the request. This covers a missing `remote_addr` and a value that is not an IP address. HTTP/3 does not record the peer address yet (AURA-2417), so HTTP/3 requests fail the gate.
+- **One gate for the middleware.** If any policy in the middleware has an enabled `ip_allow` rule, the client IP must match at least one `ip_allow` rule. The match can be in any policy.
+- **Allowlists form a union.** Several `ip_allow` rules in one policy form a union. So do `ip_allow` rules in different policies. "Office OR VPN" can be two rules in one policy or two policies.
+- **Fail closed.** If an allowlist exists and the client IP is unknown, the request is denied. This covers a missing `remote_addr` and a value that is not an IP address. HTTP/3 does not record the peer address yet (AURA-2417), so HTTP/3 requests fail the gate.
 - **Status.** A gate denial returns 403 Forbidden, the same status as an `ip_deny` match.
 - **Other rules still apply.** A request that passes the gate still needs an allow and no deny from the other rules. `ip_deny`, `path`, `method`, `rate_limit` and the rest behave as before.
 - **Evaluated first.** The gate runs before the other rules. A client outside the allowlist does not use any rate-limit budget.
-- **Policies without `ip_allow` rules are unchanged.** One matching allow rule and no deny still admits the request.
-- **Logs.** An outside client is logged at `info` with the policy id, the `ip_allow` rule ids and the client IP. An unknown client IP is logged at `warn`.
+- **No `ip_allow` rules, no gate.** If no policy has an `ip_allow` rule, one matching allow rule and no deny still admits the request.
+- **Logs.** An outside client is logged at `info` with the client IP and the ids of every `ip_allow` rule checked. An unknown client IP is logged at `warn`.
 
 The client IP comes from the envelope's `remote_addr` metadata (then `client_ip`). The HTTP adapter sets `remote_addr` from the TCP peer address for HTTP/1.1 and HTTP/2. It does not read `X-Forwarded-For`.
 
@@ -110,6 +110,43 @@ methods = ["GET", "POST", "PUT", "DELETE"]
 | unknown (for example HTTP/3) | GET | DENY 403 (fail closed) |
 
 Before AURA-2438, the method rule's allow admitted 203.0.113.9, so the allowlist blocked nothing.
+
+**Example with two policies (office OR VPN):**
+
+```toml
+[policies.office]
+id = "office"
+rules = ["office_networks", "method_filter"]
+
+[policies.vpn]
+id = "vpn"
+rules = ["vpn_networks", "method_filter"]
+
+[rules.office_networks]
+id = "office_networks"
+type = "ip_allow"
+[rules.office_networks.options]
+ip_addresses = ["192.168.0.0/16"]
+
+[rules.vpn_networks]
+id = "vpn_networks"
+type = "ip_allow"
+[rules.vpn_networks.options]
+ip_addresses = ["10.8.0.0/16"]
+
+[rules.method_filter]
+id = "method_filter"
+type = "method"
+[rules.method_filter.options]
+mode = "allow"
+methods = ["GET"]
+```
+
+| Client IP | Method | Result |
+|-----------|--------|--------|
+| 192.168.1.5 | GET | ALLOW (office allowlist) |
+| 10.8.0.7 | GET | ALLOW (VPN allowlist) |
+| 203.0.113.9 | GET | DENY 403 (matches neither allowlist) |
 
 ## Configuration Structure
 
@@ -190,7 +227,8 @@ ip_addresses = [
 **Behavior:**
 - Extracts client IP from `remote_addr` or `client_ip` metadata
 - Matches against pre-compiled CIDR networks (O(log n))
-- Acts as a required gate for its policy: a client IP that matches none of the policy's `ip_allow` rules is denied (403), even if another rule allows it
+- Acts as a required gate for the middleware: a client IP that matches no `ip_allow` rule in any policy is denied (403), even if another rule allows it
+- `ip_allow` rules form a union, within a policy and across policies
 - An unknown client IP is denied (403, fail closed)
 - On match: Rule evaluates to ALLOW
 - See [IP Allowlist Gate](#ip-allowlist-gate)

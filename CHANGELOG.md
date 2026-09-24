@@ -13,7 +13,7 @@
 
 ### Fixed
 - (AURA-2391) Final C-GET and C-MOVE responses no longer carry the Number of Remaining Sub-operations attribute, which PS3.4 forbids outside Pending responses.
-- (AURA-2438) An `ip_allow` rule in the policies middleware is now a required gate for its policy. Before, any other allow rule (for example a `method` rule in allow mode) admitted clients from outside the allowlist. A client IP that matches none of the policy's `ip_allow` rules now gets 403. A policy with an allowlist also denies requests with an unknown client IP, which includes all HTTP/3 requests for now. See docs/policies-middleware.md.
+- (AURA-2438) An `ip_allow` rule in the policies middleware is now a required gate. Before, any other allow rule (for example a `method` rule in allow mode) admitted clients from outside the allowlist. A client IP that matches no `ip_allow` rule in any of the middleware's policies now gets 403. `ip_allow` rules form a union, within a policy and across policies. When an allowlist exists, a request with an unknown client IP is also denied, which includes all HTTP/3 requests for now. See docs/policies-middleware.md.
 
 ## [0.12.3] - 2026-01-30
 
