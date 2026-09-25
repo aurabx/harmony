@@ -15,22 +15,26 @@
 //!
 //! 1. Keep the routes whose pattern matches the path. Matching is done by
 //!    `matchit`, the matcher axum uses, so what a pattern matches is unchanged.
-//! 2. Keep the routes that allow the request method. A route that allows
-//!    GET also serves HEAD, as axum does.
-//! 3. Pick the most specific route. Compare two patterns segment by segment
+//!    No route matches: 404.
+//! 2. Pick the most specific route. Compare two patterns segment by segment
 //!    from the left. At the first segment where they differ, a literal beats
 //!    a parameter and a parameter beats a catch-all. Between two parameters
-//!    or two catch-alls, the one with more literal text in front wins. For
-//!    HEAD, between two equally specific routes, the one that lists HEAD
-//!    itself wins over one that only lists GET.
+//!    or two catch-alls, the one with more literal text in front wins.
+//! 3. If that route allows the method, it serves the request. A route that
+//!    allows GET also serves HEAD, as axum does. Otherwise the answer is 405
+//!    with an `Allow` header listing that route's methods.
 //!
-//! When routes match the path but none allows the method, the answer is 405
-//! with an `Allow` header. When no route matches the path, it is 404.
+//! The method never sends a request to a less specific route. Endpoints on
+//! one network can belong to different pipelines, with different auth,
+//! policies and backends. A client must not reach another pipeline by
+//! changing the method.
 //!
-//! Two routes with the same shape (same segments, parameter names ignored)
-//! and at least one method in common can never be told apart. That is a
-//! configuration error, reported by [`RouteTable::build`] and turned into a
-//! config load error by `Config::validate`.
+//! The route is chosen by path alone, so two routes with the same shape
+//! (same segments, parameter names ignored) from different endpoints can
+//! never be told apart, whatever their methods. That is a configuration
+//! error, reported by [`RouteTable::build`] and turned into a config load
+//! error by `Config::validate`. One endpoint may register the same shape
+//! more than once with different methods; those routes are merged.
 
 use crate::config::config::Config;
 use crate::router::route_config::RouteConfig;
@@ -143,13 +147,13 @@ pub enum RouteProblem {
         pattern: String,
         reason: String,
     },
-    /// Two routes have the same shape and share at least one method.
+    /// Two endpoints (or one endpoint in two pipelines) register routes with
+    /// the same shape.
     Conflict {
         existing: RouteOwner,
         existing_pattern: String,
         rejected: RouteOwner,
         rejected_pattern: String,
-        methods: Vec<Method>,
     },
 }
 
@@ -184,7 +188,6 @@ impl fmt::Display for RouteProblem {
                 existing_pattern,
                 rejected,
                 rejected_pattern,
-                methods,
             } => {
                 let paths = if existing_pattern == rejected_pattern {
                     format!("'{}'", existing_pattern)
@@ -193,13 +196,11 @@ impl fmt::Display for RouteProblem {
                 };
                 write!(
                     f,
-                    "route conflict: {} and {} both route {} {}. \
-                     A request cannot be sent to one of them over the other. \
+                    "route conflict: {} and {} both route {}. \
+                     Endpoints are chosen by path, whatever their methods, so a request \
+                     cannot be sent to one of them over the other. \
                      Give one endpoint a different path_prefix, or put both on different networks",
-                    existing,
-                    rejected,
-                    method_list(methods),
-                    paths
+                    existing, rejected, paths
                 )
             }
         }
@@ -263,12 +264,15 @@ impl RouteEntry {
         other.segments.len().cmp(&self.segments.len())
     }
 
-    fn shared_methods(&self, other: &RouteEntry) -> Vec<Method> {
-        self.methods
-            .iter()
-            .filter(|m| other.methods.contains(m))
-            .cloned()
-            .collect()
+    /// The methods for the `Allow` header: the route's methods, plus HEAD
+    /// when it allows GET, in name order.
+    fn allow_header_methods(&self) -> Vec<Method> {
+        let mut allowed = self.methods.clone();
+        if self.allows_get() && !allowed.contains(&Method::HEAD) {
+            allowed.push(Method::HEAD);
+        }
+        allowed.sort_by(|a, b| a.as_str().cmp(b.as_str()));
+        allowed
     }
 }
 
@@ -276,8 +280,8 @@ impl RouteEntry {
 #[derive(Debug)]
 pub enum RouteLookup<'a> {
     Found(&'a RouteEntry),
-    /// The path matched, but no route allows the method. Holds the methods
-    /// the matching routes allow, for the `Allow` header.
+    /// The most specific route for the path does not allow the method. Holds
+    /// that route's methods, for the `Allow` header.
     MethodNotAllowed(Vec<Method>),
     NotFound,
 }
@@ -347,8 +351,9 @@ impl RouteTable {
         (table, problems)
     }
 
-    /// Add one route unless it is invalid or conflicts with a route already
-    /// in the table.
+    /// Add one route unless it is invalid or has the same shape as another
+    /// owner's route already in the table. A route with the same shape and
+    /// the same owner adds its methods to the existing entry.
     fn add(&mut self, route: RouteConfig, owner: RouteOwner) -> Result<(), Box<RouteProblem>> {
         let pattern = route.path.clone();
         let entry = RouteEntry::new(route, owner.clone()).map_err(|reason| {
@@ -359,23 +364,28 @@ impl RouteTable {
             })
         })?;
 
-        for existing in &self.entries {
-            if existing.segments != entry.segments {
-                continue;
-            }
-            let methods = existing.shared_methods(&entry);
-            if !methods.is_empty() {
-                return Err(Box::new(RouteProblem::Conflict {
-                    existing: existing.owner.clone(),
-                    existing_pattern: existing.pattern.clone(),
-                    rejected: entry.owner,
-                    rejected_pattern: entry.pattern,
-                    methods,
-                }));
+        let Some(existing) = self
+            .entries
+            .iter_mut()
+            .find(|existing| existing.segments == entry.segments)
+        else {
+            self.entries.push(entry);
+            return Ok(());
+        };
+
+        if existing.owner != entry.owner {
+            return Err(Box::new(RouteProblem::Conflict {
+                existing: existing.owner.clone(),
+                existing_pattern: existing.pattern.clone(),
+                rejected: entry.owner,
+                rejected_pattern: entry.pattern,
+            }));
+        }
+        for method in entry.methods {
+            if !existing.methods.contains(&method) {
+                existing.methods.push(method);
             }
         }
-
-        self.entries.push(entry);
         Ok(())
     }
 
@@ -386,46 +396,28 @@ impl RouteTable {
     /// Find the route that serves `method` on `path`, following the rule in
     /// the module documentation.
     pub fn lookup(&self, method: &Method, path: &str) -> RouteLookup<'_> {
-        let matching: Vec<&RouteEntry> = self.entries.iter().filter(|e| e.matches(path)).collect();
-        if matching.is_empty() {
+        let Some(entry) = self.most_specific_match(path) else {
             return RouteLookup::NotFound;
+        };
+        if entry.allows(method) {
+            RouteLookup::Found(entry)
+        } else {
+            RouteLookup::MethodNotAllowed(entry.allow_header_methods())
         }
-
-        if let Some(entry) = most_specific(&matching, method) {
-            return RouteLookup::Found(entry);
-        }
-
-        let mut allowed: Vec<Method> = Vec::new();
-        for entry in &matching {
-            for m in &entry.methods {
-                if !allowed.contains(m) {
-                    allowed.push(m.clone());
-                }
-            }
-        }
-        if allowed.contains(&Method::GET) && !allowed.contains(&Method::HEAD) {
-            allowed.push(Method::HEAD);
-        }
-        allowed.sort_by(|a, b| a.as_str().cmp(b.as_str()));
-        RouteLookup::MethodNotAllowed(allowed)
     }
-}
 
-/// The most specific entry that allows `method`.
-///
-/// Equal specificity means the same shape. `build` rejects same-shape routes
-/// that list a method in common, so a tie can only be a HEAD request served
-/// by one route that lists HEAD and one that lists GET; the one that lists
-/// HEAD wins. Any other tie keeps the entry added first.
-fn most_specific<'a>(matching: &[&'a RouteEntry], method: &Method) -> Option<&'a RouteEntry> {
-    matching
-        .iter()
-        .copied()
-        .filter(|e| e.allows(method))
-        .min_by(|a, b| {
-            a.specificity_cmp(b)
-                .then_with(|| b.methods.contains(method).cmp(&a.methods.contains(method)))
-        })
+    /// The most specific entry whose pattern matches `path`, whatever its
+    /// methods.
+    ///
+    /// Equal specificity means the same shape, and `add` keeps one entry per
+    /// shape, so there are no ties between matching entries. `min_by` keeps
+    /// the entry added first if that ever changes.
+    fn most_specific_match(&self, path: &str) -> Option<&RouteEntry> {
+        self.entries
+            .iter()
+            .filter(|e| e.matches(path))
+            .min_by(|a, b| a.specificity_cmp(b))
+    }
 }
 
 /// Methods joined for messages and the `Allow` header, e.g. `GET, POST`.
@@ -598,8 +590,15 @@ mod tests {
         );
     }
 
+    fn allowed_for(table: &RouteTable, method: Method, path: &str) -> String {
+        match table.lookup(&method, path) {
+            RouteLookup::MethodNotAllowed(allowed) => method_list(&allowed),
+            other => panic!("{} {}: expected 405, got {:?}", method, path, other),
+        }
+    }
+
     #[test]
-    fn a_less_specific_route_serves_a_method_the_specific_one_lacks() {
+    fn a_method_the_most_specific_route_lacks_is_405_not_a_less_specific_route() {
         let mut table = RouteTable::default();
         add_prefix(&mut table, "proxy", "/api", ALL);
         table
@@ -611,7 +610,12 @@ mod tests {
             Some("jmix")
         );
         assert_eq!(
-            endpoint_for(&table, Method::DELETE, "/api/jmix/1").as_deref(),
+            allowed_for(&table, Method::DELETE, "/api/jmix/1"),
+            "GET, HEAD"
+        );
+        // Paths the jmix route does not match still reach the proxy.
+        assert_eq!(
+            endpoint_for(&table, Method::DELETE, "/api/jmix/1/x").as_deref(),
             Some("proxy")
         );
     }
@@ -628,18 +632,12 @@ mod tests {
         table
             .add(route("/b/{*rest}", &[Method::HEAD]), owner("b_head"))
             .unwrap();
-        table
-            .add(route("/c", &[Method::GET]), owner("c_get"))
-            .unwrap();
-        table
-            .add(route("/c", &[Method::HEAD]), owner("c_head"))
-            .unwrap();
 
         assert_eq!(
             endpoint_for(&table, Method::HEAD, "/a").as_deref(),
             Some("get_only")
         );
-        // The more specific GET route wins over a less specific HEAD route.
+        // The more specific GET route serves HEAD.
         assert_eq!(
             endpoint_for(&table, Method::HEAD, "/b/x").as_deref(),
             Some("b_get")
@@ -648,15 +646,8 @@ mod tests {
             endpoint_for(&table, Method::HEAD, "/b/x/y").as_deref(),
             Some("b_head")
         );
-        // Same shape: the route that lists HEAD wins.
-        assert_eq!(
-            endpoint_for(&table, Method::HEAD, "/c").as_deref(),
-            Some("c_head")
-        );
-        assert_eq!(
-            endpoint_for(&table, Method::GET, "/c").as_deref(),
-            Some("c_get")
-        );
+        // The less specific HEAD route never serves GET.
+        assert_eq!(allowed_for(&table, Method::GET, "/b/x/y"), "HEAD");
     }
 
     #[test]
@@ -690,14 +681,10 @@ mod tests {
             .expect_err("conflict");
         match problem.as_ref() {
             RouteProblem::Conflict {
-                existing,
-                rejected,
-                methods,
-                ..
+                existing, rejected, ..
             } => {
                 assert_eq!(existing.endpoint, "by_id");
                 assert_eq!(rejected.endpoint, "by_sku");
-                assert_eq!(methods, &vec![Method::GET]);
             }
             other => panic!("expected conflict, got {:?}", other),
         }
@@ -711,23 +698,60 @@ mod tests {
     }
 
     #[test]
-    fn same_shape_with_disjoint_methods_does_not_conflict() {
+    fn same_shape_with_disjoint_methods_conflicts() {
         let mut table = RouteTable::default();
         table
             .add(route("/api/jmix", &[Method::GET]), owner("query"))
             .unwrap();
-        table
+
+        let problem = table
             .add(route("/api/jmix", &[Method::POST]), owner("upload"))
+            .expect_err("conflict");
+        let (existing, rejected) = problem.owners();
+        assert_eq!(existing.endpoint, "query");
+        assert_eq!(rejected.map(|o| o.endpoint.as_str()), Some("upload"));
+        assert_eq!(table.entries().len(), 1);
+    }
+
+    #[test]
+    fn one_endpoint_may_split_methods_across_routes_of_the_same_shape() {
+        // The jmix service registers GET and POST on `/api/jmix` as two routes.
+        let mut table = RouteTable::default();
+        table
+            .add(
+                route("/api/jmix", &[Method::GET, Method::HEAD]),
+                owner("jmix"),
+            )
+            .unwrap();
+        table
+            .add(route("/api/jmix", &[Method::POST]), owner("jmix"))
             .unwrap();
 
+        assert_eq!(table.entries().len(), 1);
         assert_eq!(
             endpoint_for(&table, Method::GET, "/api/jmix").as_deref(),
-            Some("query")
+            Some("jmix")
         );
         assert_eq!(
             endpoint_for(&table, Method::POST, "/api/jmix").as_deref(),
-            Some("upload")
+            Some("jmix")
         );
+        assert_eq!(
+            allowed_for(&table, Method::DELETE, "/api/jmix"),
+            "GET, HEAD, POST"
+        );
+    }
+
+    #[test]
+    fn one_endpoint_in_two_pipelines_conflicts() {
+        let mut table = RouteTable::default();
+        let first = owner("shared");
+        let second = RouteOwner {
+            pipeline: "other_pipeline".to_string(),
+            ..owner("shared")
+        };
+        table.add(route("/a", &[Method::GET]), first).unwrap();
+        assert!(table.add(route("/a", &[Method::POST]), second).is_err());
     }
 
     #[test]
