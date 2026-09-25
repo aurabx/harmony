@@ -5,8 +5,10 @@
 //! below it, so the prefixes overlap. The router used to hand every route to
 //! axum, whose path matcher rejects a `{param}` and a catch-all at the same
 //! position, and Harmony panicked at startup. Overlapping prefixes now route
-//! to the most specific endpoint. Two endpoints that claim the same paths
-//! for the same method fail config load instead.
+//! to the endpoint whose path matches most specifically. The method never
+//! moves a request to a less specific endpoint: if the chosen endpoint does
+//! not allow it, the answer is 405. Two endpoints with the same path shape
+//! fail config load instead.
 //! Linear: AURA-2443.
 
 use axum::body::{Body, Bytes};
@@ -115,7 +117,7 @@ async fn build_app(toml: &str) -> Router {
     harmony::router::build_network_router(Arc::new(config), "default").await
 }
 
-async fn status_of(app: &Router, method: &str, uri: &str) -> StatusCode {
+async fn send(app: &Router, method: &str, uri: &str) -> axum::response::Response {
     let mut builder = Request::builder().method(method).uri(uri);
     let body = if method == "POST" || method == "PUT" || method == "PATCH" {
         builder = builder.header("content-type", "application/json");
@@ -127,7 +129,10 @@ async fn status_of(app: &Router, method: &str, uri: &str) -> StatusCode {
         .oneshot(builder.body(body).unwrap())
         .await
         .expect("router response")
-        .status()
+}
+
+async fn status_of(app: &Router, method: &str, uri: &str) -> StatusCode {
+    send(app, method, uri).await.status()
 }
 
 /// Send one request and return the backend prefix that handled it.
@@ -271,6 +276,87 @@ async fn nested_literal_prefixes_route_to_the_longest_prefix() {
     );
 }
 
+/// A pipeline with a `jmix` endpoint whose routes start at `/api/jmix`.
+/// JMIX serves GET on `/api/jmix/{id}` and GET and POST on `/api/jmix`,
+/// plus the HEAD and OPTIONS it adds to GET routes.
+fn jmix_pipeline_toml(base_url: &str) -> String {
+    format!(
+        r#"
+        [pipelines.jmix]
+        networks = ["default"]
+        endpoints = ["jmix_in"]
+        backends = ["jmix_out"]
+        middleware = []
+
+        [endpoints.jmix_in]
+        service = "jmix"
+        [endpoints.jmix_in.options]
+        path_prefix = "/"
+
+        [backends.jmix_out]
+        service = "http"
+        [backends.jmix_out.options]
+        base_url = "{base_url}"
+        path_prefix = "/jmix"
+        "#
+    )
+}
+
+/// The endpoint is chosen by path alone. An `http` endpoint at `/api` must
+/// not receive a DELETE that the JMIX endpoint at `/api/jmix` refuses. The
+/// `/api` pipeline may have different auth, policies and backends.
+#[tokio::test]
+async fn method_the_most_specific_endpoint_lacks_gets_405_not_a_less_specific_endpoint() {
+    let upstream = start_recording_upstream().await;
+    let toml = [
+        MAIN_TOML.to_string(),
+        pipeline_toml("api", "/api", &upstream.base_url),
+        jmix_pipeline_toml(&upstream.base_url),
+    ]
+    .join("\n");
+    let app = build_app(&toml).await;
+
+    for (method, uri, allow) in [
+        ("DELETE", "/api/jmix/1", "GET, HEAD, OPTIONS"),
+        ("PUT", "/api/jmix/1", "GET, HEAD, OPTIONS"),
+        ("PUT", "/api/jmix", "GET, HEAD, OPTIONS, POST"),
+    ] {
+        let response = send(&app, method, uri).await;
+        assert_eq!(
+            response.status(),
+            StatusCode::METHOD_NOT_ALLOWED,
+            "{} {}",
+            method,
+            uri
+        );
+        assert_eq!(
+            response
+                .headers()
+                .get(axum::http::header::ALLOW)
+                .and_then(|v| v.to_str().ok()),
+            Some(allow),
+            "{} {}",
+            method,
+            uri
+        );
+    }
+    assert_eq!(
+        upstream.last(),
+        None,
+        "the /api backend must not receive requests the JMIX endpoint refuses"
+    );
+
+    // Paths the JMIX endpoint does not match still go to /api.
+    assert_eq!(
+        routed_to(&app, &upstream, "DELETE", "/api/users/1").await,
+        "api"
+    );
+    assert_eq!(
+        routed_to(&app, &upstream, "DELETE", "/api/jmix/1/extra").await,
+        "api"
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Config load
 // ---------------------------------------------------------------------------
@@ -374,6 +460,170 @@ fn same_shape_with_different_parameter_names_fails_config_load() {
 
     assert!(reason.contains("by_id_in"), "{}", reason);
     assert!(reason.contains("by_sku_in"), "{}", reason);
+}
+
+/// Test-only endpoint service that registers one route with the path and
+/// methods given in its options. No built-in endpoint lets a config choose
+/// its methods, so this is the only way to put two endpoints with the same
+/// path shape and disjoint methods on one network.
+mod method_scoped {
+    use async_trait::async_trait;
+    use axum::http::Method;
+    use axum::response::Response;
+    use harmony::config::config::ConfigError;
+    use harmony::router::route_config::RouteConfig;
+    use harmony::{RequestEnvelope, ResponseEnvelope, ServiceFactory, ServiceHandler, ServiceType};
+    use serde_json::Value;
+    use std::collections::HashMap;
+    use std::sync::Once;
+
+    pub const NAME: &str = "method_scoped_test";
+
+    type Error = Box<dyn std::error::Error + Send + Sync>;
+
+    struct Factory;
+
+    impl ServiceFactory for Factory {
+        fn service_name(&self) -> &str {
+            NAME
+        }
+
+        fn create(&self) -> Box<dyn ServiceType<ReqBody = Value>> {
+            Box::new(Service)
+        }
+    }
+
+    struct Service;
+
+    #[async_trait]
+    impl ServiceType for Service {
+        fn validate(&self, _options: &HashMap<String, Value>) -> Result<(), ConfigError> {
+            Ok(())
+        }
+
+        fn build_router(&self, options: &HashMap<String, Value>) -> Vec<RouteConfig> {
+            let path = options
+                .get("path")
+                .and_then(Value::as_str)
+                .expect("method_scoped_test endpoint needs a 'path' option");
+            let methods = options
+                .get("methods")
+                .and_then(Value::as_array)
+                .expect("method_scoped_test endpoint needs a 'methods' option")
+                .iter()
+                .map(|m| {
+                    let name = m.as_str().expect("method names are strings");
+                    Method::from_bytes(name.as_bytes()).expect("valid method name")
+                })
+                .collect();
+            vec![RouteConfig {
+                path: path.to_string(),
+                methods,
+                description: None,
+            }]
+        }
+    }
+
+    #[async_trait]
+    impl ServiceHandler<Value> for Service {
+        type ReqBody = Value;
+
+        async fn endpoint_incoming_request(
+            &self,
+            envelope: RequestEnvelope<Vec<u8>>,
+            _options: &HashMap<String, Value>,
+        ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
+            Ok(envelope)
+        }
+
+        async fn endpoint_outgoing_response(
+            &self,
+            _envelope: ResponseEnvelope<Vec<u8>>,
+            _options: &HashMap<String, Value>,
+        ) -> Result<Response, Error> {
+            Err("method_scoped_test is only used for config load tests".into())
+        }
+
+        async fn backend_outgoing_request(
+            &self,
+            _envelope: RequestEnvelope<Vec<u8>>,
+            _options: &HashMap<String, Value>,
+        ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
+            Err("method_scoped_test is not a backend".into())
+        }
+    }
+
+    pub fn register() {
+        static REGISTER: Once = Once::new();
+        REGISTER.call_once(|| {
+            harmony::extensions::registry::initialize_builtin_factories_sync();
+            harmony::get_registry()
+                .write()
+                .expect("registry lock")
+                .register_service_factory(Box::new(Factory));
+        });
+    }
+
+    pub fn pipeline_toml(name: &str, path: &str, methods: &[&str]) -> String {
+        let methods = methods
+            .iter()
+            .map(|m| format!("\"{}\"", m))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!(
+            r#"
+            [pipelines.{name}]
+            networks = ["default"]
+            endpoints = ["{name}_in"]
+            backends = []
+            middleware = []
+
+            [endpoints.{name}_in]
+            service = "{NAME}"
+            [endpoints.{name}_in.options]
+            path = "{path}"
+            methods = [{methods}]
+            "#
+        )
+    }
+}
+
+/// Endpoints are chosen by path alone, so a second endpoint with the same
+/// path shape could never receive a request. Splitting methods across two
+/// endpoints does not change that.
+#[test]
+fn same_shape_with_disjoint_methods_fails_config_load() {
+    method_scoped::register();
+    let dir = TempDir::new().unwrap();
+    let reason = load_error_text(load_from_files(
+        dir.path(),
+        &[
+            (
+                "orders-read.toml",
+                method_scoped::pipeline_toml("orders_read", "/v1/orders/{id}", &["GET"]),
+            ),
+            (
+                "orders-write.toml",
+                method_scoped::pipeline_toml("orders_write", "/v1/orders/{order_id}", &["DELETE"]),
+            ),
+        ],
+    ));
+
+    for needle in [
+        "orders_read_in",
+        "orders_write_in",
+        "orders-read.toml",
+        "orders-write.toml",
+        "/v1/orders/{id}",
+        "/v1/orders/{order_id}",
+    ] {
+        assert!(
+            reason.contains(needle),
+            "'{}' missing from: {}",
+            needle,
+            reason
+        );
+    }
 }
 
 #[test]

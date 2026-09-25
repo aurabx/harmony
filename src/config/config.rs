@@ -881,9 +881,10 @@ impl Config {
     /// Reject networks whose HTTP routes cannot all be served.
     ///
     /// Endpoints may overlap; the most specific one wins (see
-    /// `router::route_table`). Two routes with the same shape and a shared
-    /// method, or a path that is not a valid route pattern, fail the load
-    /// here so the router never meets them at startup or on reload.
+    /// `router::route_table`). Two endpoints with routes of the same shape,
+    /// whatever their methods, or a path that is not a valid route pattern,
+    /// fail the load here so the router never meets them at startup or on
+    /// reload.
     fn validate_routes(&self) -> Result<(), ConfigError> {
         let mut networks: Vec<&String> = self.network.keys().collect();
         networks.sort();
