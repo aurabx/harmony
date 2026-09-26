@@ -2,6 +2,8 @@
 //!
 //! These tests spawn dcmqrscp (DICOM QR SCP) and use dcmtk tools to test streaming.
 //! They are self-contained and only require dcmtk tools to be installed.
+//! Tests that need a running Harmony live in harmony-examples as htest
+//! examples: `pipelines/dicom-scp` and `pipelines/streaming-dicom`.
 
 use std::path::PathBuf;
 use std::process::Command;
@@ -241,86 +243,6 @@ async fn test_dicom_get_retrieve() {
     );
 }
 
-// Note: The following tests require Harmony proxy to be running
-// They are kept as ignored tests for manual integration testing
-
-/// Test that Harmony can act as DICOM SCP
-#[test]
-#[ignore] // Requires Harmony running
-fn test_harmony_as_dicom_scp() {
-    if !has_dcmtk() {
-        eprintln!("Skipping: dcmtk tools not found");
-        return;
-    }
-    if std::net::TcpStream::connect("127.0.0.1:11112").is_err() {
-        eprintln!("Skipping: Harmony DICOM SCP not running on localhost:11112");
-        return;
-    }
-
-    let output = Command::new("echoscu")
-        .args(["-aet", "TEST", "-aec", "HARMONY_SCP", "localhost", "11112"])
-        .output()
-        .expect("echoscu failed");
-
-    assert!(
-        output.status.success(),
-        "C-ECHO to Harmony failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-/// Integration test: Stream DICOM via Harmony proxy
-#[test]
-#[ignore] // Requires Harmony running
-fn test_streaming_through_harmony_proxy() {
-    if !has_dcmtk() {
-        eprintln!("Skipping: dcmtk tools not found");
-        return;
-    }
-    if std::net::TcpStream::connect("127.0.0.1:8080").is_err() {
-        eprintln!("Skipping: Harmony HTTP not running on localhost:8080");
-        return;
-    }
-    if std::net::TcpStream::connect("127.0.0.1:11112").is_err() {
-        eprintln!("Skipping: Harmony DICOM SCP not running on localhost:11112");
-        return;
-    }
-
-    // Try C-ECHO through Harmony
-    let output = Command::new("echoscu")
-        .args(["-aet", "TEST", "-aec", "HARMONY_SCP", "localhost", "11112"])
-        .output()
-        .expect("echoscu failed");
-
-    assert!(
-        output.status.success(),
-        "C-ECHO through Harmony failed: {}",
-        String::from_utf8_lossy(&output.stderr)
-    );
-}
-
-/// Test Harmony management API (requires Harmony running)
-#[test]
-#[ignore]
-fn test_harmony_rest_api_available() {
-    if std::net::TcpStream::connect("127.0.0.1:8080").is_err() {
-        eprintln!("Skipping: Harmony not running on localhost:8080");
-        return;
-    }
-
-    // Test Harmony management API (if enabled)
-    let client = reqwest::blocking::Client::new();
-    let response = client
-        .get("http://localhost:8080/admin/health")
-        .send()
-        .expect("HTTP request failed");
-
-    assert!(
-        response.status().is_success(),
-        "Harmony REST API not responding"
-    );
-}
-
 /// Document test setup requirements
 #[test]
 fn test_setup_instructions() {
@@ -331,11 +253,9 @@ fn test_setup_instructions() {
     println!("Self-contained tests (no external services required):");
     println!("  cargo test --test streaming_dicom_dcmtk\n");
     
-    println!("Tests requiring Harmony proxy running:");
-    println!("  cargo test --test streaming_dicom_dcmtk -- --ignored\n");
-    
-    println!("To run Harmony proxy:");
-    println!("  cargo run -- --config examples/dicom-streaming/bidirectional-streaming.toml\n");
+    println!("Tests that need a running Harmony are htest examples in harmony-examples:");
+    println!("  htest --examples-dir . run dicom-scp");
+    println!("  htest --examples-dir . run streaming-dicom   (skipped until AURA-2408 is fixed)\n");
     
     println!("Available dcmtk tools:");
     let tools = ["echoscu", "findscu", "getscu", "storescu", "dcmqrscp"];
