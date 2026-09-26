@@ -1,6 +1,6 @@
 # Protocol Adapters
 
-**Last Updated**: 2025-01-31
+**Last Updated**: 2026-09-24
 
 ## Overview
 
@@ -85,9 +85,9 @@ This mapping is automatically applied when starting networks based on each servi
 
 **Features**:
 - Axum-based web server with optional TLS/HTTPS support
-- Route matching and conflict detection
+- Route matching: the most specific endpoint wins when endpoint paths overlap. Same-shape routes fail config load. See [router.md](router.md#http-route-matching)
 - Header and body mapping to/from envelopes
-- Support for all HTTP methods (GET, POST, PUT, DELETE, etc.)
+- Routes GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS to the pipeline for general-purpose endpoints (`http`, `http_streaming`, `echo`, `fhir`). Protocol endpoints (`jmix`, `dicomweb`, management API) register only the methods their protocol defines. TRACE and CONNECT are never routed.
 - TLS 1.3 with HTTP/1.1 and HTTP/2 ALPN when TLS is enabled
 
 **Configuration**:

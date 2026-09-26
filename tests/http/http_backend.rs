@@ -122,6 +122,9 @@ fn get_http_backend_config(backend_base_url: &str) -> String {
         service = "http"
         [backends.http_backend.options]
         base_url = "{}"
+        # Pass-through proxy: test_http_backend_forwards_headers expects the
+        # client's Authorization to reach the upstream.
+        forward_authorization = true
 
         [services.http]
         module = ""

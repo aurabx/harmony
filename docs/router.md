@@ -1,6 +1,6 @@
 # Router and Pipeline Architecture
 
-**Last Updated**: 2026-02-08
+**Last Updated**: 2026-09-24
 
 Harmony uses a protocol-agnostic adapter architecture. This document describes the unified pipeline that handles all protocols (HTTP, DIMSE, HL7, etc.).
 
@@ -62,7 +62,7 @@ Protocol Response (HTTP/DIMSE/HL7/...)
 ### Detailed Steps
 
 1. **Protocol Adapter receives request**
-   - For HTTP: Axum route handler in `HttpAdapter`
+   - For HTTP: `HttpAdapter` picks the endpoint from the network's route table (see [HTTP route matching](#http-route-matching))
    - For DIMSE: SCP listener in `DimseAdapter`
    
 2. **Adapter converts to protocol-agnostic format**
@@ -105,10 +105,43 @@ src/
 │
 ├── router/               ← Configuration helpers
 │   ├── route_config.rs   ← Route configuration types
+│   ├── route_table.rs    ← HTTP route matching and conflict detection
 │   └── mod.rs            ← Delegation to HttpAdapter
 │
 └── lib.rs                ← Orchestrator (spawns adapters)
 ```
+
+### HTTP route matching
+
+Each HTTP endpoint registers routes. An `http` endpoint registers its `path_prefix` and every path below it (`<path_prefix>/{*wildcard}`). Endpoints on one network may overlap. A collection endpoint at `/v1/checkout/sessions` and an item endpoint at `/v1/checkout/sessions/{id}/complete` both match `/v1/checkout/sessions/cs_1/complete`.
+
+`HttpAdapter` gives axum one catch-all route and picks the endpoint itself, with `RouteTable` in `src/router/route_table.rs`:
+
+1. Keep the routes whose path pattern matches the request path. If none match, the answer is `404 Not Found`.
+2. Pick the most specific route. Compare the two patterns segment by segment from the left. At the first segment where they differ, a literal (`complete`) beats a parameter (`{id}`), and a parameter beats a catch-all (`{*wildcard}`). Between two parameters, or two catch-alls, the one with more literal text in front (`img_{id}` over `{id}`) wins.
+3. If that route allows the method, its endpoint serves the request. A route that allows GET also serves HEAD. Otherwise the answer is `405 Method Not Allowed`, with an `Allow` header that lists that route's methods.
+
+The method never sends a request to a less specific endpoint. Endpoints on one network can belong to different pipelines, with different auth, policies and backends. With a `jmix` endpoint whose routes start at `/api/jmix` and an `http` endpoint at `/api`, `DELETE /api/jmix/1` gets 405 from the JMIX route. It does not reach the `/api` pipeline.
+
+For the UCP checkout shape:
+
+| Request | Endpoint |
+|---|---|
+| `POST /v1/checkout/sessions` | `/v1/checkout/sessions` |
+| `GET /v1/checkout/sessions/cs_1` | `/v1/checkout/sessions/{id}` |
+| `PATCH /v1/checkout/sessions/cs_1` | `/v1/checkout/sessions/{id}` |
+| `POST /v1/checkout/sessions/cs_1/complete` | `/v1/checkout/sessions/{id}/complete` |
+| `GET /v1/checkout/sessions/cs_1/lines` | `/v1/checkout/sessions/{id}` |
+
+Without the `{id}` endpoint, `GET /v1/checkout/sessions/cs_1` goes to the collection endpoint.
+
+**Conflicts fail config load.** Two endpoints conflict when they register routes with the same shape. Same shape means the same segments, with parameter names ignored: `/v1/items/{id}` and `/v1/items/{sku}` have the same shape. The route is chosen by path alone, so this holds even when the two endpoints allow different methods. No request could be sent to one of them over the other. This also covers one endpoint listed in two pipelines on the same network. One endpoint may register the same shape more than once with different methods (the `jmix` endpoint does this for GET and POST on `/api/jmix`); those routes are merged. A route path that is not a valid pattern (for example `/v1/{id}.json`, or a path without a leading `/`) also fails the load. The error names the network, both endpoints, their pipelines and the files that define them:
+
+```
+ERROR: Invalid network 'default': route conflict: endpoint 'orders_a_in' (pipeline 'orders_a', defined in pipelines/orders-a.toml) and endpoint 'orders_b_in' (pipeline 'orders_b', defined in pipelines/orders-b.toml) both route '/v1/orders/{id}' and '/v1/orders/{order_id}'. ...
+```
+
+The check runs in `Config::validate`, so `--validate-config` and startup exit with code 1, and a hot reload with a conflict keeps the running config.
 
 ### Key Files
 

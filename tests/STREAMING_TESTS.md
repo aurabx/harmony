@@ -41,8 +41,6 @@ cargo test --test streaming_integration
 - Real DICOM operations using dcmtk tools (echoscu, findscu, getscu, storescu)
 - Spawns dcmqrscp (DICOM QR SCP) automatically
 - C-ECHO, C-FIND, C-GET operations
-- Optional: Harmony as DICOM SCP endpoint (requires Harmony running)
-- Optional: End-to-end streaming through Harmony proxy (requires Harmony running)
 
 **Prerequisites:**
 - dcmtk tools installed (echoscu, findscu, getscu, storescu, dcmqrscp)
@@ -62,15 +60,6 @@ sudo apt-get install dcmtk
 cargo test --test streaming_dicom_dcmtk
 ```
 
-**Run tests requiring Harmony:**
-```bash
-# 1. Start Harmony (in another terminal)
-cargo run -- --config examples/dicom-streaming/bidirectional-streaming.toml
-
-# 2. Run ignored tests
-cargo test --test streaming_dicom_dcmtk -- --ignored
-```
-
 **Show setup instructions:**
 ```bash
 cargo test --test streaming_dicom_dcmtk test_setup_instructions -- --nocapture
@@ -81,10 +70,20 @@ cargo test --test streaming_dicom_dcmtk test_setup_instructions -- --nocapture
 - `test_dicom_find_query` - C-FIND query test with spawned dcmqrscp
 - `test_dicom_get_retrieve` - C-GET retrieve test with spawned dcmqrscp
 
-**Tests Requiring Harmony Running (marked #[ignore]):**
-- `test_harmony_as_dicom_scp` - Harmony SCP endpoint test
-- `test_streaming_through_harmony_proxy` - End-to-end proxy test
-- `test_harmony_rest_api_available` - Harmony REST API test
+### 3. Tests that need a running Harmony
+
+These are htest examples in the harmony-examples repository. htest starts Harmony and every service the test declares.
+
+- `pipelines/dicom-scp` covers Harmony as a DICOM SCP (C-ECHO, C-FIND, C-GET, C-MOVE, C-STORE).
+- `pipelines/streaming-dicom` covers end-to-end streaming through two Harmony instances. It is skipped until AURA-2408 is fixed.
+
+```bash
+# From the harmony-examples checkout
+htest --examples-dir . run dicom-scp
+htest --examples-dir . run streaming-dicom
+```
+
+The workspace `docs/testing.md` describes htest and harmony-runner.
 
 ## Quick Test Summary
 
@@ -97,9 +96,6 @@ cargo test --test streaming_integration
 # Self-contained DICOM tests (only requires dcmtk)
 cargo test --test streaming_dicom_dcmtk
 
-# Tests requiring Harmony running
-cargo test --test streaming_dicom_dcmtk -- --ignored
-
 # All streaming tests
 cargo test streaming
 ```
@@ -107,8 +103,7 @@ cargo test streaming
 ### Test Results
 
 **Unit Tests**: ✅ 8/8 passing  
-**DICOM Tests (self-contained)**: ✅ 3/3 passing  
-**DICOM Tests (require Harmony)**: ⚠️ 3 tests (require Harmony running)
+**DICOM Tests (self-contained)**: ✅ 3/3 passing
 
 ## What's Covered
 
@@ -120,10 +115,10 @@ cargo test streaming
 - Backward compatibility
 - Live DICOM operations (C-ECHO, C-FIND, C-GET with spawned dcmqrscp)
 
-### ⚠️ Requires Harmony Running
+### Covered by htest examples (Harmony running)
 - HTTP stream consumption via HTTP endpoints
 - Per-instance middleware application through proxy
-- End-to-end proxy streaming (DIMSE → HTTP → DIMSE)
+- End-to-end proxy streaming (DIMSE → HTTP → DIMSE), in `streaming-dicom` (skipped until AURA-2408 is fixed)
 
 ### 🚧 Not Yet Tested (Future Work)
 - Performance/memory benchmarks
@@ -179,19 +174,6 @@ sudo apt-get install dcmtk
 which echoscu findscu getscu storescu dcmqrscp
 ```
 
-### Ignored Tests Fail with "Harmony not available"
-
-**Solution**: Start Harmony with DICOM SCP:
-```bash
-cargo run -- --config examples/dicom-streaming/bidirectional-streaming.toml
-```
-
-Verify it's running:
-```bash
-echoscu -aet TEST -aec HARMONY_SCP localhost 11112
-curl http://localhost:8080/admin/health
-```
-
 
 ## CI/CD Integration
 
@@ -217,35 +199,9 @@ jobs:
         run: cargo test --test streaming_dicom_dcmtk
 ```
 
-### Full Integration Tests (With Harmony)
+### Tests That Need Harmony
 
-For end-to-end tests including Harmony proxy:
-
-```yaml
-# .github/workflows/full-integration.yml
-name: Full Integration Tests
-on: [push, pull_request]
-
-jobs:
-  test:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v3
-      
-      - name: Install dcmtk
-        run: sudo apt-get update && sudo apt-get install -y dcmtk
-      
-      - name: Build Harmony
-        run: cargo build --release
-      
-      - name: Start Harmony in background
-        run: |
-          ./target/release/harmony --config examples/dicom-streaming/bidirectional-streaming.toml &
-          sleep 5
-      
-      - name: Run all tests
-        run: cargo test --test streaming_dicom_dcmtk -- --include-ignored
-```
+Run these through htest in harmony-examples. See the workspace `docs/testing.md`.
 
 ## Performance Testing
 
@@ -266,7 +222,7 @@ Expected results (from docs/streaming.md):
 When adding new streaming features:
 
 1. Add configuration tests to `streaming_integration.rs`
-2. Add integration tests to `streaming_dicom_dcmtk.rs` (mark with `#[ignore]`)
+2. Add self-contained dcmtk tests to `streaming_dicom_dcmtk.rs`. Add tests that need a running Harmony as htest examples in harmony-examples.
 3. Update this documentation
 4. Ensure all unit tests pass: `cargo test --test streaming_integration`
 

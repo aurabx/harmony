@@ -28,7 +28,7 @@ async fn test_streaming_pipeline_detection() {
 
         [pipelines.regular_pipeline]
         networks = ["default"]
-        endpoints = ["http_test"]
+        endpoints = ["http_regular"]
         backends = ["echo_backend"]
         middleware = []
 
@@ -36,6 +36,13 @@ async fn test_streaming_pipeline_detection() {
         service = "http"
         [endpoints.http_test.options]
         path_prefix = "/test"
+
+        # Two pipelines on one network cannot share an endpoint: both would
+        # claim the same paths, which fails config load (AURA-2443).
+        [endpoints.http_regular]
+        service = "http"
+        [endpoints.http_regular.options]
+        path_prefix = "/regular"
 
         [backends.streaming_backend]
         service = "dicom_scu_streaming"
@@ -425,4 +432,62 @@ async fn test_backward_compatibility() {
     // Verify non-streaming pipeline
     let pipeline = config.pipelines.get("regular").unwrap();
     assert!(!PipelineExecutor::is_streaming_pipeline(pipeline, &config));
+}
+
+/// Regression: a DIMSE SCP endpoint fronted by http_streaming_backend must be
+/// classified as a streaming pipeline. C-STORE previously ignored this and
+/// invoked the non-streaming executor, which the streaming backend refused.
+/// The store handler now routes through `execute_streaming` when this returns
+/// true, so this assertion pins the contract the fix relies on.
+#[tokio::test]
+async fn test_cstore_dimse_with_http_streaming_backend_is_streaming() {
+    let config_toml = r#"
+        [proxy]
+        id = "cstore-streaming-test"
+
+        [storage]
+        backend = "filesystem"
+        [storage.options]
+        path = "./tmp"
+
+        [network.default]
+        enable_wireguard = false
+        interface = "wg0"
+        [network.default.http]
+        bind_address = "127.0.0.1"
+        bind_port = 8080
+
+        [pipelines.store_pipeline]
+        networks = ["default"]
+        endpoints = ["dicom_scp"]
+        backends = ["http_stream"]
+        middleware = []
+
+        [endpoints.dicom_scp]
+        service = "dicom_scp"
+        [endpoints.dicom_scp.options]
+        local_aet = "STORE_SCP"
+        port = 11112
+        enable_store = true
+
+        [backends.http_stream]
+        service = "http_streaming_backend"
+        [backends.http_stream.options]
+        base_url = "http://localhost:9999"
+        format = "ndjson"
+
+        [services.dicom_scp]
+        module = ""
+        [services.http_streaming_backend]
+        module = ""
+    "#;
+
+    let config: Config = toml::from_str(config_toml).unwrap();
+    config.validate().unwrap();
+
+    let pipeline = config.pipelines.get("store_pipeline").unwrap();
+    assert!(
+        PipelineExecutor::is_streaming_pipeline(pipeline, &config),
+        "store pipeline with http_streaming_backend must classify as streaming"
+    );
 }

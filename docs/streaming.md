@@ -130,6 +130,8 @@ format = "ndjson"  # "sse", "ndjson", "multipart", or "auto"
 enable_compression = false
 ```
 
+Routes `path_prefix` (default `/`) and every path below it, for GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS. See [endpoints.md](endpoints.md#http-passthru) for why TRACE and CONNECT are excluded.
+
 **Formats:**
 
 ##### NDJSON (Recommended)

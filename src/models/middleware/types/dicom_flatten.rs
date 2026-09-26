@@ -58,6 +58,9 @@ impl Middleware for DicomFlattenMiddleware {
                                 obj.insert("identifier".to_string(), flat);
                             }
                         }
+                        // The flattened document is the request body the
+                        // backend should receive, so it replaces original_data.
+                        envelope.original_data = result.clone();
                         envelope.normalized_data = Some(result);
                         tracing::debug!("Applied DICOM flatten on request");
                     }
@@ -330,6 +333,53 @@ pub fn unflatten_dicom_json(data: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn test_left_writes_flattened_body_to_original_data() {
+        use crate::models::envelope::envelope::RequestEnvelopeBuilder;
+
+        let body = json!({
+            "file": "/tmp/x.dcm",
+            "dataset": { "00100020": { "vr": "LO", "Value": ["PID1"] } }
+        });
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("store")
+            .uri("dimse://scp/store")
+            .original_data(body.clone())
+            .normalized_data(Some(body))
+            .build()
+            .unwrap();
+
+        let result = DicomFlattenMiddleware::new(DicomFlattenConfig {})
+            .left(envelope)
+            .await
+            .unwrap();
+
+        let expected = json!({ "file": "/tmp/x.dcm", "dataset": { "00100020": "PID1" } });
+        assert_eq!(result.original_data, expected);
+        assert_eq!(result.normalized_data, Some(expected));
+    }
+
+    #[tokio::test]
+    async fn test_left_without_dicom_data_leaves_original_data() {
+        use crate::models::envelope::envelope::RequestEnvelopeBuilder;
+
+        let body = json!({ "not": "dicom" });
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("POST")
+            .uri("/x")
+            .original_data(body.clone())
+            .normalized_data(Some(body.clone()))
+            .build()
+            .unwrap();
+
+        let result = DicomFlattenMiddleware::new(DicomFlattenConfig {})
+            .left(envelope)
+            .await
+            .unwrap();
+
+        assert_eq!(result.original_data, body);
+    }
 
     #[test]
     fn test_flatten_simple_scalars() {

@@ -386,16 +386,28 @@ async fn test_policy_ip_allow_matches() {
         .await
         .unwrap();
 
-    // NOTE: This test expects implicit deny (403) because `remote_addr` metadata
-    // is not populated in oneshot test environment. In production, the HTTP adapter
-    // would populate remote_addr from the socket connection.
-    // The IP allow/deny logic is fully tested in unit tests.
+    // NOTE: This request carries no ConnectInfo extension, so the envelope has
+    // no `remote_addr`. A policy with an IP allowlist fails closed on an
+    // unknown client IP and returns 403. In production the HTTP adapter records
+    // remote_addr from the socket. See
+    // test_policy_ip_allowlist_gates_method_allow_via_connect_info for requests
+    // with a peer address.
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }
 
-/// Test rate limiting enforces limits
+/// Test rate limiting enforces limits.
+///
+/// Prior to the middleware-instance-state fix, the `PoliciesMiddleware` was
+/// rebuilt on every request, so the rate-limit bucket reset each call and no
+/// enforcement was visible from an HTTP-shaped test. The rate-limit rule
+/// itself falls back to `"unknown"` for `client_ip` when `remote_addr` is
+/// missing, so with a shared bucket the third request to the same rule
+/// under the same fallback key exceeds `max_requests=2` and returns 429.
 #[tokio::test]
 async fn test_policy_rate_limit_enforcement() {
+    // Reset the process-wide bucket registry so other tests in the binary
+    // do not leak state into this one.
+    harmony::models::middleware::types::policies::clear_rate_limit_registry_for_tests();
     let config_toml = r#"
         [proxy]
         id = "policy-rate-limit-test"
@@ -482,14 +494,7 @@ async fn test_policy_rate_limit_enforcement() {
 
     let app = build_network_router(config_arc, "default").await;
 
-    // NOTE: Rate limiting requires `remote_addr` metadata which is not populated
-    // in oneshot test environment. In production, the HTTP adapter would populate
-    // remote_addr from the socket connection. Testing that rate_limit rules work
-    // correctly is done in unit tests with mocked envelopes.
-    // This integration test verifies that the allow_all rule works and doesn't
-    // crash when rate_limit rules are present.
-
-    // First request - should succeed (allow_all passes)
+    // First and second requests fit inside max_requests=2 and succeed.
     let response1 = app
         .clone()
         .oneshot(
@@ -503,7 +508,6 @@ async fn test_policy_rate_limit_enforcement() {
         .unwrap();
     assert_eq!(response1.status(), StatusCode::OK);
 
-    // Second request - should succeed
     let response2 = app
         .clone()
         .oneshot(
@@ -517,7 +521,8 @@ async fn test_policy_rate_limit_enforcement() {
         .unwrap();
     assert_eq!(response2.status(), StatusCode::OK);
 
-    // Third request - should still succeed because rate_limit can't match without remote_addr
+    // Third request exceeds max_requests=2 in the shared bucket for the
+    // "unknown" client IP fallback and is rejected with 429.
     let response3 = app
         .clone()
         .oneshot(
@@ -529,8 +534,7 @@ async fn test_policy_rate_limit_enforcement() {
         )
         .await
         .unwrap();
-    // Without remote_addr, rate_limit doesn't match, but allow_all does, so request succeeds
-    assert_eq!(response3.status(), StatusCode::OK);
+    assert_eq!(response3.status(), StatusCode::TOO_MANY_REQUESTS);
 }
 
 /// Test path matching with allow mode
@@ -857,4 +861,132 @@ async fn test_policy_weight_ordering() {
 
     // Should be denied (deny_all evaluated first due to higher weight, but all rules still evaluated)
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}
+
+/// An IP allowlist is a required gate through the HTTP router (AURA-2438).
+///
+/// The policy mirrors harmony-examples `http-internal`: an `ip_allow` rule
+/// plus a `method` rule in allow mode that allows GET from any address.
+/// Before the gate, the method rule admitted a client outside the allowlist.
+/// The peer address is injected as axum `ConnectInfo`, which is how the HTTP
+/// adapter receives it from `into_make_service_with_connect_info`.
+#[tokio::test]
+async fn test_policy_ip_allowlist_gates_method_allow_via_connect_info() {
+    use axum::extract::ConnectInfo;
+    use std::net::SocketAddr;
+
+    let config_toml = r#"
+        [proxy]
+        id = "policy-ip-allowlist-gate-test"
+        log_level = "debug"
+
+        [storage]
+        backend = "filesystem"
+        [storage.options]
+        path = "./tmp"
+
+        [network.default]
+        enable_wireguard = false
+        interface = "wg0"
+
+        [network.default.http]
+        bind_address = "127.0.0.1"
+        bind_port = 8080
+
+        [pipelines.test_policy]
+        description = "Test IP allowlist gate"
+        networks = ["default"]
+        endpoints = ["http_test"]
+        middleware = ["policy_gate"]
+        backends = ["echo_backend"]
+
+        [endpoints.http_test]
+        service = "http"
+        [endpoints.http_test.options]
+        path_prefix = "/test"
+
+        [backends.echo_backend]
+        service = "echo"
+
+        [middleware.policy_gate]
+        type = "policies"
+
+        [middleware.policy_gate.options]
+        policies = ["gate_policy"]
+
+        [policies.gate_policy]
+        id = "gate_policy"
+        enabled = true
+        rules = ["internal_networks", "method_filter"]
+
+        [rules.internal_networks]
+        id = "internal_networks"
+        type = "ip_allow"
+        weight = 90
+        enabled = true
+
+        [rules.internal_networks.options]
+        ip_addresses = ["127.0.0.1/32", "10.0.0.0/8"]
+
+        [rules.method_filter]
+        id = "method_filter"
+        type = "method"
+        weight = 80
+        enabled = true
+
+        [rules.method_filter.options]
+        mode = "allow"
+        methods = ["GET", "POST", "PUT", "DELETE"]
+
+        [middleware_types.policies]
+        module = ""
+
+        [services.http]
+        module = ""
+
+        [services.echo]
+        module = ""
+    "#;
+
+    let config: Config = toml::from_str(config_toml).unwrap();
+    config.validate().unwrap();
+
+    let config_arc = Arc::new(config);
+
+    use harmony::storage::create_storage_backend;
+    harmony::globals::set_config(config_arc.clone());
+    let storage =
+        create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
+    harmony::globals::set_storage(storage);
+
+    let app = build_network_router(config_arc, "default").await;
+
+    let request_from = |peer: Option<&str>| {
+        let mut builder = Request::builder().uri("/test/endpoint").method("GET");
+        if let Some(peer) = peer {
+            let addr: SocketAddr = peer.parse().expect("valid socket address");
+            builder = builder.extension(ConnectInfo(addr));
+        }
+        builder.body(Body::empty()).unwrap()
+    };
+
+    // Outside the allowlist: the method rule allows GET, but the gate denies.
+    let outside = app
+        .clone()
+        .oneshot(request_from(Some("203.0.113.9:40000")))
+        .await
+        .unwrap();
+    assert_eq!(outside.status(), StatusCode::FORBIDDEN);
+
+    // Inside the allowlist: admitted.
+    let inside = app
+        .clone()
+        .oneshot(request_from(Some("127.0.0.1:40001")))
+        .await
+        .unwrap();
+    assert_eq!(inside.status(), StatusCode::OK);
+
+    // No peer address: the gate fails closed.
+    let unknown = app.oneshot(request_from(None)).await.unwrap();
+    assert_eq!(unknown.status(), StatusCode::FORBIDDEN);
 }

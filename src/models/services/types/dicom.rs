@@ -5,6 +5,7 @@ use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use async_trait::async_trait;
 use axum::{body::Body, response::Response};
+use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -1049,9 +1050,126 @@ impl DicomScuBackend {
             }
             "store" => {
                 // C-STORE: Send DICOM data to remote PACS
-                // Data may come as:
-                // 1. Part 10 file (from HTTP client) - has 128-byte preamble + "DICM" magic
-                // 2. Raw dataset bytes (from another DICOM service or DICOMweb middleware)
+                //
+                // Input shapes, in priority order:
+                //   1. `normalized_data.dicom_store_parts` — array of base64-encoded
+                //      DICOM part payloads, populated by the DICOMweb STOW-RS bridge
+                //      (see `DicomwebEndpoint::endpoint_incoming_request`). Each part
+                //      results in one C-STORE. Results are aggregated.
+                //   2. `envelope.original_data` — a single Part 10 file
+                //      (128-byte preamble + "DICM" magic) or bare dataset bytes.
+
+                // 1. Multipart-extracted parts path.
+                let stow_parts = envelope
+                    .normalized_data
+                    .as_ref()
+                    .and_then(|nd| nd.get("dicom_store_parts"))
+                    .and_then(|v| v.as_array())
+                    .cloned();
+
+                if let Some(parts) = stow_parts {
+                    let total = parts.len();
+                    let mut succeeded: usize = 0;
+                    let mut failed: usize = 0;
+                    let mut errors: Vec<serde_json::Value> = Vec::new();
+                    let mut instance_uids: Vec<String> = Vec::new();
+
+                    for (idx, part_val) in parts.iter().enumerate() {
+                        let b64 = match part_val.as_str() {
+                            Some(s) => s,
+                            None => {
+                                failed += 1;
+                                errors.push(serde_json::json!({
+                                    "index": idx,
+                                    "error": "part is not a base64 string"
+                                }));
+                                continue;
+                            }
+                        };
+                        let bytes = match base64::engine::general_purpose::STANDARD.decode(b64) {
+                            Ok(b) => b,
+                            Err(e) => {
+                                failed += 1;
+                                errors.push(serde_json::json!({
+                                    "index": idx,
+                                    "error": format!("base64 decode failed: {}", e)
+                                }));
+                                continue;
+                            }
+                        };
+
+                        let is_part10 = bytes.len() > 132 && &bytes[128..132] == b"DICM";
+                        let (dataset, parsed_obj) = if is_part10 {
+                            match dicom_object::from_reader(std::io::Cursor::new(&bytes)) {
+                                Ok(file_obj) => {
+                                    let inner = file_obj.into_inner();
+                                    (DatasetStream::from_object(inner.clone()), Some(inner))
+                                }
+                                Err(e) => {
+                                    failed += 1;
+                                    errors.push(serde_json::json!({
+                                        "index": idx,
+                                        "error": format!("Part 10 parse failed: {}", e)
+                                    }));
+                                    continue;
+                                }
+                            }
+                        } else {
+                            (
+                                DatasetStream::from_bytes(bytes::Bytes::from(bytes.clone())),
+                                None,
+                            )
+                        };
+
+                        match scu.store(&remote_node, dataset).await {
+                            Ok(true) => {
+                                succeeded += 1;
+                                if let Some(obj) = parsed_obj {
+                                    if let Ok(el) = obj.element_by_name("SOPInstanceUID") {
+                                        if let Ok(uid) = el.to_str() {
+                                            instance_uids.push(uid.to_string());
+                                        }
+                                    }
+                                }
+                            }
+                            Ok(false) => {
+                                failed += 1;
+                                errors.push(serde_json::json!({
+                                    "index": idx,
+                                    "error": "C-STORE returned false"
+                                }));
+                            }
+                            Err(e) => {
+                                failed += 1;
+                                errors.push(serde_json::json!({
+                                    "index": idx,
+                                    "error": e.to_string()
+                                }));
+                            }
+                        }
+                    }
+
+                    let mut response = serde_json::json!({
+                        "operation": "store",
+                        "success": failed == 0 && succeeded > 0,
+                        "total_parts": total,
+                        "succeeded": succeeded,
+                        "failed": failed,
+                        "remote_aet": remote_node.ae_title,
+                        "host": remote_node.host,
+                        "port": remote_node.port,
+                    });
+                    if !instance_uids.is_empty() {
+                        response["sop_instance_uids"] = serde_json::json!(instance_uids);
+                    }
+                    if !errors.is_empty() {
+                        response["errors"] = serde_json::Value::Array(errors);
+                    }
+                    envelope.normalized_data = Some(response.clone());
+                    return Ok(envelope.clone());
+                }
+
+                // 2. Single-body legacy path.
                 if envelope.original_data.is_empty() {
                     serde_json::json!({
                         "operation": "store",

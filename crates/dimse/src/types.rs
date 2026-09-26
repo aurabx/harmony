@@ -363,7 +363,12 @@ impl DatasetStream {
         }
     }
 
-    /// Write to a temporary file in the specified directory
+    /// Write to a temporary file in the specified directory.
+    ///
+    /// The file is a valid DICOM Part 10 image (preamble, `DICM` magic, file
+    /// meta group, then the dataset). Downstream consumers such as
+    /// `dicom_object::open_file` and `dcmdump` require this framing; writing
+    /// the raw dataset bytes here left C-STORE stages unreadable.
     pub async fn to_temp_file(&self, temp_dir: &std::path::Path) -> crate::error::Result<PathBuf> {
         let temp_file = temp_dir.join(format!("{}.dcm", self.metadata().id));
 
@@ -372,7 +377,7 @@ impl DatasetStream {
                 tokio::fs::copy(path, &temp_file).await?;
             }
             _ => {
-                let bytes = self.to_bytes().await?;
+                let bytes = self.to_part10_bytes()?;
                 tokio::fs::write(&temp_file, &bytes).await?;
             }
         }
@@ -646,6 +651,33 @@ mod tests {
             .to_str()
             .expect("text");
         assert_eq!(name.trim(), "Test^Patient");
+    }
+
+    #[tokio::test]
+    async fn to_temp_file_writes_a_readable_part10_file() {
+        let mut dataset = DatasetStream::from_object(sample_object());
+        dataset.metadata_mut().transfer_syntax =
+            Some(uids::EXPLICIT_VR_LITTLE_ENDIAN.to_string());
+
+        let dir = tempfile::tempdir().expect("temp dir");
+        let path = dataset
+            .to_temp_file(dir.path())
+            .await
+            .expect("write temp file");
+
+        let bytes = std::fs::read(&path).expect("read written file");
+        assert!(bytes.len() > 132, "file too short to hold preamble and magic");
+        assert!(
+            bytes[..128].iter().all(|b| *b == 0),
+            "preamble must be zeroed"
+        );
+        assert_eq!(&bytes[128..132], b"DICM", "missing DICM magic");
+
+        let reopened = dicom_object::open_file(&path).expect("reopen Part 10 file");
+        assert_eq!(
+            reopened.meta().media_storage_sop_instance_uid(),
+            "1.2.3.4.5.6"
+        );
     }
 
     #[test]

@@ -3,7 +3,10 @@
 //! Handles JWT-based authentication for mesh communication between Harmony proxies.
 //!
 //! - **Egress (left)**: Generates and attaches a JWT to outgoing requests to other mesh members
-//! - **Ingress (right)**: Validates incoming JWTs from other mesh members
+//! - **Ingress (left)**: Validates incoming JWTs from other mesh members before the
+//!   backend is called. A missing or invalid token fails with `AuthFailure` (HTTP 401).
+//!
+//! The response side (`right`) is a no-op in both directions.
 //!
 //! The middleware is automatically injected by the PipelineExecutor when a request
 //! flows through a mesh context. It does not need to be explicitly listed in the
@@ -528,6 +531,42 @@ impl MeshAuthMiddleware {
                 }
             })
     }
+
+    /// Validate the mesh JWT on an incoming request.
+    ///
+    /// Fails with `AuthFailure` when the Authorization header is missing, the
+    /// token does not verify, or its `mesh_id` is not this mesh. On success the
+    /// validated claims are recorded in the request metadata.
+    async fn authenticate_ingress_request(
+        &self,
+        mut envelope: RequestEnvelope<serde_json::Value>,
+    ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
+        tracing::debug!(
+            "MeshAuth ingress: validating JWT for mesh '{}'",
+            self.config.mesh_name
+        );
+
+        let token = self
+            .extract_token(&envelope.request_details.headers)
+            .ok_or(AuthFailure("Missing mesh Authorization header"))?;
+
+        // Async because the Runbeam provider may fetch JWKS.
+        let claims = self.validate_jwt(&token).await?;
+
+        let metadata = &mut envelope.request_details.metadata;
+        metadata.insert("mesh_auth_validated".to_string(), "true".to_string());
+        if let Some(sub) = claims.sub {
+            metadata.insert("mesh_auth_subject".to_string(), sub);
+        }
+        metadata.insert("mesh_auth_issuer".to_string(), claims.iss);
+
+        tracing::info!(
+            "MeshAuth: validated JWT for ingress from mesh '{}'",
+            self.config.mesh_name
+        );
+
+        Ok(envelope)
+    }
 }
 
 #[async_trait::async_trait]
@@ -536,9 +575,11 @@ impl Middleware for MeshAuthMiddleware {
         &self,
         mut envelope: RequestEnvelope<serde_json::Value>,
     ) -> Result<RequestEnvelope<serde_json::Value>, Error> {
-        // Only generate JWT for egress direction
-        if self.config.direction != MeshAuthDirection::Egress {
-            return Ok(envelope);
+        // Ingress must be validated on the request side. If it waited for the
+        // response side, an unauthenticated request would already have
+        // reached the backend before the 401 was returned.
+        if self.config.direction == MeshAuthDirection::Ingress {
+            return self.authenticate_ingress_request(envelope).await;
         }
 
         tracing::debug!(
@@ -574,46 +615,10 @@ impl Middleware for MeshAuthMiddleware {
 
     async fn right(
         &self,
-        mut envelope: ResponseEnvelope<serde_json::Value>,
+        envelope: ResponseEnvelope<serde_json::Value>,
     ) -> Result<ResponseEnvelope<serde_json::Value>, Error> {
-        // Only validate JWT for ingress direction
-        if self.config.direction != MeshAuthDirection::Ingress {
-            return Ok(envelope);
-        }
-
-        tracing::debug!(
-            "MeshAuth ingress: validating JWT for mesh '{}'",
-            self.config.mesh_name
-        );
-
-        // Extract token from request headers
-        let token = self.extract_token(&envelope.request_details.headers)
-            .ok_or_else(|| AuthFailure("Missing mesh Authorization header"))?;
-
-        // Validate the token (async for Runbeam provider)
-        let claims = self.validate_jwt(&token).await?;
-
-        // Add validated claims to response metadata
-        envelope.response_details.metadata.insert(
-            "mesh_auth_validated".to_string(),
-            "true".to_string(),
-        );
-        if let Some(sub) = claims.sub {
-            envelope.response_details.metadata.insert(
-                "mesh_auth_subject".to_string(),
-                sub,
-            );
-        }
-        envelope.response_details.metadata.insert(
-            "mesh_auth_issuer".to_string(),
-            claims.iss,
-        );
-
-        tracing::info!(
-            "MeshAuth: validated JWT for ingress from mesh '{}'",
-            self.config.mesh_name
-        );
-
+        // Nothing to do on the response side. Ingress is validated in left()
+        // before the backend is called, and egress only signs the request.
         Ok(envelope)
     }
 }
@@ -897,11 +902,72 @@ mod tests {
         );
     }
 
+    fn create_test_request_envelope_with_auth(
+        auth_header: Option<&str>,
+    ) -> RequestEnvelope<serde_json::Value> {
+        let mut headers = HashMap::new();
+        if let Some(auth) = auth_header {
+            headers.insert("authorization".to_string(), auth.to_string());
+        }
+
+        RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri("/test")
+            .headers(headers)
+            .original_data(serde_json::json!({}))
+            .normalized_data(Some(serde_json::json!({"test": "data"})))
+            .build()
+            .unwrap()
+    }
+
+    fn local_ingress(secret: &str) -> MeshAuthMiddleware {
+        MeshAuthMiddleware::for_ingress(
+            "test-mesh".to_string(),
+            None, // mesh_id: falls back to mesh_name
+            MeshProvider::Local,
+            Some(secret.to_string()),
+            None,
+            None, // jwks_url
+        )
+        .unwrap()
+    }
+
+    /// Sign an HS256 mesh token the same way a local-provider peer would.
+    fn sign_local_token(secret: &str, mesh_id: &str) -> String {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let claims = MeshClaims {
+            sub: Some("peer-proxy".to_string()),
+            iss: "test-mesh".to_string(),
+            aud: None,
+            iat: now,
+            exp: now + 300,
+            mesh_id: mesh_id.to_string(),
+        };
+        encode(
+            &Header::new(Algorithm::HS256),
+            &claims,
+            &EncodingKey::from_secret(secret.as_bytes()),
+        )
+        .unwrap()
+    }
+
+    fn expect_auth_failure(
+        result: Result<RequestEnvelope<serde_json::Value>, Error>,
+    ) -> &'static str {
+        let err = result.expect_err("ingress request should be rejected");
+        err.downcast_ref::<AuthFailure>()
+            .unwrap_or_else(|| panic!("expected AuthFailure, got: {}", err))
+            .0
+    }
+
     #[tokio::test]
-    async fn test_ingress_validates_jwt() {
+    async fn test_ingress_validates_jwt_on_request_side() {
         let secret = "test-secret-key-for-jwt";
 
-        // Generate a valid JWT first
+        // Generate a valid JWT with the egress side, as a peer proxy would
         let egress_mw = MeshAuthMiddleware::for_egress(
             "test-mesh".to_string(),
             None, // mesh_id
@@ -911,85 +977,109 @@ mod tests {
             None, // destination_url
         )
         .unwrap();
-
         let jwt = egress_mw.generate_jwt(None).await.unwrap();
 
-        // Now validate it with ingress middleware
-        let ingress_mw = MeshAuthMiddleware::for_ingress(
-            "test-mesh".to_string(),
-            None, // mesh_id
-            MeshProvider::Local,
-            Some(secret.to_string()),
-            None,
-            None, // jwks_url
-        )
-        .unwrap();
+        let ingress_mw = local_ingress(secret);
+        let envelope = create_test_request_envelope_with_auth(Some(&format!("Bearer {}", jwt)));
+        let processed = ingress_mw
+            .left(envelope)
+            .await
+            .expect("valid token should pass");
 
-        let envelope = create_test_response_envelope(Some(&format!("Bearer {}", jwt)));
-        let result = ingress_mw.right(envelope).await;
-        assert!(result.is_ok());
-
-        let processed = result.unwrap();
         assert_eq!(
-            processed.response_details.metadata.get("mesh_auth_validated"),
+            processed
+                .request_details
+                .metadata
+                .get("mesh_auth_validated"),
             Some(&"true".to_string())
+        );
+        assert_eq!(
+            processed.request_details.metadata.get("mesh_auth_issuer"),
+            Some(&"test-mesh".to_string())
+        );
+        // Ingress validates only. It must not sign the onward request.
+        assert!(
+            processed.target_details.is_none()
+                || !processed
+                    .target_details
+                    .as_ref()
+                    .unwrap()
+                    .headers
+                    .contains_key("Authorization")
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ingress_rejects_missing_auth() {
+        let envelope = create_test_request_envelope_with_auth(None);
+        let result = local_ingress("test-secret").left(envelope).await;
+        assert_eq!(
+            expect_auth_failure(result),
+            "Missing mesh Authorization header"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ingress_rejects_non_bearer_auth() {
+        let envelope = create_test_request_envelope_with_auth(Some("Basic dXNlcjpwYXNz"));
+        let result = local_ingress("test-secret").left(envelope).await;
+        assert_eq!(
+            expect_auth_failure(result),
+            "Missing mesh Authorization header"
         );
     }
 
     #[tokio::test]
     async fn test_ingress_rejects_invalid_jwt() {
-        let ingress_mw = MeshAuthMiddleware::for_ingress(
-            "test-mesh".to_string(),
-            None, // mesh_id
-            MeshProvider::Local,
-            Some("test-secret".to_string()),
-            None,
-            None, // jwks_url
-        )
-        .unwrap();
-
-        let envelope = create_test_response_envelope(Some("Bearer invalid-token"));
-        let result = ingress_mw.right(envelope).await;
-        assert!(result.is_err());
+        let envelope = create_test_request_envelope_with_auth(Some("Bearer invalid-token"));
+        let result = local_ingress("test-secret").left(envelope).await;
+        assert_eq!(expect_auth_failure(result), "Invalid mesh JWT");
     }
 
     #[tokio::test]
-    async fn test_ingress_rejects_missing_auth() {
-        let ingress_mw = MeshAuthMiddleware::for_ingress(
-            "test-mesh".to_string(),
-            None, // mesh_id
-            MeshProvider::Local,
-            Some("test-secret".to_string()),
-            None,
-            None, // jwks_url
-        )
-        .unwrap();
+    async fn test_ingress_rejects_token_signed_with_wrong_secret() {
+        let token = sign_local_token("some-other-secret", "test-mesh");
+        let envelope = create_test_request_envelope_with_auth(Some(&format!("Bearer {}", token)));
+        let result = local_ingress("test-secret").left(envelope).await;
+        assert_eq!(expect_auth_failure(result), "Invalid mesh JWT");
+    }
 
+    #[tokio::test]
+    async fn test_ingress_rejects_mesh_id_mismatch() {
+        let token = sign_local_token("test-secret", "another-mesh");
+        let envelope = create_test_request_envelope_with_auth(Some(&format!("Bearer {}", token)));
+        let result = local_ingress("test-secret").left(envelope).await;
+        assert_eq!(expect_auth_failure(result), "Mesh JWT mesh_id mismatch");
+    }
+
+    #[tokio::test]
+    async fn test_right_is_noop_for_ingress() {
+        // Validation happens in left(). The response side must not re-validate,
+        // so a response whose request carries no token passes through unchanged.
         let envelope = create_test_response_envelope(None);
-        let result = ingress_mw.right(envelope).await;
-        assert!(result.is_err());
+        let processed = local_ingress("test-secret")
+            .right(envelope)
+            .await
+            .expect("right() should be a no-op for ingress");
+        assert!(processed.response_details.metadata.is_empty());
     }
 
     #[tokio::test]
-    async fn test_egress_passthrough_for_ingress_direction() {
-        let mw = MeshAuthMiddleware::for_ingress(
+    async fn test_right_is_noop_for_egress() {
+        let mw = MeshAuthMiddleware::for_egress(
             "test-mesh".to_string(),
             None, // mesh_id
             MeshProvider::Local,
             Some("test-secret".to_string()),
             None,
-            None, // jwks_url
+            None, // destination_url
         )
         .unwrap();
-
-        let envelope = create_test_request_envelope();
-        let result = mw.left(envelope).await;
-        assert!(result.is_ok());
-
-        // Should pass through without modification
-        let processed = result.unwrap();
-        assert!(processed.target_details.is_none() || 
-            !processed.target_details.as_ref().unwrap().headers.contains_key("Authorization"));
+        let processed = mw
+            .right(create_test_response_envelope(None))
+            .await
+            .expect("right() should be a no-op for egress");
+        assert!(processed.response_details.metadata.is_empty());
     }
 
     #[test]

@@ -3,6 +3,9 @@ use crate::models::envelope::command::Command;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use crate::models::services::streaming::{ResponseStream, StreamingBackend};
+use crate::models::services::upstream_headers::{
+    upstream_request_headers, InboundAuthorizationPolicy,
+};
 use async_trait::async_trait;
 use axum::response::Response;
 use bytes::Bytes;
@@ -223,8 +226,14 @@ impl StreamingBackend for HttpStreamingBackend {
             _ => return Err(Error::from(format!("Unsupported HTTP method: {}", method))),
         };
 
-        // Add headers from envelope
-        for (key, value) in &envelope.request_details.headers {
+        // This backend sends the client's headers (it does not read
+        // target_details), so every candidate header is an inbound one.
+        for (key, value) in upstream_request_headers(
+            &envelope.request_details.headers,
+            &envelope.request_details.headers,
+            InboundAuthorizationPolicy::from_backend_options(options)?,
+            "HTTP streaming",
+        ) {
             request = request.header(key, value);
         }
 

@@ -219,10 +219,13 @@ impl DicomToDicomwebMiddleware {
             envelope.set_target_uri("/studies");
             envelope.set_target_header("content-type", ct_value);
 
-            // Encode body as Base64 in normalized_data for HttpEndpoint to pick up
             let b64 = base64::engine::general_purpose::STANDARD.encode(&body);
 
-            // Update normalized_data
+            // The multipart document is the request body for the backend. The
+            // executor decodes a `body_b64` original_data into raw bytes.
+            envelope.original_data = serde_json::json!({ "body_b64": b64.clone() });
+
+            // Also keep body_b64 in normalized_data for later middleware.
             let mut new_nd = nd.clone();
             if let Some(obj) = new_nd.as_object_mut() {
                 obj.insert("body_b64".to_string(), Value::String(b64));

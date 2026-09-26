@@ -85,6 +85,12 @@ impl HttpAdapter {
     ///
     /// This method extracts the request body and delegates to the shared
     /// `common::build_protocol_ctx` helper for building the context.
+    ///
+    /// The peer socket address is read from the `ConnectInfo<SocketAddr>`
+    /// extension when the server was bound with
+    /// `into_make_service_with_connect_info::<SocketAddr>()`. When it is
+    /// missing, the resulting envelope has no `remote_addr` metadata and
+    /// downstream IP-based rules skip.
     pub async fn http_request_to_protocol_ctx(
         req: &mut Request,
         options: &HashMap<String, serde_json::Value>,
@@ -99,6 +105,12 @@ impl HttpAdapter {
         // Get path prefix from options
         let path_prefix = common::get_path_prefix(options);
 
+        // Peer address from axum's ConnectInfo extension.
+        let remote_addr = req
+            .extensions()
+            .get::<axum::extract::ConnectInfo<SocketAddr>>()
+            .map(|ci| ci.0);
+
         // Use shared helper to build the ProtocolCtx
         Ok(common::build_protocol_ctx(
             req.method(),
@@ -107,6 +119,7 @@ impl HttpAdapter {
             body_bytes,
             path_prefix,
             "http",
+            remote_addr,
         ))
     }
 
@@ -267,7 +280,7 @@ impl ProtocolAdapter for HttpAdapter {
 
                 if let Err(e) = axum_server::bind_rustls(bind_addr, axum_tls_config)
                     .handle(handle)
-                    .serve(app.into_make_service())
+                    .serve(app.into_make_service_with_connect_info::<SocketAddr>())
                     .await
                 {
                     tracing::error!(
@@ -303,7 +316,10 @@ impl ProtocolAdapter for HttpAdapter {
                     shutdown.cancelled().await;
                 };
 
-                if let Err(e) = axum::serve(listener, app)
+                if let Err(e) = axum::serve(
+                    listener,
+                    app.into_make_service_with_connect_info::<SocketAddr>(),
+                )
                     .with_graceful_shutdown(graceful_shutdown)
                     .await
                 {
@@ -325,5 +341,101 @@ impl ProtocolAdapter for HttpAdapter {
             "HttpAdapter(network={}, bind={}, protocol={})",
             self.network_name, self.bind_addr, protocol
         )
+    }
+}
+
+#[cfg(test)]
+mod adapter_tests {
+    use super::*;
+    use axum::body::Body;
+    use axum::extract::ConnectInfo;
+    use axum::routing::get;
+    use axum::Router;
+    use http::Request;
+    use std::net::SocketAddr;
+    use tokio::net::TcpListener;
+
+    /// The HTTP adapter's request-to-context conversion records the peer's IP
+    /// (without port) under `ctx.meta["remote_addr"]` when the request carries
+    /// an axum `ConnectInfo<SocketAddr>` extension.
+    #[tokio::test]
+    async fn http_request_to_protocol_ctx_records_peer_ip() {
+        let mut req: Request<Body> = Request::builder()
+            .method("GET")
+            .uri("/health")
+            .body(Body::empty())
+            .expect("build request");
+
+        let peer: SocketAddr = "198.51.100.7:34567".parse().unwrap();
+        req.extensions_mut().insert(ConnectInfo(peer));
+
+        let options: HashMap<String, serde_json::Value> = HashMap::new();
+        let ctx = HttpAdapter::http_request_to_protocol_ctx(&mut req, &options)
+            .await
+            .expect("build ctx");
+
+        assert_eq!(ctx.meta.get("remote_addr").map(String::as_str), Some("198.51.100.7"));
+        assert_eq!(ctx.meta.get("remote_port").map(String::as_str), Some("34567"));
+    }
+
+    /// End-to-end assertion: an axum handler served with
+    /// `into_make_service_with_connect_info::<SocketAddr>()` receives a peer
+    /// address that `http_request_to_protocol_ctx` copies onto the envelope's
+    /// metadata. A tiny handler exposes the envelope's remote_addr so we can
+    /// verify it from the client side.
+    #[tokio::test]
+    async fn envelope_remote_addr_is_populated_via_axum_connect_info() {
+        use tokio::sync::oneshot;
+
+        async fn handler(mut req: axum::extract::Request) -> String {
+            let options: HashMap<String, serde_json::Value> = HashMap::new();
+            let ctx = HttpAdapter::http_request_to_protocol_ctx(&mut req, &options)
+                .await
+                .expect("build ctx");
+
+            // Simulate the HTTP endpoint copying remote_addr onto the envelope's
+            // request_details.metadata. Return the value so the test can assert.
+            ctx.meta
+                .get("remote_addr")
+                .cloned()
+                .unwrap_or_else(|| "<missing>".to_string())
+        }
+
+        let app: Router = Router::new().route("/peer", get(handler));
+
+        let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind");
+        let bound = listener.local_addr().expect("local addr");
+
+        let (tx, rx) = oneshot::channel::<()>();
+        let server = tokio::spawn(async move {
+            axum::serve(
+                listener,
+                app.into_make_service_with_connect_info::<SocketAddr>(),
+            )
+            .with_graceful_shutdown(async {
+                let _ = rx.await;
+            })
+            .await
+            .expect("axum serve");
+        });
+
+        let url = format!("http://{}/peer", bound);
+        let body = reqwest::get(&url)
+            .await
+            .expect("send request")
+            .text()
+            .await
+            .expect("read body");
+
+        // The reported IP must be a valid loopback address. Its exact form
+        // (127.0.0.1 vs ::1) depends on the OS, so we check it's a real IP
+        // and not the fallback "<missing>" sentinel.
+        assert_ne!(body, "<missing>", "remote_addr must be populated");
+        let _: std::net::IpAddr = body
+            .parse()
+            .unwrap_or_else(|_| panic!("remote_addr should be a valid IP, got: {}", body));
+
+        let _ = tx.send(());
+        server.await.expect("server task");
     }
 }

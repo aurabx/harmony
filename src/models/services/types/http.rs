@@ -2,7 +2,10 @@ use crate::config::config::ConfigError;
 use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
-use crate::router::route_config::RouteConfig;
+use crate::models::services::upstream_headers::{
+    upstream_request_headers, InboundAuthorizationPolicy,
+};
+use crate::router::route_config::{standard_methods, RouteConfig};
 use crate::utils::Error;
 use async_trait::async_trait;
 use axum::{body::Body, response::Response};
@@ -56,23 +59,13 @@ impl ServiceType for HttpEndpoint {
             // Handle exact path match
             RouteConfig {
                 path: path_prefix.to_string(),
-                methods: vec![
-                    http::Method::GET,
-                    http::Method::POST,
-                    http::Method::PUT,
-                    http::Method::DELETE,
-                ],
+                methods: standard_methods(),
                 description: Some("Handles HTTP requests at exact path".to_string()),
             },
             // Handle subpaths (e.g., /dicom/echo, /api/v1/users)
             RouteConfig {
                 path: wildcard_path,
-                methods: vec![
-                    http::Method::GET,
-                    http::Method::POST,
-                    http::Method::PUT,
-                    http::Method::DELETE,
-                ],
+                methods: standard_methods(),
                 description: Some("Handles HTTP requests with subpaths".to_string()),
             },
         ]
@@ -153,6 +146,14 @@ impl ServiceType for HttpEndpoint {
         }
         if let Some(proto) = ctx.meta.get("protocol") {
             metadata.insert("protocol".into(), proto.clone());
+        }
+        // Peer address recorded by the HTTP adapter's ConnectInfo extractor.
+        // Downstream policies (rate limit, ip_allow, ip_deny) key on this.
+        if let Some(addr) = ctx.meta.get("remote_addr") {
+            metadata.insert("remote_addr".into(), addr.clone());
+        }
+        if let Some(port) = ctx.meta.get("remote_port") {
+            metadata.insert("remote_port".into(), port.clone());
         }
 
         let method = attrs
@@ -400,24 +401,14 @@ impl ServiceHandler<Value> for HttpEndpoint {
             }
         }
 
-        // Apply path_prefix from backend options if present
-        // This prepends a path to the request URI (e.g., "/api" + "/users" = "/api/users")
-        if let Some(path_prefix) = options
-            .get("path_prefix")
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.trim().is_empty())
-        {
-            let prefix = path_prefix.trim_end_matches('/');
-            let uri = if target_details.uri.starts_with('/') {
-                &target_details.uri
-            } else {
-                // Ensure uri has leading slash
-                target_details.uri = format!("/{}", target_details.uri);
-                &target_details.uri
-            };
-            target_details.uri = format!("{}{}", prefix, uri);
-            tracing::debug!("HTTP backend applied path_prefix '{}' to URI: {}", prefix, target_details.uri);
+        let path_prefix = options.get("path_prefix").and_then(|v| v.as_str());
+        if has_non_http_scheme(&target_details.uri) {
+            tracing::debug!(
+                "HTTP backend ignoring non-HTTP request URI '{}' as backend path",
+                target_details.uri
+            );
         }
+        target_details.uri = backend_request_path(&target_details.uri, path_prefix);
 
         tracing::debug!(
             "HTTP backend targeting: {} {}",
@@ -568,6 +559,7 @@ impl HttpEndpoint {
             "DELETE" => client.delete(&full_url),
             "PATCH" => client.patch(&full_url),
             "HEAD" => client.head(&full_url),
+            "OPTIONS" => client.request(reqwest::Method::OPTIONS, &full_url),
             method => {
                 return Err(Error::from(format!("Unsupported HTTP method: {}", method)));
             }
@@ -580,21 +572,13 @@ impl HttpEndpoint {
             "HTTP",
         );
 
-        // Add headers from target_details, but drop hop-by-hop and Host headers
-        for (key, value) in &target_details.headers {
-            let k = key.to_ascii_lowercase();
-            if matches!(
-                k.as_str(),
-                "host"
-                    | "connection"
-                    | "keep-alive"
-                    | "proxy-connection"
-                    | "transfer-encoding"
-                    | "upgrade"
-                    | "content-length"
-            ) {
-                continue; // let reqwest set correct values from URL/body
-            }
+        let auth_policy = InboundAuthorizationPolicy::from_backend_options(options)?;
+        for (key, value) in upstream_request_headers(
+            &target_details.headers,
+            &envelope.request_details.headers,
+            auth_policy,
+            "HTTP",
+        ) {
             request_builder = request_builder.header(key, value);
         }
 
@@ -638,7 +622,7 @@ impl HttpEndpoint {
         conn: &ConnectionConfig,
         target_details: &crate::models::envelope::envelope::TargetDetails,
         envelope: &RequestEnvelope<Vec<u8>>,
-        _options: &HashMap<String, Value>,
+        options: &HashMap<String, Value>,
     ) -> Result<(u16, HashMap<String, String>, Vec<u8>), Error> {
         use crate::clients::http3::Http3Client;
 
@@ -682,24 +666,12 @@ impl HttpEndpoint {
             format!("{}?{}", target_details.uri, query_string)
         };
 
-        // Filter headers (drop hop-by-hop headers)
-        let mut headers = HashMap::new();
-        for (key, value) in &target_details.headers {
-            let k = key.to_ascii_lowercase();
-            if matches!(
-                k.as_str(),
-                "host"
-                    | "connection"
-                    | "keep-alive"
-                    | "proxy-connection"
-                    | "transfer-encoding"
-                    | "upgrade"
-                    | "content-length"
-            ) {
-                continue;
-            }
-            headers.insert(key.clone(), value.clone());
-        }
+        let headers = upstream_request_headers(
+            &target_details.headers,
+            &envelope.request_details.headers,
+            InboundAuthorizationPolicy::from_backend_options(options)?,
+            "HTTP/3",
+        );
 
         tracing::debug!(
             "Sending HTTP/3 request to: {}:{}{}",
@@ -724,5 +696,112 @@ impl HttpEndpoint {
         tracing::debug!("HTTP/3 backend response status: {}", status);
 
         Ok((status, response.headers, response.body))
+    }
+}
+
+/// Return true when `uri` is an absolute URI whose scheme is not HTTP(S).
+///
+/// Non-HTTP endpoints put protocol URIs such as `dimse://scp/store` into the
+/// request URI. Those URIs identify the inbound operation, not a path on the
+/// HTTP backend, so they must never be joined onto the backend base URL.
+fn has_non_http_scheme(uri: &str) -> bool {
+    let Some((scheme, _)) = uri.split_once("://") else {
+        return false;
+    };
+    // RFC 3986 scheme syntax. A value such as `/proxy/http://x` has a '/'
+    // before "://", so it is a path and not a scheme URI.
+    let mut chars = scheme.chars();
+    let is_scheme = chars.next().is_some_and(|c| c.is_ascii_alphabetic())
+        && chars.all(|c| c.is_ascii_alphanumeric() || matches!(c, '+' | '-' | '.'));
+    is_scheme && !scheme.eq_ignore_ascii_case("http") && !scheme.eq_ignore_ascii_case("https")
+}
+
+/// Build the path sent to the HTTP backend from the executor's target URI
+/// and the backend's optional `path_prefix`.
+///
+/// HTTP request paths keep their existing behaviour: the prefix (trailing
+/// slashes trimmed) is prepended and a leading slash is ensured. A non-HTTP
+/// request URI is dropped, so the result is the prefix alone. With no prefix
+/// that is an empty path, which makes `full_url()` return the base URL
+/// (target root or `base_path`) unchanged.
+fn backend_request_path(uri: &str, path_prefix: Option<&str>) -> String {
+    let prefix = path_prefix
+        .filter(|s| !s.trim().is_empty())
+        .map(|s| s.trim_end_matches('/'));
+
+    if has_non_http_scheme(uri) {
+        return prefix.unwrap_or_default().to_string();
+    }
+
+    match prefix {
+        Some(prefix) if uri.starts_with('/') => format!("{}{}", prefix, uri),
+        Some(prefix) => format!("{}/{}", prefix, uri),
+        None => uri.to_string(),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::envelope::envelope::TargetDetails;
+
+    #[test]
+    fn test_backend_request_path_http_path_without_prefix_is_unchanged() {
+        assert_eq!(backend_request_path("/api/users", None), "/api/users");
+    }
+
+    #[test]
+    fn test_backend_request_path_http_path_gets_prefix() {
+        assert_eq!(backend_request_path("/users", Some("/api/")), "/api/users");
+        assert_eq!(backend_request_path("users", Some("/api")), "/api/users");
+    }
+
+    #[test]
+    fn test_backend_request_path_blank_prefix_is_ignored() {
+        assert_eq!(backend_request_path("/users", Some("  ")), "/users");
+    }
+
+    #[test]
+    fn test_backend_request_path_absolute_http_url_is_not_dropped() {
+        assert!(!has_non_http_scheme("http://example.com/a"));
+        assert!(!has_non_http_scheme("HTTPS://example.com/a"));
+    }
+
+    #[test]
+    fn test_backend_request_path_path_containing_scheme_text_is_kept() {
+        assert!(!has_non_http_scheme("/proxy/http://example.com"));
+        assert_eq!(
+            backend_request_path("/proxy/dimse://x", Some("/api")),
+            "/api/proxy/dimse://x"
+        );
+    }
+
+    #[test]
+    fn test_backend_request_path_drops_dimse_uri() {
+        assert!(has_non_http_scheme("dimse://scp/store"));
+        assert_eq!(backend_request_path("dimse://scp/store", None), "");
+        assert_eq!(
+            backend_request_path("dimse://scp/store", Some("/ingest/")),
+            "/ingest"
+        );
+    }
+
+    #[test]
+    fn test_backend_request_path_drops_other_non_http_schemes() {
+        assert_eq!(backend_request_path("hl7://mllp/store", Some("/in")), "/in");
+        assert_eq!(backend_request_path("mllp+tls://x", None), "");
+    }
+
+    #[test]
+    fn test_full_url_for_dropped_dimse_uri_is_target_root() {
+        let target = TargetDetails {
+            base_url: "http://127.0.0.1:8080".to_string(),
+            uri: backend_request_path("dimse://scp/store", None),
+            ..TargetDetails::default()
+        };
+        let url = target.full_url().expect("full_url");
+        assert_eq!(url, "http://127.0.0.1:8080");
+        let parsed = reqwest::Url::parse(&url).expect("valid URL");
+        assert_eq!(parsed.path(), "/");
     }
 }

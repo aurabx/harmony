@@ -1,24 +1,103 @@
 use crate::config::config::Config;
-use crate::models::connection::ConnectionConfig;
+use crate::models::connection::{AuthenticationDefinition, ConnectionConfig};
 use std::collections::HashMap;
+
+/// Prefix of the TOML table that holds authentication definitions. References
+/// must not include it: `authentication = "fhir_bearer"`, not
+/// `authentication = "authentications.fhir_bearer"`.
+const AUTHENTICATIONS_TABLE_PREFIX: &str = "authentications.";
 
 /// Resolves all references in the configuration
 /// Returns a set of backend names that could not be resolved
+///
+/// Fails if any `authentication` reference does not name a key in
+/// `[authentications]`. A missing credential must stop the load, because
+/// otherwise Harmony sends requests upstream without it.
 pub fn resolve_references(config: &mut Config) -> Result<std::collections::HashSet<String>, String> {
+    validate_authentication_refs(config)?;
     resolve_endpoints(config)?;
     let unresolved_backends = resolve_backends(config)?;
     Ok(unresolved_backends)
 }
 
-/// Resolves an authentication reference to the actual AuthenticationDefinition
+/// Checks every `authentication` reference written on a target, peer, backend,
+/// endpoint or middleware instance.
+///
+/// This runs before targets and peers are merged into backends and endpoints,
+/// so each error names the item where the reference is written. All errors are
+/// returned together, sorted, so one load reports every bad reference.
+fn validate_authentication_refs(config: &Config) -> Result<(), String> {
+    let mut references: Vec<(&str, &str, &str)> = Vec::new();
+    references.extend(config.targets.iter().filter_map(|(name, target)| {
+        target.authentication.as_deref().map(|auth_ref| ("Target", name.as_str(), auth_ref))
+    }));
+    references.extend(config.peers.iter().filter_map(|(name, peer)| {
+        peer.authentication.as_deref().map(|auth_ref| ("Peer", name.as_str(), auth_ref))
+    }));
+    references.extend(config.backends.iter().filter_map(|(name, backend)| {
+        backend.authentication.as_deref().map(|auth_ref| ("Backend", name.as_str(), auth_ref))
+    }));
+    references.extend(config.endpoints.iter().filter_map(|(name, endpoint)| {
+        endpoint.authentication.as_deref().map(|auth_ref| ("Endpoint", name.as_str(), auth_ref))
+    }));
+    references.extend(config.middleware.iter().filter_map(|(name, middleware)| {
+        middleware.authentication.as_deref().map(|auth_ref| ("Middleware", name.as_str(), auth_ref))
+    }));
+
+    let mut errors: Vec<String> = references
+        .into_iter()
+        .filter_map(|(kind, name, auth_ref)| {
+            resolve_authentication_ref(kind, name, auth_ref, &config.authentications).err()
+        })
+        .collect();
+
+    if errors.is_empty() {
+        return Ok(());
+    }
+    errors.sort();
+    Err(errors.join("\n"))
+}
+
+/// Resolves an authentication reference to the actual AuthenticationDefinition.
+///
+/// `kind` and `name` identify the item that holds the reference (for example
+/// `"Target"` and `"fhir_server"`). They only shape the error message.
 fn resolve_authentication_ref(
+    kind: &str,
+    name: &str,
     auth_ref: &str,
-    authentications: &HashMap<String, crate::models::connection::AuthenticationDefinition>,
-) -> Result<crate::models::connection::AuthenticationDefinition, String> {
+    authentications: &HashMap<String, AuthenticationDefinition>,
+) -> Result<AuthenticationDefinition, String> {
     authentications
         .get(auth_ref)
         .cloned()
-        .ok_or_else(|| format!("Authentication '{}' not found in global authentications", auth_ref))
+        .ok_or_else(|| unknown_authentication_message(kind, name, auth_ref, authentications))
+}
+
+fn unknown_authentication_message(
+    kind: &str,
+    name: &str,
+    auth_ref: &str,
+    authentications: &HashMap<String, AuthenticationDefinition>,
+) -> String {
+    let mut available: Vec<&str> = authentications.keys().map(String::as_str).collect();
+    available.sort_unstable();
+    let available = if available.is_empty() {
+        "(none defined)".to_string()
+    } else {
+        available.join(", ")
+    };
+
+    match auth_ref.strip_prefix(AUTHENTICATIONS_TABLE_PREFIX) {
+        Some(bare_key) => format!(
+            "{} '{}' references unknown authentication '{}'. Drop the \"{}\" prefix: use \"{}\" instead of \"{}\". Available authentications: {}",
+            kind, name, auth_ref, AUTHENTICATIONS_TABLE_PREFIX, bare_key, auth_ref, available
+        ),
+        None => format!(
+            "{} '{}' references unknown authentication '{}'. Available authentications: {}",
+            kind, name, auth_ref, available
+        ),
+    }
 }
 
 fn resolve_endpoints(config: &mut Config) -> Result<(), String> {
@@ -139,20 +218,17 @@ fn resolve_backends(config: &mut Config) -> Result<std::collections::HashSet<Str
         // Inject connection into options for services
         inject_connection_into_options(&mut backend.options, &backend.connection);
         
-        // Resolve and inject authentication definition into options
+        // Resolve and inject authentication definition into options.
+        // validate_authentication_refs has already checked this reference; the
+        // error path stays so a missing credential can never be skipped.
         if let Some(auth_ref) = &backend.authentication {
-            match resolve_authentication_ref(auth_ref, &config.authentications) {
-                Ok(auth_def) => {
-                    let options_map = backend.options.get_or_insert_with(HashMap::new);
-                    options_map.insert(
-                        "authentication_def".to_string(),
-                        serde_json::to_value(&auth_def).expect("Failed to serialize AuthenticationDefinition"),
-                    );
-                }
-                Err(e) => {
-                    tracing::warn!("Backend '{}': {}", name, e);
-                }
-            }
+            let auth_def =
+                resolve_authentication_ref("Backend", name, auth_ref, &config.authentications)?;
+            let options_map = backend.options.get_or_insert_with(HashMap::new);
+            options_map.insert(
+                "authentication_def".to_string(),
+                serde_json::to_value(&auth_def).expect("Failed to serialize AuthenticationDefinition"),
+            );
         }
         
         // Inject reliability

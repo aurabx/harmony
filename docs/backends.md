@@ -1,6 +1,6 @@
 # Backends
 
-**Last Updated**: 2026-02-08
+**Last Updated**: 2026-09-24
 
 Backends enable the pipeline to communicate with external systems (targets). Backends operate within the unified `PipelineExecutor` and handle the "backend invocation" step of the pipeline.
 
@@ -28,12 +28,20 @@ Define a target in your main configuration and reference it from the backend. Th
 
 **config.toml**:
 ```toml
+[authentications.prod_api_token]
+id = "prod_api_token"
+method = "bearer"
+[authentications.prod_api_token.options]
+token = "$PROD_API_TOKEN"
+
 [targets.prod_api]
 connection.host = "api.example.com"
 connection.protocol = "https"
-authentication.method = "bearer"
+authentication = "prod_api_token"  # Bare key from [authentications]
 timeout_secs = 60
 ``` path=null start=null
+
+The backend inherits the target's `authentication`. The value must be the bare key. A reference that does not resolve stops the config from loading. See [Authentications](configuration.md#authentications).
 
 **pipelines/main.toml**:
 ```toml
@@ -65,6 +73,36 @@ service = "http"
 base_url = "https://api.example.com"
 ``` path=null start=null
 
+## Request Headers Sent Upstream
+
+HTTP-based backends (`http`, `http3`, `fhir`, `dicomweb`, `jmix_backend`, `http_streaming_backend`) build the upstream request from the client's headers plus any headers middleware added. Every backend applies the same filter before sending.
+
+**Always removed**:
+- `Host`. The HTTP client sets it from the backend URL.
+- Hop-by-hop headers (RFC 9110 §7.6.1): `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `Proxy-Connection`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`.
+- Any header named in the client's `Connection` header.
+- `Content-Length`. The HTTP client sets it from the body it sends.
+
+**Client `Authorization`**: removed by default. The client's credential is for Harmony (for example `basic_auth`, `jwt_auth` or a mesh JWT on ingress), not for the upstream.
+
+To pass the client's `Authorization` through, set `forward_authorization = true` in the backend options:
+
+```toml
+[backends.passthrough_api]
+service = "http"
+[backends.passthrough_api.options]
+base_url = "https://api.example.com"
+forward_authorization = true   # default: false
+``` path=null start=null
+
+Harmony never sends two `Authorization` headers. When Harmony sends its own credential, the client's is dropped even with `forward_authorization = true`. Harmony's own credential is either:
+- the backend's authentication (`authentication`, or the `authentication` of its `target_ref`), or
+- an `Authorization` header set by middleware, such as the mesh egress JWT.
+
+`forward_authorization` must be a boolean. Any other value fails the request with an error that names the option. Dropping a client `Authorization` header is logged at `debug` level. The header value is never logged.
+
+**Everything else** passes through unchanged. This includes `Accept`, `Content-Type` and custom `X-` headers.
+
 ## Backend Types
 
 ### HTTP (Passthru)
@@ -76,7 +114,8 @@ A basic HTTP backend for connecting to HTTP/HTTPS targets.
 - If a `Command` is set on the envelope, the Command's `Operation` overrides the HTTP method (e.g., Query/Retrieve→GET, Store→POST, Update→PUT). See [commands.md](commands.md).
 - Sends request to configured target
 - Converts HTTP response back to `ResponseEnvelope`
-- Preserves headers, status codes, and body
+- Forwards request headers as described in [Request Headers Sent Upstream](#request-headers-sent-upstream)
+- Preserves response headers, status codes, and body
 
 **Configuration**:
 ```toml

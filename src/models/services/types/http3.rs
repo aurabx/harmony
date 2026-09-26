@@ -35,6 +35,9 @@ use crate::config::config::ConfigError;
 use crate::models::connection::ConnectionConfig;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope, TargetDetails};
 use crate::models::services::services::{ServiceHandler, ServiceType};
+use crate::models::services::upstream_headers::{
+    upstream_request_headers, InboundAuthorizationPolicy,
+};
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use async_trait::async_trait;
@@ -291,24 +294,12 @@ impl ServiceHandler<Value> for Http3Backend {
             format!("{}?{}", target_details.uri, query_string)
         };
 
-        // Filter headers (drop hop-by-hop headers)
-        let mut headers = HashMap::new();
-        for (key, value) in &target_details.headers {
-            let k = key.to_ascii_lowercase();
-            if matches!(
-                k.as_str(),
-                "host"
-                    | "connection"
-                    | "keep-alive"
-                    | "proxy-connection"
-                    | "transfer-encoding"
-                    | "upgrade"
-                    | "content-length"
-            ) {
-                continue;
-            }
-            headers.insert(key.clone(), value.clone());
-        }
+        let headers = upstream_request_headers(
+            &target_details.headers,
+            &envelope.request_details.headers,
+            InboundAuthorizationPolicy::from_backend_options(options)?,
+            "HTTP/3",
+        );
 
         tracing::debug!(
             "Sending HTTP/3 request to: {}:{}{}",

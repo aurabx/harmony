@@ -5,6 +5,7 @@
 ### Added
 - (AURA-2391) Native C-GET SCU on dicom-ul 0.10 with SCP/SCU role negotiation. Instances stream out as they are received; without an output directory nothing touches disk.
 - (AURA-2391) `transfer_syntaxes` option on `dicom_scu_streaming` to choose the transfer syntaxes proposed for C-GET storage contexts.
+- (AURA-2433) `forward_authorization` backend option. Set it to `true` to pass the client's `Authorization` header to the upstream when the backend has no authentication of its own. See docs/backends.md.
 
 ### Changed
 - (AURA-2391) `dimse::scp::QueryProvider` returns streams. The SCP sends C-GET, C-MOVE and C-FIND results to the client as the pipeline produces them instead of collecting the whole result first.
@@ -13,6 +14,11 @@
 
 ### Fixed
 - (AURA-2391) Final C-GET and C-MOVE responses no longer carry the Number of Remaining Sub-operations attribute, which PS3.4 forbids outside Pending responses.
+- (AURA-2433, AURA-2411, AURA-2427) HTTP-based backends no longer forward the client's `Authorization` header upstream by default. Pass-through proxies must now set `forward_authorization = true`. The upstream no longer receives two `Authorization` headers when the backend or mesh egress sets its own.
+- (AURA-2427) `http_streaming_backend` no longer forwards `Host` and hop-by-hop headers. All HTTP-based backends now also strip headers named in the client's `Connection` header, plus `TE`, `Trailer`, `Proxy-Authorization` and `Proxy-Authenticate`.
+- (AURA-2438) An `ip_allow` rule in the policies middleware is now a required gate. Before, any other allow rule (for example a `method` rule in allow mode) admitted clients from outside the allowlist. A client IP that matches no `ip_allow` rule in any of the middleware's policies now gets 403. `ip_allow` rules form a union, within a policy and across policies. When an allowlist exists, a request with an unknown client IP is also denied, which includes all HTTP/3 requests for now. See docs/policies-middleware.md.
+- (AURA-2440) `http`, `http_streaming` and `echo` endpoints now route GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS to the pipeline. Before, PATCH and OPTIONS (and PUT and DELETE on `echo`) got 405 from the router, so policies and backends never saw them. The `http` backend now forwards OPTIONS. TRACE and CONNECT are still not routed.
+- (AURA-2443) HTTP endpoints whose paths overlap on one network, such as `/v1/checkout/sessions` and `/v1/checkout/sessions/{id}/complete`, no longer make Harmony panic at startup. Each request goes to the endpoint whose path matches most specifically (see docs/router.md). If that endpoint does not allow the method, the answer is 405 with an `Allow` header; the request never falls through to a less specific endpoint. Two endpoints with routes of the same shape, whatever their methods, including one endpoint listed in two pipelines on the same network, and invalid route paths now fail config load with an error naming both endpoints and their files. Before, the router dropped one of the pipelines at random.
 
 ## [0.12.3] - 2026-01-30
 

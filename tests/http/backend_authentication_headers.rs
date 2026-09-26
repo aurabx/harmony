@@ -499,3 +499,98 @@ async fn test_backend_no_auth_no_header() {
         "Backend without auth should not add X-API-Key header"
     );
 }
+
+/// Loads a target's bare `authentication` reference through the full
+/// `Config::load` path (the one the binary uses) and checks that the Bearer
+/// token reaches the upstream through a backend that inherits it via
+/// `target_ref`.
+#[tokio::test]
+async fn test_target_bearer_auth_reaches_upstream_through_config_load() {
+    let (backend_url, _handle) = build_mock_echo_server().await;
+    let upstream_port = backend_url
+        .rsplit(':')
+        .next()
+        .and_then(|port| port.parse::<u16>().ok())
+        .expect("mock server URL should end with a port");
+
+    let config_str = format!(
+        r#"
+[proxy]
+id = "target-auth-config-load-test"
+
+[management]
+enabled = false
+
+[network.default]
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 8086
+
+[authentications.fhir_bearer]
+id = "fhir_bearer"
+method = "bearer"
+[authentications.fhir_bearer.options]
+token = "target-bearer-token-67890"
+
+[targets.upstream]
+connection.host = "127.0.0.1"
+connection.port = {}
+connection.protocol = "http"
+authentication = "fhir_bearer"
+
+[pipelines.core]
+networks = ["default"]
+endpoints = ["http_endpoint"]
+backends = ["http_backend"]
+middleware = []
+
+[endpoints.http_endpoint]
+service = "http"
+[endpoints.http_endpoint.options]
+path_prefix = "/proxy"
+
+[backends.http_backend]
+service = "http"
+target_ref = "upstream"
+
+[services.http]
+module = ""
+"#,
+        upstream_port
+    );
+
+    let dir = tempfile::TempDir::new().expect("create temp dir");
+    let config_path = dir.path().join("config.toml");
+    std::fs::write(&config_path, config_str).expect("write config");
+
+    let cfg = Config::load(config_path.to_str().expect("utf-8 path")).expect("config should load");
+    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+
+    let response = app
+        .oneshot(
+            Request::builder()
+                .uri("/proxy/echo")
+                .method("POST")
+                .header("content-type", "application/json")
+                .body(Body::from(serde_json::to_vec(&json!({"test": "data"})).unwrap()))
+                .unwrap(),
+        )
+        .await
+        .expect("router handled request");
+
+    assert_eq!(response.status(), StatusCode::OK);
+
+    let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("read response body");
+    let json: serde_json::Value = serde_json::from_slice(&body).expect("json");
+    let headers = json["headers"].as_object().expect("headers object");
+    assert_eq!(
+        headers.get("authorization").and_then(|v| v.as_str()),
+        Some("Bearer target-bearer-token-67890"),
+        "The target's Bearer token should reach the upstream"
+    );
+}

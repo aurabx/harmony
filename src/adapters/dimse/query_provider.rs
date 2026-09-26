@@ -255,6 +255,96 @@ impl PipelineQueryProvider {
         Ok(Box::pin(datasets))
     }
 
+    /// Execute a DIMSE operation through a streaming pipeline and collect a single response envelope.
+    ///
+    /// Some DIMSE operations (notably C-STORE) need to inspect response metadata
+    /// set by outgoing middleware, but their pipeline may be backed by a
+    /// streaming backend that refuses non-streaming execution. This helper
+    /// mirrors `run_streaming` for setup, drives the pipeline via
+    /// `PipelineExecutor::execute_streaming`, and consumes the response stream
+    /// down to a single envelope. The stream must yield at least one envelope.
+    async fn run_streaming_response(
+        &self,
+        command: Command,
+        body: serde_json::Value,
+        mut meta: HashMap<String, String>,
+    ) -> DimseResult<ResponseEnvelope<Vec<u8>>> {
+        use futures_util::StreamExt;
+
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
+
+        // Resolve endpoint service and options
+        let endpoint = config.endpoints.get(&self.endpoint).ok_or_else(|| {
+            DimseError::operation_failed(format!("Unknown endpoint '{}'", self.endpoint))
+        })?;
+        let service = endpoint
+            .resolve_service()
+            .map_err(|e| DimseError::operation_failed(format!("Resolve service failed: {}", e)))?;
+        let options_owned: HashMap<String, serde_json::Value> =
+            endpoint.options.clone().unwrap_or_default();
+        let options = &options_owned;
+
+        // Derive the legacy dimse_op string from the typed Command for backward
+        // compatibility with services that still read metadata.
+        let op = match command.operation {
+            Operation::Query => "find",
+            Operation::Retrieve => "get",
+            Operation::Move => "move",
+            Operation::Store => "store",
+            Operation::Ping => "echo",
+            _ => "unknown",
+        };
+
+        meta.insert("protocol".into(), "dimse".into());
+        meta.insert("dimse_op".into(), op.to_string());
+        let ctx = ProtocolCtx {
+            protocol: Protocol::Dimse,
+            payload: serde_json::to_vec(&body).unwrap_or_default(),
+            meta,
+            attrs: serde_json::json!({}),
+            command: Some(command),
+        };
+
+        let request_envelope = service
+            .build_protocol_envelope(ctx.clone(), options)
+            .await
+            .map_err(|e| DimseError::operation_failed(format!("Envelope build failed: {}", e)))?;
+
+        let pipeline_cfg = config.pipelines.get(&self.pipeline).ok_or_else(|| {
+            DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
+        })?;
+
+        tracing::info!("Executing streaming pipeline for DIMSE operation: {} (single-envelope)", op);
+
+        let mut response_stream =
+            PipelineExecutor::execute_streaming(request_envelope, &self.pipeline, pipeline_cfg, &config, &ctx)
+                .await
+                .map_err(|e| {
+                    DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
+                })?;
+
+        // Consume the stream and keep the last successful envelope. Middleware
+        // (for example dicom_to_dicomweb) may set final response metadata such
+        // as dicom_status on the last envelope.
+        let mut last: Option<ResponseEnvelope<Vec<u8>>> = None;
+        while let Some(item) = response_stream.next().await {
+            match item {
+                Ok(envelope) => last = Some(envelope),
+                Err(e) => {
+                    return Err(DimseError::operation_failed(format!(
+                        "Streaming pipeline yielded error: {}",
+                        e
+                    )));
+                }
+            }
+        }
+
+        last.ok_or_else(|| {
+            DimseError::operation_failed("Streaming pipeline produced no response envelopes")
+        })
+    }
+
     /// Convert ResponseEnvelope to Vec<DatasetStream>
     ///
     /// Parses the response data and converts it to DICOM datasets.
@@ -580,14 +670,22 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             "file": temp_file.to_string_lossy()
         });
 
-        // Execute pipeline and check for DICOM status in response
-        let response = self
-            .run(
-                Command::new(Operation::Store).with_source("dimse_adapter"),
-                body,
-                meta,
-            )
-            .await?;
+        // Execute pipeline and check for DICOM status in response.
+        // Dispatch to the streaming executor when the pipeline's backend
+        // requires it. This mirrors the pattern used by `find` and `get`.
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
+        let pipeline_cfg = config.pipelines.get(&self.pipeline).ok_or_else(|| {
+            DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
+        })?;
+
+        let command = Command::new(Operation::Store).with_source("dimse_adapter");
+        let response = if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
+            tracing::info!("Using streaming pipeline for C-STORE");
+            self.run_streaming_response(command, body, meta).await?
+        } else {
+            self.run(command, body, meta).await?
+        };
 
         // Check for DICOM status in response metadata (set by dicom_to_dicomweb middleware)
         if let Some(status_str) = response.response_details.metadata.get("dicom_status") {

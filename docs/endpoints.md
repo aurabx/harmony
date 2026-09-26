@@ -1,6 +1,6 @@
 # Endpoints
 
-**Last Updated**: 2026-02-08
+**Last Updated**: 2026-09-24
 
 Endpoints define protocol entry points into the Harmony pipeline. Each endpoint is associated with a **Service** that handles protocol-specific data conversion to/from the internal `Envelope` format.
 
@@ -32,8 +32,10 @@ Define a peer in your main configuration and reference it from the endpoint.
 [peers.hospital_a]
 connection.host = "hospital-a.example.com"
 connection.protocol = "dicom"
-authentication.method = "mutual_tls"
+authentication = "hospital_a_auth"  # Bare key from [authentications]
 ```
+
+A peer's `authentication` must be the bare key of an `[authentications]` entry. A reference that does not resolve stops the config from loading. See [Authentications](configuration.md#authentications).
 
 **pipelines/main.toml**:
 ```toml
@@ -69,6 +71,10 @@ A basic HTTP endpoint handled by `HttpAdapter`.
 - Preserves headers, query parameters, and body
 - Sets a `Command` on the envelope based on the HTTP method (GET→Retrieve, POST→Store, PUT→Update, PATCH→Patch, DELETE→Delete, HEAD/OPTIONS→Ping). See [commands.md](commands.md).
 
+**Methods**: GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS all reach the pipeline, on `path_prefix` and on every path below it. The endpoint does not restrict methods. Use a `method` rule in the policies middleware to limit them (see [policies-middleware.md](policies-middleware.md)). The `echo` and `http_streaming` endpoints accept the same methods.
+
+TRACE and CONNECT are not routed and get `405 Method Not Allowed`. TRACE reflects the request, including credential headers, back to the client. CONNECT asks for a raw TCP tunnel, which a pipeline cannot carry.
+
 **Configuration**:
 ```toml
 [endpoints.<name>]
@@ -85,6 +91,8 @@ service = "http"
 path_prefix = "/api"
 ```
 
+**Paths**: the endpoint serves `path_prefix` and every path below it. `path_prefix` may contain parameters, such as `/v1/checkout/sessions/{id}/complete`. Endpoints on one network may overlap. The most specific endpoint serves each request, so an item endpoint at `/v1/orders/{id}` takes `/v1/orders/42` from a collection endpoint at `/v1/orders`. Two endpoints with the same path shape on one network fail config load. See [router.md](router.md#http-route-matching) for the full rule.
+
 ### FHIR
 
 Extends the HTTP endpoint with FHIR-specific handling.
@@ -94,6 +102,8 @@ Extends the HTTP endpoint with FHIR-specific handling.
 - Provides FHIR-aware request/response handling
 - Takes a `ResponseEnvelope` and converts it into a FHIR-compliant HTTP response
 - Sets a `Command` based on FHIR interaction type: search→Query, read→Retrieve, create→Store, `_search`→Query, metadata→Ping, and others. See [commands.md](commands.md).
+
+**Methods**: GET, HEAD, POST, PUT, PATCH, DELETE and OPTIONS on every path below `path_prefix`.
 
 **Configuration**:
 ```toml
