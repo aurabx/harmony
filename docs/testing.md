@@ -1,6 +1,6 @@
 # Testing
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2026-09-26
 
 ## Strategy
 - Unit and integration tests should be fast and deterministic
@@ -66,14 +66,16 @@ See [Backends - Mock DICOM](backends.md#mock-dicom) for configuration details.
 
 ## Verifying Examples
 
-It is recommended to run the provided examples to ensure end-to-end functionality in a real environment.
+End-to-end tests live in the harmony-examples repository. Each example has a `test.toml`, run by htest. htest builds this repository in debug and runs each example against the result. It expects this repository next to harmony-examples, or at `HARMONY_PROXY_DIR`.
+
+From the harmony-examples root:
 
 ```bash
-# Run all examples interactively
-./scripts/run-example.sh
-
-# Run specific example directly
-./scripts/run-example.sh http-backend
+htest run http-http
 ```
 
-This script builds the project and runs the selected example's `demo.sh`, which typically starts the proxy and performs integration tests against it.
+```bash
+htest run --all
+```
+
+Cargo tests in this repository must not need a running Harmony. A test that does belongs in a harmony-examples `test.toml`.
