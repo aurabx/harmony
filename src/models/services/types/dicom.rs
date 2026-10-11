@@ -1474,6 +1474,29 @@ mod tests {
         assert!(msg.contains("dicom_scu: target_details.metadata.dimse_op"), "{}", msg);
     }
 
+    #[tokio::test]
+    async fn test_backend_request_rejects_dimse_op_metadata() {
+        // The check must run on the real request path, before any association
+        // is opened. 127.0.0.1:9 is never contacted when the check holds.
+        let backend = DicomScuBackend {
+            local_aet: None,
+            aet: Some("REMOTE".to_string()),
+            host: Some("127.0.0.1".to_string()),
+            port: Some(9),
+            use_tls: None,
+        };
+        let mut env = make_envelope("/find");
+        env.set_target_metadata("dimse_op", "find");
+
+        let err = backend
+            .handle_backend_request(&mut env, &opts())
+            .await
+            .expect_err("dimse_op metadata must be rejected");
+
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("dicom_scu: target_details.metadata.dimse_op"), "{}", msg);
+    }
+
     // ── 3. Path-based (the bug scenario) ──────────────────────────────────────
 
     #[test]
