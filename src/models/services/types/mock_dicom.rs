@@ -485,18 +485,12 @@ impl ServiceType for MockDicomEndpoint {
             ));
         }
 
-        use crate::models::envelope::command::Operation;
-
         // Derive the DIMSE operation name and URI from the typed Command.
         let command = ctx.command;
-        let op = match command.as_ref().map(|c| c.operation) {
-            Some(Operation::Query) => "find",
-            Some(Operation::Retrieve) => "get",
-            Some(Operation::Move) => "move",
-            Some(Operation::Store) => "store",
-            Some(Operation::Ping) => "echo",
-            _ => "dimse",
-        };
+        let op = command
+            .as_ref()
+            .and_then(|c| c.operation.dimse_op())
+            .unwrap_or("dimse");
         let uri = format!("mock-dicom://scp/{}", op);
         let meta = ctx.meta;
 
