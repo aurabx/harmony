@@ -3,8 +3,8 @@
 //! This middleware transforms DIMSE operations (C-FIND, C-GET, C-MOVE, C-STORE) into
 //! HTTP POST requests suitable for forwarding to an HTTP streaming backend.
 //!
-//! LEFT side: Converts DIMSE envelope to HTTP POST request. A C-STORE on a
-//! streaming pipeline is sent as the DICOM Part 10 file itself.
+//! LEFT side: Converts DIMSE envelope to HTTP POST request. A C-STORE on its
+//! way to an `http_streaming_backend` is sent as the DICOM Part 10 file itself.
 //! RIGHT side: Passes through HTTP response (streaming backend handles parsing)
 
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
@@ -28,22 +28,24 @@ impl DicomToHttpMiddleware {
 
     /// Make the stored instance the HTTP request body.
     ///
-    /// The DIMSE adapter puts the Part 10 file in `body_b64` when the pipeline
-    /// has a streaming backend. Writing only that key to `original_data` makes
-    /// the executor send the raw bytes, so the receiving host gets the
-    /// instance itself and nothing that refers to this host's disk.
+    /// The DIMSE adapter puts the Part 10 file in `part10_b64` when this
+    /// middleware sits in front of an `http_streaming_backend`. Writing it to
+    /// `original_data` as a lone
+    /// `body_b64` makes the executor send the raw bytes, so the receiving
+    /// host gets the instance itself and nothing that refers to this host's
+    /// disk.
     ///
-    /// A body without `body_b64` is left as it is. That is a non-streaming
-    /// pipeline, which posts the DICOM JSON to its backend.
+    /// A body without `part10_b64` is left as it is. The pipeline then has
+    /// the `http` backend, which gets the DICOM JSON as before.
     fn send_instance_as_body(envelope: &mut RequestEnvelope<Value>) {
         let body = envelope
             .normalized_data
             .as_ref()
             .unwrap_or(&envelope.original_data);
-        let Some(body_b64) = body.get("body_b64").and_then(Value::as_str) else {
+        let Some(part10_b64) = body.get("part10_b64").and_then(Value::as_str) else {
             return;
         };
-        let instance_body = serde_json::json!({ "body_b64": body_b64 });
+        let instance_body = serde_json::json!({ "body_b64": part10_b64 });
 
         let transfer_syntax = body
             .get("transfer_syntax_uid")
@@ -211,7 +213,7 @@ mod tests {
             "command": { "sop_class_uid": "1.2.840.10008.5.1.4.1.1.2" },
             "dataset": { "00100020": { "vr": "LO", "Value": ["PID1"] } },
             "file": "/var/harmony/dimse/instance.dcm",
-            "body_b64": "UGFydDEw",
+            "part10_b64": "UGFydDEw",
             "transfer_syntax_uid": "1.2.840.10008.1.2.1",
         }));
 
@@ -229,7 +231,8 @@ mod tests {
 
     #[tokio::test]
     async fn store_without_an_inline_instance_keeps_its_json_body() {
-        // A non-streaming pipeline posts the DICOM JSON to its backend.
+        // In front of the `http` backend the adapter adds no `part10_b64`.
+        // The DICOM JSON body must pass through as it is.
         let body = serde_json::json!({
             "command": { "sop_class_uid": "1.2.840.10008.5.1.4.1.1.2" },
             "dataset": { "00100020": { "vr": "LO", "Value": ["PID1"] } },

@@ -253,10 +253,23 @@ When `enable_store` is set to `true`, Harmony accepts incoming DICOM objects (C-
 **Pipeline Request Payload (JSON):**
 ```json
 {
-  "operation": "store",
-  "dir": "/path/to/storage/dimse",
+  "command": {
+    "message_id": 1,
+    "sop_class_uid": "1.2.840.10008.5.1.4.1.1.2",
+    "priority": "MEDIUM",
+    "direction": "REQUEST"
+  },
+  "dataset": { "00100020": { "vr": "LO", "Value": ["PID1"] } },
   "file": "/path/to/storage/dimse/unique-id.dcm"
 }
 ```
+
+`dataset` is the instance as DICOM JSON. `file` is the path of the stored
+Part 10 file on this host.
+
+Two more keys are present when the pipeline's backend is `dicom_scu_streaming`,
+or when it is `http_streaming_backend` behind the `dicom_to_http` middleware:
+`part10_b64`, the Part 10 file in base64, and `transfer_syntax_uid`. See
+[streaming.md](streaming.md#c-store-requests).
 
 This allows you to use middleware to process the file (e.g., extract metadata, forward to another system, or trigger a notification) after it has been safely stored.

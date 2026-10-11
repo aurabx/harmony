@@ -27,17 +27,17 @@ fn get_current_store_dir() -> Option<PathBuf> {
 }
 
 /// A DICOM Part 10 file encoded for a JSON pipeline body.
-#[derive(Debug, PartialEq)]
 struct InlineInstance {
     /// The whole Part 10 file in standard base64.
-    body_b64: String,
+    part10_b64: String,
     /// Transfer Syntax UID from the file meta group.
     transfer_syntax_uid: String,
 }
 
 impl InlineInstance {
     /// Encode `part10` and read its transfer syntax from the file meta group,
-    /// so the stated transfer syntax always matches the bytes.
+    /// so the stated transfer syntax always matches what a reader of the file
+    /// will use.
     fn from_part10(part10: &[u8]) -> DimseResult<Self> {
         use base64::Engine;
 
@@ -56,7 +56,7 @@ impl InlineInstance {
         })?;
 
         Ok(Self {
-            body_b64: base64::engine::general_purpose::STANDARD.encode(part10),
+            part10_b64: base64::engine::general_purpose::STANDARD.encode(part10),
             transfer_syntax_uid: meta.transfer_syntax().to_string(),
         })
     }
@@ -359,12 +359,48 @@ impl PipelineQueryProvider {
         })
     }
 
+    /// True when the pipeline has a consumer that needs the stored instance
+    /// itself: the `dicom_scu_streaming` backend, which never opens a path it
+    /// is given, or the `dicom_to_http` middleware in front of an
+    /// `http_streaming_backend`, which sends the instance to another host.
+    /// Every other pipeline is spared the extra copy.
+    ///
+    /// `dicom_to_http` in front of the `http` backend is left out on purpose.
+    /// That backend does not send the headers `dicom_to_http` sets, so the
+    /// receiver could not tell the request is a store.
+    fn store_needs_inline_instance(
+        pipeline: &crate::models::pipelines::config::Pipeline,
+        config: &crate::config::config::Config,
+    ) -> bool {
+        let Some(backend) = pipeline
+            .backends
+            .first()
+            .and_then(|name| config.backends.get(name))
+        else {
+            return false;
+        };
+        if backend.service.eq_ignore_ascii_case("dicom_scu_streaming") {
+            return true;
+        }
+        backend.service.eq_ignore_ascii_case("http_streaming_backend")
+            && pipeline.middleware.left_chain().iter().any(|name| {
+                config
+                    .middleware
+                    .get(name)
+                    .is_some_and(|m| m.middleware_type.eq_ignore_ascii_case("dicom_to_http"))
+            })
+    }
+
     /// Build the pipeline body for one received C-STORE instance.
     ///
-    /// `file` is the path of the Part 10 copy on this host. Middleware that
-    /// runs in this process (`dicom_to_dicomweb`, `dimse_to_jmix`) reads it.
-    /// `inline_instance` adds the instance itself as `body_b64` plus its
-    /// `transfer_syntax_uid`, for backends that cannot use a local path.
+    /// The `file` key holds the path of the Part 10 copy on this host.
+    /// Middleware that runs in this process (`dicom_to_dicomweb`,
+    /// `dimse_to_jmix`) reads it. `inline_instance` adds the instance itself
+    /// as `part10_b64` plus its `transfer_syntax_uid`.
+    ///
+    /// The key is not `body_b64`. The executor sends any rewritten body that
+    /// has a `body_b64` key as raw bytes, which would replace the JSON that a
+    /// middleware such as `dicom_flatten` writes.
     fn build_store_body(
         sop_class_uid: Option<&str>,
         dicom_json: Option<serde_json::Value>,
@@ -382,7 +418,7 @@ impl PipelineQueryProvider {
             "file": temp_file.to_string_lossy()
         });
         if let Some(instance) = inline_instance {
-            body["body_b64"] = serde_json::Value::String(instance.body_b64);
+            body["part10_b64"] = serde_json::Value::String(instance.part10_b64);
             body["transfer_syntax_uid"] = serde_json::Value::String(instance.transfer_syntax_uid);
         }
         body
@@ -711,10 +747,9 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         })?;
         let streaming = PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config);
 
-        // A streaming backend may sit on another host, where `temp_file` means
-        // nothing, so it gets the instance itself. The bytes are read back
-        // from the file just written so both copies are identical.
-        let inline_instance = if streaming {
+        // The bytes are read back from the file just written so the inline
+        // copy and the file are identical.
+        let inline_instance = if Self::store_needs_inline_instance(pipeline_cfg, &config) {
             let part10 = tokio::fs::read(&temp_file).await.map_err(|e| {
                 DimseError::operation_failed(format!(
                     "read stored instance {}: {}",
@@ -1079,21 +1114,106 @@ mod tests {
 
         assert_eq!(instance.transfer_syntax_uid, source.meta().transfer_syntax());
         let decoded = base64::engine::general_purpose::STANDARD
-            .decode(&instance.body_b64)
-            .expect("body_b64 is base64");
+            .decode(&instance.part10_b64)
+            .expect("part10_b64 is base64");
         assert_eq!(decoded, part10);
+    }
+
+    #[test]
+    fn test_inline_instance_reads_a_transfer_syntax_that_is_not_the_default() {
+        // Explicit VR Little Endian is what `to_part10_bytes` writes when no
+        // transfer syntax is recorded, so it cannot show the value was read.
+        let implicit_vr_le = "1.2.840.10008.1.2";
+        let source = dicom_object::open_file(sample_instance_path()).expect("open sample instance");
+        let mut dataset = DatasetStream::from_object(source.into_inner());
+        dataset.metadata_mut().transfer_syntax = Some(implicit_vr_le.to_string());
+        let part10 = dataset.to_part10_bytes().expect("encode Part 10");
+
+        let instance = InlineInstance::from_part10(&part10).expect("inline instance");
+
+        assert_eq!(instance.transfer_syntax_uid, implicit_vr_le);
     }
 
     #[test]
     fn test_inline_instance_rejects_bytes_that_are_not_part10() {
         for bytes in [vec![0u8; 16], vec![0u8; 200]] {
-            let err = InlineInstance::from_part10(&bytes).expect_err("not a Part 10 file");
+            let err = InlineInstance::from_part10(&bytes)
+                .err()
+                .expect("bytes without a file meta group are rejected");
             assert!(
                 err.to_string().contains("stored instance"),
                 "unexpected error: {}",
                 err
             );
         }
+    }
+
+    fn inline_config(backend_service: &str, middleware_type: Option<&str>) -> crate::config::config::Config {
+        let (middleware_list, middleware_block) = match middleware_type {
+            Some(kind) => ("\"mw\"".to_string(), format!("[middleware.mw]\ntype = \"{}\"\n", kind)),
+            None => (String::new(), String::new()),
+        };
+        let backend_options = match backend_service {
+            "dicom_scu_streaming" => "aet = \"PACS\"\nhost = \"127.0.0.1\"\nport = 4242",
+            _ => "base_url = \"http://127.0.0.1:9\"",
+        };
+        let toml = format!(
+            r#"
+[proxy]
+id = "store-inline-test"
+
+[network.default]
+enable_wireguard = false
+interface = "wg0"
+
+[network.default.tcp_config]
+bind_address = "127.0.0.1"
+bind_port = 11112
+
+[pipelines.store]
+networks = ["default"]
+endpoints = ["scp"]
+backends = ["out"]
+middleware = [{middleware_list}]
+
+[endpoints.scp]
+service = "dicom_scp"
+[endpoints.scp.options]
+local_aet = "HARMONY"
+enable_store = true
+
+[backends.out]
+service = "{backend_service}"
+[backends.out.options]
+{backend_options}
+
+{middleware_block}
+
+[services.dicom_scp]
+module = ""
+
+[services.{backend_service}]
+module = ""
+"#
+        );
+        toml::from_str(&toml).expect("TOML parse error")
+    }
+
+    #[test]
+    fn test_instance_goes_inline_only_where_a_consumer_needs_it() {
+        let needs = |backend: &str, middleware: Option<&str>| {
+            let config = inline_config(backend, middleware);
+            let pipeline = config.pipelines.get("store").expect("pipeline present");
+            PipelineQueryProvider::store_needs_inline_instance(pipeline, &config)
+        };
+
+        assert!(needs("dicom_scu_streaming", None), "single node: the backend takes the instance");
+        assert!(needs("http_streaming_backend", Some("dicom_to_http")), "streaming bridge");
+        assert!(!needs("http", Some("dicom_to_http")), "the http backend cannot carry the bridge headers");
+        assert!(!needs("http_streaming_backend", Some("dicom_flatten")), "no bridge middleware");
+        assert!(!needs("http_streaming_backend", None));
+        assert!(!needs("http", Some("dicom_to_dicomweb")), "reads the local file");
+        assert!(!needs("http", None));
     }
 
     #[test]
@@ -1110,6 +1230,7 @@ mod tests {
         assert_eq!(local["file"], "/var/harmony/dimse/instance.dcm");
         assert_eq!(local["dataset"], dataset);
         assert_eq!(local["command"]["sop_class_uid"], "1.2.840.10008.5.1.4.1.1.2");
+        assert!(local.get("part10_b64").is_none());
         assert!(local.get("body_b64").is_none());
         assert!(local.get("transfer_syntax_uid").is_none());
 
@@ -1118,11 +1239,13 @@ mod tests {
             Some(dataset),
             temp_file,
             Some(InlineInstance {
-                body_b64: "UGFydDEw".to_string(),
+                part10_b64: "UGFydDEw".to_string(),
                 transfer_syntax_uid: "1.2.840.10008.1.2.1".to_string(),
             }),
         );
-        assert_eq!(inline["body_b64"], "UGFydDEw");
+        assert_eq!(inline["part10_b64"], "UGFydDEw");
+        // `body_b64` would make the executor replace any rewritten JSON body.
+        assert!(inline.get("body_b64").is_none());
         assert_eq!(inline["transfer_syntax_uid"], "1.2.840.10008.1.2.1");
         assert_eq!(inline["file"], "/var/harmony/dimse/instance.dcm");
     }
