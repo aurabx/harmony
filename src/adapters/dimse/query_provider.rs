@@ -177,21 +177,10 @@ impl PipelineQueryProvider {
             endpoint.options.clone().unwrap_or_default();
         let options = &options_owned;
 
-        // Derive the legacy dimse_op string from the typed Command for backward
-        // compatibility with services that still read metadata.
-        let op = match command.operation {
-            Operation::Query => "find",
-            Operation::Retrieve => "get",
-            Operation::Move => "move",
-            Operation::Store => "store",
-            Operation::Ping => "echo",
-            _ => "unknown",
-        };
-
         // Build ProtocolCtx for DIMSE with typed Command.
         // The Command is the single source of truth for the operation.
         meta.insert("protocol".into(), "dimse".into());
-        meta.insert("dimse_op".into(), op.to_string());
+        let operation = command.operation;
         let ctx = ProtocolCtx {
             protocol: Protocol::Dimse,
             payload: serde_json::to_vec(&body).unwrap_or_default(),
@@ -211,7 +200,7 @@ impl PipelineQueryProvider {
             DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
         })?;
 
-        tracing::info!("Executing streaming pipeline for DIMSE operation: {}", op);
+        tracing::info!("Executing streaming pipeline for DIMSE operation: {}", operation);
 
         // Execute streaming pipeline
         let response_stream =
@@ -285,19 +274,8 @@ impl PipelineQueryProvider {
             endpoint.options.clone().unwrap_or_default();
         let options = &options_owned;
 
-        // Derive the legacy dimse_op string from the typed Command for backward
-        // compatibility with services that still read metadata.
-        let op = match command.operation {
-            Operation::Query => "find",
-            Operation::Retrieve => "get",
-            Operation::Move => "move",
-            Operation::Store => "store",
-            Operation::Ping => "echo",
-            _ => "unknown",
-        };
-
         meta.insert("protocol".into(), "dimse".into());
-        meta.insert("dimse_op".into(), op.to_string());
+        let operation = command.operation;
         let ctx = ProtocolCtx {
             protocol: Protocol::Dimse,
             payload: serde_json::to_vec(&body).unwrap_or_default(),
@@ -315,7 +293,7 @@ impl PipelineQueryProvider {
             DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
         })?;
 
-        tracing::info!("Executing streaming pipeline for DIMSE operation: {} (single-envelope)", op);
+        tracing::info!("Executing streaming pipeline for DIMSE operation: {} (single-envelope)", operation);
 
         let mut response_stream =
             PipelineExecutor::execute_streaming(request_envelope, &self.pipeline, pipeline_cfg, &config, &ctx)
@@ -914,53 +892,6 @@ mod tests {
     }
 
     // Note: test_store_dir_functions removed - uses global static that conflicts with parallel test execution
-
-    // ── run_streaming Command → dimse_op mapping ─────────────────────────────
-    //
-    // `run_streaming()` requires a global config and live services so it cannot
-    // be called in unit tests. The op-string derivation logic is a pure match
-    // expression; we duplicate it here so the mapping stays under test.
-
-    fn op_to_dimse_string(op: Operation) -> &'static str {
-        match op {
-            Operation::Query    => "find",
-            Operation::Retrieve => "get",
-            Operation::Move     => "move",
-            Operation::Store    => "store",
-            Operation::Ping     => "echo",
-            _                   => "unknown",
-        }
-    }
-
-    #[test]
-    fn test_run_streaming_query_derives_find() {
-        assert_eq!(op_to_dimse_string(Operation::Query), "find");
-    }
-
-    #[test]
-    fn test_run_streaming_retrieve_derives_get() {
-        assert_eq!(op_to_dimse_string(Operation::Retrieve), "get");
-    }
-
-    #[test]
-    fn test_run_streaming_move_derives_move() {
-        assert_eq!(op_to_dimse_string(Operation::Move), "move");
-    }
-
-    #[test]
-    fn test_run_streaming_store_derives_store() {
-        assert_eq!(op_to_dimse_string(Operation::Store), "store");
-    }
-
-    #[test]
-    fn test_run_streaming_ping_derives_echo() {
-        assert_eq!(op_to_dimse_string(Operation::Ping), "echo");
-    }
-
-    #[test]
-    fn test_run_streaming_custom_derives_unknown() {
-        assert_eq!(op_to_dimse_string(Operation::Custom), "unknown");
-    }
 
     #[test]
     fn test_run_streaming_command_carries_correct_operation() {

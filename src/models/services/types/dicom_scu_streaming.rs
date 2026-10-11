@@ -515,21 +515,7 @@ impl StreamingBackend for DicomScuStreamingBackend {
 
         let scu = DimseScu::new(dimse_config);
 
-        // Determine operation from:
-        // 1. target_details.metadata.dimse_op (set by pipeline routing)
-        // 2. request_details.metadata.dimse_op (set by DIMSE SCP)
-        // 3. x-dimse-op HTTP header (set by dicom_to_http middleware for cross-instance bridging)
-        // 4. Default to "get"
-        let op = envelope
-            .target_details
-            .as_ref()
-            .and_then(|td| td.metadata.get("dimse_op"))
-            .cloned()
-            .or_else(|| envelope.request_details.metadata.get("dimse_op").cloned())
-            .or_else(|| envelope.request_details.headers.get("x-dimse-op").cloned())
-            .unwrap_or_else(|| "get".to_string());
-
-        let op_normalized = op.trim_start_matches('/').to_lowercase();
+        let op_normalized = Self::resolve_streaming_op(&envelope)?;
 
         // Extract query parameters
         let query_params = self.extract_query_params(&envelope)?;
@@ -671,13 +657,42 @@ impl StreamingBackend for DicomScuStreamingBackend {
             }
             _ => Err(Error::from(format!(
                 "Unsupported streaming operation: '{}'. Supported: get, find, store",
-                op
+                op_normalized
             ))),
         }
     }
 }
 
 impl DicomScuStreamingBackend {
+    /// The DIMSE operation this request asks for, lower-cased.
+    ///
+    /// Order: the typed `Command`, then the `x-dimse-op` header that
+    /// `dicom_to_http` sets between Harmony instances, then `"get"`. A
+    /// `Command` with no DIMSE service keeps its own name, so the caller
+    /// rejects it instead of defaulting to C-GET.
+    ///
+    /// Errors when the envelope still carries the removed `dimse_op` metadata
+    /// key. A pipeline that pinned the operation that way would otherwise fall
+    /// back to the client-supplied header without anyone noticing.
+    fn resolve_streaming_op(envelope: &RequestEnvelope<Vec<u8>>) -> Result<String, Error> {
+        super::dicom::reject_dimse_op_metadata(envelope, "dicom_scu_streaming")?;
+
+        let op = match envelope.resolve_operation() {
+            Some(operation) => operation
+                .dimse_op()
+                .map(str::to_string)
+                .unwrap_or_else(|| operation.to_string()),
+            None => envelope
+                .request_details
+                .headers
+                .get("x-dimse-op")
+                .cloned()
+                .unwrap_or_else(|| "get".to_string()),
+        };
+
+        Ok(op.trim_start_matches('/').to_lowercase())
+    }
+
     /// One retrieved instance as a response envelope: the Part 10 bytes as the
     /// body with an `application/dicom` content type, its DICOM JSON as the
     /// normalized data for middleware, and the SOP UIDs as headers and metadata.
@@ -1374,18 +1389,18 @@ mod tests {
         // so the fallback message must advertise it alongside get and find.
         let backend = make_backend(Some("REMOTE"), Some("127.0.0.1"), Some(4242));
 
-        // Envelope carrying an unknown op via metadata.
-        let mut metadata = HashMap::new();
-        metadata.insert("dimse_op".to_string(), "unknown_op".to_string());
+        // Envelope carrying an unknown op via the bridging header.
+        let mut headers = HashMap::new();
+        headers.insert("x-dimse-op".to_string(), "unknown_op".to_string());
 
         let envelope = crate::models::envelope::envelope::RequestEnvelope::builder()
             .method("POST".to_string())
             .uri("dimse://scp/unknown_op".to_string())
-            .headers(HashMap::new())
+            .headers(headers)
             .cookies(HashMap::new())
             .query_params(HashMap::new())
             .cache_status(None)
-            .metadata(metadata)
+            .metadata(HashMap::new())
             .target_details(None)
             .command(None)
             .original_data(Vec::new())
@@ -1409,5 +1424,115 @@ mod tests {
         assert!(msg.contains("store"), "error must advertise 'store': {}", msg);
         assert!(msg.contains("find"));
         assert!(msg.contains("get"));
+    }
+
+    #[tokio::test]
+    async fn test_command_without_dimse_service_is_rejected_over_header() {
+        // The typed Command wins over the x-dimse-op header. An operation with
+        // no DIMSE service must fail, not fall back to the header or to "get".
+        let backend = make_backend(Some("REMOTE"), Some("127.0.0.1"), Some(4242));
+
+        let mut headers = HashMap::new();
+        headers.insert("x-dimse-op".to_string(), "get".to_string());
+
+        let envelope = crate::models::envelope::envelope::RequestEnvelope::builder()
+            .method("POST".to_string())
+            .uri("dimse://scp/delete".to_string())
+            .headers(headers)
+            .cookies(HashMap::new())
+            .query_params(HashMap::new())
+            .cache_status(None)
+            .metadata(HashMap::new())
+            .target_details(None)
+            .command(Some(Command::new(Operation::Delete)))
+            .original_data(Vec::new())
+            .normalized_data(None)
+            .normalized_snapshot(None)
+            .build()
+            .expect("build envelope");
+
+        let options = make_options(&[
+            ("aet", serde_json::json!("REMOTE")),
+            ("host", serde_json::json!("127.0.0.1")),
+            ("port", serde_json::json!(4242)),
+        ]);
+
+        let result = backend.backend_outgoing_stream(envelope, &options).await;
+        let err = match result {
+            Ok(_) => panic!("an operation with no DIMSE service should fail"),
+            Err(e) => e,
+        };
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("'delete'"), "error must name the rejected operation: {}", msg);
+    }
+
+    // ── resolve_streaming_op ─────────────────────────────────────────────────
+
+    fn op_envelope(
+        command: Option<Command>,
+        header: Option<&str>,
+        request_meta: &[(&str, &str)],
+    ) -> RequestEnvelope<Vec<u8>> {
+        let mut headers = HashMap::new();
+        if let Some(op) = header {
+            headers.insert("x-dimse-op".to_string(), op.to_string());
+        }
+        let metadata: HashMap<String, String> = request_meta
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        crate::models::envelope::envelope::RequestEnvelope::builder()
+            .method("POST".to_string())
+            .uri("/".to_string())
+            .headers(headers)
+            .cookies(HashMap::new())
+            .query_params(HashMap::new())
+            .cache_status(None)
+            .metadata(metadata)
+            .target_details(None)
+            .command(command)
+            .original_data(Vec::new())
+            .normalized_data(None)
+            .normalized_snapshot(None)
+            .build()
+            .expect("build envelope")
+    }
+
+    #[test]
+    fn test_resolve_op_uses_command_before_header() {
+        let env = op_envelope(Some(Command::new(Operation::Query)), Some("store"), &[]);
+        assert_eq!(DicomScuStreamingBackend::resolve_streaming_op(&env).unwrap(), "find");
+    }
+
+    #[test]
+    fn test_resolve_op_falls_back_to_header_without_command() {
+        let env = op_envelope(None, Some("/FIND"), &[]);
+        assert_eq!(DicomScuStreamingBackend::resolve_streaming_op(&env).unwrap(), "find");
+    }
+
+    #[test]
+    fn test_resolve_op_defaults_to_get() {
+        let env = op_envelope(None, None, &[]);
+        assert_eq!(DicomScuStreamingBackend::resolve_streaming_op(&env).unwrap(), "get");
+    }
+
+    #[test]
+    fn test_resolve_op_rejects_dimse_op_in_request_metadata() {
+        let env = op_envelope(None, Some("store"), &[("dimse_op", "find")]);
+        let err = DicomScuStreamingBackend::resolve_streaming_op(&env).unwrap_err();
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("request_details.metadata.dimse_op"), "{}", msg);
+        assert!(msg.contains("command"), "{}", msg);
+    }
+
+    #[test]
+    fn test_resolve_op_rejects_dimse_op_in_target_metadata() {
+        // A transform that pinned the operation in target metadata must not
+        // fall through to the client-supplied header.
+        let mut env = op_envelope(None, Some("store"), &[]);
+        env.set_target_metadata("dimse_op", "find");
+        let err = DicomScuStreamingBackend::resolve_streaming_op(&env).unwrap_err();
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("target_details.metadata.dimse_op"), "{}", msg);
     }
 }

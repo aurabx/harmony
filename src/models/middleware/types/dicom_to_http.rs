@@ -32,13 +32,16 @@ impl Middleware for DicomToHttpMiddleware {
         &self,
         mut envelope: RequestEnvelope<Value>,
     ) -> Result<RequestEnvelope<Value>, Error> {
-        // Check if this is a DIMSE request by looking for dimse_op metadata
-        let dimse_op = match envelope.request_details.metadata.get("dimse_op") {
-            Some(op) => op.clone(),
-            None => {
-                // Not a DIMSE request, pass through unchanged
-                return Ok(envelope);
-            }
+        // Only requests that arrived over DIMSE are bridged. HTTP-origin
+        // requests can also carry a Command, so the protocol is checked too.
+        let is_dimse = envelope
+            .request_details
+            .metadata
+            .get("protocol")
+            .is_some_and(|p| p == "dimse");
+        let dimse_op = match envelope.resolve_operation().and_then(|op| op.dimse_op()) {
+            Some(op) if is_dimse => op.to_string(),
+            _ => return Ok(envelope),
         };
 
         debug!(
@@ -61,7 +64,7 @@ impl Middleware for DicomToHttpMiddleware {
             .headers
             .insert("accept".to_string(), "application/x-ndjson".to_string());
 
-        // Forward dimse_op as HTTP header so it can be received by the other Harmony instance
+        // Forward the operation as an HTTP header so the other Harmony instance can read it
         envelope
             .request_details
             .headers
@@ -77,9 +80,6 @@ impl Middleware for DicomToHttpMiddleware {
 
         // Update target details if present
         envelope.set_target_method("POST");
-
-        // Ensure the dimse_op is preserved in metadata for the receiving end
-        // (already there from the original request)
 
         debug!(
             "dicom_to_http: transformed request - method={}, headers={:?}",
@@ -99,5 +99,70 @@ impl Middleware for DicomToHttpMiddleware {
             envelope.response_details.status
         );
         Ok(envelope)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::envelope::command::{Command, Operation};
+    use crate::models::envelope::envelope::RequestEnvelopeBuilder;
+    use std::collections::HashMap;
+
+    fn envelope(protocol: Option<&str>, command: Option<Command>) -> RequestEnvelope<Value> {
+        let mut metadata = HashMap::new();
+        if let Some(protocol) = protocol {
+            metadata.insert("protocol".to_string(), protocol.to_string());
+        }
+        metadata.insert("query_level".to_string(), "STUDY".to_string());
+        RequestEnvelopeBuilder::new()
+            .method("find")
+            .uri("dimse://scp/find")
+            .headers(HashMap::new())
+            .cookies(HashMap::new())
+            .query_params(HashMap::new())
+            .cache_status(None)
+            .metadata(metadata)
+            .command(command)
+            .original_data(Value::Null)
+            .build()
+            .expect("build envelope")
+    }
+
+    #[tokio::test]
+    async fn dimse_request_becomes_http_post_with_operation_header() {
+        let env = envelope(Some("dimse"), Some(Command::new(Operation::Query)));
+
+        let out = DicomToHttpMiddleware::new().left(env).await.expect("left");
+
+        assert_eq!(out.request_details.method, "POST");
+        let headers = &out.request_details.headers;
+        assert_eq!(headers.get("x-dimse-op").map(String::as_str), Some("find"));
+        assert_eq!(headers.get("x-query-level").map(String::as_str), Some("STUDY"));
+        assert_eq!(headers.get("accept").map(String::as_str), Some("application/x-ndjson"));
+    }
+
+    #[tokio::test]
+    async fn http_request_with_a_command_passes_through() {
+        // FHIR and DICOMweb endpoints also set a Command. Only DIMSE-origin
+        // requests may be rewritten.
+        let env = envelope(Some("http"), Some(Command::new(Operation::Query)));
+
+        let out = DicomToHttpMiddleware::new().left(env).await.expect("left");
+
+        assert_eq!(out.request_details.method, "find");
+        assert!(!out.request_details.headers.contains_key("x-dimse-op"));
+    }
+
+    #[tokio::test]
+    async fn dimse_request_without_a_dimse_operation_passes_through() {
+        for command in [None, Some(Command::new(Operation::Delete))] {
+            let env = envelope(Some("dimse"), command);
+
+            let out = DicomToHttpMiddleware::new().left(env).await.expect("left");
+
+            assert_eq!(out.request_details.method, "find");
+            assert!(!out.request_details.headers.contains_key("x-dimse-op"));
+        }
     }
 }

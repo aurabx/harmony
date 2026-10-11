@@ -186,6 +186,10 @@ let command = match dimse_op.as_str() {
 };
 ```
 
+`Operation::dimse_op()` gives the reverse mapping. It returns `None` for operations with no DIMSE service.
+
+The operation is not stored in envelope metadata. Between two Harmony instances, the `dicom_to_http` middleware carries it in the `x-dimse-op` HTTP header. The DICOM backends read the `Command` first and that header second.
+
 ## Consuming Commands (Backends)
 
 Backends are **consumers** -- they read the command from the envelope to decide what protocol action to perform.

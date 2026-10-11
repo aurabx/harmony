@@ -360,6 +360,8 @@ impl DicomScuBackend {
         // Create SCU client
         let scu = DimseScu::new(dimse_config);
 
+        reject_dimse_op_metadata(&envelope, "dicom_scu")?;
+
         // Resolve DIMSE operation — see resolve_dimse_op() for full priority order.
         let normalized_op = resolve_dimse_op(&envelope, options);
 
@@ -1266,15 +1268,40 @@ impl DicomScuBackend {
     }
 }
 
+/// Errors when the envelope still carries the removed `dimse_op` metadata key,
+/// in target or request metadata.
+///
+/// A pipeline that set the operation that way would otherwise run a different
+/// operation without anyone noticing: the `x-dimse-op` header from the client,
+/// the request path, or the default. `service` names the backend in the error.
+pub(crate) fn reject_dimse_op_metadata(
+    envelope: &RequestEnvelope<Vec<u8>>,
+    service: &str,
+) -> Result<(), Error> {
+    let in_target = envelope
+        .target_details
+        .as_ref()
+        .is_some_and(|td| td.metadata.contains_key("dimse_op"));
+    if !in_target && !envelope.request_details.metadata.contains_key("dimse_op") {
+        return Ok(());
+    }
+
+    let location = if in_target { "target_details" } else { "request_details" };
+    Err(Error::from(format!(
+        "{}: {}.metadata.dimse_op is no longer supported. \
+         Set the operation with `command` instead (see docs/commands.md).",
+        service, location
+    )))
+}
+
 /// Resolve the DIMSE operation string from a request envelope and backend options.
 ///
 /// Priority (highest first):
 /// 1. `envelope.command.operation` — the canonical typed operation
 /// 2. `x-dimse-op` HTTP header — set by `dicom_to_http` middleware on the sending side
-/// 3. `dimse_op` metadata key — set by the DIMSE SCP adapter
-/// 4. Last non-empty segment of the request URI / `full_path` metadata
+/// 3. Last non-empty segment of the request URI / `full_path` metadata
 ///    (catches `/find`, `/get`, `/store` as path-routed endpoints)
-/// 5. `dimse_retrieve_mode` backend option, then `"get"` as a last resort
+/// 4. `dimse_retrieve_mode` backend option, then `"get"` as a last resort
 pub(crate) fn resolve_dimse_op(
     envelope: &RequestEnvelope<Vec<u8>>,
     options: &HashMap<String, Value>,
@@ -1302,18 +1329,7 @@ pub(crate) fn resolve_dimse_op(
         return op;
     }
 
-    // 3. dimse_op metadata key (set by DIMSE SCP adapter)
-    if let Some(op) = envelope
-        .request_details
-        .metadata
-        .get("dimse_op")
-        .map(|s| s.trim_start_matches('/').to_lowercase())
-        .filter(|p| VALID_OPS.contains(&p.as_str()))
-    {
-        return op;
-    }
-
-    // 4. Subpath metadata (the portion after the endpoint prefix)
+    // 3. Subpath metadata (the portion after the endpoint prefix)
     if let Some(op) = envelope
         .request_details
         .metadata
@@ -1324,7 +1340,7 @@ pub(crate) fn resolve_dimse_op(
         return op;
     }
 
-    // 4b. Last segment of the full URI path (covers /find, /get, /store as prefixes)
+    // 3b. Last segment of the full URI path (covers /find, /get, /store as prefixes)
     let full_path = envelope
         .request_details
         .metadata
@@ -1345,7 +1361,7 @@ pub(crate) fn resolve_dimse_op(
         return op;
     }
 
-    // 5. dimse_retrieve_mode option, then "get"
+    // 4. dimse_retrieve_mode option, then "get"
     options
         .get("dimse_retrieve_mode")
         .and_then(|v| v.as_str())
@@ -1432,16 +1448,56 @@ mod tests {
         assert_eq!(resolve_dimse_op(&env, &opts()), "find");
     }
 
-    // ── 3. dimse_op metadata ──────────────────────────────────────────────────
+    // ── Removed dimse_op metadata key ────────────────────────────────────────
 
     #[test]
-    fn test_meta_dimse_op_find() {
-        let mut env = make_envelope("/");
-        with_meta(&mut env, "dimse_op", "find");
-        assert_eq!(resolve_dimse_op(&env, &opts()), "find");
+    fn test_reject_dimse_op_accepts_envelope_without_the_key() {
+        let mut env = make_envelope("/find");
+        with_meta(&mut env, "path", "find");
+        assert!(reject_dimse_op_metadata(&env, "dicom_scu").is_ok());
     }
 
-    // ── 4. Path-based (the bug scenario) ──────────────────────────────────────
+    #[test]
+    fn test_reject_dimse_op_in_request_metadata() {
+        let mut env = make_envelope("/");
+        with_meta(&mut env, "dimse_op", "find");
+        let msg = format!("{:?}", reject_dimse_op_metadata(&env, "dicom_scu").unwrap_err());
+        assert!(msg.contains("dicom_scu: request_details.metadata.dimse_op"), "{}", msg);
+        assert!(msg.contains("command"), "{}", msg);
+    }
+
+    #[test]
+    fn test_reject_dimse_op_in_target_metadata() {
+        let mut env = make_envelope("/");
+        env.set_target_metadata("dimse_op", "find");
+        let msg = format!("{:?}", reject_dimse_op_metadata(&env, "dicom_scu").unwrap_err());
+        assert!(msg.contains("dicom_scu: target_details.metadata.dimse_op"), "{}", msg);
+    }
+
+    #[tokio::test]
+    async fn test_backend_request_rejects_dimse_op_metadata() {
+        // The check must run on the real request path, before any association
+        // is opened. 127.0.0.1:9 is never contacted when the check holds.
+        let backend = DicomScuBackend {
+            local_aet: None,
+            aet: Some("REMOTE".to_string()),
+            host: Some("127.0.0.1".to_string()),
+            port: Some(9),
+            use_tls: None,
+        };
+        let mut env = make_envelope("/find");
+        env.set_target_metadata("dimse_op", "find");
+
+        let err = backend
+            .handle_backend_request(&mut env, &opts())
+            .await
+            .expect_err("dimse_op metadata must be rejected");
+
+        let msg = format!("{:?}", err);
+        assert!(msg.contains("dicom_scu: target_details.metadata.dimse_op"), "{}", msg);
+    }
+
+    // ── 3. Path-based (the bug scenario) ──────────────────────────────────────
 
     #[test]
     fn test_uri_find_when_subpath_empty() {
@@ -1483,7 +1539,7 @@ mod tests {
         assert_eq!(resolve_dimse_op(&env, &opts()), "find");
     }
 
-    // ── 5. Default fallback ──────────────────────────────────────────────────
+    // ── 4. Default fallback ──────────────────────────────────────────────────
 
     #[test]
     fn test_defaults_to_get() {

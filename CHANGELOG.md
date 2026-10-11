@@ -11,6 +11,9 @@
 - (AURA-2391) `dimse::scp::QueryProvider` returns streams. The SCP sends C-GET, C-MOVE and C-FIND results to the client as the pipeline produces them instead of collecting the whole result first.
 - (AURA-2391) dicom-rs crates upgraded from 0.9 to 0.10.
 - DCMTK is now needed only for C-MOVE on the SCU side.
+- (AURA-2257) The `dimse_op` metadata key is gone. Harmony no longer writes it and no longer uses it. `dicom_scu`, `dicom_scu_streaming` and the `dicom_to_http` middleware take the DIMSE operation from the typed `Command`. A transform that set `target_details.metadata.dimse_op` must set `command` instead. `dicom_scu` and `dicom_scu_streaming` return an error when they find `dimse_op` in target or request metadata, so a stale pipeline fails visibly and does not fall back to the client's `x-dimse-op` header, the request path or the default. The `x-dimse-op` header between Harmony instances is unchanged.
+- (AURA-2257) `dicom_to_http` now also rewrites DIMSE requests on the non-streaming path. It adds the `x-dimse-op`, `x-query-level`, `content-type` and `accept` headers. Before, it passed them through unchanged because only the streaming path set `dimse_op`. The `http` backend still picks the HTTP method from the `Command`, so a bridged C-FIND leaves as `GET`.
+- (AURA-2257) `dicom_scu_streaming` now follows the `Command`. Before, it ignored it. A request from a FHIR or DICOMweb endpoint that maps to `Query` runs C-FIND and one that maps to `Store` runs C-STORE. Both ran C-GET before. A `Command` with no supported DIMSE service, such as `delete` or `ping`, is rejected.
 
 ### Fixed
 - (AURA-2391) Final C-GET and C-MOVE responses no longer carry the Number of Remaining Sub-operations attribute, which PS3.4 forbids outside Pending responses.

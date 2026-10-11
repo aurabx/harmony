@@ -18,13 +18,6 @@
   {
     "operation": "default",
     "spec": {
-      "context": {
-        "target_details": {
-          "metadata": {
-            "dimse_op": "find"
-          }
-        }
-      },
       "data": {
         "dimse_identifier": {
           "00100020": {
