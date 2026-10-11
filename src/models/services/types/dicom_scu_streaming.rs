@@ -675,18 +675,7 @@ impl DicomScuStreamingBackend {
     /// key. A pipeline that pinned the operation that way would otherwise fall
     /// back to the client-supplied header without anyone noticing.
     fn resolve_streaming_op(envelope: &RequestEnvelope<Vec<u8>>) -> Result<String, Error> {
-        let in_target = envelope
-            .target_details
-            .as_ref()
-            .is_some_and(|td| td.metadata.contains_key("dimse_op"));
-        if in_target || envelope.request_details.metadata.contains_key("dimse_op") {
-            let location = if in_target { "target_details" } else { "request_details" };
-            return Err(Error::from(format!(
-                "dicom_scu_streaming: {}.metadata.dimse_op is no longer supported. \
-                 Set the operation with `command` instead (see docs/commands.md).",
-                location
-            )));
-        }
+        super::dicom::reject_dimse_op_metadata(envelope, "dicom_scu_streaming")?;
 
         let op = match envelope.resolve_operation() {
             Some(operation) => operation

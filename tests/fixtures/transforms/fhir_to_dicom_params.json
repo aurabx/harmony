@@ -18,12 +18,10 @@
   {
     "operation": "default",
     "spec": {
-      "context": {
-        "target_details": {
-          "metadata": {
-            "dimse_op": "find"
-          }
-        }
+      "command": {
+        "operation": "query",
+        "params": {},
+        "source": "jolt_transform"
       },
       "data": {
         "dimse_identifier": {

@@ -360,6 +360,8 @@ impl DicomScuBackend {
         // Create SCU client
         let scu = DimseScu::new(dimse_config);
 
+        reject_dimse_op_metadata(&envelope, "dicom_scu")?;
+
         // Resolve DIMSE operation — see resolve_dimse_op() for full priority order.
         let normalized_op = resolve_dimse_op(&envelope, options);
 
@@ -1266,6 +1268,32 @@ impl DicomScuBackend {
     }
 }
 
+/// Errors when the envelope still carries the removed `dimse_op` metadata key,
+/// in target or request metadata.
+///
+/// A pipeline that set the operation that way would otherwise run a different
+/// operation without anyone noticing: the `x-dimse-op` header from the client,
+/// the request path, or the default. `service` names the backend in the error.
+pub(crate) fn reject_dimse_op_metadata(
+    envelope: &RequestEnvelope<Vec<u8>>,
+    service: &str,
+) -> Result<(), Error> {
+    let in_target = envelope
+        .target_details
+        .as_ref()
+        .is_some_and(|td| td.metadata.contains_key("dimse_op"));
+    if !in_target && !envelope.request_details.metadata.contains_key("dimse_op") {
+        return Ok(());
+    }
+
+    let location = if in_target { "target_details" } else { "request_details" };
+    Err(Error::from(format!(
+        "{}: {}.metadata.dimse_op is no longer supported. \
+         Set the operation with `command` instead (see docs/commands.md).",
+        service, location
+    )))
+}
+
 /// Resolve the DIMSE operation string from a request envelope and backend options.
 ///
 /// Priority (highest first):
@@ -1418,6 +1446,32 @@ mod tests {
         with_header(&mut env, "x-dimse-op", "scan");
         // Falls through to URI last-segment: "find"
         assert_eq!(resolve_dimse_op(&env, &opts()), "find");
+    }
+
+    // ── Removed dimse_op metadata key ────────────────────────────────────────
+
+    #[test]
+    fn test_reject_dimse_op_accepts_envelope_without_the_key() {
+        let mut env = make_envelope("/find");
+        with_meta(&mut env, "path", "find");
+        assert!(reject_dimse_op_metadata(&env, "dicom_scu").is_ok());
+    }
+
+    #[test]
+    fn test_reject_dimse_op_in_request_metadata() {
+        let mut env = make_envelope("/");
+        with_meta(&mut env, "dimse_op", "find");
+        let msg = format!("{:?}", reject_dimse_op_metadata(&env, "dicom_scu").unwrap_err());
+        assert!(msg.contains("dicom_scu: request_details.metadata.dimse_op"), "{}", msg);
+        assert!(msg.contains("command"), "{}", msg);
+    }
+
+    #[test]
+    fn test_reject_dimse_op_in_target_metadata() {
+        let mut env = make_envelope("/");
+        env.set_target_metadata("dimse_op", "find");
+        let msg = format!("{:?}", reject_dimse_op_metadata(&env, "dicom_scu").unwrap_err());
+        assert!(msg.contains("dicom_scu: target_details.metadata.dimse_op"), "{}", msg);
     }
 
     // ── 3. Path-based (the bug scenario) ──────────────────────────────────────
