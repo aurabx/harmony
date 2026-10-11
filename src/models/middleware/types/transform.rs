@@ -81,7 +81,7 @@ impl Middleware for JoltTransformMiddleware {
         // Apply transform to normalized_data
         if let Some(ref normalized_data) = envelope.normalized_data.clone() {
             // Always wrap data with context
-            let transform_input = serde_json::json!({
+            let mut transform_input = serde_json::json!({
                 "data": normalized_data,
                 "context": {
                     "request_details": {
@@ -93,9 +93,14 @@ impl Middleware for JoltTransformMiddleware {
                         "metadata": envelope.request_details.metadata,
                     },
                     "target_details": envelope.target_details,
-                    "command": envelope.command,
                 }
             });
+            // The JOLT `default` operation treats a null value as present.
+            // A null `command` would stop a spec from supplying one, so the
+            // key is left out when the request has no Command.
+            if let Some(command) = &envelope.command {
+                transform_input["context"]["command"] = serde_json::json!(command);
+            }
 
             if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
                 tracing::debug!("JOLT transform input (request): {}", serde_json::to_string_pretty(&transform_input).unwrap_or_default());
@@ -440,6 +445,39 @@ mod tests {
 
         assert_eq!(result.normalized_data, Some(expected));
         assert_eq!(result.normalized_snapshot, Some(input));
+    }
+
+    #[tokio::test]
+    async fn test_wildcard_spec_sets_command_when_request_has_none() {
+        // The shift copies the whole input, context included. With no Command
+        // on the request, the default step must be able to supply one.
+        use crate::models::envelope::command::Operation;
+        let spec = json!([
+            { "operation": "shift", "spec": { "*": "&" } },
+            {
+                "operation": "default",
+                "spec": {
+                    "context": {
+                        "command": { "operation": "query", "source": "jolt_transform" }
+                    }
+                }
+            }
+        ]);
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+        let middleware = JoltTransformMiddleware::new(JoltTransformMiddlewareConfig {
+            spec_path: temp_file.path().to_string_lossy().to_string(),
+            apply: "left".to_string(),
+            fail_on_error: true,
+            debug: false,
+        })
+        .unwrap();
+        let envelope = create_test_envelope(json!({ "id": 1 }));
+        assert!(envelope.command.is_none());
+
+        let result = middleware.left(envelope).await.unwrap();
+
+        assert_eq!(result.resolve_operation(), Some(Operation::Query));
     }
 
     #[tokio::test]

@@ -184,15 +184,20 @@ impl Middleware for MetadataTransformMiddleware {
         match self.transform_target.as_str() {
             "target_details" => {
                 // Build input JSON from request_details (source of query_params, headers, etc.)
-                let input_json = serde_json::json!({
+                let mut input_json = serde_json::json!({
                     "query_params": envelope.request_details.query_params,
                     "headers": envelope.request_details.headers,
                     "cookies": envelope.request_details.cookies,
                     "metadata": envelope.request_details.metadata,
                     "method": envelope.request_details.method,
                     "uri": envelope.request_details.uri,
-                    "command": envelope.command,
                 });
+                // The JOLT `default` operation treats a null value as present.
+                // A null `command` would stop a spec from supplying one, so the
+                // key is left out when the request has no Command.
+                if let Some(command) = &envelope.command {
+                    input_json["command"] = serde_json::json!(command);
+                }
 
                 // Apply transform to create/modify target_details
                 tracing::debug!("Metadata transform input: {}", serde_json::to_string_pretty(&input_json).unwrap_or_default());
@@ -611,5 +616,59 @@ mod tests {
         
         // Check that command is set
         assert_eq!(out.resolve_operation(), Some(Operation::Query));
+    }
+
+    /// The `metadata_set_command.json` transform shipped with the harmony-examples
+    /// `fhir_dicom` pipeline. Its shift step copies every input key with
+    /// `"*": "&"`, including `command`, before the default step supplies one.
+    fn wildcard_command_middleware() -> MetadataTransformMiddleware {
+        let cfg = MetadataTransformConfig {
+            spec_path: format!(
+                "{}/tests/fixtures/transforms/metadata_set_command.json",
+                env!("CARGO_MANIFEST_DIR")
+            ),
+            apply: "left".into(),
+            fail_on_error: true,
+            transform_target: "target_details".to_string(),
+        };
+        MetadataTransformMiddleware::new(cfg).unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_wildcard_spec_sets_command_when_request_has_none() {
+        // A plain http endpoint sets no Command, so the transform input carries
+        // "command": null. The default step must still supply the operation.
+        use crate::models::envelope::command::Operation;
+        use crate::models::envelope::envelope::RequestEnvelopeBuilder;
+        let env = RequestEnvelopeBuilder::new()
+            .method("POST")
+            .uri("/find")
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
+        assert!(env.command.is_none());
+
+        let out = wildcard_command_middleware().left(env).await.unwrap();
+
+        assert_eq!(out.resolve_operation(), Some(Operation::Query));
+    }
+
+    #[tokio::test]
+    async fn test_wildcard_spec_keeps_command_the_endpoint_set() {
+        // The shift step copies an existing Command through, so the default
+        // step does not replace it.
+        use crate::models::envelope::command::{Command, Operation};
+        use crate::models::envelope::envelope::RequestEnvelopeBuilder;
+        let env = RequestEnvelopeBuilder::new()
+            .method("POST")
+            .uri("/find")
+            .command(Some(Command::new(Operation::Retrieve)))
+            .original_data(serde_json::json!({}))
+            .build()
+            .unwrap();
+
+        let out = wildcard_command_middleware().left(env).await.unwrap();
+
+        assert_eq!(out.resolve_operation(), Some(Operation::Retrieve));
     }
 }
