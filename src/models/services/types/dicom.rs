@@ -1271,10 +1271,9 @@ impl DicomScuBackend {
 /// Priority (highest first):
 /// 1. `envelope.command.operation` — the canonical typed operation
 /// 2. `x-dimse-op` HTTP header — set by `dicom_to_http` middleware on the sending side
-/// 3. `dimse_op` metadata key — set by the DIMSE SCP adapter
-/// 4. Last non-empty segment of the request URI / `full_path` metadata
+/// 3. Last non-empty segment of the request URI / `full_path` metadata
 ///    (catches `/find`, `/get`, `/store` as path-routed endpoints)
-/// 5. `dimse_retrieve_mode` backend option, then `"get"` as a last resort
+/// 4. `dimse_retrieve_mode` backend option, then `"get"` as a last resort
 pub(crate) fn resolve_dimse_op(
     envelope: &RequestEnvelope<Vec<u8>>,
     options: &HashMap<String, Value>,
@@ -1302,18 +1301,7 @@ pub(crate) fn resolve_dimse_op(
         return op;
     }
 
-    // 3. dimse_op metadata key (set by DIMSE SCP adapter)
-    if let Some(op) = envelope
-        .request_details
-        .metadata
-        .get("dimse_op")
-        .map(|s| s.trim_start_matches('/').to_lowercase())
-        .filter(|p| VALID_OPS.contains(&p.as_str()))
-    {
-        return op;
-    }
-
-    // 4. Subpath metadata (the portion after the endpoint prefix)
+    // 3. Subpath metadata (the portion after the endpoint prefix)
     if let Some(op) = envelope
         .request_details
         .metadata
@@ -1324,7 +1312,7 @@ pub(crate) fn resolve_dimse_op(
         return op;
     }
 
-    // 4b. Last segment of the full URI path (covers /find, /get, /store as prefixes)
+    // 3b. Last segment of the full URI path (covers /find, /get, /store as prefixes)
     let full_path = envelope
         .request_details
         .metadata
@@ -1345,7 +1333,7 @@ pub(crate) fn resolve_dimse_op(
         return op;
     }
 
-    // 5. dimse_retrieve_mode option, then "get"
+    // 4. dimse_retrieve_mode option, then "get"
     options
         .get("dimse_retrieve_mode")
         .and_then(|v| v.as_str())
@@ -1432,16 +1420,7 @@ mod tests {
         assert_eq!(resolve_dimse_op(&env, &opts()), "find");
     }
 
-    // ── 3. dimse_op metadata ──────────────────────────────────────────────────
-
-    #[test]
-    fn test_meta_dimse_op_find() {
-        let mut env = make_envelope("/");
-        with_meta(&mut env, "dimse_op", "find");
-        assert_eq!(resolve_dimse_op(&env, &opts()), "find");
-    }
-
-    // ── 4. Path-based (the bug scenario) ──────────────────────────────────────
+    // ── 3. Path-based (the bug scenario) ──────────────────────────────────────
 
     #[test]
     fn test_uri_find_when_subpath_empty() {
@@ -1483,7 +1462,7 @@ mod tests {
         assert_eq!(resolve_dimse_op(&env, &opts()), "find");
     }
 
-    // ── 5. Default fallback ──────────────────────────────────────────────────
+    // ── 4. Default fallback ──────────────────────────────────────────────────
 
     #[test]
     fn test_defaults_to_get() {

@@ -135,11 +135,6 @@ pub fn build_protocol_ctx(
         meta_map.insert("remote_port".to_string(), peer.port().to_string());
     }
 
-    // Extract DIMSE operation from header if present (for DICOM-to-HTTP bridging)
-    if let Some(dimse_op) = headers.get("x-dimse-op").and_then(|v| v.to_str().ok()) {
-        meta_map.insert("dimse_op".to_string(), dimse_op.to_string());
-    }
-
     // attrs object
     let mut attrs = serde_json::Map::new();
     attrs.insert(

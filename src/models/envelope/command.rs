@@ -124,6 +124,28 @@ pub enum Operation {
     Custom,
 }
 
+impl Operation {
+    /// The DIMSE operation name for this operation, as carried in the
+    /// `x-dimse-op` header between Harmony instances.
+    ///
+    /// Returns `None` for operations that have no DIMSE service.
+    pub fn dimse_op(&self) -> Option<&'static str> {
+        match self {
+            Operation::Query => Some("find"),
+            Operation::Retrieve => Some("get"),
+            Operation::Move => Some("move"),
+            Operation::Store => Some("store"),
+            Operation::Ping => Some("echo"),
+            Operation::Update
+            | Operation::Patch
+            | Operation::Delete
+            | Operation::Subscribe
+            | Operation::Publish
+            | Operation::Custom => None,
+        }
+    }
+}
+
 impl std::fmt::Display for Operation {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
@@ -204,6 +226,29 @@ mod tests {
         assert_eq!(format!("{}", Operation::Store), "store");
         assert_eq!(format!("{}", Operation::Ping), "ping");
         assert_eq!(format!("{}", Operation::Custom), "custom");
+    }
+
+    #[test]
+    fn test_dimse_op_names() {
+        assert_eq!(Operation::Query.dimse_op(), Some("find"));
+        assert_eq!(Operation::Retrieve.dimse_op(), Some("get"));
+        assert_eq!(Operation::Move.dimse_op(), Some("move"));
+        assert_eq!(Operation::Store.dimse_op(), Some("store"));
+        assert_eq!(Operation::Ping.dimse_op(), Some("echo"));
+    }
+
+    #[test]
+    fn test_dimse_op_is_none_without_a_dimse_service() {
+        for op in [
+            Operation::Update,
+            Operation::Patch,
+            Operation::Delete,
+            Operation::Subscribe,
+            Operation::Publish,
+            Operation::Custom,
+        ] {
+            assert_eq!(op.dimse_op(), None, "{} has no DIMSE service", op);
+        }
     }
 
     #[test]
