@@ -382,12 +382,16 @@ impl PipelineQueryProvider {
         if backend.service.eq_ignore_ascii_case("dicom_scu_streaming") {
             return true;
         }
+        // A pipeline may name a `[middleware.<name>]` table, or a built-in
+        // type with no table. The middleware builder accepts both, so this
+        // must too, or the bridge would run without the instance.
         backend.service.eq_ignore_ascii_case("http_streaming_backend")
             && pipeline.middleware.left_chain().iter().any(|name| {
-                config
+                let middleware_type = config
                     .middleware
                     .get(name)
-                    .is_some_and(|m| m.middleware_type.eq_ignore_ascii_case("dicom_to_http"))
+                    .map_or(name.as_str(), |m| m.middleware_type.as_str());
+                middleware_type.eq_ignore_ascii_case("dicom_to_http")
             })
     }
 
@@ -1148,10 +1152,23 @@ mod tests {
         }
     }
 
-    fn inline_config(backend_service: &str, middleware_type: Option<&str>) -> crate::config::config::Config {
-        let (middleware_list, middleware_block) = match middleware_type {
-            Some(kind) => ("\"mw\"".to_string(), format!("[middleware.mw]\ntype = \"{}\"\n", kind)),
-            None => (String::new(), String::new()),
+    /// How the pipeline under test refers to its one middleware.
+    enum MiddlewareRef<'a> {
+        None,
+        /// `middleware = ["mw"]` with a `[middleware.mw]` table of this type.
+        Table(&'a str),
+        /// `middleware = ["<type>"]` with no table.
+        BareType(&'a str),
+    }
+
+    fn inline_config(backend_service: &str, middleware: MiddlewareRef) -> crate::config::config::Config {
+        let (middleware_list, middleware_block) = match middleware {
+            MiddlewareRef::Table(kind) => (
+                "\"mw\"".to_string(),
+                format!("[middleware.mw]\ntype = \"{}\"\n", kind),
+            ),
+            MiddlewareRef::BareType(kind) => (format!("\"{}\"", kind), String::new()),
+            MiddlewareRef::None => (String::new(), String::new()),
         };
         let backend_options = match backend_service {
             "dicom_scu_streaming" => "aet = \"PACS\"\nhost = \"127.0.0.1\"\nport = 4242",
@@ -1201,18 +1218,23 @@ module = ""
 
     #[test]
     fn test_instance_goes_inline_only_where_a_consumer_needs_it() {
-        let needs = |backend: &str, middleware: Option<&str>| {
+        use MiddlewareRef::{BareType, None, Table};
+        let needs = |backend: &str, middleware: MiddlewareRef| {
             let config = inline_config(backend, middleware);
             let pipeline = config.pipelines.get("store").expect("pipeline present");
             PipelineQueryProvider::store_needs_inline_instance(pipeline, &config)
         };
 
         assert!(needs("dicom_scu_streaming", None), "single node: the backend takes the instance");
-        assert!(needs("http_streaming_backend", Some("dicom_to_http")), "streaming bridge");
-        assert!(!needs("http", Some("dicom_to_http")), "the http backend cannot carry the bridge headers");
-        assert!(!needs("http_streaming_backend", Some("dicom_flatten")), "no bridge middleware");
+        assert!(needs("http_streaming_backend", Table("dicom_to_http")), "streaming bridge");
+        assert!(
+            needs("http_streaming_backend", BareType("dicom_to_http")),
+            "streaming bridge that names the built-in type with no table"
+        );
+        assert!(!needs("http", Table("dicom_to_http")), "the http backend cannot carry the bridge headers");
+        assert!(!needs("http_streaming_backend", Table("dicom_flatten")), "no bridge middleware");
         assert!(!needs("http_streaming_backend", None));
-        assert!(!needs("http", Some("dicom_to_dicomweb")), "reads the local file");
+        assert!(!needs("http", Table("dicom_to_dicomweb")), "reads the local file");
         assert!(!needs("http", None));
     }
 

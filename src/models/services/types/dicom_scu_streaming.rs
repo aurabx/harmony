@@ -302,14 +302,18 @@ impl DicomScuStreamingBackend {
         let Some(stated) = headers.get(header) else {
             return Ok(());
         };
-        if Some(stated.trim()) == actual {
+        // HTTP strips whitespace around a header value, so the instance's
+        // value is trimmed the same way before the two are compared.
+        let stated = stated.trim();
+        let actual = actual.map(str::trim);
+        if Some(stated) == actual {
             return Ok(());
         }
+        // Both values come from the request. `{:?}` escapes control
+        // characters so neither can forge a log line.
         Err(Error::from(format!(
-            "dicom_scu_streaming store: header {} says '{}' but the instance says '{}'",
-            header,
-            stated.trim(),
-            actual.unwrap_or("<absent>")
+            "dicom_scu_streaming store: header {} says {:?} but the instance says {:?}",
+            header, stated, actual
         )))
     }
 
@@ -1472,7 +1476,7 @@ mod tests {
         );
         let msg = extract_error(&contradicting);
         assert!(msg.contains(TRANSFER_SYNTAX_HEADER), "unexpected error: {}", msg);
-        assert!(msg.contains("says '1.2.840.10008.1.2' "), "unexpected error: {}", msg);
+        assert!(msg.contains("1.2.840.10008.1.2\\\" but the instance"), "unexpected error: {}", msg);
     }
 
     #[test]

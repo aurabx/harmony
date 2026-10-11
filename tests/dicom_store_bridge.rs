@@ -320,4 +320,8 @@ async fn http_backend_pipeline_keeps_its_json_body() {
     assert_eq!(body.pointer("/dataset/00100020"), Some(&patient_id));
     assert!(body.get("part10_b64").is_none());
     assert!(body.get("body_b64").is_none());
+    assert!(
+        !run.request.headers.contains_key("x-dimse-op"),
+        "the http backend does not send the headers dicom_to_http sets"
+    );
 }
