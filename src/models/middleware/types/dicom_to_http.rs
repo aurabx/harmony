@@ -1,9 +1,10 @@
 //! Middleware that bridges DICOM DIMSE requests to HTTP streaming requests.
 //!
-//! This middleware transforms DIMSE operations (C-FIND, C-GET, C-MOVE) into HTTP POST
-//! requests suitable for forwarding to an HTTP streaming backend.
+//! This middleware transforms DIMSE operations (C-FIND, C-GET, C-MOVE, C-STORE) into
+//! HTTP POST requests suitable for forwarding to an HTTP streaming backend.
 //!
-//! LEFT side: Converts DIMSE envelope to HTTP POST request
+//! LEFT side: Converts DIMSE envelope to HTTP POST request. A C-STORE on a
+//! streaming pipeline is sent as the DICOM Part 10 file itself.
 //! RIGHT side: Passes through HTTP response (streaming backend handles parsing)
 
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
@@ -23,6 +24,54 @@ pub struct DicomToHttpMiddleware;
 impl DicomToHttpMiddleware {
     pub fn new() -> Self {
         Self
+    }
+
+    /// Make the stored instance the HTTP request body.
+    ///
+    /// The DIMSE adapter puts the Part 10 file in `body_b64` when the pipeline
+    /// has a streaming backend. Writing only that key to `original_data` makes
+    /// the executor send the raw bytes, so the receiving host gets the
+    /// instance itself and nothing that refers to this host's disk.
+    ///
+    /// A body without `body_b64` is left as it is. That is a non-streaming
+    /// pipeline, which posts the DICOM JSON to its backend.
+    fn send_instance_as_body(envelope: &mut RequestEnvelope<Value>) {
+        let body = envelope
+            .normalized_data
+            .as_ref()
+            .unwrap_or(&envelope.original_data);
+        let Some(body_b64) = body.get("body_b64").and_then(Value::as_str) else {
+            return;
+        };
+        let instance_body = serde_json::json!({ "body_b64": body_b64 });
+
+        let transfer_syntax = body
+            .get("transfer_syntax_uid")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let sop_class_uid = body
+            .pointer("/command/sop_class_uid")
+            .and_then(Value::as_str)
+            .map(str::to_string);
+        let sop_instance_uid = envelope
+            .request_details
+            .metadata
+            .get("SOPInstanceUID")
+            .cloned();
+
+        envelope.original_data = instance_body;
+
+        let headers = &mut envelope.request_details.headers;
+        headers.insert("content-type".to_string(), "application/dicom".to_string());
+        for (name, value) in [
+            ("x-dicom-transfer-syntax", transfer_syntax),
+            ("x-dicom-sop-class-uid", sop_class_uid),
+            ("x-dicom-sop-instance-uid", sop_instance_uid),
+        ] {
+            if let Some(value) = value {
+                headers.insert(name.to_string(), value);
+            }
+        }
     }
 }
 
@@ -76,6 +125,10 @@ impl Middleware for DicomToHttpMiddleware {
                 .request_details
                 .headers
                 .insert("x-query-level".to_string(), query_level.clone());
+        }
+
+        if dimse_op == "store" {
+            Self::send_instance_as_body(&mut envelope);
         }
 
         // Update target details if present
@@ -140,6 +193,59 @@ mod tests {
         assert_eq!(headers.get("x-dimse-op").map(String::as_str), Some("find"));
         assert_eq!(headers.get("x-query-level").map(String::as_str), Some("STUDY"));
         assert_eq!(headers.get("accept").map(String::as_str), Some("application/x-ndjson"));
+    }
+
+    fn store_envelope(body: Value) -> RequestEnvelope<Value> {
+        let mut env = envelope(Some("dimse"), Some(Command::new(Operation::Store)));
+        env.request_details
+            .metadata
+            .insert("SOPInstanceUID".to_string(), "1.2.3.4.5".to_string());
+        env.original_data = body.clone();
+        env.normalized_data = Some(body);
+        env
+    }
+
+    #[tokio::test]
+    async fn streaming_store_sends_the_instance_and_drops_the_local_path() {
+        let env = store_envelope(serde_json::json!({
+            "command": { "sop_class_uid": "1.2.840.10008.5.1.4.1.1.2" },
+            "dataset": { "00100020": { "vr": "LO", "Value": ["PID1"] } },
+            "file": "/var/harmony/dimse/instance.dcm",
+            "body_b64": "UGFydDEw",
+            "transfer_syntax_uid": "1.2.840.10008.1.2.1",
+        }));
+
+        let out = DicomToHttpMiddleware::new().left(env).await.expect("left");
+
+        // The executor turns a lone `body_b64` into the raw request body.
+        assert_eq!(out.original_data, serde_json::json!({ "body_b64": "UGFydDEw" }));
+        let header = |name: &str| out.request_details.headers.get(name).map(String::as_str);
+        assert_eq!(header("content-type"), Some("application/dicom"));
+        assert_eq!(header("x-dimse-op"), Some("store"));
+        assert_eq!(header("x-dicom-transfer-syntax"), Some("1.2.840.10008.1.2.1"));
+        assert_eq!(header("x-dicom-sop-class-uid"), Some("1.2.840.10008.5.1.4.1.1.2"));
+        assert_eq!(header("x-dicom-sop-instance-uid"), Some("1.2.3.4.5"));
+    }
+
+    #[tokio::test]
+    async fn store_without_an_inline_instance_keeps_its_json_body() {
+        // A non-streaming pipeline posts the DICOM JSON to its backend.
+        let body = serde_json::json!({
+            "command": { "sop_class_uid": "1.2.840.10008.5.1.4.1.1.2" },
+            "dataset": { "00100020": { "vr": "LO", "Value": ["PID1"] } },
+            "file": "/var/harmony/dimse/instance.dcm",
+        });
+
+        let out = DicomToHttpMiddleware::new()
+            .left(store_envelope(body.clone()))
+            .await
+            .expect("left");
+
+        assert_eq!(out.original_data, body);
+        let headers = &out.request_details.headers;
+        assert_eq!(headers.get("content-type").map(String::as_str), Some("application/json"));
+        assert_eq!(headers.get("x-dimse-op").map(String::as_str), Some("store"));
+        assert!(!headers.contains_key("x-dicom-transfer-syntax"));
     }
 
     #[tokio::test]

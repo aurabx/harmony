@@ -71,6 +71,38 @@ use_tls = false                   # Enable TLS (default: false)
   disk. At most 8 instances wait in memory ahead of the consumer; beyond that
   the backend stops answering the PACS until the consumer catches up.
 - **C-FIND**: Queries only (metadata). Instances yielded as query results.
+- **C-STORE**: Sends one instance to the PACS per request. See
+  [C-STORE requests](#c-store-requests).
+
+##### C-STORE requests
+
+The request must carry the instance as a DICOM Part 10 file. Two forms are
+accepted:
+
+| Form | Body | Sent by |
+|------|------|---------|
+| Part 10 body | The Part 10 file, with `Content-Type: application/dicom` | `dicom_to_http` on another Harmony, or any HTTP client |
+| JSON body | A JSON object with the Part 10 file as base64 in `body_b64` | The `dicom_scp` endpoint in the same pipeline |
+
+Any other body is rejected, including raw data set bytes without the Part 10
+header. The backend never opens a file that a request names. A JSON body with
+a `file` key and no `body_b64` is rejected.
+
+The transfer syntax is read from the file meta group of the Part 10 file.
+
+When `dicom_to_http` bridges a C-STORE to another Harmony it sends these
+headers with the Part 10 body:
+
+| Header | Value |
+|--------|-------|
+| `x-dimse-op` | `store` |
+| `x-dicom-transfer-syntax` | Transfer Syntax UID of the file |
+| `x-dicom-sop-class-uid` | SOP Class UID, when known |
+| `x-dicom-sop-instance-uid` | SOP Instance UID, when known |
+
+The backend rejects a request whose `x-dicom-transfer-syntax` header differs
+from the file meta group. It takes the SOP UIDs from the file and does not
+read the two SOP UID headers.
 
 **Transfer syntaxes:** the `transfer_syntaxes` option lists the transfer
 syntaxes proposed for the storage presentation contexts of the C-GET, most

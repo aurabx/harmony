@@ -19,6 +19,10 @@ use dimse::{DimseConfig, DimseScu, RemoteNode};
 use futures_util::stream;
 use tracing::{debug, info, warn};
 
+/// Request header in which `dicom_to_http` states the transfer syntax of a
+/// bridged C-STORE instance.
+const TRANSFER_SYNTAX_HEADER: &str = "x-dicom-transfer-syntax";
+
 /// DICOM SCU (Service Class User) streaming backend configuration
 ///
 /// This service handles outgoing DICOM DIMSE requests (C-FIND, C-GET) and yields
@@ -245,67 +249,99 @@ impl DicomScuStreamingBackend {
         }
     }
 
-    /// Extract the DICOM Part 10 bytes and SOP UIDs for a C-STORE from a request envelope.
+    /// Extract the instance for a C-STORE from a request envelope.
     ///
-    /// The envelope may arrive from three sources:
-    /// 1. `dicom_scp.build_protocol_envelope` — `original_data` is JSON with a `file`
-    ///    field pointing to a local temp file that holds the Part 10 bytes.
-    /// 2. Middleware that has already placed Part 10 bytes into `original_data`
-    ///    (detected by the DICM magic at offset 128).
-    /// 3. Raw dataset bytes in `original_data` when middleware produced them directly.
+    /// The request must carry the DICOM Part 10 file itself, either as the
+    /// whole body or in the `body_b64` key of a JSON body. The first is what
+    /// `dicom_to_http` sends from another Harmony. The second is what the
+    /// DIMSE adapter builds when this backend is in the same pipeline.
     ///
-    /// Returns the DICOM bytes plus best-effort SOP class and instance UIDs.
-    fn extract_store_dataset(
-        envelope: &RequestEnvelope<Vec<u8>>,
-    ) -> Result<(Vec<u8>, Option<String>, Option<String>), Error> {
-        if envelope.original_data.is_empty() {
-            return Err(Error::from(
-                "dicom_scu_streaming store: envelope has no original_data",
-            ));
-        }
+    /// A path in the request is never read. A request can come from any HTTP
+    /// client, and a path it names would be opened with this process's rights.
+    ///
+    /// The returned dataset has its SOP UIDs and its transfer syntax, taken
+    /// from the file meta group, in its metadata.
+    fn extract_store_dataset(envelope: &RequestEnvelope<Vec<u8>>) -> Result<DatasetStream, Error> {
+        let part10 = Self::store_part10_bytes(&envelope.original_data)?;
 
-        // Prefer a `file` reference in a JSON payload. The DIMSE SCP writes the
-        // received dataset to a temp file and hands the path through the pipeline.
-        if let Ok(json) = serde_json::from_slice::<serde_json::Value>(&envelope.original_data) {
-            if let Some(path) = json.get("file").and_then(|v| v.as_str()) {
-                let bytes = std::fs::read(path).map_err(|e| {
-                    Error::from(format!(
-                        "dicom_scu_streaming store: failed to read spooled file '{}': {}",
-                        path, e
-                    ))
-                })?;
-                let (class_uid, instance_uid) = Self::read_sop_uids(&bytes);
-                return Ok((bytes, class_uid, instance_uid));
+        let file = dicom_object::from_reader(std::io::Cursor::new(part10.as_ref())).map_err(|e| {
+            Error::from(format!(
+                "dicom_scu_streaming store: the instance is not a readable DICOM Part 10 file: {}",
+                e
+            ))
+        })?;
+        let transfer_syntax = file.meta().transfer_syntax().to_string();
+
+        // `dicom_to_http` states the transfer syntax in this header. A value
+        // that contradicts the file means the request was built wrongly.
+        if let Some(stated) = envelope.request_details.headers.get(TRANSFER_SYNTAX_HEADER) {
+            if stated.trim() != transfer_syntax {
+                return Err(Error::from(format!(
+                    "dicom_scu_streaming store: header {} says '{}' but the file meta group says '{}'",
+                    TRANSFER_SYNTAX_HEADER,
+                    stated.trim(),
+                    transfer_syntax
+                )));
             }
         }
 
-        // Otherwise use original_data directly. It is either a Part 10 file
-        // (with the DICM magic at offset 128) or raw dataset bytes.
-        let bytes = envelope.original_data.clone();
-        let (class_uid, instance_uid) = Self::read_sop_uids(&bytes);
-        Ok((bytes, class_uid, instance_uid))
+        let mut dataset = DatasetStream::from_object(file.into_inner());
+        let metadata = dataset.metadata_mut();
+        metadata.transfer_syntax = Some(transfer_syntax);
+        metadata.size_bytes = Some(part10.len() as u64);
+        Ok(dataset)
     }
 
-    /// Best-effort SOP class and instance UID extraction from Part 10 bytes.
-    /// Both UIDs are returned as `None` when parsing fails.
-    fn read_sop_uids(bytes: &[u8]) -> (Option<String>, Option<String>) {
-        let cursor = std::io::Cursor::new(bytes);
-        match dicom_object::from_reader(cursor) {
-            Ok(obj) => {
-                let class_uid = obj
-                    .element_by_name("SOPClassUID")
-                    .ok()
-                    .and_then(|e| e.to_str().ok())
-                    .map(|s| s.to_string());
-                let instance_uid = obj
-                    .element_by_name("SOPInstanceUID")
-                    .ok()
-                    .and_then(|e| e.to_str().ok())
-                    .map(|s| s.to_string());
-                (class_uid, instance_uid)
-            }
-            Err(_) => (None, None),
+    /// Find the Part 10 bytes in a C-STORE request body.
+    fn store_part10_bytes(body: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, Error> {
+        use base64::Engine;
+        const ACCEPTED: &str = "Send the DICOM Part 10 file as the request body, \
+             or as base64 in the 'body_b64' key of a JSON body";
+
+        if body.is_empty() {
+            return Err(Error::from(format!(
+                "dicom_scu_streaming store: envelope has no original_data. {}",
+                ACCEPTED
+            )));
         }
+        if Self::is_part10(body) {
+            return Ok(std::borrow::Cow::Borrowed(body));
+        }
+
+        let json: serde_json::Value = serde_json::from_slice(body).map_err(|_| {
+            Error::from(format!(
+                "dicom_scu_streaming store: the {}-byte body is neither a DICOM Part 10 file nor JSON. {}",
+                body.len(),
+                ACCEPTED
+            ))
+        })?;
+        let Some(body_b64) = json.get("body_b64").and_then(|v| v.as_str()) else {
+            let reason = if json.get("file").is_some() {
+                "the body names a path in 'file', and this backend does not read files named by a request"
+            } else {
+                "the JSON body has no 'body_b64' string"
+            };
+            return Err(Error::from(format!(
+                "dicom_scu_streaming store: {}. {}",
+                reason, ACCEPTED
+            )));
+        };
+
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(body_b64)
+            .map_err(|e| {
+                Error::from(format!(
+                    "dicom_scu_streaming store: 'body_b64' is not valid base64: {}",
+                    e
+                ))
+            })?;
+        if !Self::is_part10(&decoded) {
+            return Err(Error::from(format!(
+                "dicom_scu_streaming store: 'body_b64' decodes to {} bytes that are not a DICOM Part 10 file",
+                decoded.len()
+            )));
+        }
+        Ok(std::borrow::Cow::Owned(decoded))
     }
 
     /// Detect whether `bytes` looks like a DICOM Part 10 file (DICM magic at offset 128).
@@ -589,34 +625,19 @@ impl StreamingBackend for DicomScuStreamingBackend {
                 // stream down to its last envelope, from which it reads
                 // `dicom_status` to decide the DIMSE status returned to the
                 // originating SCU.
-                let (bytes, sop_class_uid, sop_instance_uid) =
-                    Self::extract_store_dataset(&envelope)?;
+                let dataset = Self::extract_store_dataset(&envelope)?;
+                let sop_class_uid = dataset.metadata().sop_class_uid.clone();
+                let sop_instance_uid = dataset.metadata().sop_instance_uid.clone();
 
                 info!(
-                    "dicom_scu_streaming store: forwarding {} bytes to {}@{}:{} (sop_instance_uid={:?})",
-                    bytes.len(),
+                    "dicom_scu_streaming store: forwarding {} bytes to {}@{}:{} (sop_instance_uid={:?}, transfer_syntax={:?})",
+                    dataset.metadata().size_bytes.unwrap_or_default(),
                     remote_node.ae_title,
                     remote_node.host,
                     remote_node.port,
                     sop_instance_uid,
+                    dataset.metadata().transfer_syntax,
                 );
-
-                let dataset = if Self::is_part10(&bytes) {
-                    // Parse the Part 10 file so the SCU can negotiate the correct
-                    // presentation context. Fall back to raw bytes if parsing fails.
-                    match dicom_object::from_reader(std::io::Cursor::new(&bytes)) {
-                        Ok(file_obj) => DatasetStream::from_object(file_obj.into_inner()),
-                        Err(e) => {
-                            warn!(
-                                "dicom_scu_streaming store: Part 10 parse failed, sending as raw bytes: {}",
-                                e
-                            );
-                            DatasetStream::from_bytes(bytes::Bytes::from(bytes.clone()))
-                        }
-                    }
-                } else {
-                    DatasetStream::from_bytes(bytes::Bytes::from(bytes.clone()))
-                };
 
                 let request_details = envelope.request_details.clone();
                 let command = envelope.command.clone();
@@ -1152,7 +1173,7 @@ mod tests {
     // The store arm dispatches to the external DIMSE SCU. Live SCU verification
     // needs an integration harness (a running SCP peer) that this crate does not
     // ship. The tests below exercise the deterministic pieces: input extraction
-    // for the three payload shapes, empty-payload rejection, and the response
+    // for the two accepted payload shapes, rejection of everything else, and the response
     // envelope contract that the DIMSE SCP-side dispatcher relies on
     // (dicom_status metadata plus status code).
 
@@ -1231,61 +1252,171 @@ mod tests {
         assert!(!DicomScuStreamingBackend::is_part10(&buf));
     }
 
+    fn extract_error(envelope: &RequestEnvelope<Vec<u8>>) -> String {
+        match DicomScuStreamingBackend::extract_store_dataset(envelope) {
+            Ok(_) => panic!("the store request should be rejected"),
+            Err(e) => format!("{:?}", e),
+        }
+    }
+
+    fn json_envelope(payload: serde_json::Value) -> RequestEnvelope<Vec<u8>> {
+        envelope_with_original_data(serde_json::to_vec(&payload).expect("serialize payload"))
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        use base64::Engine;
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
     #[test]
     fn test_extract_store_dataset_rejects_empty_payload() {
-        let envelope = envelope_with_original_data(Vec::new());
-        let err = DicomScuStreamingBackend::extract_store_dataset(&envelope).unwrap_err();
-        let msg = format!("{:?}", err);
+        let msg = extract_error(&envelope_with_original_data(Vec::new()));
         assert!(msg.contains("no original_data"), "unexpected error: {}", msg);
     }
 
     #[test]
-    fn test_extract_store_dataset_uses_file_field_from_json_payload() {
-        let uid = "1.2.3.4.99.1";
-        let bytes = make_part10_bytes(uid);
-
+    fn test_extract_store_dataset_never_reads_a_file_named_by_the_request() {
+        // AURA-2408. The file is a valid instance, so the only way this
+        // request can fail is that the backend did not open it.
         let dir = tempfile::tempdir().expect("tempdir");
         let file = dir.path().join("instance.dcm");
-        std::fs::write(&file, &bytes).expect("write temp instance");
+        std::fs::write(&file, make_part10_bytes("1.2.3.4.99.1")).expect("write instance");
 
-        let payload = serde_json::json!({
+        let msg = extract_error(&json_envelope(serde_json::json!({
             "command": {"message_id": 1},
             "dataset": {},
             "file": file.to_string_lossy(),
-        });
-        let payload_bytes = serde_json::to_vec(&payload).expect("serialize payload");
+        })));
 
-        let envelope = envelope_with_original_data(payload_bytes);
-        let (out_bytes, _class_uid, instance_uid) =
-            DicomScuStreamingBackend::extract_store_dataset(&envelope).expect("extract");
-
-        assert_eq!(out_bytes, bytes, "bytes should match temp file");
-        assert_eq!(instance_uid.as_deref(), Some(uid));
+        assert!(msg.contains("does not read files"), "unexpected error: {}", msg);
     }
 
     #[test]
-    fn test_extract_store_dataset_falls_back_to_original_data_when_no_file_field() {
+    fn test_extract_store_dataset_prefers_body_b64_and_ignores_file() {
+        // The DIMSE adapter sends both keys to a backend in its own pipeline.
+        // The path does not exist, so reading it would fail the request.
+        let uid = "1.2.3.4.99.3";
+        let envelope = json_envelope(serde_json::json!({
+            "file": "/nonexistent/aura-2408/instance.dcm",
+            "body_b64": b64(&make_part10_bytes(uid)),
+            "transfer_syntax_uid": "1.2.840.10008.1.2.1",
+        }));
+
+        let dataset = DicomScuStreamingBackend::extract_store_dataset(&envelope).expect("extract");
+
+        assert_eq!(dataset.metadata().sop_instance_uid.as_deref(), Some(uid));
+        assert_eq!(
+            dataset.metadata().sop_class_uid.as_deref(),
+            Some("1.2.840.10008.5.1.4.1.1.7")
+        );
+        assert_eq!(
+            dataset.metadata().transfer_syntax.as_deref(),
+            Some("1.2.840.10008.1.2.1")
+        );
+    }
+
+    #[test]
+    fn test_extract_store_dataset_accepts_part10_body() {
         let uid = "1.2.3.4.99.2";
         let bytes = make_part10_bytes(uid);
-
         let envelope = envelope_with_original_data(bytes.clone());
-        let (out_bytes, _class_uid, instance_uid) =
-            DicomScuStreamingBackend::extract_store_dataset(&envelope).expect("extract");
 
-        assert_eq!(out_bytes, bytes);
-        assert_eq!(instance_uid.as_deref(), Some(uid));
+        let dataset = DicomScuStreamingBackend::extract_store_dataset(&envelope).expect("extract");
+
+        assert_eq!(dataset.metadata().sop_instance_uid.as_deref(), Some(uid));
+        assert_eq!(
+            dataset.metadata().transfer_syntax.as_deref(),
+            Some("1.2.840.10008.1.2.1")
+        );
+        assert_eq!(dataset.metadata().size_bytes, Some(bytes.len() as u64));
+    }
+
+    #[tokio::test]
+    async fn test_extract_store_dataset_keeps_sample_instance_pixel_data() {
+        let source_path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/dicom/study_1/series_1/CT.1.1.dcm");
+        let bytes = std::fs::read(&source_path).expect("read sample instance");
+        let source = dicom_object::open_file(&source_path).expect("open sample instance");
+
+        let dataset = DicomScuStreamingBackend::extract_store_dataset(&json_envelope(
+            serde_json::json!({ "body_b64": b64(&bytes) }),
+        ))
+        .expect("extract");
+        let received = dataset.to_object().await.expect("dataset object");
+
+        assert_eq!(
+            dataset.metadata().transfer_syntax.as_deref(),
+            Some(source.meta().transfer_syntax())
+        );
+        let pixels = |object: &dicom_object::InMemDicomObject| {
+            object
+                .element_by_name("PixelData")
+                .expect("pixel data element")
+                .to_bytes()
+                .expect("pixel bytes")
+                .to_vec()
+        };
+        assert_eq!(pixels(&received), pixels(&source));
     }
 
     #[test]
-    fn test_extract_store_dataset_passes_raw_bytes_when_not_json_and_not_part10() {
-        let raw = b"raw dataset bytes without DICM magic".to_vec();
-        let envelope = envelope_with_original_data(raw.clone());
-        let (out_bytes, class_uid, instance_uid) =
-            DicomScuStreamingBackend::extract_store_dataset(&envelope).expect("extract");
+    fn test_extract_store_dataset_rejects_body_that_is_not_part10_or_json() {
+        let msg = extract_error(&envelope_with_original_data(
+            b"raw dataset bytes without DICM magic".to_vec(),
+        ));
+        assert!(msg.contains("neither a DICOM Part 10 file nor JSON"), "unexpected error: {}", msg);
+    }
 
-        assert_eq!(out_bytes, raw);
-        assert!(class_uid.is_none(), "no UIDs parseable from raw bytes");
-        assert!(instance_uid.is_none());
+    #[test]
+    fn test_extract_store_dataset_rejects_json_without_body_b64() {
+        let msg = extract_error(&json_envelope(serde_json::json!({ "dataset": {} })));
+        assert!(msg.contains("no 'body_b64' string"), "unexpected error: {}", msg);
+    }
+
+    #[test]
+    fn test_extract_store_dataset_rejects_invalid_base64() {
+        let msg = extract_error(&json_envelope(serde_json::json!({ "body_b64": "not base64!" })));
+        assert!(msg.contains("not valid base64"), "unexpected error: {}", msg);
+    }
+
+    #[test]
+    fn test_extract_store_dataset_rejects_body_b64_that_is_not_part10() {
+        let msg = extract_error(&json_envelope(serde_json::json!({
+            "body_b64": b64(b"raw dataset bytes without DICM magic"),
+        })));
+        assert!(msg.contains("not a DICOM Part 10 file"), "unexpected error: {}", msg);
+    }
+
+    #[test]
+    fn test_extract_store_dataset_rejects_part10_magic_without_a_dataset() {
+        let mut bytes = vec![0u8; 128];
+        bytes.extend_from_slice(b"DICM");
+        bytes.extend_from_slice(&[0u8; 100]);
+
+        let msg = extract_error(&envelope_with_original_data(bytes));
+        assert!(msg.contains("not a readable DICOM Part 10 file"), "unexpected error: {}", msg);
+    }
+
+    #[test]
+    fn test_extract_store_dataset_checks_transfer_syntax_header_against_file() {
+        let bytes = make_part10_bytes("1.2.3.4.99.4");
+
+        let mut matching = envelope_with_original_data(bytes.clone());
+        matching.request_details.headers.insert(
+            TRANSFER_SYNTAX_HEADER.to_string(),
+            "1.2.840.10008.1.2.1".to_string(),
+        );
+        DicomScuStreamingBackend::extract_store_dataset(&matching)
+            .expect("a header that matches the file is accepted");
+
+        let mut contradicting = envelope_with_original_data(bytes);
+        contradicting.request_details.headers.insert(
+            TRANSFER_SYNTAX_HEADER.to_string(),
+            "1.2.840.10008.1.2".to_string(),
+        );
+        let msg = extract_error(&contradicting);
+        assert!(msg.contains("1.2.840.10008.1.2'"), "unexpected error: {}", msg);
+        assert!(msg.contains("file meta group"), "unexpected error: {}", msg);
     }
 
     #[test]

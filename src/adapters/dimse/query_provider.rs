@@ -26,6 +26,42 @@ fn get_current_store_dir() -> Option<PathBuf> {
     CURRENT_STORE_DIR.lock().ok().and_then(|g| g.clone())
 }
 
+/// A DICOM Part 10 file encoded for a JSON pipeline body.
+#[derive(Debug, PartialEq)]
+struct InlineInstance {
+    /// The whole Part 10 file in standard base64.
+    body_b64: String,
+    /// Transfer Syntax UID from the file meta group.
+    transfer_syntax_uid: String,
+}
+
+impl InlineInstance {
+    /// Encode `part10` and read its transfer syntax from the file meta group,
+    /// so the stated transfer syntax always matches the bytes.
+    fn from_part10(part10: &[u8]) -> DimseResult<Self> {
+        use base64::Engine;
+
+        // The file meta group starts at the `DICM` code, after the 128-byte preamble.
+        let meta_group = part10.get(128..).ok_or_else(|| {
+            DimseError::operation_failed(format!(
+                "stored instance is {} bytes, too short for a DICOM Part 10 file",
+                part10.len()
+            ))
+        })?;
+        let meta = dicom_object::meta::FileMetaTable::from_reader(meta_group).map_err(|e| {
+            DimseError::operation_failed(format!(
+                "stored instance has no readable file meta group: {}",
+                e
+            ))
+        })?;
+
+        Ok(Self {
+            body_b64: base64::engine::general_purpose::STANDARD.encode(part10),
+            transfer_syntax_uid: meta.transfer_syntax().to_string(),
+        })
+    }
+}
+
 /// DIMSE query provider that integrates with the pipeline system
 ///
 /// This provider implements the dimse::scp::QueryProvider trait to handle
@@ -321,6 +357,35 @@ impl PipelineQueryProvider {
         last.ok_or_else(|| {
             DimseError::operation_failed("Streaming pipeline produced no response envelopes")
         })
+    }
+
+    /// Build the pipeline body for one received C-STORE instance.
+    ///
+    /// `file` is the path of the Part 10 copy on this host. Middleware that
+    /// runs in this process (`dicom_to_dicomweb`, `dimse_to_jmix`) reads it.
+    /// `inline_instance` adds the instance itself as `body_b64` plus its
+    /// `transfer_syntax_uid`, for backends that cannot use a local path.
+    fn build_store_body(
+        sop_class_uid: Option<&str>,
+        dicom_json: Option<serde_json::Value>,
+        temp_file: &std::path::Path,
+        inline_instance: Option<InlineInstance>,
+    ) -> serde_json::Value {
+        let mut body = serde_json::json!({
+            "command": {
+                "message_id": 1,
+                "sop_class_uid": sop_class_uid,
+                "priority": "MEDIUM",
+                "direction": "REQUEST"
+            },
+            "dataset": dicom_json,
+            "file": temp_file.to_string_lossy()
+        });
+        if let Some(instance) = inline_instance {
+            body["body_b64"] = serde_json::Value::String(instance.body_b64);
+            body["transfer_syntax_uid"] = serde_json::Value::String(instance.transfer_syntax_uid);
+        }
+        body
     }
 
     /// Convert ResponseEnvelope to Vec<DatasetStream>
@@ -636,18 +701,6 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             meta.insert("PatientID".into(), id.clone());
         }
 
-        // Build body with command metadata, dataset, and file path for STOW-RS transformation
-        let body = serde_json::json!({
-            "command": {
-                "message_id": 1,
-                "sop_class_uid": ds_meta.sop_class_uid,
-                "priority": "MEDIUM",
-                "direction": "REQUEST"
-            },
-            "dataset": dicom_json,
-            "file": temp_file.to_string_lossy()
-        });
-
         // Execute pipeline and check for DICOM status in response.
         // Dispatch to the streaming executor when the pipeline's backend
         // requires it. This mirrors the pattern used by `find` and `get`.
@@ -656,9 +709,33 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let pipeline_cfg = config.pipelines.get(&self.pipeline).ok_or_else(|| {
             DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
         })?;
+        let streaming = PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config);
+
+        // A streaming backend may sit on another host, where `temp_file` means
+        // nothing, so it gets the instance itself. The bytes are read back
+        // from the file just written so both copies are identical.
+        let inline_instance = if streaming {
+            let part10 = tokio::fs::read(&temp_file).await.map_err(|e| {
+                DimseError::operation_failed(format!(
+                    "read stored instance {}: {}",
+                    temp_file.display(),
+                    e
+                ))
+            })?;
+            Some(InlineInstance::from_part10(&part10)?)
+        } else {
+            None
+        };
+
+        let body = Self::build_store_body(
+            ds_meta.sop_class_uid.as_deref(),
+            dicom_json,
+            &temp_file,
+            inline_instance,
+        );
 
         let command = Command::new(Operation::Store).with_source("dimse_adapter");
-        let response = if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
+        let response = if streaming {
             tracing::info!("Using streaming pipeline for C-STORE");
             self.run_streaming_response(command, body, meta).await?
         } else {
@@ -981,6 +1058,73 @@ mod tests {
         for op in [DimseOp::Find, DimseOp::Store, DimseOp::Get, DimseOp::Move] {
             assert_eq!(mux.provider_for(op).pipeline, "all_in_one");
         }
+    }
+
+    // ── C-STORE pipeline body ────────────────────────────────────────────────
+
+    fn sample_instance_path() -> PathBuf {
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/dicom/study_1/series_1/CT.1.1.dcm")
+    }
+
+    #[test]
+    fn test_inline_instance_states_the_transfer_syntax_of_the_file() {
+        use base64::Engine;
+
+        let path = sample_instance_path();
+        let part10 = std::fs::read(&path).expect("read sample instance");
+        let source = dicom_object::open_file(&path).expect("open sample instance");
+
+        let instance = InlineInstance::from_part10(&part10).expect("inline instance");
+
+        assert_eq!(instance.transfer_syntax_uid, source.meta().transfer_syntax());
+        let decoded = base64::engine::general_purpose::STANDARD
+            .decode(&instance.body_b64)
+            .expect("body_b64 is base64");
+        assert_eq!(decoded, part10);
+    }
+
+    #[test]
+    fn test_inline_instance_rejects_bytes_that_are_not_part10() {
+        for bytes in [vec![0u8; 16], vec![0u8; 200]] {
+            let err = InlineInstance::from_part10(&bytes).expect_err("not a Part 10 file");
+            assert!(
+                err.to_string().contains("stored instance"),
+                "unexpected error: {}",
+                err
+            );
+        }
+    }
+
+    #[test]
+    fn test_store_body_carries_the_instance_only_when_inline() {
+        let temp_file = std::path::Path::new("/var/harmony/dimse/instance.dcm");
+        let dataset = serde_json::json!({ "00100020": { "vr": "LO", "Value": ["PID1"] } });
+
+        let local = PipelineQueryProvider::build_store_body(
+            Some("1.2.840.10008.5.1.4.1.1.2"),
+            Some(dataset.clone()),
+            temp_file,
+            None,
+        );
+        assert_eq!(local["file"], "/var/harmony/dimse/instance.dcm");
+        assert_eq!(local["dataset"], dataset);
+        assert_eq!(local["command"]["sop_class_uid"], "1.2.840.10008.5.1.4.1.1.2");
+        assert!(local.get("body_b64").is_none());
+        assert!(local.get("transfer_syntax_uid").is_none());
+
+        let inline = PipelineQueryProvider::build_store_body(
+            Some("1.2.840.10008.5.1.4.1.1.2"),
+            Some(dataset),
+            temp_file,
+            Some(InlineInstance {
+                body_b64: "UGFydDEw".to_string(),
+                transfer_syntax_uid: "1.2.840.10008.1.2.1".to_string(),
+            }),
+        );
+        assert_eq!(inline["body_b64"], "UGFydDEw");
+        assert_eq!(inline["transfer_syntax_uid"], "1.2.840.10008.1.2.1");
+        assert_eq!(inline["file"], "/var/harmony/dimse/instance.dcm");
     }
 
     // ── Streaming bridge hand-off ────────────────────────────────────────────
