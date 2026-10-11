@@ -78,10 +78,12 @@ examples/cstore-filesystem/data/
 /.automatic/
 /.claude/
 /.codex/
+/.cursor/
 /.mcp.json
 /.opencode/
 /AGENTS.md
 /CLAUDE.md
 /opencode.json
 # END Automatic-managed
+
 /docker

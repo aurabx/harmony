@@ -1,0 +1,154 @@
+{
+  "agents": [
+    "claude",
+    "opencode",
+    "codex",
+    "cursor"
+  ],
+  "custom_agents": [],
+  "custom_commands": [],
+  "custom_skills": [],
+  "description": "",
+  "file_rules": {
+    "_project": [
+      "automatic-service",
+      "automatic-process",
+      "automatic-general",
+      "automatic-prose",
+      "automatic-code",
+      "local-git-rules",
+      "thinking-effort",
+      "automatic-workflow"
+    ]
+  },
+  "id": "bace4c91-4f66-415a-b426-980eeb5db523",
+  "instruction_mode": "unified",
+  "instructions_index_mode": false,
+  "manage_gitignore": true,
+  "mcp_servers": [
+    "automatic",
+    "Sentry",
+    "harmony-runner",
+    "nightowl",
+    "better-stack",
+    "aikido-security",
+    "linear-aurabox",
+    "github"
+  ],
+  "name": "harmony-proxy",
+  "profile_contributions": {
+    "General": {
+      "agents": [
+        "claude",
+        "codex",
+        "cursor",
+        "opencode"
+      ],
+      "mcp_servers": [
+        "github"
+      ],
+      "rules": [
+        "automatic-service",
+        "automatic-process",
+        "automatic-code",
+        "automatic-general",
+        "automatic-prose",
+        "local-git-rules",
+        "thinking-effort",
+        "automatic-workflow"
+      ]
+    },
+    "Runbeam": {
+      "skills": [
+        "harmony-pipeline-builder",
+        "harmony-runner"
+      ]
+    }
+  },
+  "profiles": [
+    "General",
+    "Runbeam"
+  ],
+  "providers": [],
+  "skill_collections": {
+    "automatic": "automatic-skills",
+    "automatic-code-review": "automatic-skills",
+    "automatic-debugging": "automatic-skills",
+    "automatic-documentation": "automatic-skills",
+    "automatic-performance": "automatic-skills",
+    "automatic-refactoring": "automatic-skills",
+    "automatic-security-review": "automatic-skills",
+    "automatic-testing": "automatic-skills",
+    "linear": "davila7/claude-code-templates"
+  },
+  "skill_sources": {
+    "automatic": {
+      "id": "automatic/automatic-app/automatic",
+      "kind": "bundled",
+      "source": "automatic/automatic-app"
+    },
+    "automatic-code-review": {
+      "id": "automatic/automatic-app/automatic-code-review",
+      "kind": "bundled",
+      "source": "automatic/automatic-app"
+    },
+    "automatic-debugging": {
+      "id": "automatic/automatic-app/automatic-debugging",
+      "kind": "bundled",
+      "source": "automatic/automatic-app"
+    },
+    "automatic-documentation": {
+      "id": "automatic/automatic-app/automatic-documentation",
+      "kind": "bundled",
+      "source": "automatic/automatic-app"
+    },
+    "automatic-performance": {
+      "id": "automatic/automatic-app/automatic-performance",
+      "kind": "bundled",
+      "source": "automatic/automatic-app"
+    },
+    "automatic-refactoring": {
+      "id": "automatic/automatic-app/automatic-refactoring",
+      "kind": "bundled",
+      "source": "automatic/automatic-app"
+    },
+    "automatic-security-review": {
+      "id": "automatic/automatic-app/automatic-security-review",
+      "kind": "bundled",
+      "source": "automatic/automatic-app"
+    },
+    "automatic-testing": {
+      "id": "automatic/automatic-app/automatic-testing",
+      "kind": "bundled",
+      "source": "automatic/automatic-app"
+    },
+    "git-commit": {
+      "id": "github/awesome-copilot/git-commit",
+      "kind": "github",
+      "source": "github/awesome-copilot"
+    },
+    "linear": {
+      "id": "davila7/claude-code-templates/linear",
+      "kind": "github",
+      "source": "davila7/claude-code-templates"
+    }
+  },
+  "skills": [
+    "automatic",
+    "git-commit",
+    "automatic-code-review",
+    "automatic-debugging",
+    "automatic-documentation",
+    "automatic-performance",
+    "automatic-refactoring",
+    "automatic-security-review",
+    "automatic-testing",
+    "linear-workflow",
+    "nightowl",
+    "linear",
+    "aurabox-rest-api",
+    "harmony-pipeline-builder",
+    "harmony-runner"
+  ],
+  "tools": []
+}
