@@ -179,7 +179,6 @@ impl ServiceType for DicomScpEndpoint {
         ctx: crate::models::protocol::ProtocolCtx,
         _options: &HashMap<String, Value>,
     ) -> Result<RequestEnvelope<Vec<u8>>, Error> {
-        use crate::models::envelope::command::Operation;
         use crate::models::protocol::Protocol;
         use std::collections::HashMap as Map;
 
@@ -191,14 +190,10 @@ impl ServiceType for DicomScpEndpoint {
 
         // Derive the DIMSE operation name and URI from the typed Command.
         let command = ctx.command;
-        let op = match command.as_ref().map(|c| c.operation) {
-            Some(Operation::Query) => "find",
-            Some(Operation::Retrieve) => "get",
-            Some(Operation::Move) => "move",
-            Some(Operation::Store) => "store",
-            Some(Operation::Ping) => "echo",
-            _ => "dimse",
-        };
+        let op = command
+            .as_ref()
+            .and_then(|c| c.operation.dimse_op())
+            .unwrap_or("dimse");
         let uri = format!("dimse://scp/{}", op);
         let metadata: Map<String, String> = ctx.meta.clone();
 

@@ -1147,52 +1147,6 @@ mod tests {
         assert!(item.is_err(), "DIMSE error should surface as Err");
     }
 
-    // ── run_streaming op-string derivation ───────────────────────────────────
-    //
-    // The full `run_streaming()` requires global config and live services, so we
-    // test the op-derivation mapping directly — the same match arm used there.
-
-    fn derive_op(operation: Operation) -> &'static str {
-        match operation {
-            Operation::Query    => "find",
-            Operation::Retrieve => "get",
-            Operation::Move     => "move",
-            Operation::Store    => "store",
-            Operation::Ping     => "echo",
-            _                   => "unknown",
-        }
-    }
-
-    #[test]
-    fn test_op_derivation_query_maps_to_find() {
-        assert_eq!(derive_op(Operation::Query), "find");
-    }
-
-    #[test]
-    fn test_op_derivation_retrieve_maps_to_get() {
-        assert_eq!(derive_op(Operation::Retrieve), "get");
-    }
-
-    #[test]
-    fn test_op_derivation_move_maps_to_move() {
-        assert_eq!(derive_op(Operation::Move), "move");
-    }
-
-    #[test]
-    fn test_op_derivation_store_maps_to_store() {
-        assert_eq!(derive_op(Operation::Store), "store");
-    }
-
-    #[test]
-    fn test_op_derivation_ping_maps_to_echo() {
-        assert_eq!(derive_op(Operation::Ping), "echo");
-    }
-
-    #[test]
-    fn test_op_derivation_custom_maps_to_unknown() {
-        assert_eq!(derive_op(Operation::Custom), "unknown");
-    }
-
     // ── store arm helpers ───────────────────────────────────────────────────
     //
     // The store arm dispatches to the external DIMSE SCU. Live SCU verification

@@ -1,6 +1,5 @@
 use crate::config::config::ConfigError;
 use crate::models::connection::ConnectionConfig;
-use crate::models::envelope::command::Operation;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use async_trait::async_trait;
@@ -157,18 +156,12 @@ impl ServiceType for DicomScuBackend {
             ));
         }
 
-        use crate::models::envelope::command::Operation;
-
         // Derive the DIMSE operation name and URI from the typed Command.
         let command = ctx.command;
-        let op = match command.as_ref().map(|c| c.operation) {
-            Some(Operation::Query) => "find",
-            Some(Operation::Retrieve) => "get",
-            Some(Operation::Move) => "move",
-            Some(Operation::Store) => "store",
-            Some(Operation::Ping) => "echo",
-            _ => "dimse",
-        };
+        let op = command
+            .as_ref()
+            .and_then(|c| c.operation.dimse_op())
+            .unwrap_or("dimse");
         let uri = format!("dimse://scu/{}", op);
         let metadata: Map<String, String> = ctx.meta.clone();
 
@@ -1309,13 +1302,9 @@ pub(crate) fn resolve_dimse_op(
     const VALID_OPS: &[&str] = &["echo", "find", "get", "move", "store"];
 
     // 1. Typed Command
-    match envelope.resolve_operation() {
-        Some(Operation::Query) => return "find".to_string(),
-        Some(Operation::Retrieve) => return "get".to_string(),
-        Some(Operation::Move) => return "move".to_string(),
-        Some(Operation::Store) => return "store".to_string(),
-        Some(Operation::Ping) => return "echo".to_string(),
-        Some(_) | None => {} // fall through
+    // An operation with no DIMSE service falls through to the next step.
+    if let Some(op) = envelope.resolve_operation().and_then(|o| o.dimse_op()) {
+        return op.to_string();
     }
 
     // 2. x-dimse-op header (set by dicom_to_http middleware)
