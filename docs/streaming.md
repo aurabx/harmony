@@ -48,7 +48,7 @@ Harmony's streaming architecture enables efficient processing of large DICOM stu
 
 #### dicom_scu_streaming
 
-Streams DICOM instances from a PACS using C-GET or C-FIND operations.
+Streams DICOM instances from a PACS using C-GET or C-FIND operations, and sends instances to a PACS using C-STORE.
 
 **Configuration:**
 ```toml
@@ -71,6 +71,48 @@ use_tls = false                   # Enable TLS (default: false)
   disk. At most 8 instances wait in memory ahead of the consumer; beyond that
   the backend stops answering the PACS until the consumer catches up.
 - **C-FIND**: Queries only (metadata). Instances yielded as query results.
+- **C-STORE**: Sends one instance to the PACS per request. See
+  [C-STORE requests](#c-store-requests).
+
+##### C-STORE requests
+
+The request must carry the instance as a DICOM Part 10 file. Two forms are
+accepted:
+
+| Form | Body | Sent by |
+|------|------|---------|
+| Part 10 body | The Part 10 file as the whole body | `dicom_to_http` on another Harmony, or any HTTP client |
+| JSON body | A JSON object with the Part 10 file as base64 in `part10_b64` | The `dicom_scp` endpoint in the same pipeline |
+
+The backend recognises a Part 10 body by its `DICM` code. It does not read
+`Content-Type`.
+
+Any other body is rejected, including raw data set bytes without the Part 10
+header. The backend never opens a file that a request names. A JSON body with
+a `file` key and no `part10_b64` is rejected. The HTTP client gets a 502 with
+an empty body, and the reason is in the Harmony log.
+
+The transfer syntax is read from the file meta group of the Part 10 file.
+
+To bridge a C-STORE to another Harmony, use `dicom_to_http` with an
+`http_streaming_backend`. The request body is then the Part 10 file, sent with
+these headers:
+
+| Header | Value |
+|--------|-------|
+| `Content-Type` | `application/dicom` |
+| `x-dimse-op` | `store` |
+| `x-dicom-transfer-syntax` | Transfer Syntax UID of the file |
+| `x-dicom-sop-class-uid` | SOP Class UID, when known |
+| `x-dicom-sop-instance-uid` | SOP Instance UID, when known |
+
+The backend takes the transfer syntax and both SOP UIDs from the file. It
+rejects a request in which one of the three `x-dicom-*` headers is present and
+differs from the file.
+
+`dicom_to_http` with the `http` backend does not bridge a C-STORE. That
+backend does not send the headers above, and the request body stays the JSON
+that `dicom_scp` builds.
 
 **Transfer syntaxes:** the `transfer_syntaxes` option lists the transfer
 syntaxes proposed for the storage presentation contexts of the C-GET, most
