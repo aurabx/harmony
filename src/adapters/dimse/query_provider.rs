@@ -26,6 +26,10 @@ fn get_current_store_dir() -> Option<PathBuf> {
     CURRENT_STORE_DIR.lock().ok().and_then(|g| g.clone())
 }
 
+/// Longest part of a receiver's failure reason that is kept in the error for
+/// a failed C-STORE. The text comes from another host and ends up in the log.
+const MAX_RECEIVER_REASON_CHARS: usize = 512;
+
 /// A DICOM Part 10 file encoded for a JSON pipeline body.
 struct InlineInstance {
     /// The whole Part 10 file in standard base64.
@@ -428,6 +432,89 @@ impl PipelineQueryProvider {
         body
     }
 
+    /// Decide from the pipeline's final response whether a C-STORE reached its
+    /// destination.
+    ///
+    /// The SCP answers the sending device from this result. A device may
+    /// delete its copy of an instance once the store is acknowledged, so `Ok`
+    /// must mean the instance is stored.
+    ///
+    /// Two things mark a failed store:
+    /// - `dicom_status` in the response metadata. A backend or middleware in
+    ///   this process sets it (`dicom_scu_streaming`, `dicom_to_dicomweb`).
+    /// - A `success` key in the response body that is not `true`. A receiving
+    ///   Harmony answers HTTP 200 to a store its PACS did not take and reports
+    ///   the failure only in the body, because response metadata does not
+    ///   cross the HTTP hop.
+    fn check_store_response(response: &ResponseEnvelope<Vec<u8>>) -> DimseResult<()> {
+        Self::check_store_dicom_status(response)?;
+        Self::check_store_body(response)
+    }
+
+    /// Fail the store when `dicom_status` in the response metadata is a
+    /// failure status. The value has the form `0xC000`.
+    fn check_store_dicom_status(response: &ResponseEnvelope<Vec<u8>>) -> DimseResult<()> {
+        if let Some(status_str) = response.response_details.metadata.get("dicom_status") {
+            // Parse "0x0000" or "0xC000" format
+            if let Some(hex) = status_str.strip_prefix("0x") {
+                if let Ok(status) = u16::from_str_radix(hex, 16) {
+                    // Check for failure status (0xC000 range indicates failure)
+                    if status >= 0xC000 {
+                        return Err(DimseError::operation_failed(format!(
+                            "C-STORE failed with DICOM status: {}",
+                            status_str
+                        )));
+                    }
+                    // Warning status (0xB000 range) - log but don't fail
+                    if status >= 0xB000 && status < 0xC000 {
+                        tracing::warn!("C-STORE completed with warning status: {}", status_str);
+                    }
+                }
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Fail the store when the response body is a JSON object whose `success`
+    /// key is anything other than `true`. The receiver's `error` text, when it
+    /// gives one, becomes part of the returned error.
+    fn check_store_body(response: &ResponseEnvelope<Vec<u8>>) -> DimseResult<()> {
+        // A body that is not JSON, such as an empty body or a STOW-RS XML
+        // answer, says nothing about the store. It is not a failure here.
+        let parsed_body: Option<serde_json::Value>;
+        let body = match response.normalized_data.as_ref() {
+            Some(body) => body,
+            None => {
+                parsed_body = serde_json::from_slice(&response.original_data).ok();
+                match parsed_body.as_ref() {
+                    Some(body) => body,
+                    None => return Ok(()),
+                }
+            }
+        };
+
+        match body.get("success") {
+            None | Some(serde_json::Value::Bool(true)) => Ok(()),
+            Some(_) => {
+                // The reason is text from another host. It is cut to a fixed
+                // length and written with `{:?}`, which escapes control
+                // characters, so it cannot add lines to the log.
+                let reason: String = body
+                    .get("error")
+                    .and_then(|error| error.as_str())
+                    .unwrap_or("no reason given")
+                    .chars()
+                    .take(MAX_RECEIVER_REASON_CHARS)
+                    .collect();
+                Err(DimseError::operation_failed(format!(
+                    "C-STORE failed: the receiver did not report the instance as stored: {:?}",
+                    reason
+                )))
+            }
+        }
+    }
+
     /// Convert ResponseEnvelope to Vec<DatasetStream>
     ///
     /// Parses the response data and converts it to DICOM datasets.
@@ -781,27 +868,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             self.run(command, body, meta).await?
         };
 
-        // Check for DICOM status in response metadata (set by dicom_to_dicomweb middleware)
-        if let Some(status_str) = response.response_details.metadata.get("dicom_status") {
-            // Parse "0x0000" or "0xC000" format
-            if let Some(hex) = status_str.strip_prefix("0x") {
-                if let Ok(status) = u16::from_str_radix(hex, 16) {
-                    // Check for failure status (0xC000 range indicates failure)
-                    if status >= 0xC000 {
-                        return Err(DimseError::operation_failed(format!(
-                            "C-STORE failed with DICOM status: {}",
-                            status_str
-                        )));
-                    }
-                    // Warning status (0xB000 range) - log but don't fail
-                    if status >= 0xB000 && status < 0xC000 {
-                        tracing::warn!("C-STORE completed with warning status: {}", status_str);
-                    }
-                }
-            }
-        }
-
-        Ok(())
+        Self::check_store_response(&response)
     }
 }
 
@@ -1394,5 +1461,148 @@ module = ""
             .to_bytes()
             .expect("received pixel bytes");
         assert_eq!(received_pixels, source_pixels, "pixel data changed in the round trip");
+    }
+
+    /// The final response of a store pipeline, as `store` sees it.
+    fn store_response(
+        dicom_status: Option<&str>,
+        body: Option<serde_json::Value>,
+    ) -> ResponseEnvelope<Vec<u8>> {
+        let original_data = body
+            .as_ref()
+            .map(|json| serde_json::to_vec(json).expect("serialize body"))
+            .unwrap_or_default();
+        let mut response = ResponseEnvelope::from_backend_with_command(
+            bridge_request_details(),
+            200,
+            HashMap::new(),
+            original_data,
+            None,
+            None,
+        );
+        response.normalized_data = body;
+        if let Some(status) = dicom_status {
+            response
+                .response_details
+                .metadata
+                .insert("dicom_status".to_string(), status.to_string());
+        }
+        response
+    }
+
+    #[test]
+    fn test_store_fails_when_the_receiver_reports_success_false() {
+        // What a receiving Harmony sends back over HTTP 200 when its PACS is
+        // down. No dicom_status crosses the HTTP hop.
+        let response = store_response(
+            None,
+            Some(serde_json::json!({
+                "operation": "store",
+                "success": false,
+                "error": "C-STORE to PACS@10.0.0.5:4242 failed: could not connect to server"
+            })),
+        );
+
+        let error = PipelineQueryProvider::check_store_response(&response)
+            .expect_err("success:false must fail the store");
+        assert!(
+            error.to_string().contains("could not connect to server"),
+            "the error should carry the receiver's reason: {}",
+            error
+        );
+    }
+
+    #[test]
+    fn test_store_fails_when_only_the_raw_body_reports_success_false() {
+        let mut response = store_response(
+            None,
+            Some(serde_json::json!({ "operation": "store", "success": false })),
+        );
+        response.normalized_data = None;
+
+        PipelineQueryProvider::check_store_response(&response)
+            .expect_err("success:false in the raw body must fail the store");
+    }
+
+    #[test]
+    fn test_store_fails_when_success_is_present_and_not_true() {
+        for value in [
+            serde_json::json!(null),
+            serde_json::json!("false"),
+            serde_json::json!(0),
+        ] {
+            let response = store_response(None, Some(serde_json::json!({ "success": value })));
+            assert!(
+                PipelineQueryProvider::check_store_response(&response).is_err(),
+                "success = {} must fail the store",
+                value
+            );
+        }
+    }
+
+    #[test]
+    fn test_store_succeeds_when_nothing_reports_a_failure() {
+        let stored = serde_json::json!({ "operation": "store", "success": true });
+        // A receiver that is not Harmony, such as a STOW-RS server, has no
+        // `success` key in its answer.
+        let stow_rs = serde_json::json!({ "00081199": { "vr": "SQ", "Value": [] } });
+
+        for (dicom_status, body) in [
+            (None, Some(stored.clone())),
+            (Some("0x0000"), Some(stored)),
+            (Some("0x0000"), Some(stow_rs.clone())),
+            (None, Some(stow_rs)),
+            (None, None),
+        ] {
+            let response = store_response(dicom_status, body.clone());
+            assert!(
+                PipelineQueryProvider::check_store_response(&response).is_ok(),
+                "dicom_status {:?} with body {:?} must not fail the store",
+                dicom_status,
+                body
+            );
+        }
+    }
+
+    #[test]
+    fn test_store_fails_on_a_failure_dicom_status_whatever_the_body_says() {
+        let response = store_response(
+            Some("0xC000"),
+            Some(serde_json::json!({ "operation": "store", "success": true })),
+        );
+
+        let error = PipelineQueryProvider::check_store_response(&response)
+            .expect_err("dicom_status 0xC000 must fail the store");
+        assert!(error.to_string().contains("0xC000"), "unexpected error: {}", error);
+    }
+
+    #[test]
+    fn test_store_fails_on_success_false_even_with_a_success_dicom_status() {
+        let response = store_response(
+            Some("0x0000"),
+            Some(serde_json::json!({ "operation": "store", "success": false })),
+        );
+
+        PipelineQueryProvider::check_store_response(&response)
+            .expect_err("success:false must fail the store");
+    }
+
+    #[test]
+    fn test_store_error_keeps_the_receiver_reason_on_one_bounded_line() {
+        let reason = format!("first line\nforged log line {}", "x".repeat(4096));
+        let response = store_response(
+            None,
+            Some(serde_json::json!({ "success": false, "error": reason })),
+        );
+
+        let error = PipelineQueryProvider::check_store_response(&response)
+            .expect_err("success:false must fail the store")
+            .to_string();
+        assert!(!error.contains('\n'), "the reason must not add a line: {}", error);
+        assert!(
+            error.len() < MAX_RECEIVER_REASON_CHARS + 256,
+            "the reason must be cut, got {} bytes",
+            error.len()
+        );
     }
 }
