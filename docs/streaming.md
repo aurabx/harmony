@@ -132,10 +132,10 @@ took the instance. Read `success` to learn the result.
 | `sop_class_uid`, `sop_instance_uid` | Taken from the file, when known |
 
 A `dicom_scp` endpoint that bridged the C-STORE reads this line. When
-`success` is present and is not `true`, it answers the sending device with
-status `0xC000`, so the device keeps the instance and can send it again. The
-`error` text goes to the Harmony log. A response-side transform on either
-Harmony must keep the `success` key, or a failed store is reported as stored.
+`success` is `false`, it answers the sending device with status `0xC000`, so
+the device keeps the instance and can send it again. The `error` text goes to
+the Harmony log. A response-side transform on either Harmony must keep the
+`success` key, or a failed store is reported as stored.
 
 **Transfer syntaxes:** the `transfer_syntaxes` option lists the transfer
 syntaxes proposed for the storage presentation contexts of the C-GET, most

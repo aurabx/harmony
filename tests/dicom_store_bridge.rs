@@ -441,5 +441,10 @@ async fn single_node_pipeline_reports_a_store_the_pacs_did_not_take() {
     let (outcome, stored_file) = send_sample("single_node", "scp_single_node").await;
     std::fs::remove_file(&stored_file).expect("remove the adapter's copy");
 
-    outcome.expect_err("nothing listens on the PACS port, so the store must fail");
+    let error = outcome.expect_err("nothing listens on the PACS port, so the store must fail");
+    assert!(
+        error.to_string().contains("DICOM status: 0xC000"),
+        "the failure should come from the backend's dicom_status: {}",
+        error
+    );
 }

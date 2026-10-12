@@ -442,10 +442,10 @@ impl PipelineQueryProvider {
     /// Two things mark a failed store:
     /// - `dicom_status` in the response metadata. A backend or middleware in
     ///   this process sets it (`dicom_scu_streaming`, `dicom_to_dicomweb`).
-    /// - A `success` key in the response body that is not `true`. A receiving
-    ///   Harmony answers HTTP 200 to a store its PACS did not take and reports
-    ///   the failure only in the body, because response metadata does not
-    ///   cross the HTTP hop.
+    /// - `"success": false` in the response body. A receiving Harmony answers
+    ///   HTTP 200 to a store its PACS did not take and reports the failure
+    ///   only in the body, because response metadata does not cross the HTTP
+    ///   hop.
     fn check_store_response(response: &ResponseEnvelope<Vec<u8>>) -> DimseResult<()> {
         Self::check_store_dicom_status(response)?;
         Self::check_store_body(response)
@@ -476,43 +476,35 @@ impl PipelineQueryProvider {
         Ok(())
     }
 
-    /// Fail the store when the response body is a JSON object whose `success`
-    /// key is anything other than `true`. The receiver's `error` text, when it
-    /// gives one, becomes part of the returned error.
+    /// Fail the store when the JSON response body has `"success": false` at
+    /// the top level. This is how the store backends report a store that did
+    /// not reach its destination. The receiver's `error` text, when it gives
+    /// one, becomes part of the returned error.
+    ///
+    /// A body with no `success` key says nothing about the store, so it is not
+    /// a failure here.
     fn check_store_body(response: &ResponseEnvelope<Vec<u8>>) -> DimseResult<()> {
-        // A body that is not JSON, such as an empty body or a STOW-RS XML
-        // answer, says nothing about the store. It is not a failure here.
-        let parsed_body: Option<serde_json::Value>;
-        let body = match response.normalized_data.as_ref() {
-            Some(body) => body,
-            None => {
-                parsed_body = serde_json::from_slice(&response.original_data).ok();
-                match parsed_body.as_ref() {
-                    Some(body) => body,
-                    None => return Ok(()),
-                }
-            }
+        let Some(body) = response.normalized_data.as_ref() else {
+            return Ok(());
         };
-
-        match body.get("success") {
-            None | Some(serde_json::Value::Bool(true)) => Ok(()),
-            Some(_) => {
-                // The reason is text from another host. It is cut to a fixed
-                // length and written with `{:?}`, which escapes control
-                // characters, so it cannot add lines to the log.
-                let reason: String = body
-                    .get("error")
-                    .and_then(|error| error.as_str())
-                    .unwrap_or("no reason given")
-                    .chars()
-                    .take(MAX_RECEIVER_REASON_CHARS)
-                    .collect();
-                Err(DimseError::operation_failed(format!(
-                    "C-STORE failed: the receiver did not report the instance as stored: {:?}",
-                    reason
-                )))
-            }
+        if body.get("success") != Some(&serde_json::Value::Bool(false)) {
+            return Ok(());
         }
+
+        // The reason is text from another host. It is cut to a fixed length
+        // and written with `{:?}`, which escapes control characters, so it
+        // cannot add lines to the log.
+        let reason: String = body
+            .get("error")
+            .and_then(|error| error.as_str())
+            .unwrap_or("no reason given")
+            .chars()
+            .take(MAX_RECEIVER_REASON_CHARS)
+            .collect();
+        Err(DimseError::operation_failed(format!(
+            "C-STORE failed: the receiver reported that the instance was not stored: {:?}",
+            reason
+        )))
     }
 
     /// Convert ResponseEnvelope to Vec<DatasetStream>
@@ -1512,32 +1504,71 @@ module = ""
         );
     }
 
-    #[test]
-    fn test_store_fails_when_only_the_raw_body_reports_success_false() {
-        let mut response = store_response(
+    // The whole path of a failed store on the bridge, without the network:
+    // the receiving Harmony's own failure response, written as NDJSON, parsed
+    // by the sending Harmony and judged by `store`. If the receiver's
+    // response changes shape, this test fails.
+    #[tokio::test]
+    async fn test_failed_store_on_the_receiving_harmony_fails_the_store_on_the_sender() {
+        use crate::models::services::types::dicom_scu_streaming::DicomScuStreamingBackend;
+        use crate::models::services::types::http_streaming::{HttpStreamingEndpoint, StreamFormat};
+        use crate::models::services::types::http_streaming_backend::HttpStreamingBackend;
+        use bytes::Bytes;
+        use futures_util::StreamExt;
+
+        // Harmony B: the PACS did not take the instance.
+        let not_stored = DicomScuStreamingBackend::build_store_response(
+            &bridge_request_details(),
+            &None,
+            &dimse::config::RemoteNode::new("PACS", "10.0.0.5", 4242),
+            false,
+            Some("C-STORE to PACS@10.0.0.5:4242 failed: could not connect to server".to_string()),
             None,
-            Some(serde_json::json!({ "operation": "store", "success": false })),
+            Some("1.2.3".to_string()),
         );
-        response.normalized_data = None;
 
-        PipelineQueryProvider::check_store_response(&response)
-            .expect_err("success:false in the raw body must fail the store");
-    }
+        // Harmony B: envelope → NDJSON response body
+        let writer = HttpStreamingEndpoint {
+            default_format: None,
+            buffer_size: None,
+            enable_compression: None,
+        };
+        let response = writer
+            .build_streaming_response(
+                Box::pin(futures_util::stream::iter(vec![Ok(not_stored)])),
+                StreamFormat::Ndjson,
+                &HashMap::new(),
+            )
+            .expect("NDJSON response should build");
+        assert_eq!(response.status(), 200, "the receiver answers 200 for a failed store");
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .expect("read NDJSON body");
 
-    #[test]
-    fn test_store_fails_when_success_is_present_and_not_true() {
-        for value in [
-            serde_json::json!(null),
-            serde_json::json!("false"),
-            serde_json::json!(0),
-        ] {
-            let response = store_response(None, Some(serde_json::json!({ "success": value })));
-            assert!(
-                PipelineQueryProvider::check_store_response(&response).is_err(),
-                "success = {} must fail the store",
-                value
-            );
-        }
+        // Harmony A: NDJSON body → the last envelope, which `store` judges
+        let chunks: Vec<Result<Bytes, reqwest::Error>> = vec![Ok(body)];
+        let last = HttpStreamingBackend::parse_ndjson_stream(
+            futures_util::stream::iter(chunks),
+            bridge_request_details(),
+            None,
+        )
+        .collect::<Vec<_>>()
+        .await
+        .pop()
+        .expect("one line in, one envelope out")
+        .expect("NDJSON line should parse");
+        assert!(
+            !last.response_details.metadata.contains_key("dicom_status"),
+            "dicom_status does not cross the HTTP hop, so the body must carry the result"
+        );
+
+        let error = PipelineQueryProvider::check_store_response(&last)
+            .expect_err("a store the receiver could not complete must fail on the sender");
+        assert!(
+            error.to_string().contains("could not connect to server"),
+            "the error should carry the receiver's reason: {}",
+            error
+        );
     }
 
     #[test]
