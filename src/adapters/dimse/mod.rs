@@ -181,6 +181,8 @@ impl DimseAdapter {
             ..Default::default()
         };
 
+        let mut max_dataset_bytes = 0u64;
+
         // Merge settings from all endpoints sharing this listen address
         for ep in endpoints {
             let opts = &ep.options;
@@ -228,6 +230,18 @@ impl DimseAdapter {
                     config.max_pdu = max_pdu_val as u32;
                 }
             }
+
+            // Largest instance: use the largest value across endpoints, as for
+            // max_pdu. An endpoint that does not set the option counts with
+            // the default, so the listener goes below the default only when
+            // every endpoint on it asks for less. The dicom_scp endpoint
+            // validation rejects a value that is not a positive integer
+            // before the adapter starts.
+            let endpoint_limit = opts
+                .get("max_dataset_bytes")
+                .and_then(|v| v.as_u64())
+                .unwrap_or_else(dimse::config::default_max_dataset_bytes);
+            max_dataset_bytes = max_dataset_bytes.max(endpoint_limit);
 
             // Warn if AETs differ across endpoints on the same port
             let ep_aet = opts
@@ -279,6 +293,7 @@ impl DimseAdapter {
             }
         }
 
+        config.max_dataset_bytes = max_dataset_bytes;
         config
     }
 }
@@ -823,5 +838,42 @@ mod tests {
         assert!(cfg.enable_echo, "echo from ep1");
         assert!(cfg.enable_store, "store from ep2");
         assert!(!cfg.enable_get, "get not enabled by either");
+    }
+
+    fn endpoint_with_limit(name: &str, limit: Option<u64>) -> ScpEndpointConfig {
+        let mut options = HashMap::new();
+        options.insert("local_aet".into(), serde_json::json!("SCP"));
+        if let Some(limit) = limit {
+            options.insert("max_dataset_bytes".into(), serde_json::json!(limit));
+        }
+        ScpEndpointConfig {
+            pipeline_name: name.into(),
+            endpoint_name: name.into(),
+            options,
+        }
+    }
+
+    fn merged_limit(endpoints: &[&ScpEndpointConfig]) -> u64 {
+        let addr = IpAddr::from(std::net::Ipv4Addr::LOCALHOST);
+        DimseAdapter::build_merged_config(addr, 11112, endpoints).max_dataset_bytes
+    }
+
+    #[test]
+    fn test_build_merged_config_max_dataset_bytes() {
+        let default = dimse::config::default_max_dataset_bytes();
+        let unset = endpoint_with_limit("unset", None);
+        let small = endpoint_with_limit("small", Some(1_000_000));
+        let smaller = endpoint_with_limit("smaller", Some(500_000));
+        let large = endpoint_with_limit("large", Some(default * 2));
+
+        assert_eq!(merged_limit(&[&unset]), default, "the default applies when unset");
+        assert_eq!(merged_limit(&[&small]), 1_000_000, "one endpoint can go below the default");
+        assert_eq!(merged_limit(&[&small, &smaller]), 1_000_000, "the largest value wins");
+        assert_eq!(
+            merged_limit(&[&small, &unset]),
+            default,
+            "an endpoint that does not set the option counts with the default"
+        );
+        assert_eq!(merged_limit(&[&unset, &large]), default * 2);
     }
 }

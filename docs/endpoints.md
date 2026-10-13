@@ -216,7 +216,10 @@ enable_move = true            # Enable C-MOVE (default: false)
 enable_get = true             # Enable C-GET (default: false)
 enable_store = true           # Enable C-STORE (default: false)
 storage_dir = "./tmp/dimse"  # Storage directory (optional)
+max_dataset_bytes = 4294967296  # Largest instance accepted, in bytes (default: 4 GiB)
 ```
+
+`max_dataset_bytes` limits the data set of one DIMSE message. A C-STORE carries one instance per message, so it is a limit on the size of one instance. Harmony aborts the association when a peer sends more. Endpoints that share a listen address use the largest value any of them sets.
 
 **Supported Operations**:
 - `C-ECHO` - Connectivity test (enabled by default)

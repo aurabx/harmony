@@ -1,177 +1,79 @@
-//! PDU parsing, accumulation, and routing
+//! P-DATA handling: reassembly of DIMSE messages and routing to commands
 
-use dicom_encoding::text::SpecificCharacterSet;
-use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
-use dicom_object::{InMemDicomObject, StandardDataDictionary};
-use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
-use dicom_dictionary_std::{tags, uids};
+use dicom_dictionary_std::tags;
 use dicom_ul::association::server::AsyncServerAssociation;
 use tokio::net::TcpStream;
 use tracing::debug;
 
 use crate::{DimseError, Result};
 
-use super::DimseScp;
 use super::commands;
+use super::message_assembler::{DimseMessage, MessageAssembler};
+use super::DimseScp;
 
-/// Pending command context for commands that expect a dataset
-#[derive(Clone)]
-pub struct PendingCommand {
-    pub command_field: u16,
-    pub message_id: u16,
-    pub move_destination: Option<String>,
-}
-
-/// Handle P-DATA PDU containing DIMSE command
+/// Handle one P-DATA PDU.
+///
+/// Each PDV goes to the assembler. A command is dispatched only when its
+/// message is complete, so a data set that spans several PDUs reaches the
+/// command handler whole.
 pub async fn handle_pdata(
     scp: &DimseScp,
     association: &mut AsyncServerAssociation<TcpStream>,
     pdata: Vec<dicom_ul::pdu::PDataValue>,
-    pending_command: &mut Option<PendingCommand>,
-    accumulated_identifier: &mut Vec<u8>,
+    assembler: &mut MessageAssembler,
 ) -> Result<()> {
-    // Separate command and data PDUs, track presentation context ID
-    let mut command_data = Vec::new();
-    let mut identifier_data = Vec::new();
-    let mut presentation_context_id = 1u8; // Default to 1
-
     for pdata_value in pdata {
-        presentation_context_id = pdata_value.presentation_context_id;
-        match pdata_value.value_type {
-            dicom_ul::pdu::PDataValueType::Command => {
-                command_data.extend_from_slice(&pdata_value.data);
-            }
-            dicom_ul::pdu::PDataValueType::Data => {
-                identifier_data.extend_from_slice(&pdata_value.data);
-            }
+        if let Some(message) = assembler.push(pdata_value)? {
+            dispatch_message(scp, association, message).await?;
         }
     }
+    Ok(())
+}
 
-    // Check if we have command data
-    if command_data.is_empty() {
-        // This is a data-only PDU - accumulate it for pending command
-        if !identifier_data.is_empty() {
-            debug!(
-                "Received data-only P-DATA ({} bytes), accumulating",
-                identifier_data.len()
-            );
-            accumulated_identifier.extend_from_slice(&identifier_data);
-
-            // Check if we have a pending command to dispatch
-            if let Some(ref pending) = *pending_command {
-                // Dispatch the command with accumulated data
-                debug!(
-                    "Dispatching pending command 0x{:04X} with {} bytes of data",
-                    pending.command_field,
-                    accumulated_identifier.len()
-                );
-                commands::dispatch_command(
-                    scp,
-                    association,
-                    pending.command_field,
-                    pending.message_id,
-                    accumulated_identifier.clone(),
-                    presentation_context_id,
-                    pending.move_destination.clone(),
-                )
-                .await?;
-                *pending_command = None;
-                accumulated_identifier.clear();
-            }
-        }
-        return Ok(());
-    }
-
-    // Parse the command dataset using Implicit VR Little Endian (DICOM command PDUs use this)
-    let ts = TransferSyntaxRegistry
-        .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
-        .ok_or_else(|| DimseError::parse("Implicit VR Little Endian TS not found"))?;
-
-    let cursor = std::io::Cursor::new(&command_data);
-    let command_obj = InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
-        cursor,
-        ts,
-        SpecificCharacterSet::default(),
-    )
-    .map_err(|e| {
-        DimseError::parse(format!(
-            "Failed to parse command dataset ({} bytes): {}",
-            command_data.len(),
-            e
-        ))
-    })?;
-
-    // Extract command field to determine operation type
-    let command_field = command_obj
+/// Read the routing fields of a complete message and run its command.
+async fn dispatch_message(
+    scp: &DimseScp,
+    association: &mut AsyncServerAssociation<TcpStream>,
+    message: DimseMessage,
+) -> Result<()> {
+    let command_field = message
+        .command
         .element(tags::COMMAND_FIELD)
         .map_err(|_| DimseError::parse("Missing command field"))?
         .uint16()
         .map_err(|e| DimseError::parse(format!("Invalid command field: {}", e)))?;
 
-    // Extract message ID for response correlation
-    let message_id = command_obj
+    // The message ID correlates the response with the request.
+    let message_id = message
+        .command
         .element(tags::MESSAGE_ID)
         .map_err(|_| DimseError::parse("Missing message ID"))?
         .uint16()
         .map_err(|e| DimseError::parse(format!("Invalid message ID: {}", e)))?;
 
-    // Extract MoveDestination for C-MOVE requests (tag 0000,0600)
-    let move_destination = command_obj
+    // Only C-MOVE requests carry MoveDestination (0000,0600).
+    let move_destination = message
+        .command
         .element(tags::MOVE_DESTINATION)
         .ok()
         .and_then(|e| e.to_str().ok())
         .map(|s| s.trim().to_string());
 
     debug!(
-        "Received DIMSE command: 0x{:04X}, message ID: {}, move_dest: {:?}",
-        command_field, message_id, move_destination
+        "Dispatching DIMSE command 0x{:04X}, message ID: {}, move_dest: {:?}, data set: {} bytes",
+        command_field,
+        message_id,
+        move_destination,
+        message.data.len()
     );
 
-    // Check if this command expects a dataset
-    let expects_dataset = command_obj
-        .element(tags::COMMAND_DATA_SET_TYPE)
-        .ok()
-        .and_then(|e| e.uint16().ok())
-        .map(|v| v != 0x0101) // 0x0101 = no dataset present
-        .unwrap_or(false);
-
-    // If we have identifier data in this PDU, use it immediately
-    if !identifier_data.is_empty() {
-        debug!(
-            "Command has {} bytes of identifier data in same PDU",
-            identifier_data.len()
-        );
-        return commands::dispatch_command(
-            scp,
-            association,
-            command_field,
-            message_id,
-            identifier_data,
-            presentation_context_id,
-            move_destination,
-        )
-        .await;
-    }
-
-    // If command expects dataset but we don't have it yet, buffer the command
-    if expects_dataset {
-        debug!("Command expects dataset, buffering command for next PDU");
-        *pending_command = Some(PendingCommand {
-            command_field,
-            message_id,
-            move_destination,
-        });
-        return Ok(());
-    }
-
-    // No dataset expected, dispatch immediately
     commands::dispatch_command(
         scp,
         association,
         command_field,
         message_id,
-        Vec::new(),
-        presentation_context_id,
+        message.data,
+        message.presentation_context_id,
         move_destination,
     )
     .await
