@@ -1,6 +1,6 @@
 # Policies Middleware
 
-**Last Updated**: 2025-01-14
+**Last Updated**: 2026-10-13
 
 The policies middleware provides comprehensive policy-based access control, rate limiting, and request filtering through a flexible rule system.
 
@@ -198,6 +198,23 @@ ip_addresses = ["203.0.113.0/24"]
 - `weight` (integer, default: 0): Priority for evaluation order
 - `enabled` (boolean, default: true): Whether rule is active
 - `options` (table, varies): Rule-specific configuration
+
+### Undefined Rule and Policy Ids
+
+Harmony checks rule and policy ids when it loads the config.
+
+- Every id in a policy's `rules` list must be a key in `[rules]`.
+- Every id in a `policies` middleware instance's `policies` list must be a key in `[policies]`.
+- Disabled policies are checked too.
+
+An undefined id fails the load. The error has one line per bad id. Each line names the policy or middleware instance, the undefined id and the ids that are defined:
+
+```
+Policy 'office' references unknown rule 'missing_rule'. Available rules: internal_networks, method_filter
+Middleware 'access' references unknown policy 'missing_policy'. Available policies: office, vpn
+```
+
+At startup and with `--validate-config`, Harmony prints the error on stderr and exits with code 1. On hot reload, Harmony rejects the file and keeps the previous config.
 
 ## Rule Types
 
