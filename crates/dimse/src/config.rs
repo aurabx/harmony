@@ -329,9 +329,11 @@ fn default_max_pdu() -> u32 {
     65536
 }
 
-/// 4 GiB.
+/// 1 GiB. The SCP holds each instance in memory and copies it several times
+/// while it stores it, so the default stays well below the memory of a small
+/// host. Sites that receive larger instances raise it.
 pub fn default_max_dataset_bytes() -> u64 {
-    4 * 1024 * 1024 * 1024
+    1024 * 1024 * 1024
 }
 
 fn default_connect_timeout() -> u64 {
