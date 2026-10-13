@@ -53,6 +53,9 @@ pub async fn handle_c_store(
         SpecificCharacterSet::default(),
     )
     .map_err(|e| DimseError::parse(format!("Failed to parse C-STORE dataset: {}", e)))?;
+    // The parsed object holds its own copy of every value. Free the encoded
+    // bytes now, so a large instance is not held twice while it is stored.
+    drop(dataset_data);
 
     // The parsed object keeps encapsulated pixel data as it arrived, so the
     // transfer syntax must travel with it. Without it a later writer would

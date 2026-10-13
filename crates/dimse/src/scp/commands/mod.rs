@@ -63,6 +63,27 @@ pub fn extract_query_parameters(
     (query_level, parameters)
 }
 
+const C_STORE_RQ: u16 = 0x0001;
+const C_GET_RQ: u16 = 0x0010;
+const C_FIND_RQ: u16 = 0x0020;
+const C_MOVE_RQ: u16 = 0x0021;
+
+/// The command fields whose data set the SCP reads, given what is enabled.
+///
+/// C-ECHO carries no data set, so it is never listed.
+pub fn commands_with_data_sets(config: &crate::config::DimseConfig) -> Vec<u16> {
+    [
+        (config.enable_store, C_STORE_RQ),
+        (config.enable_get, C_GET_RQ),
+        (config.enable_find, C_FIND_RQ),
+        (config.enable_move, C_MOVE_RQ),
+    ]
+    .into_iter()
+    .filter(|(enabled, _)| *enabled)
+    .map(|(_, command_field)| command_field)
+    .collect()
+}
+
 /// Dispatch a DIMSE command to the appropriate handler
 pub async fn dispatch_command(
     scp: &DimseScp,

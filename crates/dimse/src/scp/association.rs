@@ -11,7 +11,9 @@ use tracing::{error, info, warn};
 use crate::{DimseError, Result};
 
 use super::DimseScp;
-use super::pdu_handler::{self, PendingCommand};
+use super::commands;
+use super::message_assembler::MessageAssembler;
+use super::pdu_handler;
 
 /// Handle a single association
 pub async fn handle_association(
@@ -62,9 +64,12 @@ async fn handle_association_inner(
         association.requestor_max_pdu_length()
     );
 
-    // Buffer for accumulating identifier data across multiple PDUs
-    let mut pending_command: Option<PendingCommand> = None;
-    let mut accumulated_identifier = Vec::new();
+    // A DIMSE message can span several PDUs, so its fragments are collected
+    // across iterations of the loop below.
+    let mut assembler = MessageAssembler::new(
+        scp.config.max_dataset_bytes,
+        commands::commands_with_data_sets(&scp.config),
+    );
 
     // Process PDUs until association is released or aborted
     loop {
@@ -75,8 +80,7 @@ async fn handle_association_inner(
                     scp,
                     &mut association,
                     data,
-                    &mut pending_command,
-                    &mut accumulated_identifier,
+                    &mut assembler,
                 )
                 .await
                 {

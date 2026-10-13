@@ -2,6 +2,7 @@
 
 pub mod association;
 pub mod commands;
+pub mod message_assembler;
 pub mod pdu_handler;
 pub mod query_provider;
 pub mod response_builder;

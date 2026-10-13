@@ -33,6 +33,16 @@ pub struct DimseConfig {
     #[serde(default = "default_max_pdu")]
     pub max_pdu: u32,
 
+    /// Largest data set, in bytes, that the SCP accepts in one DIMSE
+    /// message. A C-STORE carries one instance per message, so this is a
+    /// limit on the size of one instance. DICOM sets no such limit; it stops
+    /// a peer from making the SCP buffer fragments without end.
+    ///
+    /// It is not a limit on memory. Each association buffers one data set,
+    /// and an instance is copied several times while it is stored.
+    #[serde(default = "default_max_dataset_bytes")]
+    pub max_dataset_bytes: u64,
+
     /// Connection timeout in milliseconds
     #[serde(default = "default_connect_timeout")]
     pub connect_timeout_ms: u64,
@@ -143,6 +153,7 @@ impl Default for DimseConfig {
             port: default_port(),
             incoming_store_port: default_incoming_store_port(),
             max_pdu: default_max_pdu(),
+            max_dataset_bytes: default_max_dataset_bytes(),
             connect_timeout_ms: default_connect_timeout(),
             association_timeout_ms: default_association_timeout(),
             storage_dir: default_storage_dir(),
@@ -197,6 +208,12 @@ impl DimseConfig {
         if self.max_pdu < 16384 || self.max_pdu > 131072 {
             return Err(crate::error::DimseError::config(
                 "Max PDU size must be between 16384 and 131072 bytes",
+            ));
+        }
+
+        if self.max_dataset_bytes == 0 {
+            return Err(crate::error::DimseError::config(
+                "max_dataset_bytes must be greater than 0",
             ));
         }
 
@@ -310,6 +327,14 @@ fn default_incoming_store_port() -> u16 {
 
 fn default_max_pdu() -> u32 {
     65536
+}
+
+/// 4 GiB, so that large breast tomosynthesis instances are accepted without
+/// configuration. The SCP holds each instance in memory and copies it several
+/// times while it stores it (AURA-2499), so a host that cannot hold several
+/// times this value should set a lower limit.
+pub fn default_max_dataset_bytes() -> u64 {
+    4 * 1024 * 1024 * 1024
 }
 
 fn default_connect_timeout() -> u64 {

@@ -131,6 +131,20 @@ impl ServiceType for DicomScpEndpoint {
             }
         }
 
+        // A limit of zero would refuse every message, and a value of another
+        // type would be ignored, which leaves the default in force unnoticed.
+        if let Some(limit) = options.get("max_dataset_bytes") {
+            if !limit.as_u64().is_some_and(|bytes| bytes > 0) {
+                return Err(ConfigError::InvalidEndpoint {
+                    name: "dicom_scp".to_string(),
+                    reason: format!(
+                        "max_dataset_bytes must be a whole number of bytes greater than 0, got {}",
+                        limit
+                    ),
+                });
+            }
+        }
+
         // Ensure at least one operation is enabled
         let enable_echo = options
             .get("enable_echo")
@@ -331,6 +345,44 @@ mod tests {
 
         let options = HashMap::new();
         assert!(scp.validate(&options).is_ok());
+    }
+
+    #[test]
+    fn test_scp_validation_max_dataset_bytes() {
+        let scp = DicomScpEndpoint {
+            local_aet: Some("TEST_SCP".to_string()),
+            bind_addr: Some("127.0.0.1".to_string()),
+            port: Some(11112),
+            enable_echo: Some(true),
+            enable_find: None,
+            enable_move: None,
+            enable_get: None,
+            enable_store: None,
+            storage_dir: None,
+        };
+
+        let with_limit = |limit: Value| {
+            let mut options = HashMap::new();
+            options.insert("max_dataset_bytes".to_string(), limit);
+            scp.validate(&options)
+        };
+
+        assert!(with_limit(serde_json::json!(1)).is_ok());
+        assert!(with_limit(serde_json::json!(8_589_934_592u64)).is_ok());
+        for invalid in [
+            serde_json::json!(0),
+            serde_json::json!(-1),
+            serde_json::json!(1.5),
+            serde_json::json!("4GB"),
+        ] {
+            let error = with_limit(invalid.clone()).expect_err("an invalid limit must be rejected");
+            assert!(
+                format!("{:?}", error).contains("max_dataset_bytes"),
+                "the error for {} should name the option: {:?}",
+                invalid,
+                error
+            );
+        }
     }
 
     #[test]
