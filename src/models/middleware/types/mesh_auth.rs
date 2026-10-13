@@ -414,8 +414,9 @@ impl MeshAuthMiddleware {
         let mut validation = Validation::new(Algorithm::RS256);
         validation.validate_exp = true;
         validation.leeway = 60; // 60 second leeway
-        // Runbeam tokens include mesh_id as the issuer, so we don't validate iss here
-        validation.set_issuer::<String>(&[]);
+        // The issuer is deliberately left unset, which skips the `iss` check.
+        // Runbeam tokens carry the mesh id as issuer and `mesh_id` is compared
+        // below. An empty issuer set would reject every token with an `iss`.
 
         let token_data = decode::<MeshClaims>(token, &decoding_key, &validation)
             .map_err(|e| {
@@ -1006,6 +1007,126 @@ mod tests {
                     .unwrap()
                     .headers
                     .contains_key("Authorization")
+        );
+    }
+
+    const RUNBEAM_MESH_ID: &str = "mesh-01HZX";
+    const RUNBEAM_KID: &str = "runbeam-test-key";
+
+    /// Serve a JWKS document holding `public_key` under `RUNBEAM_KID`.
+    async fn start_jwks_server(public_key: &rsa::RsaPublicKey) -> String {
+        use base64::Engine;
+        use rsa::traits::PublicKeyParts;
+
+        let b64 = base64::engine::general_purpose::URL_SAFE_NO_PAD;
+        let jwks = serde_json::json!({
+            "keys": [{
+                "kty": "RSA",
+                "kid": RUNBEAM_KID,
+                "alg": "RS256",
+                "n": b64.encode(public_key.n().to_bytes_be()),
+                "e": b64.encode(public_key.e().to_bytes_be()),
+            }]
+        });
+        let app = axum::Router::new().route(
+            "/jwks.json",
+            axum::routing::get(move || {
+                let jwks = jwks.clone();
+                async move { axum::Json(jwks) }
+            }),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let url = format!("http://{}/jwks.json", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        url
+    }
+
+    /// Sign an RS256 token shaped like the ones Runbeam Cloud issues.
+    fn sign_runbeam_token(private_key: &rsa::RsaPrivateKey, mesh_id: &str) -> String {
+        use rsa::pkcs8::EncodePrivateKey;
+
+        let pem = private_key
+            .to_pkcs8_pem(rsa::pkcs8::LineEnding::LF)
+            .unwrap();
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs() as i64;
+        let claims = MeshClaims {
+            sub: Some("peer-proxy".to_string()),
+            iss: mesh_id.to_string(),
+            aud: None,
+            iat: now,
+            exp: now + 300,
+            mesh_id: mesh_id.to_string(),
+        };
+        let mut header = Header::new(Algorithm::RS256);
+        header.kid = Some(RUNBEAM_KID.to_string());
+        encode(
+            &header,
+            &claims,
+            &EncodingKey::from_rsa_pem(pem.as_bytes()).unwrap(),
+        )
+        .unwrap()
+    }
+
+    async fn runbeam_ingress(private_key: &rsa::RsaPrivateKey) -> MeshAuthMiddleware {
+        let jwks_url = start_jwks_server(&private_key.to_public_key()).await;
+        MeshAuthMiddleware::for_ingress(
+            "runbeam-mesh".to_string(),
+            Some(RUNBEAM_MESH_ID.to_string()),
+            MeshProvider::Runbeam,
+            None,
+            None,
+            Some(jwks_url),
+        )
+        .unwrap()
+    }
+
+    #[tokio::test]
+    async fn test_runbeam_ingress_accepts_token_with_issuer() {
+        let private_key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
+        let ingress_mw = runbeam_ingress(&private_key).await;
+        let jwt = sign_runbeam_token(&private_key, RUNBEAM_MESH_ID);
+
+        let envelope = create_test_request_envelope_with_auth(Some(&format!("Bearer {}", jwt)));
+        let processed = ingress_mw
+            .left(envelope)
+            .await
+            .expect("a valid Runbeam token should pass");
+
+        assert_eq!(
+            processed.request_details.metadata.get("mesh_auth_issuer"),
+            Some(&RUNBEAM_MESH_ID.to_string())
+        );
+    }
+
+    #[tokio::test]
+    async fn test_runbeam_ingress_rejects_mesh_id_mismatch() {
+        let private_key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
+        let ingress_mw = runbeam_ingress(&private_key).await;
+        let jwt = sign_runbeam_token(&private_key, "some-other-mesh");
+
+        let envelope = create_test_request_envelope_with_auth(Some(&format!("Bearer {}", jwt)));
+        assert_eq!(
+            expect_auth_failure(ingress_mw.left(envelope).await),
+            "Mesh JWT mesh_id mismatch"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_runbeam_ingress_rejects_token_signed_with_other_key() {
+        let private_key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
+        let other_key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
+        let ingress_mw = runbeam_ingress(&private_key).await;
+        let jwt = sign_runbeam_token(&other_key, RUNBEAM_MESH_ID);
+
+        let envelope = create_test_request_envelope_with_auth(Some(&format!("Bearer {}", jwt)));
+        assert_eq!(
+            expect_auth_failure(ingress_mw.left(envelope).await),
+            "Invalid mesh JWT"
         );
     }
 
