@@ -87,44 +87,106 @@ pub(crate) fn transfer_syntaxes_to_propose(
     Ok(proposal)
 }
 
-/// Whether the Pixel Data of `object` is encapsulated: a sequence of
-/// compressed fragments instead of native pixel values.
-pub(crate) fn has_encapsulated_pixel_data(object: &InMemDicomObject<StandardDataDictionary>) -> bool {
-    object
-        .element(tags::PIXEL_DATA)
-        .is_ok_and(|element| matches!(element.value(), Value::PixelSequence(_)))
+/// The form the Pixel Data element (7FE0,0010) of an instance has.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum PixelDataForm {
+    /// The instance has no Pixel Data element, for example a structured
+    /// report.
+    Absent,
+    /// Pixel values as they are, with no encapsulation.
+    Native,
+    /// A sequence of compressed fragments.
+    Encapsulated,
+}
+
+impl PixelDataForm {
+    fn describe(self) -> &'static str {
+        match self {
+            Self::Absent => "no",
+            Self::Native => "native",
+            Self::Encapsulated => "encapsulated",
+        }
+    }
+}
+
+/// The form of the top-level Pixel Data element of `object`.
+pub(crate) fn pixel_data_form(object: &InMemDicomObject<StandardDataDictionary>) -> PixelDataForm {
+    match object.element(tags::PIXEL_DATA) {
+        Ok(element) if matches!(element.value(), Value::PixelSequence(_)) => {
+            PixelDataForm::Encapsulated
+        }
+        Ok(_) => PixelDataForm::Native,
+        // `element` fails only when the object has no such element.
+        Err(_) => PixelDataForm::Absent,
+    }
 }
 
 /// Refuse an instance whose pixel data would not match the transfer syntax
-/// it is sent in.
+/// it is sent in. Pixel data is sent as it is and is never transcoded.
 ///
-/// Encapsulated pixel data is sent as it is, so it is only valid in the
-/// transfer syntax of the instance. The check fails when the negotiated
-/// transfer syntax is a different one, or when the instance has no recorded
-/// transfer syntax. Native pixel data is re-encoded and always passes.
+/// - No Pixel Data element: always passes. Nothing in the data set depends on
+///   the pixel encoding, so the instance is valid in any transfer syntax,
+///   including an encapsulated one.
+/// - Encapsulated pixel data: the negotiated transfer syntax must be the
+///   recorded transfer syntax of the instance, and it must be an encapsulated
+///   one. An instance with no recorded transfer syntax is refused.
+/// - Native pixel data: the negotiated transfer syntax must not be an
+///   encapsulated one.
+///
+/// Fails as well when the negotiated transfer syntax is not in the registry.
 pub(crate) fn check_pixel_data_matches_negotiated(
     sop_instance_uid: &str,
-    encapsulated_pixel_data: bool,
+    pixel_data: PixelDataForm,
     instance_transfer_syntax: Option<&str>,
     negotiated_transfer_syntax: &str,
 ) -> Result<()> {
-    if !encapsulated_pixel_data {
+    if pixel_data == PixelDataForm::Absent {
         return Ok(());
     }
     let negotiated = trim_uid(negotiated_transfer_syntax);
-    match instance_transfer_syntax.map(trim_uid) {
-        Some(instance_ts) if instance_ts == negotiated => Ok(()),
-        Some(instance_ts) => Err(DimseError::operation_failed(format!(
-            "Instance {} has encapsulated pixel data in transfer syntax {}, but the C-STORE was negotiated in {}. \
-             The pixel data is not transcoded, so the instance was not sent",
-            sop_instance_uid, instance_ts, negotiated
-        ))),
-        None => Err(DimseError::operation_failed(format!(
-            "Instance {} has encapsulated pixel data and no recorded transfer syntax, \
-             so it cannot be sent in the negotiated transfer syntax {}. The instance was not sent",
-            sop_instance_uid, negotiated
-        ))),
+
+    if pixel_data == PixelDataForm::Encapsulated {
+        match instance_transfer_syntax.map(trim_uid) {
+            Some(instance_ts) if instance_ts == negotiated => {}
+            Some(instance_ts) => {
+                return Err(DimseError::operation_failed(format!(
+                    "Instance {} has encapsulated pixel data in transfer syntax {}, but the C-STORE was negotiated in {}. \
+                     The pixel data is not transcoded, so the instance was not sent",
+                    sop_instance_uid, instance_ts, negotiated
+                )))
+            }
+            None => {
+                return Err(DimseError::operation_failed(format!(
+                    "Instance {} has encapsulated pixel data and no recorded transfer syntax, \
+                     so it cannot be sent in the negotiated transfer syntax {}. The instance was not sent",
+                    sop_instance_uid, negotiated
+                )))
+            }
+        }
     }
+
+    let negotiated_is_encapsulated = TransferSyntaxRegistry
+        .get(negotiated)
+        .ok_or_else(|| {
+            DimseError::operation_failed(format!(
+                "The C-STORE of instance {} was negotiated in transfer syntax {}, which is not known. \
+                 The instance was not sent",
+                sop_instance_uid, negotiated
+            ))
+        })?
+        .is_encapsulated_pixel_data();
+
+    if (pixel_data == PixelDataForm::Encapsulated) == negotiated_is_encapsulated {
+        return Ok(());
+    }
+    Err(DimseError::operation_failed(format!(
+        "Instance {} has {} pixel data, but the negotiated transfer syntax {} takes {} pixel data. \
+         The pixel data is not transcoded, so the instance was not sent",
+        sop_instance_uid,
+        pixel_data.describe(),
+        negotiated,
+        if negotiated_is_encapsulated { "encapsulated" } else { "native" }
+    )))
 }
 
 /// Read the instance to send from `dataset`: the DICOM object, its SOP UIDs
@@ -252,7 +314,7 @@ pub async fn handle_store(
 
     if let Err(e) = check_pixel_data_matches_negotiated(
         &sop_instance_uid,
-        has_encapsulated_pixel_data(&dicom_obj),
+        pixel_data_form(&dicom_obj),
         instance_transfer_syntax.as_deref(),
         &negotiated_transfer_syntax,
     ) {
@@ -399,6 +461,8 @@ mod tests {
     use dicom_core::value::PixelFragmentSequence;
 
     const JPEG_LOSSLESS_SV1: &str = "1.2.840.10008.1.2.4.70";
+    // Retired, so the dictionary constant is deprecated. Devices still send it.
+    const EXPLICIT_VR_BIG_ENDIAN: &str = "1.2.840.10008.1.2.2";
 
     fn object_with_pixel_data(value: Value<InMemDicomObject, Vec<u8>>, vr: VR) -> InMemDicomObject {
         let mut object = InMemDicomObject::new_empty();
@@ -468,6 +532,17 @@ mod tests {
     }
 
     #[test]
+    fn proposes_big_endian_then_implicit_vr_for_a_big_endian_instance() {
+        assert_eq!(
+            transfer_syntaxes_to_propose(Some(EXPLICIT_VR_BIG_ENDIAN)).unwrap(),
+            vec![
+                EXPLICIT_VR_BIG_ENDIAN,
+                uids::IMPLICIT_VR_LITTLE_ENDIAN
+            ]
+        );
+    }
+
+    #[test]
     fn proposal_drops_the_padding_of_a_recorded_uid() {
         assert_eq!(
             transfer_syntaxes_to_propose(Some("1.2.840.10008.1.2.4.70\0")).unwrap(),
@@ -489,41 +564,122 @@ mod tests {
     fn a_pixel_sequence_is_encapsulated_pixel_data() {
         let fragments = PixelFragmentSequence::new_fragments(vec![vec![1u8, 2, 3, 4]]);
         let object = object_with_pixel_data(Value::PixelSequence(fragments), VR::OB);
-        assert!(has_encapsulated_pixel_data(&object));
+        assert_eq!(pixel_data_form(&object), PixelDataForm::Encapsulated);
     }
 
     #[test]
-    fn native_pixel_values_are_not_encapsulated_pixel_data() {
+    fn pixel_values_are_native_pixel_data() {
         let object = object_with_pixel_data(
             Value::Primitive(PrimitiveValue::from(vec![1u8, 2, 3, 4])),
             VR::OB,
         );
-        assert!(!has_encapsulated_pixel_data(&object));
+        assert_eq!(pixel_data_form(&object), PixelDataForm::Native);
     }
 
     #[test]
-    fn an_object_without_pixel_data_has_no_encapsulated_pixel_data() {
-        assert!(!has_encapsulated_pixel_data(&InMemDicomObject::new_empty()));
+    fn an_object_without_the_element_has_no_pixel_data() {
+        assert_eq!(
+            pixel_data_form(&InMemDicomObject::new_empty()),
+            PixelDataForm::Absent
+        );
     }
 
     #[test]
-    fn native_pixel_data_may_be_sent_in_any_negotiated_syntax() {
-        check_pixel_data_matches_negotiated(
+    fn native_pixel_data_may_be_sent_in_any_uncompressed_syntax() {
+        for recorded in [Some(uids::EXPLICIT_VR_LITTLE_ENDIAN), None] {
+            for negotiated in [
+                uids::IMPLICIT_VR_LITTLE_ENDIAN,
+                uids::EXPLICIT_VR_LITTLE_ENDIAN,
+                EXPLICIT_VR_BIG_ENDIAN,
+            ] {
+                check_pixel_data_matches_negotiated(
+                    "1.2.3",
+                    PixelDataForm::Native,
+                    recorded,
+                    negotiated,
+                )
+                .expect("native pixel data is re-encoded");
+            }
+        }
+    }
+
+    #[test]
+    fn native_pixel_data_is_refused_in_a_compressed_syntax() {
+        // The instance is labelled JPEG Lossless but holds pixel values.
+        let error = check_pixel_data_matches_negotiated(
             "1.2.3",
-            false,
-            Some(uids::EXPLICIT_VR_LITTLE_ENDIAN),
-            uids::IMPLICIT_VR_LITTLE_ENDIAN,
+            PixelDataForm::Native,
+            Some(JPEG_LOSSLESS_SV1),
+            JPEG_LOSSLESS_SV1,
         )
-        .expect("native pixel data is re-encoded");
-        check_pixel_data_matches_negotiated("1.2.3", false, None, uids::IMPLICIT_VR_LITTLE_ENDIAN)
-            .expect("native pixel data is re-encoded");
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "DIMSE operation failed: Instance 1.2.3 has native pixel data, but the negotiated \
+             transfer syntax 1.2.840.10008.1.2.4.70 takes encapsulated pixel data. \
+             The pixel data is not transcoded, so the instance was not sent"
+        );
+    }
+
+    #[test]
+    fn encapsulated_pixel_data_is_refused_in_an_uncompressed_syntax_it_is_labelled_with() {
+        // The instance is labelled Explicit VR Little Endian but holds
+        // compressed fragments.
+        let error = check_pixel_data_matches_negotiated(
+            "1.2.3",
+            PixelDataForm::Encapsulated,
+            Some(uids::EXPLICIT_VR_LITTLE_ENDIAN),
+            uids::EXPLICIT_VR_LITTLE_ENDIAN,
+        )
+        .unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "DIMSE operation failed: Instance 1.2.3 has encapsulated pixel data, but the \
+             negotiated transfer syntax 1.2.840.10008.1.2.1 takes native pixel data. \
+             The pixel data is not transcoded, so the instance was not sent"
+        );
+    }
+
+    #[test]
+    fn an_instance_without_pixel_data_may_be_sent_in_any_syntax() {
+        for recorded in [Some(JPEG_LOSSLESS_SV1), Some(uids::EXPLICIT_VR_LITTLE_ENDIAN), None] {
+            for negotiated in [
+                JPEG_LOSSLESS_SV1,
+                uids::EXPLICIT_VR_LITTLE_ENDIAN,
+                uids::IMPLICIT_VR_LITTLE_ENDIAN,
+            ] {
+                check_pixel_data_matches_negotiated(
+                    "1.2.3",
+                    PixelDataForm::Absent,
+                    recorded,
+                    negotiated,
+                )
+                .expect("there is no pixel data to mismatch");
+            }
+        }
+    }
+
+    #[test]
+    fn pixel_data_is_refused_in_a_negotiated_syntax_the_registry_does_not_know() {
+        let error = check_pixel_data_matches_negotiated(
+            "1.2.3",
+            PixelDataForm::Native,
+            None,
+            "1.2.3.4.5.999",
+        )
+        .unwrap_err();
+        assert!(
+            error.to_string().contains("1.2.3.4.5.999"),
+            "the error should name the transfer syntax: {}",
+            error
+        );
     }
 
     #[test]
     fn encapsulated_pixel_data_may_be_sent_in_its_own_syntax() {
         check_pixel_data_matches_negotiated(
             "1.2.3",
-            true,
+            PixelDataForm::Encapsulated,
             Some("1.2.840.10008.1.2.4.70\0"),
             JPEG_LOSSLESS_SV1,
         )
@@ -534,7 +690,7 @@ mod tests {
     fn encapsulated_pixel_data_is_refused_in_another_syntax() {
         let error = check_pixel_data_matches_negotiated(
             "1.2.3",
-            true,
+            PixelDataForm::Encapsulated,
             Some(JPEG_LOSSLESS_SV1),
             uids::IMPLICIT_VR_LITTLE_ENDIAN,
         )
@@ -551,7 +707,7 @@ mod tests {
     fn encapsulated_pixel_data_is_refused_without_a_recorded_syntax() {
         let error = check_pixel_data_matches_negotiated(
             "1.2.3",
-            true,
+            PixelDataForm::Encapsulated,
             None,
             uids::IMPLICIT_VR_LITTLE_ENDIAN,
         )

@@ -348,6 +348,13 @@ PACS in the transfer syntax it was received in. If the PACS does not accept
 that transfer syntax, the store fails and nothing is sent. The error names the
 SOP class and the transfer syntax.
 
+The backend checks the pixel data against the negotiated transfer syntax
+before it sends anything. It refuses an instance whose label and pixel data
+disagree: compressed fragments under an uncompressed transfer syntax, or
+uncompressed pixel values under a compressed one. The error names the
+negotiated transfer syntax and the form of the pixel data. An instance with no
+pixel data, such as a structured report, is sent in any transfer syntax.
+
 A `dicom_scp` endpoint in the same pipeline records the transfer syntax it
 negotiated with the sending device, so the instance keeps it on the way to the
 PACS.

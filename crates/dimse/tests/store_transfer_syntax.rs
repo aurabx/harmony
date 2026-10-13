@@ -12,8 +12,10 @@ use std::sync::{Arc, Mutex};
 use dicom_core::value::{PixelFragmentSequence, Value};
 use dicom_core::{DataElement, PrimitiveValue, VR};
 use dicom_dictionary_std::{tags, uids};
+use dicom_object::meta::FileMetaTableBuilder;
 use dicom_object::InMemDicomObject;
 use dicom_ul::association::server::ServerAssociationOptions;
+use dicom_ul::pdu::PresentationContextResultReason;
 use dicom_ul::Pdu;
 use dimse::scp::QueryProvider;
 use dimse::types::{
@@ -320,16 +322,132 @@ async fn encapsulated_pixel_data_without_a_recorded_transfer_syntax_is_not_sent(
     );
 }
 
+#[tokio::test]
+async fn a_compressed_part10_file_arrives_in_its_own_transfer_syntax() {
+    let (port, received, _storage_dir) = start_recording_scp().await;
+
+    let dir = tempfile::tempdir().expect("temp dir");
+    let path = dir.path().join("compressed.dcm");
+    instance_with_encapsulated_pixel_data()
+        .with_meta(FileMetaTableBuilder::new().transfer_syntax(JPEG_LOSSLESS_SV1))
+        .expect("file meta group")
+        .write_to_file(&path)
+        .expect("write the Part 10 file");
+
+    // The metadata records no transfer syntax. The SCU must read it from the
+    // file meta group.
+    let stored = scu()
+        .store(
+            &node("RECORDING", port),
+            DatasetStream::from_file(path, false),
+        )
+        .await
+        .expect("the SCP accepts every transfer syntax");
+    assert!(stored);
+
+    let received = received.lock().unwrap();
+    assert_eq!(received.len(), 1, "the SCP should hold exactly one instance");
+    assert_eq!(
+        received[0].transfer_syntax.as_deref(),
+        Some(JPEG_LOSSLESS_SV1)
+    );
+    assert_eq!(pixel_fragments(&received[0].object), fragments());
+}
+
+#[tokio::test]
+async fn encapsulated_pixel_data_labelled_as_uncompressed_is_not_sent() {
+    let (port, received, _storage_dir) = start_recording_scp().await;
+
+    let error = scu()
+        .store(
+            &node("RECORDING", port),
+            dataset(
+                instance_with_encapsulated_pixel_data(),
+                Some(uids::EXPLICIT_VR_LITTLE_ENDIAN),
+            ),
+        )
+        .await
+        .expect_err("Explicit VR Little Endian cannot carry compressed fragments");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("has encapsulated pixel data")
+            && message.contains("1.2.840.10008.1.2.1 takes native pixel data"),
+        "the error should name the negotiated syntax and the form of the pixel data: {}",
+        message
+    );
+    assert!(
+        received.lock().unwrap().is_empty(),
+        "nothing should reach the SCP"
+    );
+}
+
+#[tokio::test]
+async fn native_pixel_data_labelled_as_compressed_is_not_sent() {
+    let (port, received, _storage_dir) = start_recording_scp().await;
+
+    let error = scu()
+        .store(
+            &node("RECORDING", port),
+            dataset(instance_with_native_pixel_data(), Some(JPEG_LOSSLESS_SV1)),
+        )
+        .await
+        .expect_err("JPEG Lossless cannot carry native pixel values");
+
+    let message = error.to_string();
+    assert!(
+        message.contains("has native pixel data")
+            && message.contains("1.2.840.10008.1.2.4.70 takes encapsulated pixel data"),
+        "the error should name the negotiated syntax and the form of the pixel data: {}",
+        message
+    );
+    assert!(
+        received.lock().unwrap().is_empty(),
+        "nothing should reach the SCP"
+    );
+}
+
+#[tokio::test]
+async fn an_instance_without_pixel_data_is_sent_in_a_compressed_syntax() {
+    let (port, received, _storage_dir) = start_recording_scp().await;
+
+    // With no Pixel Data element there is nothing the transfer syntax could
+    // mismatch, so the instance goes out as labelled.
+    scu()
+        .store(
+            &node("RECORDING", port),
+            dataset(instance_without_pixel_data(), Some(JPEG_LOSSLESS_SV1)),
+        )
+        .await
+        .expect("an instance without pixel data is valid in any transfer syntax");
+
+    let received = received.lock().unwrap();
+    assert_eq!(received.len(), 1, "the SCP should hold exactly one instance");
+    assert_eq!(
+        received[0].transfer_syntax.as_deref(),
+        Some(JPEG_LOSSLESS_SV1)
+    );
+}
+
+/// What the uncompressed-only PACS saw on its one association.
+struct Served {
+    /// The transfer syntaxes of the presentation contexts it accepted.
+    accepted_transfer_syntaxes: Vec<String>,
+    /// The number of P-DATA PDUs it was sent.
+    p_data_pdus: usize,
+}
+
 /// A PACS that takes Secondary Capture instances in the two uncompressed
 /// little endian transfer syntaxes and nothing else. It serves one
-/// association and returns the number of P-DATA PDUs it was sent. It answers
-/// no request: it closes the connection at the first P-DATA PDU.
-async fn start_uncompressed_only_pacs() -> (u16, tokio::task::JoinHandle<usize>) {
+/// association and answers no request: it closes the connection at the first
+/// P-DATA PDU.
+async fn start_uncompressed_only_pacs() -> (u16, tokio::task::JoinHandle<Served>) {
     let listener = TcpListener::bind("127.0.0.1:0").await.expect("bind PACS");
     let port = listener.local_addr().expect("local address").port();
 
     let served = tokio::spawn(async move {
         let p_data_pdus = AtomicUsize::new(0);
+        let mut accepted_transfer_syntaxes = Vec::new();
         let (stream, _) = listener.accept().await.expect("accept the SCU");
         let options = ServerAssociationOptions::new()
             .accept_any()
@@ -340,6 +458,12 @@ async fn start_uncompressed_only_pacs() -> (u16, tokio::task::JoinHandle<usize>)
         // The association ends when the SCU aborts or the connection closes.
         // Either can surface as an error from `establish_async` or `receive`.
         if let Ok(mut association) = options.establish_async(stream).await {
+            accepted_transfer_syntaxes = association
+                .presentation_contexts()
+                .iter()
+                .filter(|pc| pc.reason == PresentationContextResultReason::Acceptance)
+                .map(|pc| pc.transfer_syntax.clone())
+                .collect();
             loop {
                 match association.receive().await {
                     Ok(Pdu::PData { .. }) => {
@@ -357,7 +481,10 @@ async fn start_uncompressed_only_pacs() -> (u16, tokio::task::JoinHandle<usize>)
                 }
             }
         }
-        p_data_pdus.load(Ordering::Relaxed)
+        Served {
+            accepted_transfer_syntaxes,
+            p_data_pdus: p_data_pdus.load(Ordering::Relaxed),
+        }
     });
 
     (port, served)
@@ -398,11 +525,14 @@ async fn a_pacs_without_the_compressed_syntax_gets_nothing_and_the_store_fails()
         message
     );
 
-    let p_data_pdus = timeout(Duration::from_secs(5), served)
+    let served = timeout(Duration::from_secs(5), served)
         .await
         .expect("the PACS should see the association end")
         .expect("PACS task");
-    assert_eq!(p_data_pdus, 0, "no command or data set should reach the PACS");
+    assert_eq!(
+        served.p_data_pdus, 0,
+        "no command or data set should reach the PACS"
+    );
 }
 
 #[tokio::test]
@@ -430,9 +560,17 @@ async fn a_pacs_without_the_compressed_syntax_still_takes_an_uncompressed_instan
         error
     );
 
-    let p_data_pdus = timeout(Duration::from_secs(5), served)
+    let served = timeout(Duration::from_secs(5), served)
         .await
         .expect("the PACS should see the association end")
         .expect("PACS task");
-    assert_eq!(p_data_pdus, 1, "the C-STORE request should reach the PACS");
+    assert_eq!(
+        served.accepted_transfer_syntaxes,
+        vec![uids::EXPLICIT_VR_LITTLE_ENDIAN],
+        "the PACS should take the instance's own transfer syntax, proposed first"
+    );
+    assert_eq!(
+        served.p_data_pdus, 1,
+        "the C-STORE request should reach the PACS"
+    );
 }
