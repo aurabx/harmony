@@ -7,6 +7,7 @@
 
 use axum::body::Body;
 use http::{Request, StatusCode};
+use jsonwebtoken::{encode, Algorithm, EncodingKey, Header};
 use std::sync::Arc;
 use tower::ServiceExt;
 
@@ -14,6 +15,7 @@ use harmony::adapters::http::router::build_network_router;
 use harmony::config::config::Config;
 use harmony::models::endpoints::endpoint::Endpoint;
 use harmony::models::mesh::config::{Mesh, MeshIngress, MeshProtocol, MeshProvider};
+use harmony::models::middleware::types::mesh_auth::MeshClaims;
 use harmony::models::pipelines::config::Pipeline;
 use harmony::models::services::services::ServiceConfig;
 
@@ -146,17 +148,41 @@ fn make_test_config() -> Config {
     config
 }
 
+/// Sign a mesh JWT that the `healthcare` mesh in `make_test_config` accepts.
+fn sign_mesh_token() -> String {
+    let now = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .unwrap()
+        .as_secs() as i64;
+    let claims = MeshClaims {
+        sub: Some("peer-proxy".to_string()),
+        iss: "healthcare".to_string(),
+        aud: None,
+        iat: now,
+        exp: now + 300,
+        mesh_id: "healthcare".to_string(),
+    };
+    encode(
+        &Header::new(Algorithm::HS256),
+        &claims,
+        &EncodingKey::from_secret(b"test-mesh-secret"),
+    )
+    .unwrap()
+}
+
 #[tokio::test]
 async fn test_mesh_route_takes_priority() {
     let config = Arc::new(make_test_config());
     let router = build_network_router(config, "default").await;
 
-    // Request to mesh URL (fhir.example.com) should be routed via mesh
+    // Request to mesh URL (fhir.example.com) should be routed via mesh.
+    // The ingress belongs to an enabled mesh, so it needs a mesh JWT.
     let request = Request::builder()
         .method("GET")
         .uri("/r4/Patient/123")
         .header("Host", "fhir.example.com")
         .header("X-Forwarded-Proto", "https")
+        .header("Authorization", format!("Bearer {}", sign_mesh_token()))
         .body(Body::empty())
         .unwrap();
 
@@ -167,6 +193,28 @@ async fn test_mesh_route_takes_priority() {
         response.status(),
         StatusCode::OK,
         "Mesh route should match and return 200"
+    );
+}
+
+#[tokio::test]
+async fn test_mesh_route_without_token_is_unauthorized() {
+    let config = Arc::new(make_test_config());
+    let router = build_network_router(config, "default").await;
+
+    let request = Request::builder()
+        .method("GET")
+        .uri("/r4/Patient/123")
+        .header("Host", "fhir.example.com")
+        .header("X-Forwarded-Proto", "https")
+        .body(Body::empty())
+        .unwrap();
+
+    let response = router.oneshot(request).await.unwrap();
+
+    assert_eq!(
+        response.status(),
+        StatusCode::UNAUTHORIZED,
+        "Mesh route without a mesh JWT should return 401"
     );
 }
 

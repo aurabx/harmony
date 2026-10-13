@@ -263,7 +263,7 @@ async fn handle_request_with_mesh(
 
     // Check if this is a streaming pipeline
     if PipelineExecutor::is_streaming_pipeline(pipeline, &config) {
-        return handle_streaming_request(req, config, endpoint_name, pipeline_name).await;
+        return handle_streaming_request(req, config, endpoint_name, pipeline_name, mesh_context).await;
     }
 
     // 1. Convert HTTP Request → ProtocolCtx
@@ -324,11 +324,15 @@ async fn handle_request_with_mesh(
 }
 
 /// Handle HTTP streaming request using PipelineExecutor::execute_streaming
+///
+/// When `mesh_context` is Some, the request came through mesh routing and
+/// the context is attached to ProtocolCtx, as in `handle_request_with_mesh`.
 async fn handle_streaming_request(
     req: &mut Request,
     config: Arc<Config>,
     endpoint_name: String,
     pipeline_name: String,
+    mesh_context: Option<MeshContext>,
 ) -> Result<Response<Body>, StatusCode> {
     use futures_util::StreamExt;
 
@@ -350,7 +354,7 @@ async fn handle_streaming_request(
         .ok_or(StatusCode::INTERNAL_SERVER_ERROR)?;
 
     // 1. Convert HTTP Request → ProtocolCtx
-    let ctx = HttpAdapter::http_request_to_protocol_ctx(
+    let mut ctx = HttpAdapter::http_request_to_protocol_ctx(
         req,
         endpoint.options.as_ref().unwrap_or(&HashMap::new()),
     )
@@ -363,6 +367,11 @@ async fn handle_streaming_request(
         );
         StatusCode::BAD_REQUEST
     })?;
+
+    // 1b. Attach mesh context if present
+    if let Some(ref mesh_ctx) = mesh_context {
+        attach_mesh_context(&mut ctx, mesh_ctx);
+    }
 
     // 2. Build envelope via service
     let envelope = service
