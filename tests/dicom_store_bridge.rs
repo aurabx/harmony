@@ -12,10 +12,17 @@
 //! A store that the receiving side could not complete must come back from
 //! `store` as an error. The SCP answers the sending device from that result, so
 //! an `Ok` tells the device it may delete its copy (AURA-2467).
+//!
+//! An instance with compressed pixel data must leave in its own transfer
+//! syntax, with its pixel fragments unchanged (AURA-2470).
 
 use axum::body::Bytes;
 use axum::http::HeaderMap;
 use axum::Router;
+use dicom_core::value::{PixelFragmentSequence, Value as DicomValue};
+use dicom_core::{DataElement, PrimitiveValue, VR};
+use dicom_dictionary_std::{tags, uids};
+use dicom_object::InMemDicomObject;
 use dimse::scp::QueryProvider;
 use dimse::types::DatasetStream;
 use harmony::adapters::dimse::query_provider::PipelineQueryProvider;
@@ -286,8 +293,16 @@ struct StoreRun {
 /// `store` returned and where the adapter wrote its copy of the instance.
 async fn send_sample(pipeline: &str, endpoint: &str) -> (dimse::Result<()>, PathBuf) {
     let source = dicom_object::open_file(sample_path()).expect("open sample instance");
-    let dataset = DatasetStream::from_object(source.into_inner());
+    send(pipeline, endpoint, DatasetStream::from_object(source.into_inner())).await
+}
 
+/// Hand `dataset` to `pipeline` the way the SCP does. Returns what `store`
+/// returned and where the adapter wrote its copy of the instance.
+async fn send(
+    pipeline: &str,
+    endpoint: &str,
+    dataset: DatasetStream,
+) -> (dimse::Result<()>, PathBuf) {
     // No storage backend is configured, so the adapter writes its copy here.
     let stored_file = PathBuf::from("./tmp/dimse").join(format!("{}.dcm", dataset.metadata().id));
 
@@ -370,13 +385,94 @@ fn assert_request_is_the_instance(run: &StoreRun) {
     }
 }
 
+// The two tests below share the streaming receiver and count what it holds,
+// so they must not overlap.
+
 #[tokio::test]
+#[serial_test::serial(streaming_receiver)]
 async fn streaming_bridge_sends_the_part10_file_and_no_path() {
     let bridges = bridges();
 
     let run = store_sample("streaming_bridge", "scp_streaming", &bridges.streaming).await;
 
     assert_request_is_the_instance(&run);
+}
+
+const JPEG_LOSSLESS_SV1: &str = "1.2.840.10008.1.2.4.70";
+
+/// The fragments are not a real JPEG stream. Nothing on the path decodes
+/// them, and they only have to arrive unchanged. Each has an even length, as
+/// DICOM requires of a fragment.
+fn compressed_fragments() -> Vec<Vec<u8>> {
+    vec![
+        vec![0xFF, 0xD8, 0x01, 0x02, 0x03, 0x04, 0xFF, 0xD9],
+        vec![0xFF, 0xD8, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0xFF, 0xD9],
+    ]
+}
+
+/// A JPEG Lossless instance as the SCP hands it to the adapter: the parsed
+/// object with encapsulated pixel data, and the negotiated transfer syntax
+/// in the metadata.
+fn compressed_instance() -> DatasetStream {
+    let mut object = InMemDicomObject::new_empty();
+    for (tag, value) in [
+        (tags::SOP_CLASS_UID, uids::SECONDARY_CAPTURE_IMAGE_STORAGE),
+        (tags::SOP_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.5"),
+        (tags::STUDY_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.6"),
+        (tags::SERIES_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.7"),
+    ] {
+        object.put(DataElement::new(tag, VR::UI, PrimitiveValue::from(value)));
+    }
+    object.put(DataElement::new(
+        tags::PIXEL_DATA,
+        VR::OB,
+        DicomValue::PixelSequence(PixelFragmentSequence::new_fragments(compressed_fragments())),
+    ));
+
+    let mut dataset = DatasetStream::from_object(object);
+    dataset.metadata_mut().transfer_syntax = Some(JPEG_LOSSLESS_SV1.to_string());
+    dataset
+}
+
+#[tokio::test]
+#[serial_test::serial(streaming_receiver)]
+async fn streaming_bridge_sends_a_compressed_instance_in_its_own_transfer_syntax() {
+    let bridges = bridges();
+
+    let (outcome, stored_file) =
+        send("streaming_bridge", "scp_streaming", compressed_instance()).await;
+    outcome.expect("the receiver stores the instance, so the C-STORE should succeed");
+    std::fs::remove_file(&stored_file).expect("remove the adapter's copy");
+
+    let mut recorded = bridges.streaming.lock().unwrap();
+    assert_eq!(recorded.len(), 1, "receiver should get exactly one request");
+    let request = recorded.remove(0);
+
+    assert_eq!(
+        request
+            .headers
+            .get("x-dicom-transfer-syntax")
+            .map(String::as_str),
+        Some(JPEG_LOSSLESS_SV1)
+    );
+    let received = dicom_object::from_reader(std::io::Cursor::new(&request.body))
+        .expect("the request body must parse as a DICOM Part 10 file");
+    assert_eq!(
+        received.meta().transfer_syntax(),
+        JPEG_LOSSLESS_SV1,
+        "the file meta group must name the transfer syntax of the pixel data"
+    );
+    let pixel_data = received
+        .element(tags::PIXEL_DATA)
+        .expect("PixelData missing");
+    match pixel_data.value() {
+        DicomValue::PixelSequence(sequence) => assert_eq!(
+            sequence.fragments(),
+            compressed_fragments().as_slice(),
+            "the pixel fragments changed on the way to the receiver"
+        ),
+        other => panic!("PixelData is no longer encapsulated: {:?}", other),
+    }
 }
 
 #[tokio::test]

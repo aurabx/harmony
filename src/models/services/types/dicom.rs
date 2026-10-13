@@ -1098,8 +1098,12 @@ impl DicomScuBackend {
                         let (dataset, parsed_obj) = if is_part10 {
                             match dicom_object::from_reader(std::io::Cursor::new(&bytes)) {
                                 Ok(file_obj) => {
+                                    let transfer_syntax =
+                                        file_obj.meta().transfer_syntax().to_string();
                                     let inner = file_obj.into_inner();
-                                    (DatasetStream::from_object(inner.clone()), Some(inner))
+                                    let mut dataset = DatasetStream::from_object(inner.clone());
+                                    dataset.metadata_mut().transfer_syntax = Some(transfer_syntax);
+                                    (dataset, Some(inner))
                                 }
                                 Err(e) => {
                                     failed += 1;
@@ -1258,7 +1262,12 @@ impl DicomScuBackend {
         };
         let file = dicom_object::from_reader(std::io::Cursor::new(part10.as_ref()))
             .map_err(|e| format!("Failed to parse DICOM Part 10 file: {}", e))?;
-        Ok(DatasetStream::from_object(file.into_inner()))
+        // The SCU proposes this transfer syntax to the PACS. Encapsulated
+        // pixel data can only be sent in the transfer syntax it was encoded in.
+        let transfer_syntax = file.meta().transfer_syntax().to_string();
+        let mut dataset = DatasetStream::from_object(file.into_inner());
+        dataset.metadata_mut().transfer_syntax = Some(transfer_syntax);
+        Ok(dataset)
     }
 }
 
@@ -1627,6 +1636,168 @@ mod tests {
             dataset.metadata().sop_instance_uid,
             Some(sample_sop_instance_uid())
         );
+    }
+
+    #[test]
+    fn test_store_dataset_records_the_transfer_syntax_of_the_file() {
+        let file = dicom_object::from_reader(std::io::Cursor::new(sample_part10()))
+            .expect("sample instance parses");
+        let expected = file.meta().transfer_syntax().to_string();
+
+        let dataset =
+            DicomScuBackend::store_dataset_from_body(&sample_part10()).expect("instance");
+
+        assert_eq!(dataset.metadata().transfer_syntax, Some(expected));
+    }
+
+    // ── C-STORE of a STOW-RS part ────────────────────────────────────────────
+
+    /// What the test PACS was handed for one C-STORE: the negotiated transfer
+    /// syntax and the instance.
+    type ReceivedParts = std::sync::Arc<
+        std::sync::Mutex<Vec<(Option<String>, dicom_object::InMemDicomObject)>>,
+    >;
+
+    struct RecordingPacs {
+        received: ReceivedParts,
+    }
+
+    #[async_trait]
+    impl dimse::scp::QueryProvider for RecordingPacs {
+        async fn find(
+            &self,
+            _query_level: QueryLevel,
+            _parameters: &HashMap<String, String>,
+            _max_results: u32,
+        ) -> dimse::Result<dimse::types::BoxDatasetStream> {
+            Ok(dimse::types::dataset_stream_from_vec(Vec::new()))
+        }
+
+        async fn locate(
+            &self,
+            _query_level: QueryLevel,
+            _parameters: &HashMap<String, String>,
+        ) -> dimse::Result<dimse::types::BoxDatasetStream> {
+            Ok(dimse::types::dataset_stream_from_vec(Vec::new()))
+        }
+
+        async fn get(
+            &self,
+            _query_level: QueryLevel,
+            _parameters: &HashMap<String, String>,
+        ) -> dimse::Result<dimse::types::RetrieveStream> {
+            Ok(dimse::types::RetrieveStream::new(
+                dimse::types::dataset_stream_from_vec(Vec::new()),
+            ))
+        }
+
+        async fn store(&self, dataset: DatasetStream) -> dimse::Result<()> {
+            let transfer_syntax = dataset.metadata().transfer_syntax.clone();
+            let object = dataset.to_object().await?;
+            self.received.lock().unwrap().push((transfer_syntax, object));
+            Ok(())
+        }
+    }
+
+    /// Start a PACS on a free local port that accepts every transfer syntax.
+    async fn start_recording_pacs() -> (u16, ReceivedParts, tempfile::TempDir) {
+        let received: ReceivedParts = Default::default();
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind a free port")
+            .local_addr()
+            .expect("local address")
+            .port();
+        let storage_dir = tempfile::tempdir().expect("PACS storage dir");
+        let scp = dimse::DimseScp::new(
+            DimseConfig {
+                local_aet: "STOW_PACS".to_string(),
+                bind_addr: std::net::IpAddr::V4(std::net::Ipv4Addr::LOCALHOST),
+                port,
+                enable_store: true,
+                storage_dir: storage_dir.path().to_path_buf(),
+                ..Default::default()
+            },
+            std::sync::Arc::new(RecordingPacs {
+                received: received.clone(),
+            }),
+        );
+        tokio::spawn(scp.run(tokio_util::sync::CancellationToken::new()));
+        for _ in 0..250 {
+            if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+                return (port, received, storage_dir);
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        panic!("the PACS did not start listening on port {}", port);
+    }
+
+    #[tokio::test]
+    async fn test_stow_part_keeps_its_compressed_transfer_syntax() {
+        use dicom_core::value::{PixelFragmentSequence, Value as DicomValue};
+        use dicom_core::{DataElement, PrimitiveValue, VR};
+        use dicom_dictionary_std::{tags, uids};
+
+        const JPEG_LOSSLESS_SV1: &str = "1.2.840.10008.1.2.4.70";
+        // Not a real JPEG stream. Nothing on the path decodes the fragment.
+        let fragments = vec![vec![0xFFu8, 0xD8, 0x01, 0x02, 0x03, 0x04, 0xFF, 0xD9]];
+
+        let mut object = dicom_object::InMemDicomObject::new_empty();
+        for (tag, value) in [
+            (tags::SOP_CLASS_UID, uids::SECONDARY_CAPTURE_IMAGE_STORAGE),
+            (tags::SOP_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.8"),
+        ] {
+            object.put(DataElement::new(tag, VR::UI, PrimitiveValue::from(value)));
+        }
+        object.put(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            DicomValue::PixelSequence(PixelFragmentSequence::new_fragments(fragments.clone())),
+        ));
+        let mut part10 = Vec::new();
+        object
+            .with_meta(
+                dicom_object::meta::FileMetaTableBuilder::new().transfer_syntax(JPEG_LOSSLESS_SV1),
+            )
+            .expect("file meta group")
+            .write_all(&mut part10)
+            .expect("encode the Part 10 file");
+
+        let (port, received, _storage_dir) = start_recording_pacs().await;
+        let backend = DicomScuBackend {
+            local_aet: Some("STOW_SCU".to_string()),
+            aet: Some("STOW_PACS".to_string()),
+            host: Some("127.0.0.1".to_string()),
+            port: Some(port),
+            use_tls: None,
+        };
+        // The `dicomweb` endpoint hands each STOW-RS part over this way.
+        let mut env = make_envelope("/store");
+        env.normalized_data = Some(serde_json::json!({
+            "dicom_store_parts": [base64::engine::general_purpose::STANDARD.encode(&part10)]
+        }));
+
+        let response = backend
+            .handle_backend_request(&mut env, &opts())
+            .await
+            .expect("the backend answers a store");
+
+        let result = response.normalized_data.expect("store result");
+        assert_eq!(result["success"], true, "store result: {}", result);
+
+        let received = received.lock().unwrap();
+        assert_eq!(received.len(), 1, "the PACS should hold exactly one instance");
+        assert_eq!(received[0].0.as_deref(), Some(JPEG_LOSSLESS_SV1));
+        match received[0]
+            .1
+            .element(tags::PIXEL_DATA)
+            .expect("PixelData missing")
+            .value()
+        {
+            DicomValue::PixelSequence(sequence) => {
+                assert_eq!(sequence.fragments(), fragments.as_slice())
+            }
+            other => panic!("PixelData is no longer encapsulated: {:?}", other),
+        }
     }
 
     #[test]

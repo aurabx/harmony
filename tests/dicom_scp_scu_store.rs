@@ -5,7 +5,13 @@
 //! test calls the DIMSE adapter's `store`, the function the SCP calls for a
 //! received C-STORE, and runs the real pipeline against a DICOM SCP in this
 //! process that records what it receives.
+//!
+//! An instance with compressed pixel data must reach the PACS in its own
+//! transfer syntax, with its pixel fragments unchanged (AURA-2470).
 
+use dicom_core::value::{PixelFragmentSequence, Value};
+use dicom_core::{DataElement, PrimitiveValue, VR};
+use dicom_dictionary_std::{tags, uids};
 use dicom_object::InMemDicomObject;
 use dimse::scp::QueryProvider;
 use dimse::types::{
@@ -21,8 +27,14 @@ use std::sync::{Arc, Mutex, OnceLock};
 use std::time::{Duration, Instant};
 use tokio_util::sync::CancellationToken;
 
+/// An instance the PACS took, with the transfer syntax it arrived in.
+struct StoredInstance {
+    transfer_syntax: Option<String>,
+    object: InMemDicomObject,
+}
+
 /// The instances the PACS took, in the order they arrived.
-type Stored = Arc<Mutex<Vec<InMemDicomObject>>>;
+type Stored = Arc<Mutex<Vec<StoredInstance>>>;
 
 /// A PACS that keeps every instance it is sent and serves nothing.
 struct RecordingPacs {
@@ -57,8 +69,11 @@ impl QueryProvider for RecordingPacs {
     }
 
     async fn store(&self, dataset: DatasetStream) -> dimse::Result<()> {
-        let object = dataset.to_object().await?;
-        self.stored.lock().unwrap().push(object);
+        let instance = StoredInstance {
+            transfer_syntax: dataset.metadata().transfer_syntax.clone(),
+            object: dataset.to_object().await?,
+        };
+        self.stored.lock().unwrap().push(instance);
         Ok(())
     }
 }
@@ -178,6 +193,28 @@ host = "127.0.0.1"
 port = {pacs_port}
 local_aet = "HARMONY_S3"
 
+# dicom_scp -> dicom_scu_streaming, PACS is up
+[pipelines.to_pacs_streaming]
+networks = ["default"]
+endpoints = ["scp_to_pacs_streaming"]
+backends = ["pacs_streaming"]
+middleware = []
+
+[endpoints.scp_to_pacs_streaming]
+service = "dicom_scp"
+[endpoints.scp_to_pacs_streaming.options]
+local_aet = "HARMONY_S4"
+port = 11116
+enable_store = true
+
+[backends.pacs_streaming]
+service = "dicom_scu_streaming"
+[backends.pacs_streaming.options]
+aet = "TEST_PACS"
+host = "127.0.0.1"
+port = {pacs_port}
+local_aet = "HARMONY_S4"
+
 # dicom_scp -> dicom_scu, PACS is down
 [pipelines.to_down_pacs]
 networks = ["default"]
@@ -208,6 +245,9 @@ module = ""
 
 [services.dicom]
 module = ""
+
+[services.dicom_scu_streaming]
+module = ""
 "#
     );
 
@@ -232,12 +272,15 @@ fn element_bytes(object: &InMemDicomObject, name: &str) -> Vec<u8> {
         .to_vec()
 }
 
-/// Send the sample instance to `pipeline` the way the SCP does, and remove the
-/// copy the adapter wrote on this host.
+/// Send the sample instance to `pipeline` the way the SCP does.
 async fn send_sample(pipeline: &str, endpoint: &str) -> dimse::Result<()> {
     let source = dicom_object::open_file(sample_path()).expect("open sample instance");
-    let dataset = DatasetStream::from_object(source.into_inner());
+    send(pipeline, endpoint, DatasetStream::from_object(source.into_inner())).await
+}
 
+/// Hand `dataset` to `pipeline` the way the SCP does, and remove the copy the
+/// adapter wrote on this host.
+async fn send(pipeline: &str, endpoint: &str, dataset: DatasetStream) -> dimse::Result<()> {
     // No storage backend is configured, so the adapter writes its copy here.
     let stored_file = PathBuf::from("./tmp/dimse").join(format!("{}.dcm", dataset.metadata().id));
 
@@ -266,7 +309,7 @@ async fn assert_pipeline_sends_the_instance_to_the_pacs(pipeline: &str, endpoint
     let source = dicom_object::open_file(sample_path()).expect("open sample instance");
     for name in ["SOPInstanceUID", "StudyInstanceUID", "PixelData"] {
         assert_eq!(
-            element_bytes(&stored[0], name),
+            element_bytes(&stored[0].object, name),
             element_bytes(&source, name),
             "{} changed on the way to the PACS",
             name
@@ -274,8 +317,108 @@ async fn assert_pipeline_sends_the_instance_to_the_pacs(pipeline: &str, endpoint
     }
 }
 
-// The two tests below share the PACS and count what it holds, so they must
-// not overlap.
+const JPEG_LOSSLESS_SV1: &str = "1.2.840.10008.1.2.4.70";
+
+/// The fragments are not a real JPEG stream. Nothing on the path decodes
+/// them, and they only have to arrive unchanged. Each has an even length, as
+/// DICOM requires of a fragment.
+fn compressed_fragments() -> Vec<Vec<u8>> {
+    vec![
+        vec![0xFF, 0xD8, 0x01, 0x02, 0x03, 0x04, 0xFF, 0xD9],
+        vec![0xFF, 0xD8, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F, 0xFF, 0xD9],
+    ]
+}
+
+/// A JPEG Lossless instance as the SCP hands it to the adapter: the parsed
+/// object with encapsulated pixel data, and the negotiated transfer syntax
+/// in the metadata.
+fn compressed_instance() -> DatasetStream {
+    let mut object = InMemDicomObject::new_empty();
+    for (tag, value) in [
+        (tags::SOP_CLASS_UID, uids::SECONDARY_CAPTURE_IMAGE_STORAGE),
+        (tags::SOP_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.2"),
+        (tags::STUDY_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.3"),
+        (tags::SERIES_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.4"),
+    ] {
+        object.put(DataElement::new(tag, VR::UI, PrimitiveValue::from(value)));
+    }
+    object.put(DataElement::new(
+        tags::PIXEL_DATA,
+        VR::OB,
+        Value::PixelSequence(PixelFragmentSequence::new_fragments(compressed_fragments())),
+    ));
+
+    let mut dataset = DatasetStream::from_object(object);
+    dataset.metadata_mut().transfer_syntax = Some(JPEG_LOSSLESS_SV1.to_string());
+    dataset
+}
+
+// The tests below that are marked `serial` share the PACS and count what it
+// holds, so they must not overlap.
+
+/// Send the compressed instance through `pipeline` and check that the PACS
+/// took it in JPEG Lossless with the same pixel fragments.
+async fn assert_pipeline_keeps_a_compressed_instance(pipeline: &str, endpoint: &str) {
+    let stored = pacs();
+
+    send(pipeline, endpoint, compressed_instance())
+        .await
+        .expect("the PACS accepts every transfer syntax, so the C-STORE should succeed");
+
+    let stored = std::mem::take(&mut *stored.lock().unwrap());
+    assert_eq!(stored.len(), 1, "the PACS should hold exactly one instance");
+    assert_eq!(
+        stored[0].transfer_syntax.as_deref(),
+        Some(JPEG_LOSSLESS_SV1),
+        "the transfer syntax changed on the way to the PACS"
+    );
+
+    let pixel_data = stored[0]
+        .object
+        .element(tags::PIXEL_DATA)
+        .expect("PixelData missing");
+    match pixel_data.value() {
+        Value::PixelSequence(sequence) => assert_eq!(
+            sequence.fragments(),
+            compressed_fragments().as_slice(),
+            "the pixel fragments changed on the way to the PACS"
+        ),
+        other => panic!("PixelData is no longer encapsulated: {:?}", other),
+    }
+}
+
+#[tokio::test]
+#[serial_test::serial(recording_pacs)]
+async fn dicom_scu_backend_sends_a_compressed_instance_in_its_own_transfer_syntax() {
+    assert_pipeline_keeps_a_compressed_instance("to_pacs", "scp_to_pacs").await;
+}
+
+#[tokio::test]
+#[serial_test::serial(recording_pacs)]
+async fn dicom_scu_streaming_backend_sends_a_compressed_instance_in_its_own_transfer_syntax() {
+    assert_pipeline_keeps_a_compressed_instance("to_pacs_streaming", "scp_to_pacs_streaming")
+        .await;
+}
+
+#[tokio::test]
+#[serial_test::serial(recording_pacs)]
+async fn dicom_scu_backend_sends_an_uncompressed_instance_in_its_own_transfer_syntax() {
+    let stored = pacs();
+
+    send_sample("to_pacs", "scp_to_pacs")
+        .await
+        .expect("the PACS is up, so the C-STORE should succeed");
+
+    // The sample is sent with no recorded transfer syntax, so the adapter
+    // writes it as Explicit VR Little Endian. The backend reads that from
+    // the file and proposes it first.
+    let stored = std::mem::take(&mut *stored.lock().unwrap());
+    assert_eq!(stored.len(), 1, "the PACS should hold exactly one instance");
+    assert_eq!(
+        stored[0].transfer_syntax.as_deref(),
+        Some(uids::EXPLICIT_VR_LITTLE_ENDIAN)
+    );
+}
 
 #[tokio::test]
 #[serial_test::serial(recording_pacs)]
