@@ -7,14 +7,23 @@ use std::collections::HashMap;
 /// `authentication = "authentications.fhir_bearer"`.
 const AUTHENTICATIONS_TABLE_PREFIX: &str = "authentications.";
 
+/// Middleware type whose `policies` option lists policy ids.
+const POLICIES_MIDDLEWARE_TYPE: &str = "policies";
+
 /// Resolves all references in the configuration
 /// Returns a set of backend names that could not be resolved
 ///
 /// Fails if any `authentication` reference does not name a key in
 /// `[authentications]`. A missing credential must stop the load, because
 /// otherwise Harmony sends requests upstream without it.
+///
+/// Fails if a policy lists a rule id that is not a key in `[rules]`, or a
+/// `policies` middleware instance lists a policy id that is not a key in
+/// `[policies]`. The middleware resolves these ids per request, so a bad id
+/// that passed the load would turn every request into a 500.
 pub fn resolve_references(config: &mut Config) -> Result<std::collections::HashSet<String>, String> {
     validate_authentication_refs(config)?;
+    validate_policy_refs(config)?;
     resolve_endpoints(config)?;
     let unresolved_backends = resolve_backends(config)?;
     Ok(unresolved_backends)
@@ -74,19 +83,114 @@ fn resolve_authentication_ref(
         .ok_or_else(|| unknown_authentication_message(kind, name, auth_ref, authentications))
 }
 
+/// Lists the keys of a config table, sorted, for an "unknown reference" error.
+/// An empty table is spelled out so the message never ends in a bare colon.
+fn available_keys<V>(table: &HashMap<String, V>) -> String {
+    let mut available: Vec<&str> = table.keys().map(String::as_str).collect();
+    available.sort_unstable();
+    if available.is_empty() {
+        "(none defined)".to_string()
+    } else {
+        available.join(", ")
+    }
+}
+
+/// Checks every rule id listed by a policy and every policy id listed by a
+/// `policies` middleware instance.
+///
+/// Ids are matched against the keys of `[rules]` and `[policies]`, because
+/// that is how the middleware looks them up. Disabled policies are checked
+/// too: the middleware skips them, so a bad id would otherwise stay hidden
+/// until someone enables the policy. All errors are returned together,
+/// sorted, so one load reports every bad reference.
+///
+/// The defined ids are listed once per kind, after the error lines. Repeating
+/// the list on every line makes the message grow with bad ids times defined
+/// ids, which reaches tens of megabytes on a large config.
+fn validate_policy_refs(config: &Config) -> Result<(), String> {
+    let rule_errors = unknown_rule_errors(config);
+    let policy_errors = unknown_policy_errors(config);
+
+    if rule_errors.is_empty() && policy_errors.is_empty() {
+        return Ok(());
+    }
+
+    let available_rules = (!rule_errors.is_empty())
+        .then(|| format!("Available rules: {}", available_keys(&config.rules)));
+    let available_policies = (!policy_errors.is_empty())
+        .then(|| format!("Available policies: {}", available_keys(&config.policies)));
+
+    let mut lines = rule_errors;
+    lines.extend(policy_errors);
+    lines.sort();
+    lines.extend(available_rules);
+    lines.extend(available_policies);
+    Err(lines.join("\n"))
+}
+
+/// One error per rule id in a `[policies.<key>]` entry that is not a key in
+/// `[rules]`.
+fn unknown_rule_errors(config: &Config) -> Vec<String> {
+    config
+        .policies
+        .iter()
+        .flat_map(|(policy_key, policy)| {
+            policy
+                .rules
+                .iter()
+                .map(move |rule_id| (policy_key, rule_id))
+        })
+        .filter(|(_, rule_id)| !config.rules.contains_key(rule_id.as_str()))
+        .map(|(policy_key, rule_id)| {
+            format!(
+                "Policy '{}' references unknown rule '{}'",
+                policy_key, rule_id
+            )
+        })
+        .collect()
+}
+
+/// One error per policy id in the `policies` option of a `policies`
+/// middleware instance that is not a key in `[policies]`.
+///
+/// A missing `policies` option, a non-array value and non-string entries are
+/// left to the middleware, which already rejects them.
+fn unknown_policy_errors(config: &Config) -> Vec<String> {
+    config
+        .middleware
+        .iter()
+        .filter(|(_, instance)| {
+            instance
+                .middleware_type
+                .eq_ignore_ascii_case(POLICIES_MIDDLEWARE_TYPE)
+        })
+        .flat_map(|(instance_name, instance)| {
+            instance
+                .options
+                .get("policies")
+                .and_then(|value| value.as_array())
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| entry.as_str())
+                .map(move |policy_id| (instance_name, policy_id))
+        })
+        .filter(|(_, policy_id)| !config.policies.contains_key(*policy_id))
+        .map(|(instance_name, policy_id)| {
+            format!(
+                "Middleware '{}' references unknown policy '{}'",
+                instance_name, policy_id
+            )
+        })
+        .collect()
+}
+
 fn unknown_authentication_message(
     kind: &str,
     name: &str,
     auth_ref: &str,
     authentications: &HashMap<String, AuthenticationDefinition>,
 ) -> String {
-    let mut available: Vec<&str> = authentications.keys().map(String::as_str).collect();
-    available.sort_unstable();
-    let available = if available.is_empty() {
-        "(none defined)".to_string()
-    } else {
-        available.join(", ")
-    };
+    let available = available_keys(authentications);
 
     match auth_ref.strip_prefix(AUTHENTICATIONS_TABLE_PREFIX) {
         Some(bare_key) => format!(
