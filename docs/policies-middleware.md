@@ -207,12 +207,16 @@ Harmony checks rule and policy ids when it loads the config.
 - Every id in a `policies` middleware instance's `policies` list must be a key in `[policies]`.
 - Disabled policies are checked too.
 
-An undefined id fails the load. The error has one line per bad id. Each line names the policy or middleware instance, the undefined id and the ids that are defined:
+An undefined id fails the load. The error has one line per bad id. Each line names the policy or middleware instance and the undefined id. The lines are sorted. The defined ids follow, listed once for rules and once for policies:
 
 ```
-Policy 'office' references unknown rule 'missing_rule'. Available rules: internal_networks, method_filter
-Middleware 'access' references unknown policy 'missing_policy'. Available policies: office, vpn
+Middleware 'access' references unknown policy 'missing_policy'
+Policy 'office' references unknown rule 'missing_rule'
+Available rules: internal_networks, method_filter
+Available policies: office, vpn
 ```
+
+The `Available rules` line appears only when a rule id is undefined. The `Available policies` line appears only when a policy id is undefined.
 
 At startup and with `--validate-config`, Harmony prints the error on stderr and exits with code 1. On hot reload, Harmony rejects the file and keeps the previous config.
 

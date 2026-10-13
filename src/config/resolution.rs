@@ -103,15 +103,29 @@ fn available_keys<V>(table: &HashMap<String, V>) -> String {
 /// too: the middleware skips them, so a bad id would otherwise stay hidden
 /// until someone enables the policy. All errors are returned together,
 /// sorted, so one load reports every bad reference.
+///
+/// The defined ids are listed once per kind, after the error lines. Repeating
+/// the list on every line makes the message grow with bad ids times defined
+/// ids, which reaches tens of megabytes on a large config.
 fn validate_policy_refs(config: &Config) -> Result<(), String> {
-    let mut errors = unknown_rule_errors(config);
-    errors.extend(unknown_policy_errors(config));
+    let rule_errors = unknown_rule_errors(config);
+    let policy_errors = unknown_policy_errors(config);
 
-    if errors.is_empty() {
+    if rule_errors.is_empty() && policy_errors.is_empty() {
         return Ok(());
     }
-    errors.sort();
-    Err(errors.join("\n"))
+
+    let available_rules = (!rule_errors.is_empty())
+        .then(|| format!("Available rules: {}", available_keys(&config.rules)));
+    let available_policies = (!policy_errors.is_empty())
+        .then(|| format!("Available policies: {}", available_keys(&config.policies)));
+
+    let mut lines = rule_errors;
+    lines.extend(policy_errors);
+    lines.sort();
+    lines.extend(available_rules);
+    lines.extend(available_policies);
+    Err(lines.join("\n"))
 }
 
 /// One error per rule id in a `[policies.<key>]` entry that is not a key in
@@ -129,10 +143,8 @@ fn unknown_rule_errors(config: &Config) -> Vec<String> {
         .filter(|(_, rule_id)| !config.rules.contains_key(rule_id.as_str()))
         .map(|(policy_key, rule_id)| {
             format!(
-                "Policy '{}' references unknown rule '{}'. Available rules: {}",
-                policy_key,
-                rule_id,
-                available_keys(&config.rules)
+                "Policy '{}' references unknown rule '{}'",
+                policy_key, rule_id
             )
         })
         .collect()
@@ -165,10 +177,8 @@ fn unknown_policy_errors(config: &Config) -> Vec<String> {
         .filter(|(_, policy_id)| !config.policies.contains_key(*policy_id))
         .map(|(instance_name, policy_id)| {
             format!(
-                "Middleware '{}' references unknown policy '{}'. Available policies: {}",
-                instance_name,
-                policy_id,
-                available_keys(&config.policies)
+                "Middleware '{}' references unknown policy '{}'",
+                instance_name, policy_id
             )
         })
         .collect()
