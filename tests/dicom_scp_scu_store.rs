@@ -193,6 +193,28 @@ host = "127.0.0.1"
 port = {pacs_port}
 local_aet = "HARMONY_S3"
 
+# dicom_scp -> dicom_scu_streaming, PACS is up
+[pipelines.to_pacs_streaming]
+networks = ["default"]
+endpoints = ["scp_to_pacs_streaming"]
+backends = ["pacs_streaming"]
+middleware = []
+
+[endpoints.scp_to_pacs_streaming]
+service = "dicom_scp"
+[endpoints.scp_to_pacs_streaming.options]
+local_aet = "HARMONY_S4"
+port = 11116
+enable_store = true
+
+[backends.pacs_streaming]
+service = "dicom_scu_streaming"
+[backends.pacs_streaming.options]
+aet = "TEST_PACS"
+host = "127.0.0.1"
+port = {pacs_port}
+local_aet = "HARMONY_S4"
+
 # dicom_scp -> dicom_scu, PACS is down
 [pipelines.to_down_pacs]
 networks = ["default"]
@@ -222,6 +244,9 @@ module = ""
 module = ""
 
 [services.dicom]
+module = ""
+
+[services.dicom_scu_streaming]
 module = ""
 "#
     );
@@ -331,12 +356,12 @@ fn compressed_instance() -> DatasetStream {
 // The tests below that are marked `serial` share the PACS and count what it
 // holds, so they must not overlap.
 
-#[tokio::test]
-#[serial_test::serial(recording_pacs)]
-async fn dicom_scu_backend_sends_a_compressed_instance_in_its_own_transfer_syntax() {
+/// Send the compressed instance through `pipeline` and check that the PACS
+/// took it in JPEG Lossless with the same pixel fragments.
+async fn assert_pipeline_keeps_a_compressed_instance(pipeline: &str, endpoint: &str) {
     let stored = pacs();
 
-    send("to_pacs", "scp_to_pacs", compressed_instance())
+    send(pipeline, endpoint, compressed_instance())
         .await
         .expect("the PACS accepts every transfer syntax, so the C-STORE should succeed");
 
@@ -360,6 +385,19 @@ async fn dicom_scu_backend_sends_a_compressed_instance_in_its_own_transfer_synta
         ),
         other => panic!("PixelData is no longer encapsulated: {:?}", other),
     }
+}
+
+#[tokio::test]
+#[serial_test::serial(recording_pacs)]
+async fn dicom_scu_backend_sends_a_compressed_instance_in_its_own_transfer_syntax() {
+    assert_pipeline_keeps_a_compressed_instance("to_pacs", "scp_to_pacs").await;
+}
+
+#[tokio::test]
+#[serial_test::serial(recording_pacs)]
+async fn dicom_scu_streaming_backend_sends_a_compressed_instance_in_its_own_transfer_syntax() {
+    assert_pipeline_keeps_a_compressed_instance("to_pacs_streaming", "scp_to_pacs_streaming")
+        .await;
 }
 
 #[tokio::test]
