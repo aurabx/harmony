@@ -267,9 +267,12 @@ When `enable_store` is set to `true`, Harmony accepts incoming DICOM objects (C-
 `dataset` is the instance as DICOM JSON. `file` is the path of the stored
 Part 10 file on this host.
 
-Two more keys are present when the pipeline's backend is `dicom_scu_streaming`,
-or when it is `http_streaming_backend` behind the `dicom_to_http` middleware:
-`part10_b64`, the Part 10 file in base64, and `transfer_syntax_uid`. See
+Two more keys are present when the pipeline's backend is `dicom_scu` (also
+under its legacy name `dicom`) or `dicom_scu_streaming`, or when it is `http_streaming_backend` behind the
+`dicom_to_http` middleware: `part10_b64`, the Part 10 file in base64, and
+`transfer_syntax_uid`. The two DICOM backends send the instance from
+`part10_b64` to the PACS. They never open the path in `file`. See
+[backends.md](backends.md#dicom-scu-service-class-user) and
 [streaming.md](streaming.md#c-store-requests).
 
 This allows you to use middleware to process the file (e.g., extract metadata, forward to another system, or trigger a notification) after it has been safely stored.

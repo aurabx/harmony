@@ -79,6 +79,12 @@ use_tls = false
 - `C-ECHO`: Test connectivity to remote DICOM node
 - `C-FIND`: Query remote DICOM node for studies/series/images
 - `C-MOVE`: Request remote node to move datasets
+- `C-GET`: Retrieve datasets from the remote node
+- `C-STORE`: Send one instance to the remote node per request
+
+`dicom` is the legacy name of the `dicom_scu` service. See
+[backends.md](backends.md#dicom-scu-service-class-user) for the options and the
+C-STORE request body.
 
 ### Endpoint Usage (SCP - Service Class Provider)
 

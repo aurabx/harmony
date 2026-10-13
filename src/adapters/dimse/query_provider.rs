@@ -364,9 +364,9 @@ impl PipelineQueryProvider {
     }
 
     /// True when the pipeline has a consumer that needs the stored instance
-    /// itself: the `dicom_scu_streaming` backend, which never opens a path it
-    /// is given, or the `dicom_to_http` middleware in front of an
-    /// `http_streaming_backend`, which sends the instance to another host.
+    /// itself: the `dicom_scu` or `dicom_scu_streaming` backend, which never
+    /// opens a path it is given, or the `dicom_to_http` middleware in front of
+    /// an `http_streaming_backend`, which sends the instance to another host.
     /// Every other pipeline is spared the extra copy.
     ///
     /// `dicom_to_http` in front of the `http` backend is left out on purpose.
@@ -383,7 +383,11 @@ impl PipelineQueryProvider {
         else {
             return false;
         };
-        if backend.service.eq_ignore_ascii_case("dicom_scu_streaming") {
+        // `dicom` is the legacy name of `dicom_scu` (see `DicomScuServiceFactory`).
+        if ["dicom_scu", "dicom", "dicom_scu_streaming"]
+            .iter()
+            .any(|service| backend.service.eq_ignore_ascii_case(service))
+        {
             return true;
         }
         // A pipeline may name a `[middleware.<name>]` table, or a built-in
@@ -1230,7 +1234,9 @@ mod tests {
             MiddlewareRef::None => (String::new(), String::new()),
         };
         let backend_options = match backend_service {
-            "dicom_scu_streaming" => "aet = \"PACS\"\nhost = \"127.0.0.1\"\nport = 4242",
+            "dicom_scu" | "dicom" | "dicom_scu_streaming" => {
+                "aet = \"PACS\"\nhost = \"127.0.0.1\"\nport = 4242"
+            }
             _ => "base_url = \"http://127.0.0.1:9\"",
         };
         let toml = format!(
@@ -1284,6 +1290,8 @@ module = ""
             PipelineQueryProvider::store_needs_inline_instance(pipeline, &config)
         };
 
+        assert!(needs("dicom_scu", None), "single node: the backend takes the instance");
+        assert!(needs("dicom", None), "the legacy name of dicom_scu");
         assert!(needs("dicom_scu_streaming", None), "single node: the backend takes the instance");
         assert!(needs("http_streaming_backend", Table("dicom_to_http")), "streaming bridge");
         assert!(

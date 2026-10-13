@@ -9,6 +9,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
+use super::dicom_store_body::{part10_from_store_body, StoreBodyError};
 use crate::globals::get_storage;
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
@@ -1051,8 +1052,8 @@ impl DicomScuBackend {
                 //      DICOM part payloads, populated by the DICOMweb STOW-RS bridge
                 //      (see `DicomwebEndpoint::endpoint_incoming_request`). Each part
                 //      results in one C-STORE. Results are aggregated.
-                //   2. `envelope.original_data` — a single Part 10 file
-                //      (128-byte preamble + "DICM" magic) or bare dataset bytes.
+                //   2. `envelope.original_data` — one instance. See
+                //      `store_dataset_from_body` for the accepted body forms.
 
                 // 1. Multipart-extracted parts path.
                 let stow_parts = envelope
@@ -1164,87 +1165,8 @@ impl DicomScuBackend {
                     return Ok(envelope.clone());
                 }
 
-                // 2. Single-body legacy path.
-                if envelope.original_data.is_empty() {
-                    serde_json::json!({
-                        "operation": "store",
-                        "success": false,
-                        "error": "No DICOM data provided in request body"
-                    })
-                } else {
-                    // Detect format: Part 10 files have "DICM" at byte 128
-                    let is_part10 = envelope.original_data.len() > 132
-                        && &envelope.original_data[128..132] == b"DICM";
-
-                    let dataset = if is_part10 {
-                        // Parse as Part 10 DICOM file
-                        match dicom_object::from_reader(std::io::Cursor::new(&envelope.original_data)) {
-                            Ok(file_obj) => DatasetStream::from_object(file_obj.into_inner()),
-                            Err(e) => {
-                                return Ok({
-                                    let mut env = envelope.clone();
-                                    env.normalized_data = Some(serde_json::json!({
-                                        "operation": "store",
-                                        "success": false,
-                                        "error": format!("Failed to parse DICOM Part 10 file: {}", e)
-                                    }));
-                                    env
-                                });
-                            }
-                        }
-                    } else {
-                        // Treat as raw dataset bytes (from DICOM/DICOMweb pipeline)
-                        DatasetStream::from_bytes(bytes::Bytes::from(envelope.original_data.clone()))
-                    };
-
-                    match scu.store(&remote_node, dataset).await {
-                        Ok(success) => {
-                            // Try to extract SOP UIDs from the original data for the response
-                            let (sop_class_uid, sop_instance_uid) = {
-                                use std::io::Cursor;
-                                let cursor = Cursor::new(&envelope.original_data);
-                                match dicom_object::from_reader(cursor) {
-                                    Ok(obj) => {
-                                        let class_uid = obj
-                                            .element_by_name("SOPClassUID")
-                                            .ok()
-                                            .and_then(|e| e.to_str().ok())
-                                            .map(|s| s.to_string());
-                                        let instance_uid = obj
-                                            .element_by_name("SOPInstanceUID")
-                                            .ok()
-                                            .and_then(|e| e.to_str().ok())
-                                            .map(|s| s.to_string());
-                                        (class_uid, instance_uid)
-                                    }
-                                    Err(_) => (None, None),
-                                }
-                            };
-
-                            let mut response = serde_json::json!({
-                                "operation": "store",
-                                "success": success,
-                                "remote_aet": remote_node.ae_title,
-                                "host": remote_node.host,
-                                "port": remote_node.port
-                            });
-
-                            if let Some(uid) = sop_class_uid {
-                                response["sop_class_uid"] = serde_json::json!(uid);
-                            }
-                            if let Some(uid) = sop_instance_uid {
-                                response["sop_instance_uid"] = serde_json::json!(uid);
-                            }
-
-                            response
-                        }
-                        Err(e) => serde_json::json!({
-                            "operation": "store",
-                            "success": false,
-                            "error": e.to_string()
-                        }),
-                    }
-                }
+                // 2. Single-body path.
+                Self::store_single_body(&scu, &remote_node, &envelope.original_data).await
             }
             _ => {
                 // This should never be reached due to validation above, but handle it gracefully
@@ -1258,6 +1180,85 @@ impl DicomScuBackend {
 
         envelope.normalized_data = Some(result);
         Ok(envelope.clone())
+    }
+
+    /// Send the one instance in a store request body to `remote_node`.
+    ///
+    /// Returns the backend's JSON response. `success` is true only when the
+    /// remote node took the instance.
+    async fn store_single_body(
+        scu: &DimseScu,
+        remote_node: &RemoteNode,
+        body: &[u8],
+    ) -> serde_json::Value {
+        let dataset = match Self::store_dataset_from_body(body) {
+            Ok(dataset) => dataset,
+            Err(reason) => {
+                return serde_json::json!({
+                    "operation": "store",
+                    "success": false,
+                    "error": reason
+                });
+            }
+        };
+        let sop_class_uid = dataset.metadata().sop_class_uid.clone();
+        let sop_instance_uid = dataset.metadata().sop_instance_uid.clone();
+
+        match scu.store(remote_node, dataset).await {
+            Ok(success) => {
+                let mut response = serde_json::json!({
+                    "operation": "store",
+                    "success": success,
+                    "remote_aet": remote_node.ae_title,
+                    "host": remote_node.host,
+                    "port": remote_node.port
+                });
+                if let Some(uid) = sop_class_uid {
+                    response["sop_class_uid"] = serde_json::json!(uid);
+                }
+                if let Some(uid) = sop_instance_uid {
+                    response["sop_instance_uid"] = serde_json::json!(uid);
+                }
+                response
+            }
+            Err(e) => serde_json::json!({
+                "operation": "store",
+                "success": false,
+                "error": e.to_string()
+            }),
+        }
+    }
+
+    /// Read the instance for a C-STORE from a request body.
+    ///
+    /// Three body forms are accepted:
+    /// - A DICOM Part 10 file. An HTTP client sends this.
+    /// - A JSON object with the Part 10 file as base64 in `part10_b64`. The
+    ///   DIMSE adapter builds this when a `dicom_scp` endpoint is in the same
+    ///   pipeline.
+    /// - Any other body that does not start with `{`. It is sent as bare data
+    ///   set bytes, which the SCU reads as Implicit VR Little Endian.
+    ///
+    /// A JSON body without `part10_b64` carries no instance and is rejected.
+    /// Its `file` key is never read. See `dicom_store_body` for the reason.
+    fn store_dataset_from_body(body: &[u8]) -> Result<DatasetStream, String> {
+        if body.is_empty() {
+            return Err("No DICOM data provided in request body".to_string());
+        }
+        let part10 = match part10_from_store_body(body) {
+            Ok(part10) => part10,
+            // The JSON body a `dicom_scp` endpoint builds starts with `{`, and
+            // it must be rejected when it cannot be parsed. Data set bytes that
+            // start with that byte have no group 0008, so no SOP Class UID,
+            // and could not be stored anyway.
+            Err(StoreBodyError::NotPart10OrJson { .. }) if body.first() != Some(&b'{') => {
+                return Ok(DatasetStream::from_bytes(bytes::Bytes::copy_from_slice(body)));
+            }
+            Err(e) => return Err(format!("dicom_scu store: {}", e)),
+        };
+        let file = dicom_object::from_reader(std::io::Cursor::new(part10.as_ref()))
+            .map_err(|e| format!("Failed to parse DICOM Part 10 file: {}", e))?;
+        Ok(DatasetStream::from_object(file.into_inner()))
     }
 }
 
@@ -1542,5 +1543,155 @@ mod tests {
         let mut options = opts();
         options.insert("dimse_retrieve_mode".to_string(), Value::String("move".to_string()));
         assert_eq!(resolve_dimse_op(&env, &options), "move");
+    }
+
+    // ── C-STORE request bodies ───────────────────────────────────────────────
+
+    fn sample_part10() -> Vec<u8> {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("samples/dicom/study_1/series_1/CT.1.1.dcm");
+        fs::read(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
+    }
+
+    fn sample_sop_instance_uid() -> String {
+        let file = dicom_object::from_reader(std::io::Cursor::new(sample_part10()))
+            .expect("sample instance parses");
+        let uid = file
+            .element_by_name("SOPInstanceUID")
+            .expect("sample has a SOP Instance UID")
+            .to_str()
+            .expect("UID is text")
+            .to_string();
+        uid
+    }
+
+    fn json_body(body: Value) -> Vec<u8> {
+        serde_json::to_vec(&body).expect("serialise body")
+    }
+
+    fn b64(bytes: &[u8]) -> String {
+        base64::engine::general_purpose::STANDARD.encode(bytes)
+    }
+
+    fn store_body_error(body: &[u8]) -> String {
+        match DicomScuBackend::store_dataset_from_body(body) {
+            Ok(_) => panic!("the body should be rejected"),
+            Err(reason) => reason,
+        }
+    }
+
+    #[test]
+    fn test_store_dataset_reads_part10_b64_and_ignores_file() {
+        // AURA-2476. This is the body a `dicom_scp` endpoint builds. The path
+        // does not exist, so reading it would fail the request.
+        let body = json_body(serde_json::json!({
+            "command": {"message_id": 1},
+            "dataset": {},
+            "file": "/nonexistent/aura-2476/instance.dcm",
+            "part10_b64": b64(&sample_part10()),
+        }));
+
+        let dataset = DicomScuBackend::store_dataset_from_body(&body).expect("instance");
+
+        assert!(matches!(dataset, DatasetStream::Object { .. }));
+        assert_eq!(
+            dataset.metadata().sop_instance_uid,
+            Some(sample_sop_instance_uid())
+        );
+    }
+
+    #[test]
+    fn test_store_dataset_never_reads_a_file_named_by_the_request() {
+        // The file is a valid instance, so the only way this request can fail
+        // is that the backend did not open it.
+        let dir = tempfile::tempdir().expect("tempdir");
+        let file = dir.path().join("instance.dcm");
+        fs::write(&file, sample_part10()).expect("write instance");
+
+        let reason = store_body_error(&json_body(serde_json::json!({
+            "command": {"message_id": 1},
+            "dataset": {},
+            "file": file.to_string_lossy(),
+        })));
+
+        assert!(reason.contains("does not read files"), "unexpected error: {}", reason);
+    }
+
+    #[test]
+    fn test_store_dataset_accepts_part10_body() {
+        let dataset =
+            DicomScuBackend::store_dataset_from_body(&sample_part10()).expect("instance");
+
+        assert!(matches!(dataset, DatasetStream::Object { .. }));
+        assert_eq!(
+            dataset.metadata().sop_instance_uid,
+            Some(sample_sop_instance_uid())
+        );
+    }
+
+    #[test]
+    fn test_store_dataset_sends_other_bytes_as_a_bare_data_set() {
+        // (0008,0016) SOP Class UID, Implicit VR Little Endian. Not Part 10
+        // and not JSON.
+        let bare = [0x08, 0x00, 0x16, 0x00, 0x02, 0x00, 0x00, 0x00, b'1', 0x00];
+
+        let dataset = DicomScuBackend::store_dataset_from_body(&bare).expect("data set");
+
+        match &dataset {
+            DatasetStream::Memory { data, .. } => assert_eq!(data.as_ref(), &bare[..]),
+            other => panic!("expected the body as bare bytes, got {:?}", other.metadata()),
+        }
+    }
+
+    #[test]
+    fn test_store_dataset_never_sends_unreadable_json_as_a_data_set() {
+        // serde_json writes a data set with many nested sequences but refuses
+        // to read it back. That body holds a local path and must not go to
+        // the PACS as data set bytes.
+        let nested = format!("{{\"dataset\":{}{}}}", "[".repeat(200), "]".repeat(200));
+
+        let reason = store_body_error(nested.as_bytes());
+
+        assert!(
+            reason.contains("neither a DICOM Part 10 file nor JSON"),
+            "unexpected error: {}",
+            reason
+        );
+    }
+
+    #[test]
+    fn test_store_dataset_rejects_bodies_without_an_instance() {
+        let rejected = [
+            (Vec::new(), "No DICOM data provided"),
+            (json_body(serde_json::json!({"dataset": {}})), "no 'part10_b64' string"),
+            (json_body(serde_json::json!({"part10_b64": 7})), "no 'part10_b64' string"),
+            (
+                json_body(serde_json::json!({"part10_b64": "not base64!"})),
+                "not valid base64",
+            ),
+            (
+                json_body(serde_json::json!({"part10_b64": b64(b"bare data set bytes")})),
+                "not a DICOM Part 10 file",
+            ),
+        ];
+        for (body, expected) in rejected {
+            let reason = store_body_error(&body);
+            assert!(reason.contains(expected), "expected {:?} in: {}", expected, reason);
+        }
+    }
+
+    #[test]
+    fn test_store_dataset_rejects_part10_magic_without_a_data_set() {
+        let mut truncated = vec![0u8; 128];
+        truncated.extend_from_slice(b"DICM");
+        truncated.extend_from_slice(&[0u8; 8]);
+
+        let reason = store_body_error(&truncated);
+
+        assert!(
+            reason.contains("Failed to parse DICOM Part 10 file"),
+            "unexpected error: {}",
+            reason
+        );
     }
 }
