@@ -381,7 +381,11 @@ impl DicomScuStreamingBackend {
     /// LAST envelope from the response stream and inspects
     /// `metadata.dicom_status`. A `0x0000` value means success. A `0xC000` value
     /// signals failure and the SCP returns a DIMSE failure status to the client.
-    fn build_store_response(
+    ///
+    /// Metadata does not reach a dispatcher on another Harmony. Over HTTP only
+    /// the body is sent, so the `success` key in the body is the result that
+    /// dispatcher reads. Keep it.
+    pub(crate) fn build_store_response(
         request_details: &crate::models::envelope::envelope::RequestDetails,
         command: &Option<Command>,
         remote_node: &RemoteNode,
@@ -1551,6 +1555,10 @@ mod tests {
             env.response_details.metadata.get("dicom_status").map(|s| s.as_str()),
             Some("0xC000"),
         );
+        // A sending Harmony reads the result from the body.
+        let body = env.normalized_data.expect("the response has a JSON body");
+        assert_eq!(body.get("success"), Some(&serde_json::json!(false)));
+        assert_eq!(body.get("error"), Some(&serde_json::json!("association failed")));
     }
 
     #[tokio::test]

@@ -114,6 +114,29 @@ differs from the file.
 backend does not send the headers above, and the request body stays the JSON
 that `dicom_scp` builds.
 
+##### C-STORE response
+
+Behind an `http_streaming` endpoint the answer to a store request is one
+NDJSON line under HTTP 200. The HTTP status is 200 whether or not the PACS
+took the instance. Read `success` to learn the result.
+
+```json
+{"operation":"store","success":false,"remote_aet":"PACS","host":"pacs.example.com","port":4242,"sop_instance_uid":"1.2.3","error":"C-STORE to PACS@pacs.example.com:4242 failed: could not connect to server","_stream_sequence":1}
+```
+
+| Key | Value |
+|-----|-------|
+| `success` | `true` when the PACS accepted the instance, otherwise `false` |
+| `error` | The reason, present only when `success` is `false` |
+| `remote_aet`, `host`, `port` | The PACS the backend sent to |
+| `sop_class_uid`, `sop_instance_uid` | Taken from the file, when known |
+
+A `dicom_scp` endpoint that bridged the C-STORE reads this line. When
+`success` is `false`, it answers the sending device with status `0xC000`, so
+the device keeps the instance and can send it again. The `error` text goes to
+the Harmony log. A response-side transform on either Harmony must keep the
+`success` key, or a failed store is reported as stored.
+
 **Transfer syntaxes:** the `transfer_syntaxes` option lists the transfer
 syntaxes proposed for the storage presentation contexts of the C-GET, most
 preferred first. Instances arrive in one of them. The default is Explicit VR
