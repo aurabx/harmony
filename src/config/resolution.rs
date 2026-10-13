@@ -1,5 +1,6 @@
 use crate::config::config::Config;
 use crate::models::connection::{AuthenticationDefinition, ConnectionConfig};
+use std::borrow::Cow;
 use std::collections::HashMap;
 
 /// Prefix of the TOML table that holds authentication definitions. References
@@ -83,16 +84,40 @@ fn resolve_authentication_ref(
         .ok_or_else(|| unknown_authentication_message(kind, name, auth_ref, authentications))
 }
 
+/// Escapes control characters in a config-supplied string before it goes
+/// into an error message.
+///
+/// Names and ids come from the config file, and reference errors are written
+/// to stderr and the reload log. A raw newline in an id would forge a log
+/// line, and a raw ESC would send an ANSI sequence to the terminal. Only
+/// control characters (`char::is_control`) are escaped, so ordinary ids print
+/// unchanged. A newline prints as `\n` and ESC as `\u{1b}`.
+fn escape_control_chars(value: &str) -> Cow<'_, str> {
+    if !value.chars().any(char::is_control) {
+        return Cow::Borrowed(value);
+    }
+    let mut escaped = String::with_capacity(value.len());
+    for character in value.chars() {
+        if character.is_control() {
+            escaped.extend(character.escape_default());
+        } else {
+            escaped.push(character);
+        }
+    }
+    Cow::Owned(escaped)
+}
+
 /// Lists the keys of a config table, sorted, for an "unknown reference" error.
 /// An empty table is spelled out so the message never ends in a bare colon.
+/// Keys are escaped because TOML quoted keys can hold control characters.
 fn available_keys<V>(table: &HashMap<String, V>) -> String {
     let mut available: Vec<&str> = table.keys().map(String::as_str).collect();
     available.sort_unstable();
     if available.is_empty() {
-        "(none defined)".to_string()
-    } else {
-        available.join(", ")
+        return "(none defined)".to_string();
     }
+    let escaped: Vec<Cow<'_, str>> = available.into_iter().map(escape_control_chars).collect();
+    escaped.join(", ")
 }
 
 /// Checks every rule id listed by a policy and every policy id listed by a
@@ -144,7 +169,8 @@ fn unknown_rule_errors(config: &Config) -> Vec<String> {
         .map(|(policy_key, rule_id)| {
             format!(
                 "Policy '{}' references unknown rule '{}'",
-                policy_key, rule_id
+                escape_control_chars(policy_key),
+                escape_control_chars(rule_id)
             )
         })
         .collect()
@@ -178,7 +204,8 @@ fn unknown_policy_errors(config: &Config) -> Vec<String> {
         .map(|(instance_name, policy_id)| {
             format!(
                 "Middleware '{}' references unknown policy '{}'",
-                instance_name, policy_id
+                escape_control_chars(instance_name),
+                escape_control_chars(policy_id)
             )
         })
         .collect()
@@ -191,6 +218,10 @@ fn unknown_authentication_message(
     authentications: &HashMap<String, AuthenticationDefinition>,
 ) -> String {
     let available = available_keys(authentications);
+    let name = escape_control_chars(name);
+    // The prefix has no control characters, so stripping it before or after
+    // escaping gives the same bare key.
+    let auth_ref = escape_control_chars(auth_ref);
 
     match auth_ref.strip_prefix(AUTHENTICATIONS_TABLE_PREFIX) {
         Some(bare_key) => format!(
