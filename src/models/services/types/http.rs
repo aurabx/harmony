@@ -13,6 +13,16 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
+/// `ProtocolCtx.meta` keys the HTTP router sets for a request that matched a
+/// mesh ingress. They are copied into the request envelope metadata.
+const MESH_META_KEYS: [&str; 5] = [
+    "mesh_name",
+    "mesh_ingress",
+    "mesh_pipeline",
+    "mesh_provider",
+    "mesh_type",
+];
+
 #[derive(Debug, Deserialize)]
 pub struct HttpEndpoint {}
 
@@ -154,6 +164,14 @@ impl ServiceType for HttpEndpoint {
         }
         if let Some(port) = ctx.meta.get("remote_port") {
             metadata.insert("remote_port".into(), port.clone());
+        }
+        // Mesh routing context set by the HTTP router. The executor keys
+        // ingress mesh_auth injection on `mesh_name`, so dropping these would
+        // leave a mesh ingress unauthenticated.
+        for key in MESH_META_KEYS {
+            if let Some(value) = ctx.meta.get(key) {
+                metadata.insert(key.to_string(), value.clone());
+            }
         }
 
         let method = attrs
