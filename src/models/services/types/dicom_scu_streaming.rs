@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::collections::HashMap;
 use std::pin::Pin;
 
+use super::dicom_store_body::part10_from_store_body;
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use dicom_json_tool as djt;
@@ -264,7 +265,8 @@ impl DicomScuStreamingBackend {
     /// The returned dataset has its SOP UIDs and its transfer syntax, taken
     /// from the file meta group, in its metadata.
     fn extract_store_dataset(envelope: &RequestEnvelope<Vec<u8>>) -> Result<DatasetStream, Error> {
-        let part10 = Self::store_part10_bytes(&envelope.original_data)?;
+        let part10 = part10_from_store_body(&envelope.original_data)
+            .map_err(|e| Error::from(format!("dicom_scu_streaming store: {}", e)))?;
 
         let file = dicom_object::from_reader(std::io::Cursor::new(part10.as_ref())).map_err(|e| {
             Error::from(format!(
@@ -315,64 +317,6 @@ impl DicomScuStreamingBackend {
             "dicom_scu_streaming store: header {} says {:?} but the instance says {:?}",
             header, stated, actual
         )))
-    }
-
-    /// Find the Part 10 bytes in a C-STORE request body.
-    fn store_part10_bytes(body: &[u8]) -> Result<std::borrow::Cow<'_, [u8]>, Error> {
-        use base64::Engine;
-        const ACCEPTED: &str = "Send the DICOM Part 10 file as the request body, \
-             or as base64 in the 'part10_b64' key of a JSON body";
-
-        if body.is_empty() {
-            return Err(Error::from(format!(
-                "dicom_scu_streaming store: envelope has no original_data. {}",
-                ACCEPTED
-            )));
-        }
-        if Self::is_part10(body) {
-            return Ok(std::borrow::Cow::Borrowed(body));
-        }
-
-        let json: serde_json::Value = serde_json::from_slice(body).map_err(|e| {
-            Error::from(format!(
-                "dicom_scu_streaming store: the {}-byte body is neither a DICOM Part 10 file nor JSON ({}). {}",
-                body.len(),
-                e,
-                ACCEPTED
-            ))
-        })?;
-        let Some(part10_b64) = json.get("part10_b64").and_then(|v| v.as_str()) else {
-            let reason = if json.get("file").is_some() {
-                "the body names a path in 'file', and this backend does not read files named by a request"
-            } else {
-                "the JSON body has no 'part10_b64' string"
-            };
-            return Err(Error::from(format!(
-                "dicom_scu_streaming store: {}. {}",
-                reason, ACCEPTED
-            )));
-        };
-
-        let decoded = base64::engine::general_purpose::STANDARD
-            .decode(part10_b64)
-            .map_err(|e| {
-                Error::from(format!(
-                    "dicom_scu_streaming store: 'part10_b64' is not valid base64: {}",
-                    e
-                ))
-            })?;
-        if !Self::is_part10(&decoded) {
-            return Err(Error::from(format!(
-                "dicom_scu_streaming store: 'part10_b64' decodes to {} bytes that are not a DICOM Part 10 file",
-                decoded.len()
-            )));
-        }
-        Ok(std::borrow::Cow::Owned(decoded))
-    }
-
-    /// Detect whether `bytes` looks like a DICOM Part 10 file (DICM magic at offset 128).
-    fn is_part10(bytes: &[u8]) -> bool {
-        bytes.len() > 132 && &bytes[128..132] == b"DICM"
     }
 
     /// Build the final response envelope for a C-STORE result.
@@ -1271,27 +1215,6 @@ mod tests {
             .normalized_snapshot(None)
             .build()
             .expect("build envelope")
-    }
-
-    #[test]
-    fn test_is_part10_detects_dicm_magic() {
-        let mut buf = vec![0u8; 128];
-        buf.extend_from_slice(b"DICM");
-        buf.extend_from_slice(&[0u8; 100]);
-        assert!(DicomScuStreamingBackend::is_part10(&buf));
-    }
-
-    #[test]
-    fn test_is_part10_rejects_short_buffer() {
-        assert!(!DicomScuStreamingBackend::is_part10(&[0u8; 100]));
-    }
-
-    #[test]
-    fn test_is_part10_rejects_wrong_magic() {
-        let mut buf = vec![0u8; 128];
-        buf.extend_from_slice(b"XXXX");
-        buf.extend_from_slice(&[0u8; 100]);
-        assert!(!DicomScuStreamingBackend::is_part10(&buf));
     }
 
     fn extract_error(envelope: &RequestEnvelope<Vec<u8>>) -> String {

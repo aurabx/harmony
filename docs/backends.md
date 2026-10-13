@@ -253,14 +253,14 @@ ca_cert_path = "./certs/internal-ca.pem"
 
 ### DICOM SCU (Service Class User)
 
-A DICOM DIMSE backend for connecting to remote DICOM PACS via C-ECHO/C-FIND/C-MOVE/C-GET operations.
+A DICOM DIMSE backend for connecting to remote DICOM PACS via C-ECHO/C-FIND/C-MOVE/C-GET/C-STORE operations.
 
 **Service behavior**:
 - Converts `RequestEnvelope` to DICOM DIMSE operations (SCU - outgoing requests)
 - Uses `resolve_operation()` to determine the DIMSE action: Query→C-FIND, Retrieve→C-GET/C-MOVE, Store→C-STORE, Ping→C-ECHO. Falls back to path-based detection if no Command is set. See [commands.md](commands.md).
 - Communicates with remote DICOM nodes using AE titles
 - Converts DICOM responses back to `ResponseEnvelope`
-- Supports C-ECHO, C-FIND, C-MOVE, C-GET operations
+- Supports C-ECHO, C-FIND, C-MOVE, C-GET, C-STORE operations
 
 **Configuration**:
 ```toml
@@ -309,6 +309,32 @@ use_tls = false
 - `C-FIND`: Query for studies/series/images
 - `C-MOVE`: Request dataset transfer
 - `C-GET`: Retrieve datasets
+- `C-STORE`: Send one instance to the PACS per request
+
+**C-STORE request body**:
+
+| Body | Sent by | Result |
+|------|---------|--------|
+| A DICOM Part 10 file | An HTTP client | The instance is sent |
+| A JSON object with the Part 10 file as base64 in `part10_b64` | The `dicom_scp` endpoint in the same pipeline | The instance is sent |
+| A JSON object without `part10_b64` | | Rejected |
+| Any other body | An HTTP client | Sent as bare data set bytes, read as Implicit VR Little Endian |
+
+The backend never opens a file that a request names. A JSON body with a `file`
+key and no `part10_b64` is rejected.
+
+A DICOMweb STOW-RS request reaches this backend as one C-STORE per part. The
+`dicomweb` endpoint takes the parts out of the multipart body.
+
+The response is JSON. Read `success` to learn the result:
+
+```json
+{"operation":"store","success":true,"remote_aet":"ORTHANC","host":"localhost","port":4242,"sop_class_uid":"1.2.840.10008.5.1.4.1.1.2","sop_instance_uid":"1.2.3"}
+```
+
+A failed store has `"success": false` and an `error` string. A `dicom_scp`
+endpoint in front of this backend then answers the sending device with status
+`0xC000`.
 
 See [dimse-integration.md](dimse-integration.md) for detailed DIMSE usage.
 
