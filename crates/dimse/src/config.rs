@@ -329,11 +329,12 @@ fn default_max_pdu() -> u32 {
     65536
 }
 
-/// 1 GiB. The SCP holds each instance in memory and copies it several times
-/// while it stores it, so the default stays well below the memory of a small
-/// host. Sites that receive larger instances raise it.
+/// 4 GiB, so that large breast tomosynthesis instances are accepted without
+/// configuration. The SCP holds each instance in memory and copies it several
+/// times while it stores it (AURA-2499), so a host that cannot hold several
+/// times this value should set a lower limit.
 pub fn default_max_dataset_bytes() -> u64 {
-    1024 * 1024 * 1024
+    4 * 1024 * 1024 * 1024
 }
 
 fn default_connect_timeout() -> u64 {
