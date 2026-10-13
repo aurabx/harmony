@@ -218,6 +218,8 @@ Available policies: office, vpn
 
 The `Available rules` line appears only when a rule id is undefined. The `Available policies` line appears only when a policy id is undefined.
 
+Control characters in a name or id are escaped in the error. A newline prints as `\n` and ESC prints as `\u{1b}`.
+
 At startup and with `--validate-config`, Harmony prints the error on stderr and exits with code 1. On hot reload, Harmony rejects the file and keeps the previous config.
 
 ## Rule Types

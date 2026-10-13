@@ -528,6 +528,49 @@ authentication = "fhir_bearer"
     assert_eq!(auth_def["method"], "bearer");
 }
 
+/// References and names come from the config file, and the error goes to
+/// stderr and the reload log. A newline or an ANSI escape in them must not
+/// start a new log line or reach the terminal. Control characters are printed
+/// escaped, in the reference, the item name, the prefix hint and the list of
+/// available keys.
+#[test]
+fn control_characters_in_authentication_references_are_escaped() {
+    let toml = config_with(&format!(
+        r#"
+[authentications."a\nb"]
+id = "a_b"
+method = "basic"
+
+[targets.upstream]
+connection.host = "api.example.com"
+connection.protocol = "https"
+authentication = "x\nERROR: forged \u001b[31mline"
+
+[targets."t\u001bx"]
+connection.host = "api.example.com"
+connection.protocol = "https"
+authentication = "authentications.b\u001bc"
+{}"#,
+        BACKEND_VIA_TARGET
+    ));
+
+    let err = load_via_file(&toml).expect_err("unknown authentication must fail load");
+
+    let expected = [
+        r#"Target 't\u{1b}x' references unknown authentication 'authentications.b\u{1b}c'. Drop the "authentications." prefix: use "b\u{1b}c" instead of "authentications.b\u{1b}c". Available authentications: a\nb, fhir_bearer, other_basic"#,
+        r"Target 'upstream' references unknown authentication 'x\nERROR: forged \u{1b}[31mline'. Available authentications: a\nb, fhir_bearer, other_basic",
+    ]
+    .join("\n");
+    assert!(
+        err.ends_with(&format!(": {}", expected)),
+        "unexpected error.\nexpected tail:\n{}\nactual:\n{}",
+        expected,
+        err
+    );
+    assert!(!err.contains('\u{1b}'), "raw ESC in error: {:?}", err);
+    assert_eq!(err.lines().count(), 2, "forged line in error: {:?}", err);
+}
+
 /// The binary must exit non-zero and print the reason on stderr, both for
 /// `--validate-config` and for a normal start. Config load runs before
 /// logging is set up, so stderr is the only place the message can appear.

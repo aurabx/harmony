@@ -379,3 +379,76 @@ policies = ["missing_policy"]
         ],
     );
 }
+
+/// Ids come from the config file, and the error goes to stderr and the reload
+/// log. A newline or an ANSI escape in an id must not start a new log line or
+/// reach the terminal. Control characters are printed escaped.
+#[test]
+fn control_characters_in_undefined_ids_are_escaped() {
+    let toml = config_with(
+        r#"
+[policies.office]
+id = "office"
+rules = ["internal_networks", "x\nERROR: forged \u001b[31mline"]
+
+[rules."a\nb"]
+id = "a\nb"
+type = "allow_all"
+
+[middleware.access]
+type = "policies"
+[middleware.access.options]
+policies = ["office", "y\nERROR: forged \u001b[31mpolicy"]
+"#,
+    );
+
+    let err = load_via_file(&toml).expect_err("undefined ids must fail load");
+
+    assert_error_tail(
+        &err,
+        &[
+            r"Middleware 'access' references unknown policy 'y\nERROR: forged \u{1b}[31mpolicy'",
+            r"Policy 'office' references unknown rule 'x\nERROR: forged \u{1b}[31mline'",
+            r"Available rules: a\nb, internal_networks, method_filter",
+            "Available policies: office",
+        ],
+    );
+    assert!(!err.contains('\u{1b}'), "raw ESC in error: {:?}", err);
+    assert_eq!(err.lines().count(), 4, "forged line in error: {:?}", err);
+}
+
+/// The policy key and the middleware instance name are config-supplied too.
+#[test]
+fn control_characters_in_policy_keys_and_instance_names_are_escaped() {
+    let toml = config_with(
+        r#"
+[policies."p\nk"]
+id = "pk"
+rules = ["missing_rule"]
+
+[middleware.access]
+type = "policies"
+[middleware.access.options]
+policies = ["p\nk"]
+
+[middleware."m\u001bw"]
+type = "policies"
+[middleware."m\u001bw".options]
+policies = ["missing_policy"]
+"#,
+    );
+
+    let err = load_via_file(&toml).expect_err("undefined ids must fail load");
+
+    assert_error_tail(
+        &err,
+        &[
+            r"Middleware 'm\u{1b}w' references unknown policy 'missing_policy'",
+            r"Policy 'p\nk' references unknown rule 'missing_rule'",
+            "Available rules: internal_networks, method_filter",
+            r"Available policies: p\nk",
+        ],
+    );
+    assert!(!err.contains('\u{1b}'), "raw ESC in error: {:?}", err);
+    assert_eq!(err.lines().count(), 4, "forged line in error: {:?}", err);
+}
