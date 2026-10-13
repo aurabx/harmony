@@ -236,30 +236,70 @@ async fn a_compressed_instance_larger_than_one_pdu_arrives_whole() {
     );
 }
 
+fn compressed_dataset(pixel_bytes: usize) -> DatasetStream {
+    dataset(
+        instance(DataElement::new(
+            tags::PIXEL_DATA,
+            VR::OB,
+            Value::PixelSequence(PixelFragmentSequence::new_fragments(vec![patterned_bytes(
+                pixel_bytes,
+            )])),
+        )),
+        JPEG_LOSSLESS_SV1,
+    )
+}
+
+/// The instances are compressed because a truncated compressed data set still
+/// parses. Only the size limit can refuse the second one.
 #[tokio::test]
-async fn an_instance_over_the_size_limit_is_refused() {
-    let limit = 2 * MAX_PDU as u64;
+async fn a_compressed_instance_over_the_size_limit_is_refused() {
+    let limit = 4 * MAX_PDU as u64;
     let (port, received, _storage_dir) = start_recording_scp(limit).await;
 
-    let result = store(
-        port,
-        dataset(
-            instance(DataElement::new(
-                tags::PIXEL_DATA,
-                VR::OB,
-                PrimitiveValue::from(patterned_bytes(10 * MAX_PDU as usize)),
-            )),
-            uids::EXPLICIT_VR_LITTLE_ENDIAN,
-        ),
-    )
-    .await;
+    let stored = store(port, compressed_dataset(2 * MAX_PDU as usize))
+        .await
+        .expect("an instance under the limit is accepted");
+    assert!(stored);
+    assert_eq!(received.lock().unwrap().len(), 1);
 
+    let result = store(port, compressed_dataset(10 * MAX_PDU as usize)).await;
     assert!(
         !matches!(result, Ok(true)),
         "an instance over the limit must not be acknowledged as stored"
     );
-    assert!(
-        received.lock().unwrap().is_empty(),
+    assert_eq!(
+        received.lock().unwrap().len(),
+        1,
         "nothing over the limit should reach the provider"
     );
+}
+
+#[tokio::test]
+async fn a_data_set_for_a_disabled_operation_is_refused() {
+    let received = Arc::new(Mutex::new(Vec::new()));
+    let port = free_port();
+    let storage_dir = tempfile::tempdir().expect("storage dir");
+    let scp = DimseScp::new(
+        DimseConfig {
+            local_aet: "RECORDING".to_string(),
+            bind_addr: IpAddr::V4(Ipv4Addr::LOCALHOST),
+            port,
+            max_pdu: MAX_PDU,
+            enable_store: false,
+            storage_dir: storage_dir.path().to_path_buf(),
+            ..Default::default()
+        },
+        Arc::new(RecordingProvider {
+            received: received.clone(),
+        }),
+    );
+    tokio::spawn(scp.run(CancellationToken::new()));
+    wait_for_port(port).await;
+
+    let result = store(port, compressed_dataset(10 * MAX_PDU as usize)).await;
+    assert!(
+        !matches!(result, Ok(true)),
+        "a store must not be acknowledged when C-STORE is disabled"
+    );
+    assert!(received.lock().unwrap().is_empty());
 }

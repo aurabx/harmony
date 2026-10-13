@@ -18,6 +18,12 @@ use crate::{DimseError, Result};
 /// The value of CommandDataSetType (0000,0800) that means no data set follows.
 const NO_DATA_SET: u16 = 0x0101;
 
+/// Largest command set the assembler buffers. A command set holds a handful
+/// of short elements and is a few hundred bytes, so this is generous. It is
+/// fixed, and separate from the data set limit, so that neither a peer nor a
+/// low data set limit can affect it.
+const MAX_COMMAND_SET_BYTES: u64 = 64 * 1024;
+
 /// A complete DIMSE message.
 #[derive(Debug)]
 pub struct DimseMessage {
@@ -49,28 +55,41 @@ enum Progress {
 /// fragments of at most one message at a time.
 pub struct MessageAssembler {
     progress: Progress,
-    max_part_bytes: u64,
+    max_data_set_bytes: u64,
+    commands_with_data_sets: Vec<u16>,
 }
 
 impl MessageAssembler {
-    /// `max_part_bytes` is the largest command set or data set the assembler
-    /// will buffer. DICOM does not limit either, so without it a peer could
-    /// send fragments without end.
-    pub fn new(max_part_bytes: u64) -> Self {
+    /// `max_data_set_bytes` is the largest data set the assembler will
+    /// buffer. DICOM sets no limit, so without it a peer could send fragments
+    /// without end.
+    ///
+    /// `commands_with_data_sets` lists the command fields whose data set the
+    /// assembler will buffer. A data set declared by any other command is
+    /// refused when the command arrives, before any of it is buffered, so a
+    /// peer cannot fill memory through an operation that is switched off.
+    pub fn new(max_data_set_bytes: u64, commands_with_data_sets: Vec<u16>) -> Self {
         Self {
             progress: Progress::Command { bytes: Vec::new() },
-            max_part_bytes,
+            max_data_set_bytes,
+            commands_with_data_sets,
         }
     }
 
-    /// Fail when adding `incoming` bytes to a part of `buffered` bytes would
-    /// pass the limit.
-    fn check_size(&self, part: &str, buffered: usize, incoming: usize) -> Result<()> {
-        let total = (buffered as u64).saturating_add(incoming as u64);
-        if total > self.max_part_bytes {
-            return Err(DimseError::parse(format!(
-                "The {} of a DIMSE message reached {} bytes, over the limit of {} bytes (max_dataset_bytes)",
-                part, total, self.max_part_bytes
+    /// Fail when the command declares a data set that will not be buffered.
+    fn check_data_set_accepted(
+        &self,
+        command: &InMemDicomObject<StandardDataDictionary>,
+    ) -> Result<()> {
+        let command_field = command
+            .element(tags::COMMAND_FIELD)
+            .map_err(|_| DimseError::parse("Missing command field"))?
+            .uint16()
+            .map_err(|e| DimseError::parse(format!("Invalid command field: {}", e)))?;
+        if !self.commands_with_data_sets.contains(&command_field) {
+            return Err(DimseError::operation_failed(format!(
+                "Command 0x{:04X} declares a data set, but the operation is not enabled or not supported",
+                command_field
             )));
         }
         Ok(())
@@ -87,7 +106,12 @@ impl MessageAssembler {
             std::mem::replace(&mut self.progress, Progress::Command { bytes: Vec::new() });
         match (progress, pdv.value_type) {
             (Progress::Command { mut bytes }, PDataValueType::Command) => {
-                self.check_size("command set", bytes.len(), pdv.data.len())?;
+                check_size(
+                    "command set",
+                    bytes.len(),
+                    pdv.data.len(),
+                    MAX_COMMAND_SET_BYTES,
+                )?;
                 bytes.extend_from_slice(&pdv.data);
                 if !pdv.is_last {
                     self.progress = Progress::Command { bytes };
@@ -101,6 +125,7 @@ impl MessageAssembler {
                         presentation_context_id: pdv.presentation_context_id,
                     }));
                 }
+                self.check_data_set_accepted(&command)?;
                 self.progress = Progress::Data {
                     command,
                     presentation_context_id: pdv.presentation_context_id,
@@ -127,7 +152,12 @@ impl MessageAssembler {
                         pdv.presentation_context_id, presentation_context_id
                     )));
                 }
-                self.check_size("data set", bytes.len(), pdv.data.len())?;
+                check_size(
+                    "data set",
+                    bytes.len(),
+                    pdv.data.len(),
+                    self.max_data_set_bytes,
+                )?;
                 bytes.extend_from_slice(&pdv.data);
                 if !pdv.is_last {
                     self.progress = Progress::Data {
@@ -149,6 +179,19 @@ impl MessageAssembler {
             ))),
         }
     }
+}
+
+/// Fail when adding `incoming` bytes to a part of `buffered` bytes would pass
+/// `limit`.
+fn check_size(part: &str, buffered: usize, incoming: usize, limit: u64) -> Result<()> {
+    let total = (buffered as u64).saturating_add(incoming as u64);
+    if total > limit {
+        return Err(DimseError::parse(format!(
+            "The {} of a DIMSE message reached {} bytes, over the limit of {} bytes",
+            part, total, limit
+        )));
+    }
+    Ok(())
 }
 
 /// Parse a command set. Command sets are always Implicit VR Little Endian.
@@ -190,7 +233,12 @@ mod tests {
     const C_STORE_RQ: u16 = 0x0001;
     const C_ECHO_RQ: u16 = 0x0030;
     const DATA_SET_PRESENT: u16 = 0x0000;
+    const C_FIND_RQ: u16 = 0x0020;
     const NO_LIMIT: u64 = u64::MAX;
+
+    fn assembler_with_limit(max_data_set_bytes: u64) -> MessageAssembler {
+        MessageAssembler::new(max_data_set_bytes, vec![C_STORE_RQ])
+    }
 
     fn command_bytes(command_field: u16, data_set_type: u16) -> Vec<u8> {
         let mut command = InMemDicomObject::new_empty();
@@ -240,7 +288,7 @@ mod tests {
 
     #[test]
     fn a_command_without_a_data_set_completes_at_once() {
-        let mut assembler = MessageAssembler::new(NO_LIMIT);
+        let mut assembler = assembler_with_limit(NO_LIMIT);
         let message = assembler
             .push(pdv_on(
                 3,
@@ -257,7 +305,7 @@ mod tests {
 
     #[test]
     fn a_data_set_in_one_fragment_completes_the_message() {
-        let mut assembler = MessageAssembler::new(NO_LIMIT);
+        let mut assembler = assembler_with_limit(NO_LIMIT);
         let command = command_bytes(C_STORE_RQ, DATA_SET_PRESENT);
         assert!(assembler
             .push(pdv(PDataValueType::Command, &command, true))
@@ -273,7 +321,7 @@ mod tests {
 
     #[test]
     fn a_data_set_is_not_complete_until_the_last_fragment() {
-        let mut assembler = MessageAssembler::new(NO_LIMIT);
+        let mut assembler = assembler_with_limit(NO_LIMIT);
         let command = command_bytes(C_STORE_RQ, DATA_SET_PRESENT);
         assembler
             .push(pdv(PDataValueType::Command, &command, true))
@@ -296,7 +344,7 @@ mod tests {
 
     #[test]
     fn a_command_split_across_fragments_is_joined() {
-        let mut assembler = MessageAssembler::new(NO_LIMIT);
+        let mut assembler = assembler_with_limit(NO_LIMIT);
         let command = command_bytes(C_ECHO_RQ, NO_DATA_SET);
         let (first, second) = command.split_at(command.len() / 2);
         assert!(assembler
@@ -312,7 +360,7 @@ mod tests {
 
     #[test]
     fn an_empty_last_data_fragment_completes_the_message() {
-        let mut assembler = MessageAssembler::new(NO_LIMIT);
+        let mut assembler = assembler_with_limit(NO_LIMIT);
         let command = command_bytes(C_STORE_RQ, DATA_SET_PRESENT);
         assembler
             .push(pdv(PDataValueType::Command, &command, true))
@@ -329,7 +377,7 @@ mod tests {
 
     #[test]
     fn the_assembler_takes_a_second_message_after_the_first() {
-        let mut assembler = MessageAssembler::new(NO_LIMIT);
+        let mut assembler = assembler_with_limit(NO_LIMIT);
         let command = command_bytes(C_STORE_RQ, DATA_SET_PRESENT);
         for payload in [[1u8, 2], [3, 4]] {
             assembler
@@ -345,7 +393,7 @@ mod tests {
 
     #[test]
     fn a_data_fragment_with_no_command_is_rejected() {
-        let mut assembler = MessageAssembler::new(NO_LIMIT);
+        let mut assembler = assembler_with_limit(NO_LIMIT);
         let error = assembler
             .push(pdv(PDataValueType::Data, &[1, 2], true))
             .expect_err("no command was sent");
@@ -354,7 +402,7 @@ mod tests {
 
     #[test]
     fn a_data_fragment_after_a_command_without_a_data_set_is_rejected() {
-        let mut assembler = MessageAssembler::new(NO_LIMIT);
+        let mut assembler = assembler_with_limit(NO_LIMIT);
         assembler
             .push(pdv(
                 PDataValueType::Command,
@@ -369,7 +417,7 @@ mod tests {
 
     #[test]
     fn a_command_during_an_incomplete_data_set_is_rejected() {
-        let mut assembler = MessageAssembler::new(NO_LIMIT);
+        let mut assembler = assembler_with_limit(NO_LIMIT);
         let command = command_bytes(C_STORE_RQ, DATA_SET_PRESENT);
         assembler
             .push(pdv(PDataValueType::Command, &command, true))
@@ -385,7 +433,7 @@ mod tests {
 
     #[test]
     fn a_data_set_at_the_limit_is_accepted() {
-        let mut assembler = MessageAssembler::new(64);
+        let mut assembler = assembler_with_limit(64);
         let command = command_bytes(C_STORE_RQ, DATA_SET_PRESENT);
         assert!(command.len() <= 64, "the test command must fit the limit");
         assembler
@@ -403,7 +451,7 @@ mod tests {
 
     #[test]
     fn a_data_set_over_the_limit_is_rejected() {
-        let mut assembler = MessageAssembler::new(64);
+        let mut assembler = assembler_with_limit(64);
         let command = command_bytes(C_STORE_RQ, DATA_SET_PRESENT);
         assembler
             .push(pdv(PDataValueType::Command, &command, true))
@@ -423,17 +471,60 @@ mod tests {
     }
 
     #[test]
-    fn a_command_set_over_the_limit_is_rejected() {
-        let mut assembler = MessageAssembler::new(8);
+    fn a_command_set_over_its_fixed_limit_is_rejected() {
+        let mut assembler = assembler_with_limit(NO_LIMIT);
+        let fragment = vec![0u8; MAX_COMMAND_SET_BYTES as usize];
+        assert!(assembler
+            .push(pdv(PDataValueType::Command, &fragment, false))
+            .expect("exactly the limit is accepted")
+            .is_none());
         let error = assembler
-            .push(pdv(PDataValueType::Command, &[0u8; 9], false))
-            .expect_err("9 bytes are over the limit");
+            .push(pdv(PDataValueType::Command, &[0u8; 1], false))
+            .expect_err("one byte more is over the limit");
         assert!(error.to_string().contains("command set"), "{}", error);
     }
 
     #[test]
+    fn a_low_data_set_limit_does_not_affect_commands() {
+        let mut assembler = assembler_with_limit(1);
+        let command = command_bytes(C_ECHO_RQ, NO_DATA_SET);
+        assert!(command.len() > 1);
+        assembler
+            .push(pdv(PDataValueType::Command, &command, true))
+            .expect("the data set limit must not apply to the command set")
+            .expect("the message is complete");
+    }
+
+    #[test]
+    fn a_data_set_for_a_command_that_is_not_accepted_is_refused_before_buffering() {
+        let mut assembler = MessageAssembler::new(NO_LIMIT, vec![C_FIND_RQ]);
+        let error = assembler
+            .push(pdv(
+                PDataValueType::Command,
+                &command_bytes(C_STORE_RQ, DATA_SET_PRESENT),
+                true,
+            ))
+            .expect_err("C-STORE is not in the accepted list");
+        assert!(error.to_string().contains("0x0001"), "{}", error);
+    }
+
+    #[test]
+    fn a_command_that_is_not_accepted_still_passes_without_a_data_set() {
+        let mut assembler = MessageAssembler::new(NO_LIMIT, Vec::new());
+        let message = assembler
+            .push(pdv(
+                PDataValueType::Command,
+                &command_bytes(C_ECHO_RQ, NO_DATA_SET),
+                true,
+            ))
+            .expect("a command without a data set needs no entry in the list")
+            .expect("the message is complete");
+        assert_eq!(command_field(&message), C_ECHO_RQ);
+    }
+
+    #[test]
     fn a_data_fragment_on_another_presentation_context_is_rejected() {
-        let mut assembler = MessageAssembler::new(NO_LIMIT);
+        let mut assembler = assembler_with_limit(NO_LIMIT);
         let command = command_bytes(C_STORE_RQ, DATA_SET_PRESENT);
         assembler
             .push(pdv_on(1, PDataValueType::Command, &command, true))

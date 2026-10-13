@@ -33,10 +33,13 @@ pub struct DimseConfig {
     #[serde(default = "default_max_pdu")]
     pub max_pdu: u32,
 
-    /// Largest command set or data set, in bytes, that the SCP accepts in
-    /// one DIMSE message. A C-STORE carries one instance per message, so this
-    /// is a limit on the size of one instance. DICOM sets no such limit; it
-    /// stops a peer from making the SCP buffer fragments without end.
+    /// Largest data set, in bytes, that the SCP accepts in one DIMSE
+    /// message. A C-STORE carries one instance per message, so this is a
+    /// limit on the size of one instance. DICOM sets no such limit; it stops
+    /// a peer from making the SCP buffer fragments without end.
+    ///
+    /// It is not a limit on memory. Each association buffers one data set,
+    /// and an instance is copied several times while it is stored.
     #[serde(default = "default_max_dataset_bytes")]
     pub max_dataset_bytes: u64,
 

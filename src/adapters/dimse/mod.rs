@@ -241,6 +241,21 @@ impl DimseAdapter {
                 .get("max_dataset_bytes")
                 .and_then(|v| v.as_u64())
                 .unwrap_or_else(dimse::config::default_max_dataset_bytes);
+            if max_dataset_bytes != 0 && endpoint_limit != max_dataset_bytes {
+                tracing::warn!(
+                    "Endpoint '{}' (pipeline '{}') has max_dataset_bytes {} but another endpoint on {}:{} \
+                     has {}. The listener will use {}. An endpoint that does not set the option counts \
+                     with the default of {}.",
+                    ep.endpoint_name,
+                    ep.pipeline_name,
+                    endpoint_limit,
+                    bind_addr,
+                    port,
+                    max_dataset_bytes,
+                    max_dataset_bytes.max(endpoint_limit),
+                    dimse::config::default_max_dataset_bytes(),
+                );
+            }
             max_dataset_bytes = max_dataset_bytes.max(endpoint_limit);
 
             // Warn if AETs differ across endpoints on the same port

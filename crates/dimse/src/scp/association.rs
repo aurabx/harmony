@@ -11,6 +11,7 @@ use tracing::{error, info, warn};
 use crate::{DimseError, Result};
 
 use super::DimseScp;
+use super::commands;
 use super::message_assembler::MessageAssembler;
 use super::pdu_handler;
 
@@ -65,7 +66,10 @@ async fn handle_association_inner(
 
     // A DIMSE message can span several PDUs, so its fragments are collected
     // across iterations of the loop below.
-    let mut assembler = MessageAssembler::new(scp.config.max_dataset_bytes);
+    let mut assembler = MessageAssembler::new(
+        scp.config.max_dataset_bytes,
+        commands::commands_with_data_sets(&scp.config),
+    );
 
     // Process PDUs until association is released or aborted
     loop {

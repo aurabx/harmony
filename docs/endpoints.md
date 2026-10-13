@@ -219,7 +219,11 @@ storage_dir = "./tmp/dimse"  # Storage directory (optional)
 max_dataset_bytes = 4294967296  # Largest instance accepted, in bytes (default: 4 GiB)
 ```
 
-`max_dataset_bytes` limits the data set of one DIMSE message. A C-STORE carries one instance per message, so it is a limit on the size of one instance. Harmony aborts the association when a peer sends more. Endpoints that share a listen address use the largest value any of them sets.
+`max_dataset_bytes` limits the data set of one DIMSE message. A C-STORE carries one instance per message, so it is a limit on the size of one instance. Harmony aborts the association when a peer sends more.
+
+It is not a limit on memory. Harmony holds each instance in memory and copies it several times while it stores it, and every open association can hold one instance. Set the option to the largest instance you expect, and size the host for several times that value for each concurrent sender.
+
+Endpoints that share a listen address use the largest value among them. An endpoint that does not set the option counts with the default, so the listener goes below 4 GiB only when every endpoint on it sets a lower value. Harmony logs a warning when the values differ.
 
 **Supported Operations**:
 - `C-ECHO` - Connectivity test (enabled by default)
