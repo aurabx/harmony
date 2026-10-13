@@ -46,6 +46,11 @@ fn trim_uid(uid: &str) -> &str {
 ///
 /// - Encapsulated transfer syntax: only that one. The pixel data is not
 ///   transcoded, so no other transfer syntax can carry it.
+/// - A transfer syntax that transforms the whole data set, such as Deflated
+///   Explicit VR Little Endian: Explicit VR Little Endian, then Implicit VR
+///   Little Endian. The transformed stream can have an odd length, which a
+///   P-DATA fragment must not have. The object is already decoded in memory,
+///   so sending it untransformed loses nothing.
 /// - Any other transfer syntax: that one, then Implicit VR Little Endian,
 ///   which every node must accept. The data set is re-encoded as negotiated.
 /// - None recorded: Implicit VR Little Endian.
@@ -65,8 +70,18 @@ pub(crate) fn transfer_syntaxes_to_propose(
         ))
     })?;
 
-    let mut proposal = vec![instance_ts.to_string()];
-    if !ts.is_encapsulated_pixel_data() && instance_ts != uids::IMPLICIT_VR_LITTLE_ENDIAN {
+    if ts.is_encapsulated_pixel_data() {
+        return Ok(vec![instance_ts.to_string()]);
+    }
+    // Neither codec free nor encapsulated pixel data leaves the transfer
+    // syntaxes with a data set codec.
+    let first = if ts.is_codec_free() {
+        instance_ts
+    } else {
+        uids::EXPLICIT_VR_LITTLE_ENDIAN
+    };
+    let mut proposal = vec![first.to_string()];
+    if first != uids::IMPLICIT_VR_LITTLE_ENDIAN {
         proposal.push(uids::IMPLICIT_VR_LITTLE_ENDIAN.to_string());
     }
     Ok(proposal)
@@ -100,11 +115,13 @@ pub(crate) fn check_pixel_data_matches_negotiated(
     match instance_transfer_syntax.map(trim_uid) {
         Some(instance_ts) if instance_ts == negotiated => Ok(()),
         Some(instance_ts) => Err(DimseError::operation_failed(format!(
-            "Instance {} has encapsulated pixel data in transfer syntax {}, but the C-STORE was negotiated in {}.              The pixel data is not transcoded, so the instance was not sent",
+            "Instance {} has encapsulated pixel data in transfer syntax {}, but the C-STORE was negotiated in {}. \
+             The pixel data is not transcoded, so the instance was not sent",
             sop_instance_uid, instance_ts, negotiated
         ))),
         None => Err(DimseError::operation_failed(format!(
-            "Instance {} has encapsulated pixel data and no recorded transfer syntax,              so it cannot be sent in the negotiated transfer syntax {}. The instance was not sent",
+            "Instance {} has encapsulated pixel data and no recorded transfer syntax, \
+             so it cannot be sent in the negotiated transfer syntax {}. The instance was not sent",
             sop_instance_uid, negotiated
         ))),
     }
@@ -425,6 +442,32 @@ mod tests {
     }
 
     #[test]
+    fn proposes_untransformed_syntaxes_for_a_deflated_instance() {
+        assert_eq!(
+            transfer_syntaxes_to_propose(Some(uids::DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN)).unwrap(),
+            vec![
+                uids::EXPLICIT_VR_LITTLE_ENDIAN,
+                uids::IMPLICIT_VR_LITTLE_ENDIAN
+            ]
+        );
+    }
+
+    #[test]
+    fn never_proposes_a_syntax_that_transforms_the_data_set() {
+        for ts in TransferSyntaxRegistry.iter() {
+            if ts.is_codec_free() || ts.is_encapsulated_pixel_data() {
+                continue;
+            }
+            let proposal = transfer_syntaxes_to_propose(Some(ts.uid())).unwrap();
+            assert!(
+                !proposal.iter().any(|uid| uid == ts.uid()),
+                "{} transforms the data set and must not be proposed",
+                ts.uid()
+            );
+        }
+    }
+
+    #[test]
     fn proposal_drops_the_padding_of_a_recorded_uid() {
         assert_eq!(
             transfer_syntaxes_to_propose(Some("1.2.840.10008.1.2.4.70\0")).unwrap(),
@@ -496,15 +539,12 @@ mod tests {
             uids::IMPLICIT_VR_LITTLE_ENDIAN,
         )
         .unwrap_err();
-        let message = error.to_string();
-        for expected in ["1.2.3", JPEG_LOSSLESS_SV1, uids::IMPLICIT_VR_LITTLE_ENDIAN] {
-            assert!(
-                message.contains(expected),
-                "the error should name {}: {}",
-                expected,
-                message
-            );
-        }
+        assert_eq!(
+            error.to_string(),
+            "DIMSE operation failed: Instance 1.2.3 has encapsulated pixel data in transfer syntax \
+             1.2.840.10008.1.2.4.70, but the C-STORE was negotiated in 1.2.840.10008.1.2. \
+             The pixel data is not transcoded, so the instance was not sent"
+        );
     }
 
     #[test]
@@ -516,10 +556,11 @@ mod tests {
             uids::IMPLICIT_VR_LITTLE_ENDIAN,
         )
         .unwrap_err();
-        assert!(
-            error.to_string().contains("no recorded transfer syntax"),
-            "the error should say the transfer syntax is missing: {}",
-            error
+        assert_eq!(
+            error.to_string(),
+            "DIMSE operation failed: Instance 1.2.3 has encapsulated pixel data and no recorded \
+             transfer syntax, so it cannot be sent in the negotiated transfer syntax \
+             1.2.840.10008.1.2. The instance was not sent"
         );
     }
 }

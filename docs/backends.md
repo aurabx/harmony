@@ -340,6 +340,7 @@ and proposes it to the PACS:
 |----------|----------------------------|
 | Compressed pixel data, for example JPEG Lossless | The transfer syntax of the instance |
 | Uncompressed pixel data | The transfer syntax of the instance, then Implicit VR Little Endian |
+| Deflated Explicit VR Little Endian | Explicit VR Little Endian, then Implicit VR Little Endian. The instance is sent without deflate compression |
 | Bare data set bytes | Implicit VR Little Endian |
 
 The backend does not transcode pixel data. A compressed instance reaches the

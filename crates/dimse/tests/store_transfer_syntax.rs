@@ -251,6 +251,32 @@ async fn the_scp_records_the_transfer_syntax_of_an_uncompressed_instance() {
 }
 
 #[tokio::test]
+async fn a_deflated_instance_is_sent_as_explicit_vr() {
+    let (port, received, _storage_dir) = start_recording_scp().await;
+
+    // The label is enough. The object is already decoded, so nothing here
+    // inflates or deflates.
+    scu()
+        .store(
+            &node("RECORDING", port),
+            dataset(
+                instance_with_native_pixel_data(),
+                Some(uids::DEFLATED_EXPLICIT_VR_LITTLE_ENDIAN),
+            ),
+        )
+        .await
+        .expect("the SCP accepts every transfer syntax");
+
+    let received = received.lock().unwrap();
+    assert_eq!(received.len(), 1, "the SCP should hold exactly one instance");
+    assert_eq!(
+        received[0].transfer_syntax.as_deref(),
+        Some(uids::EXPLICIT_VR_LITTLE_ENDIAN),
+        "a deflated data set must not be put in P-DATA fragments"
+    );
+}
+
+#[tokio::test]
 async fn an_instance_without_a_recorded_transfer_syntax_is_sent_as_implicit_vr() {
     let (port, received, _storage_dir) = start_recording_scp().await;
 
