@@ -318,10 +318,23 @@ use_tls = false
 | A DICOM Part 10 file | An HTTP client | The instance is sent |
 | A JSON object with the Part 10 file as base64 in `part10_b64` | The `dicom_scp` endpoint in the same pipeline | The instance is sent |
 | A JSON object without `part10_b64` | | Rejected |
-| Any other body | An HTTP client | Sent as bare data set bytes, read as Implicit VR Little Endian |
+| Any other body that does not start with `{` | An HTTP client | Sent as bare data set bytes, read as Implicit VR Little Endian |
+| A body that starts with `{` and is not valid JSON | | Rejected |
 
 The backend never opens a file that a request names. A JSON body with a `file`
 key and no `part10_b64` is rejected.
+
+The backend sends the instance in `part10_b64` as it was received. A change
+that middleware makes to the `dataset` key does not change what is sent. A
+`transform` that removes patient tags from `dataset` does not de-identify the
+instance that reaches the PACS.
+
+A middleware that replaces the whole body, such as `transform`, must keep
+`part10_b64` in its output. Without it the backend has no instance to send and
+the store fails.
+
+The backend proposes Implicit VR Little Endian only. An instance with
+compressed pixel data cannot be sent yet.
 
 A DICOMweb STOW-RS request reaches this backend as one C-STORE per part. The
 `dicomweb` endpoint takes the parts out of the multipart body.

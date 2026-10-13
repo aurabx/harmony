@@ -156,6 +156,28 @@ host = "127.0.0.1"
 port = {pacs_port}
 local_aet = "HARMONY_S1"
 
+# dicom_scp -> dicom, the legacy name of dicom_scu, PACS is up
+[pipelines.to_pacs_legacy_name]
+networks = ["default"]
+endpoints = ["scp_to_pacs_legacy_name"]
+backends = ["pacs_legacy_name"]
+middleware = []
+
+[endpoints.scp_to_pacs_legacy_name]
+service = "dicom_scp"
+[endpoints.scp_to_pacs_legacy_name.options]
+local_aet = "HARMONY_S3"
+port = 11115
+enable_store = true
+
+[backends.pacs_legacy_name]
+service = "dicom"
+[backends.pacs_legacy_name.options]
+aet = "TEST_PACS"
+host = "127.0.0.1"
+port = {pacs_port}
+local_aet = "HARMONY_S3"
+
 # dicom_scp -> dicom_scu, PACS is down
 [pipelines.to_down_pacs]
 networks = ["default"]
@@ -182,6 +204,9 @@ local_aet = "HARMONY_S2"
 module = ""
 
 [services.dicom_scu]
+module = ""
+
+[services.dicom]
 module = ""
 "#
     );
@@ -219,15 +244,19 @@ async fn send_sample(pipeline: &str, endpoint: &str) -> dimse::Result<()> {
     let outcome = PipelineQueryProvider::new(pipeline, endpoint)
         .store(dataset)
         .await;
-    std::fs::remove_file(&stored_file).expect("remove the adapter's copy");
+    // A store that fails early writes no copy. Its error must reach the test.
+    if stored_file.exists() {
+        std::fs::remove_file(&stored_file).expect("remove the adapter's copy");
+    }
     outcome
 }
 
-#[tokio::test]
-async fn dicom_scu_backend_sends_the_received_instance_to_the_pacs() {
+/// Send the sample instance through `pipeline` and check that the PACS took
+/// exactly that instance, unchanged.
+async fn assert_pipeline_sends_the_instance_to_the_pacs(pipeline: &str, endpoint: &str) {
     let stored = pacs();
 
-    send_sample("to_pacs", "scp_to_pacs")
+    send_sample(pipeline, endpoint)
         .await
         .expect("the PACS is up, so the C-STORE should succeed");
 
@@ -243,6 +272,26 @@ async fn dicom_scu_backend_sends_the_received_instance_to_the_pacs() {
             name
         );
     }
+}
+
+// The two tests below share the PACS and count what it holds, so they must
+// not overlap.
+
+#[tokio::test]
+#[serial_test::serial(recording_pacs)]
+async fn dicom_scu_backend_sends_the_received_instance_to_the_pacs() {
+    assert_pipeline_sends_the_instance_to_the_pacs("to_pacs", "scp_to_pacs").await;
+}
+
+#[tokio::test]
+#[serial_test::serial(recording_pacs)]
+async fn backend_named_dicom_sends_the_received_instance_to_the_pacs() {
+    // `dicom` is the legacy name of the `dicom_scu` service.
+    assert_pipeline_sends_the_instance_to_the_pacs(
+        "to_pacs_legacy_name",
+        "scp_to_pacs_legacy_name",
+    )
+    .await;
 }
 
 #[tokio::test]

@@ -1361,6 +1361,18 @@ mod tests {
     }
 
     #[test]
+    fn test_extract_store_dataset_names_this_backend_in_its_error() {
+        // The reason comes from the shared body parser. The prefix is added
+        // here, and operators search the log for it.
+        let msg = extract_error(&json_envelope(serde_json::json!({ "dataset": {} })));
+        let expected = "dicom_scu_streaming store: the JSON body has no 'part10_b64' string. \
+             Send the DICOM Part 10 file as the request body, \
+             or as base64 in the 'part10_b64' key of a JSON body";
+        // `extract_error` formats the error with `{:?}`.
+        assert_eq!(msg, format!("{:?}", expected));
+    }
+
+    #[test]
     fn test_extract_store_dataset_rejects_invalid_base64() {
         let msg = extract_error(&json_envelope(serde_json::json!({ "part10_b64": "not base64!" })));
         assert!(msg.contains("not valid base64"), "unexpected error: {}", msg);

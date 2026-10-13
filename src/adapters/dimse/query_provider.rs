@@ -383,8 +383,10 @@ impl PipelineQueryProvider {
         else {
             return false;
         };
-        if backend.service.eq_ignore_ascii_case("dicom_scu")
-            || backend.service.eq_ignore_ascii_case("dicom_scu_streaming")
+        // `dicom` is the legacy name of `dicom_scu` (see `DicomScuServiceFactory`).
+        if ["dicom_scu", "dicom", "dicom_scu_streaming"]
+            .iter()
+            .any(|service| backend.service.eq_ignore_ascii_case(service))
         {
             return true;
         }
@@ -1232,7 +1234,7 @@ mod tests {
             MiddlewareRef::None => (String::new(), String::new()),
         };
         let backend_options = match backend_service {
-            "dicom_scu" | "dicom_scu_streaming" => {
+            "dicom_scu" | "dicom" | "dicom_scu_streaming" => {
                 "aet = \"PACS\"\nhost = \"127.0.0.1\"\nport = 4242"
             }
             _ => "base_url = \"http://127.0.0.1:9\"",
@@ -1289,6 +1291,7 @@ module = ""
         };
 
         assert!(needs("dicom_scu", None), "single node: the backend takes the instance");
+        assert!(needs("dicom", None), "the legacy name of dicom_scu");
         assert!(needs("dicom_scu_streaming", None), "single node: the backend takes the instance");
         assert!(needs("http_streaming_backend", Table("dicom_to_http")), "streaming bridge");
         assert!(

@@ -1236,8 +1236,8 @@ impl DicomScuBackend {
     /// - A JSON object with the Part 10 file as base64 in `part10_b64`. The
     ///   DIMSE adapter builds this when a `dicom_scp` endpoint is in the same
     ///   pipeline.
-    /// - Any other body that is not JSON. It is sent as bare data set bytes,
-    ///   which the SCU reads as Implicit VR Little Endian.
+    /// - Any other body that does not start with `{`. It is sent as bare data
+    ///   set bytes, which the SCU reads as Implicit VR Little Endian.
     ///
     /// A JSON body without `part10_b64` carries no instance and is rejected.
     /// Its `file` key is never read. See `dicom_store_body` for the reason.
@@ -1247,7 +1247,11 @@ impl DicomScuBackend {
         }
         let part10 = match part10_from_store_body(body) {
             Ok(part10) => part10,
-            Err(StoreBodyError::NotPart10OrJson { .. }) => {
+            // The JSON body a `dicom_scp` endpoint builds starts with `{`, and
+            // it must be rejected when it cannot be parsed. Data set bytes that
+            // start with that byte have no group 0008, so no SOP Class UID,
+            // and could not be stored anyway.
+            Err(StoreBodyError::NotPart10OrJson { .. }) if body.first() != Some(&b'{') => {
                 return Ok(DatasetStream::from_bytes(bytes::Bytes::copy_from_slice(body)));
             }
             Err(e) => return Err(format!("dicom_scu store: {}", e)),
@@ -1637,6 +1641,22 @@ mod tests {
             DatasetStream::Memory { data, .. } => assert_eq!(data.as_ref(), &bare[..]),
             other => panic!("expected the body as bare bytes, got {:?}", other.metadata()),
         }
+    }
+
+    #[test]
+    fn test_store_dataset_never_sends_unreadable_json_as_a_data_set() {
+        // serde_json writes a data set with many nested sequences but refuses
+        // to read it back. That body holds a local path and must not go to
+        // the PACS as data set bytes.
+        let nested = format!("{{\"dataset\":{}{}}}", "[".repeat(200), "]".repeat(200));
+
+        let reason = store_body_error(nested.as_bytes());
+
+        assert!(
+            reason.contains("neither a DICOM Part 10 file nor JSON"),
+            "unexpected error: {}",
+            reason
+        );
     }
 
     #[test]
