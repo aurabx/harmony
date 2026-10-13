@@ -1098,8 +1098,12 @@ impl DicomScuBackend {
                         let (dataset, parsed_obj) = if is_part10 {
                             match dicom_object::from_reader(std::io::Cursor::new(&bytes)) {
                                 Ok(file_obj) => {
+                                    let transfer_syntax =
+                                        file_obj.meta().transfer_syntax().to_string();
                                     let inner = file_obj.into_inner();
-                                    (DatasetStream::from_object(inner.clone()), Some(inner))
+                                    let mut dataset = DatasetStream::from_object(inner.clone());
+                                    dataset.metadata_mut().transfer_syntax = Some(transfer_syntax);
+                                    (dataset, Some(inner))
                                 }
                                 Err(e) => {
                                     failed += 1;
@@ -1258,7 +1262,12 @@ impl DicomScuBackend {
         };
         let file = dicom_object::from_reader(std::io::Cursor::new(part10.as_ref()))
             .map_err(|e| format!("Failed to parse DICOM Part 10 file: {}", e))?;
-        Ok(DatasetStream::from_object(file.into_inner()))
+        // The SCU proposes this transfer syntax to the PACS. Encapsulated
+        // pixel data can only be sent in the transfer syntax it was encoded in.
+        let transfer_syntax = file.meta().transfer_syntax().to_string();
+        let mut dataset = DatasetStream::from_object(file.into_inner());
+        dataset.metadata_mut().transfer_syntax = Some(transfer_syntax);
+        Ok(dataset)
     }
 }
 
@@ -1627,6 +1636,18 @@ mod tests {
             dataset.metadata().sop_instance_uid,
             Some(sample_sop_instance_uid())
         );
+    }
+
+    #[test]
+    fn test_store_dataset_records_the_transfer_syntax_of_the_file() {
+        let file = dicom_object::from_reader(std::io::Cursor::new(sample_part10()))
+            .expect("sample instance parses");
+        let expected = file.meta().transfer_syntax().to_string();
+
+        let dataset =
+            DicomScuBackend::store_dataset_from_body(&sample_part10()).expect("instance");
+
+        assert_eq!(dataset.metadata().transfer_syntax, Some(expected));
     }
 
     #[test]

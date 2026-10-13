@@ -3,6 +3,7 @@
 use dicom_dictionary_std::uids;
 use dicom_ul::association::client::ClientAssociationOptions;
 use dicom_ul::association::client::AsyncClientAssociation;
+use dicom_ul::association::Error as AssociationError;
 use tokio::net::TcpStream;
 use tracing::{info, warn};
 
@@ -57,6 +58,86 @@ pub async fn establish_association(
     );
 
     Ok(association)
+}
+
+/// Establish a client association for the C-STORE of one instance.
+///
+/// One presentation context is proposed: `sop_class_uid` with
+/// `transfer_syntaxes`, in order of preference. The caller chooses the list
+/// from the instance, because an instance with encapsulated pixel data can
+/// only be sent in its own transfer syntax.
+///
+/// Fails with an error that names the SOP class and the proposed transfer
+/// syntaxes when the remote node accepts none of them. dicom-ul has already
+/// aborted the association in that case.
+pub async fn establish_store_association(
+    config: &DimseConfig,
+    node: &RemoteNode,
+    sop_class_uid: &str,
+    transfer_syntaxes: &[String],
+) -> Result<AsyncClientAssociation<TcpStream>> {
+    node.validate()?;
+    if transfer_syntaxes.is_empty() {
+        return Err(DimseError::internal(format!(
+            "No transfer syntax to propose for the C-STORE of SOP class {}",
+            sop_class_uid
+        )));
+    }
+
+    let addr = format!("{}:{}", node.host, node.port);
+    info!(
+        "Connecting to {}@{} for C-STORE (SOP class {}, transfer syntaxes {})",
+        node.ae_title,
+        addr,
+        sop_class_uid,
+        transfer_syntaxes.join(", ")
+    );
+
+    let max_pdu = node.max_pdu.unwrap_or(config.max_pdu);
+    let proposed: Vec<&str> = transfer_syntaxes.iter().map(String::as_str).collect();
+
+    let association = ClientAssociationOptions::new()
+        .calling_ae_title(config.local_aet.as_str())
+        .called_ae_title(node.ae_title.as_str())
+        .max_pdu_length(max_pdu)
+        .with_presentation_context(sop_class_uid, proposed)
+        .establish_async(&addr)
+        .await
+        .map_err(|e| match e {
+            // dicom-ul reports a refused presentation context this way when
+            // no other context was accepted. Only one is proposed here.
+            AssociationError::NoAcceptedPresentationContexts { .. } => {
+                store_context_not_accepted(node, sop_class_uid, transfer_syntaxes)
+            }
+            other => DimseError::association(format!(
+                "Failed to establish association with {}: {}",
+                addr, other
+            )),
+        })?;
+
+    info!(
+        "C-STORE association established with {}@{}",
+        node.ae_title, addr
+    );
+
+    Ok(association)
+}
+
+/// The error for a C-STORE that cannot go ahead because the remote node did
+/// not accept the presentation context for the instance.
+pub fn store_context_not_accepted(
+    node: &RemoteNode,
+    sop_class_uid: &str,
+    transfer_syntaxes: &[String],
+) -> DimseError {
+    DimseError::association(format!(
+        "{}@{}:{} accepted no presentation context for SOP class {} with the proposed transfer syntaxes [{}]",
+        node.ae_title,
+        node.host,
+        node.port,
+        sop_class_uid,
+        transfer_syntaxes.join(", ")
+    ))
 }
 
 /// Establish a client association for a C-GET.

@@ -54,8 +54,11 @@ pub async fn handle_c_store(
     )
     .map_err(|e| DimseError::parse(format!("Failed to parse C-STORE dataset: {}", e)))?;
 
-    // Create DatasetStream
-    let dataset = DatasetStream::from_object(obj);
+    // The parsed object keeps encapsulated pixel data as it arrived, so the
+    // transfer syntax must travel with it. Without it a later writer would
+    // label the instance with a transfer syntax its pixel data does not match.
+    let mut dataset = DatasetStream::from_object(obj);
+    dataset.metadata_mut().transfer_syntax = Some(ts.uid().to_string());
 
     // Store the dataset
     match scp.query_provider.store(dataset).await {

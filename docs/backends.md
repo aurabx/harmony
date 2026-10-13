@@ -333,8 +333,23 @@ A middleware that replaces the whole body, such as `transform`, must keep
 `part10_b64` in its output. Without it the backend has no instance to send and
 the store fails.
 
-The backend proposes Implicit VR Little Endian only. An instance with
-compressed pixel data cannot be sent yet.
+The backend reads the transfer syntax of the instance from the file meta group
+and proposes it to the PACS:
+
+| Instance | Transfer syntaxes proposed |
+|----------|----------------------------|
+| Compressed pixel data, for example JPEG Lossless | The transfer syntax of the instance |
+| Uncompressed pixel data | The transfer syntax of the instance, then Implicit VR Little Endian |
+| Bare data set bytes | Implicit VR Little Endian |
+
+The backend does not transcode pixel data. A compressed instance reaches the
+PACS in the transfer syntax it was received in. If the PACS does not accept
+that transfer syntax, the store fails and nothing is sent. The error names the
+SOP class and the transfer syntax.
+
+A `dicom_scp` endpoint in the same pipeline records the transfer syntax it
+negotiated with the sending device, so the instance keeps it on the way to the
+PACS.
 
 A DICOMweb STOW-RS request reaches this backend as one C-STORE per part. The
 `dicomweb` endpoint takes the parts out of the multipart body.
