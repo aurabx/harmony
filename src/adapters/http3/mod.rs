@@ -165,6 +165,10 @@ pub async fn handle_connection(
 ) -> anyhow::Result<()> {
     // Complete the QUIC handshake
     let connection = incoming.await?;
+    // One QUIC connection has one peer, so every request on it shares this
+    // address. Quinn updates it on connection migration; reading it once per
+    // connection matches how the HTTP adapter records the TCP peer.
+    let peer_addr = connection.remote_address();
 
     // Upgrade to HTTP/3 connection
     let mut h3_conn = server::builder()
@@ -332,8 +336,8 @@ pub async fn handle_connection(
 
                 // Build ProtocolCtx using shared helper
                 let path_prefix = get_path_prefix(options);
-                // HTTP/3: peer address plumbing not yet wired through this adapter,
-                // so no remote_addr is recorded. IP-based policies skip on HTTP/3.
+                // The QUIC peer address feeds remote_addr, which IP allowlists
+                // and per-IP rate limits key on.
                 let ctx = build_protocol_ctx(
                     &method,
                     &uri,
@@ -341,7 +345,7 @@ pub async fn handle_connection(
                     body_bytes,
                     path_prefix,
                     "http3",
-                    None,
+                    Some(peer_addr),
                 );
 
                 // Resolve service again (we dropped it earlier when leaving scope)

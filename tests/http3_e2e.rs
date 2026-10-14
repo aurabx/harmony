@@ -46,6 +46,21 @@ fn create_http3_test_config(
     cert_path: &str,
     key_path: &str,
 ) -> String {
+    create_http3_test_config_with_middleware(dir, http_port, http3_port, cert_path, key_path, "", "")
+}
+
+/// Same as `create_http3_test_config`, but the echo pipeline runs the
+/// middleware named in `middleware_list` (a TOML array body such as
+/// `"ip_gate"`). `extra_toml` holds the definitions those names need.
+fn create_http3_test_config_with_middleware(
+    dir: &TempDir,
+    http_port: u16,
+    http3_port: u16,
+    cert_path: &str,
+    key_path: &str,
+    middleware_list: &str,
+    extra_toml: &str,
+) -> String {
     let config_content = format!(
         r#"
 [proxy]
@@ -83,7 +98,7 @@ description = "Echo pipeline for HTTP/3 testing"
 networks = ["test"]
 endpoints = ["http_endpoint"]
 backends = ["echo_backend"]
-middleware = []
+middleware = [{}]
 
 [endpoints.http_endpoint]
 service = "http"
@@ -101,8 +116,10 @@ module = ""
 
 [management]
 enabled = false
+
+{}
 "#,
-        http_port, http3_port, cert_path, key_path
+        http_port, http3_port, cert_path, key_path, middleware_list, extra_toml
     );
 
     let config_path = dir.path().join("http3-test-config.toml");
@@ -431,4 +448,94 @@ async fn test_http3_not_found() {
     // Assert result - should get 404
     let (status, _body) = result.expect("HTTP/3 request failed");
     assert_eq!(status, 404, "Expected 404 Not Found");
+}
+
+/// Policies middleware with a single `ip_allow` rule over `cidr`.
+fn ip_gate_middleware_toml(cidr: &str) -> String {
+    format!(
+        r#"
+[middleware.ip_gate]
+type = "policies"
+[middleware.ip_gate.options]
+policies = ["ip_policy"]
+
+[policies.ip_policy]
+id = "ip_policy"
+enabled = true
+rules = ["ip_allow_rule"]
+
+[rules.ip_allow_rule]
+id = "ip_allow_rule"
+type = "ip_allow"
+weight = 100
+enabled = true
+[rules.ip_allow_rule.options]
+ip_addresses = ["{}"]
+
+[middleware_types.policies]
+module = ""
+"#,
+        cidr
+    )
+}
+
+/// Start a network whose pipeline is gated by an `ip_allow` rule over `cidr`,
+/// send one HTTP/3 GET from 127.0.0.1, and return the status code.
+async fn http3_status_behind_ip_gate(http_port: u16, http3_port: u16, cidr: &str) -> u16 {
+    install_crypto_provider();
+
+    let (cert_pem, key_pem) = generate_self_signed_cert();
+    let temp_dir = TempDir::new().unwrap();
+    let cert_path = temp_dir.path().join("cert.pem");
+    let key_path = temp_dir.path().join("key.pem");
+    fs::write(&cert_path, &cert_pem).unwrap();
+    fs::write(&key_path, &key_pem).unwrap();
+
+    let config_path = create_http3_test_config_with_middleware(
+        &temp_dir,
+        http_port,
+        http3_port,
+        cert_path.to_str().unwrap(),
+        key_path.to_str().unwrap(),
+        "\"ip_gate\"",
+        &ip_gate_middleware_toml(cidr),
+    );
+
+    let cli = Cli::new(config_path);
+    let config = Config::from_args(cli);
+    let config_arc = Arc::new(config);
+
+    let registry = Arc::new(AdapterRegistry::new());
+    registry
+        .start_network("test".to_string(), config_arc.clone())
+        .await
+        .expect("failed to start network");
+
+    tokio::time::sleep(Duration::from_millis(500)).await;
+
+    let client_config = build_client_config(&cert_pem);
+    let addr: SocketAddr = format!("127.0.0.1:{}", http3_port).parse().unwrap();
+    let result = http3_get(client_config, addr, "/api/ping").await;
+
+    registry.stop_all().await.ok();
+
+    let (status, _body) = result.expect("HTTP/3 request failed");
+    status
+}
+
+/// AURA-2417: the QUIC peer address reaches `remote_addr`, so a loopback
+/// client passes an allowlist that contains it. Before the fix every HTTP/3
+/// request failed the gate with 403 because the client IP was unknown.
+#[tokio::test]
+async fn test_http3_ip_allow_admits_client_in_allowlist() {
+    let status = http3_status_behind_ip_gate(19083, 19446, "127.0.0.1/32").await;
+    assert_eq!(status, 200, "loopback client should pass a 127.0.0.1/32 allowlist");
+}
+
+/// AURA-2417: the gate compares the real peer address, so a loopback client
+/// is still denied by an allowlist that does not contain it.
+#[tokio::test]
+async fn test_http3_ip_allow_denies_client_outside_allowlist() {
+    let status = http3_status_behind_ip_gate(19084, 19447, "10.0.0.0/8").await;
+    assert_eq!(status, 403, "loopback client should fail a 10.0.0.0/8 allowlist");
 }

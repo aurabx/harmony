@@ -1,6 +1,6 @@
 # Policies Middleware
 
-**Last Updated**: 2026-10-13
+**Last Updated**: 2026-10-15
 
 The policies middleware provides comprehensive policy-based access control, rate limiting, and request filtering through a flexible rule system.
 
@@ -72,14 +72,14 @@ An `ip_allow` rule restricts who may use the pipeline. Other allow rules cannot 
 
 - **One gate for the middleware.** If any policy in the middleware has an enabled `ip_allow` rule, the client IP must match at least one `ip_allow` rule. The match can be in any policy.
 - **Allowlists form a union.** Several `ip_allow` rules in one policy form a union. So do `ip_allow` rules in different policies. "Office OR VPN" can be two rules in one policy or two policies.
-- **Fail closed.** If an allowlist exists and the client IP is unknown, the request is denied. This covers a missing `remote_addr` and a value that is not an IP address. HTTP/3 does not record the peer address yet (AURA-2417), so HTTP/3 requests fail the gate.
+- **Fail closed.** If an allowlist exists and the client IP is unknown, the request is denied. This covers a missing `remote_addr` and a value that is not an IP address.
 - **Status.** A gate denial returns 403 Forbidden, the same status as an `ip_deny` match.
 - **Other rules still apply.** A request that passes the gate still needs an allow and no deny from the other rules. `ip_deny`, `path`, `method`, `rate_limit` and the rest behave as before.
 - **Evaluated first.** The gate runs before the other rules. A client outside the allowlist does not use any rate-limit budget.
 - **No `ip_allow` rules, no gate.** If no policy has an `ip_allow` rule, one matching allow rule and no deny still admits the request.
 - **Logs.** An outside client is logged at `info` with the client IP and the ids of every `ip_allow` rule checked. An unknown client IP is logged at `warn`.
 
-The client IP comes from the envelope's `remote_addr` metadata (then `client_ip`). The HTTP adapter sets `remote_addr` from the TCP peer address for HTTP/1.1 and HTTP/2. It does not read `X-Forwarded-For`.
+The client IP comes from the envelope's `remote_addr` metadata (then `client_ip`). The HTTP adapter sets `remote_addr` from the TCP peer address for HTTP/1.1 and HTTP/2. The HTTP/3 adapter sets it from the QUIC peer address. Neither reads `X-Forwarded-For`.
 
 **Example:**
 
@@ -107,7 +107,7 @@ methods = ["GET", "POST", "PUT", "DELETE"]
 | 10.1.2.3 | GET | ALLOW |
 | 10.1.2.3 | PATCH | DENY 405 (method rule) |
 | 203.0.113.9 | GET | DENY 403 (outside the allowlist) |
-| unknown (for example HTTP/3) | GET | DENY 403 (fail closed) |
+| unknown (no `remote_addr`) | GET | DENY 403 (fail closed) |
 
 Before AURA-2438, the method rule's allow admitted 203.0.113.9, so the allowlist blocked nothing.
 
