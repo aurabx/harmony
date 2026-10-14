@@ -5,7 +5,7 @@ pub mod middleware;
 pub mod types;
 
 // Re-export error types for easier access
-pub use types::auth_error::AuthFailure;
+pub use types::auth_error::{AuthFailure, AuthUnavailable};
 pub use types::denial_errors::{
     AccessDenied, ContentTypeDenied, MethodDenied, PathDenied, RateLimitExceeded,
 };

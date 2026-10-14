@@ -2,7 +2,8 @@ use super::HttpAdapter;
 use crate::config::config::Config;
 use crate::models::mesh::registry::{MeshContext, MeshRegistry};
 use crate::models::middleware::{
-    AccessDenied, AuthFailure, ContentTypeDenied, MethodDenied, PathDenied, RateLimitExceeded,
+    AccessDenied, AuthFailure, AuthUnavailable, ContentTypeDenied, MethodDenied, PathDenied,
+    RateLimitExceeded,
 };
 use crate::pipeline::{PipelineError, PipelineExecutor};
 use crate::router::route_table::{method_list, RouteLookup, RouteTable};
@@ -506,6 +507,8 @@ pub(crate) fn map_pipeline_error_to_status(err: &PipelineError) -> StatusCode {
             // Check for specific middleware error types and map to appropriate status codes
             if middleware_err.downcast_ref::<AuthFailure>().is_some() {
                 StatusCode::UNAUTHORIZED
+            } else if middleware_err.downcast_ref::<AuthUnavailable>().is_some() {
+                StatusCode::SERVICE_UNAVAILABLE
             } else if middleware_err.downcast_ref::<PathDenied>().is_some() {
                 StatusCode::NOT_FOUND
             } else if middleware_err.downcast_ref::<MethodDenied>().is_some() {
@@ -541,6 +544,17 @@ mod tests {
         let status = map_pipeline_error_to_status(&pipeline_error);
 
         assert_eq!(status, StatusCode::UNAUTHORIZED);
+    }
+
+    #[test]
+    fn test_map_auth_unavailable_to_service_unavailable() {
+        let pipeline_error = PipelineError::MiddlewareError(Box::new(AuthUnavailable(
+            "JWKS fetch failed".to_string(),
+        )));
+
+        let status = map_pipeline_error_to_status(&pipeline_error);
+
+        assert_eq!(status, StatusCode::SERVICE_UNAVAILABLE);
     }
 
     #[test]
