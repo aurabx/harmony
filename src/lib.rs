@@ -6,6 +6,7 @@ pub mod extensions;
 mod file;
 pub mod globals;
 pub mod integrations;
+pub mod logging;
 pub mod models;
 pub mod pipeline;
 pub mod router;

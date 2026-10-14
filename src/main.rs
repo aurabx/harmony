@@ -1,4 +1,5 @@
 use harmony::config::env_substitution::{substitute_env_vars, validate_substituted_values};
+use harmony::logging::with_bootstrap_logging;
 use harmony::{Cli, Config, HarmonyBuilder};
 use std::env;
 
@@ -83,7 +84,7 @@ async fn main() {
 
         // Full load/validate using standard path
         let cli = Cli::new_validate_only(args.config_path.clone());
-        let _config = Config::from_args(cli);
+        let _config = with_bootstrap_logging(|| Config::from_args(cli));
         println!("Configuration is valid\nAll required environment variables present\nSubstitution completed");
         std::process::exit(0);
     }
@@ -103,7 +104,8 @@ async fn main() {
     //     .await;
     // ```
     let cli = Cli::new(args.config_path.clone());
-    let config = Config::from_args(cli);
+    // The real logger starts in `HarmonyBuilder::run`, after the config is loaded.
+    let config = with_bootstrap_logging(|| Config::from_args(cli));
 
     HarmonyBuilder::new(config)
         .with_config_path(args.config_path)
