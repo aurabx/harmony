@@ -26,7 +26,7 @@ RequestEnvelope → Incoming Middleware<RequestEnvelope> → Backend<ResponseEnv
 
 Incoming middleware errors are mapped to HTTP status codes as follows:
 - **Authentication failures** (JWT/Basic auth credential problems): HTTP 401 Unauthorized
-- **Authentication unavailable** (the mesh JWKS source is unreachable, returns an error, or serves an unusable key): HTTP 503 Service Unavailable. The token may be valid, so the client should retry rather than re-authenticate.
+- **Authentication unavailable** (the mesh JWKS source is unreachable, returns an error status, or serves a document that cannot be parsed): HTTP 503 Service Unavailable. The token may be valid, so the client should retry. A token whose key ID names a key the proxy cannot use is an authentication failure (401).
 - **All other middleware failures** (transform errors, internal failures): HTTP 500 Internal Server Error
 
 This ensures that only actual authentication problems result in 401 responses, while configuration errors, transform failures, and other internal issues correctly return 500.

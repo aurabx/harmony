@@ -5,8 +5,8 @@
 //! - **Egress (left)**: Generates and attaches a JWT to outgoing requests to other mesh members
 //! - **Ingress (left)**: Validates incoming JWTs from other mesh members before the
 //!   backend is called. A missing or invalid token fails with `AuthFailure` (HTTP 401).
-//!   If the Runbeam JWKS source cannot supply a usable key, the request fails with
-//!   `AuthUnavailable` (HTTP 503).
+//!   If the Runbeam JWKS document cannot be fetched or parsed, the request fails
+//!   with `AuthUnavailable` (HTTP 503).
 //!
 //! The response side (`right`) is a no-op in both directions.
 //!
@@ -57,13 +57,24 @@ struct CachedJwks {
     fetched_at: Instant,
 }
 
-/// Build the error for a JWKS source that cannot supply a usable key.
+/// Build the error for a JWKS document that cannot be fetched or parsed.
 ///
 /// The client's token may be valid, so this maps to HTTP 503, not 401. The
-/// detail is logged here because only the status reaches the client.
+/// router already logs the error with this detail, so this log is debug only.
 fn key_source_unavailable(detail: String) -> Error {
-    tracing::warn!("Mesh JWT key source unavailable: {}", detail);
+    tracing::debug!("Mesh JWT key source unavailable: {}", detail);
     AuthUnavailable(detail).into()
+}
+
+/// Build the error for a token whose `kid` names a key that cannot verify it.
+///
+/// The token chose the key, so this is an auth failure (HTTP 401). Returning
+/// 503 would let anyone who reads the public JWKS force a retryable status.
+/// The detail is logged at debug only, because a caller can trigger this on
+/// every request.
+fn unusable_key(detail: String) -> Error {
+    tracing::debug!("Mesh JWT key unusable: {}", detail);
+    AuthFailure("Mesh JWKS key cannot verify token").into()
 }
 
 /// Global JWKS cache - keyed by JWKS URL
@@ -517,25 +528,27 @@ impl MeshAuthMiddleware {
 
     /// Convert a JWK to a DecodingKey
     ///
-    /// A key the source serves in an unusable form is a key source fault, so
-    /// every failure here is `AuthUnavailable` (HTTP 503).
+    /// Every failure here is `AuthFailure` (HTTP 401), because the token's
+    /// `kid` selected this key.
     fn jwk_to_decoding_key(jwk: &JwkKey) -> Result<DecodingKey, Error> {
         if jwk.kty != "RSA" {
-            return Err(key_source_unavailable(format!(
+            return Err(unusable_key(format!(
                 "JWK '{}' has unsupported key type: {}",
                 jwk.kid, jwk.kty
             )));
         }
 
-        let n = jwk.n.as_ref().ok_or_else(|| {
-            key_source_unavailable(format!("JWK '{}' missing 'n' parameter", jwk.kid))
-        })?;
-        let e = jwk.e.as_ref().ok_or_else(|| {
-            key_source_unavailable(format!("JWK '{}' missing 'e' parameter", jwk.kid))
-        })?;
+        let n = jwk
+            .n
+            .as_ref()
+            .ok_or_else(|| unusable_key(format!("JWK '{}' missing 'n' parameter", jwk.kid)))?;
+        let e = jwk
+            .e
+            .as_ref()
+            .ok_or_else(|| unusable_key(format!("JWK '{}' missing 'e' parameter", jwk.kid)))?;
 
         DecodingKey::from_rsa_components(n, e).map_err(|err| {
-            key_source_unavailable(format!(
+            unusable_key(format!(
                 "Failed to create decoding key from JWK '{}': {}",
                 jwk.kid, err
             ))
@@ -560,8 +573,8 @@ impl MeshAuthMiddleware {
     ///
     /// Fails with `AuthFailure` when the Authorization header is missing, the
     /// token does not verify, or its `mesh_id` is not this mesh. Fails with
-    /// `AuthUnavailable` when the Runbeam JWKS source cannot supply a usable
-    /// key. On success the validated claims are recorded in the request metadata.
+    /// `AuthUnavailable` when the Runbeam JWKS document cannot be fetched or
+    /// parsed. On success the validated claims are recorded in the request metadata.
     async fn authenticate_ingress_request(
         &self,
         mut envelope: RequestEnvelope<serde_json::Value>,
@@ -1203,6 +1216,20 @@ mod tests {
         );
     }
 
+    /// Send a well-formed Runbeam token whose `kid` names an unusable key in the
+    /// JWKS at `jwks_url`, and assert it is rejected as an auth failure.
+    async fn assert_unusable_key_is_auth_failure(jwks_url: String) {
+        let private_key = rsa::RsaPrivateKey::new(&mut rand::thread_rng(), 2048).unwrap();
+        let ingress_mw = runbeam_ingress_at(jwks_url);
+        let jwt = sign_runbeam_token(&private_key, RUNBEAM_MESH_ID);
+
+        let envelope = create_test_request_envelope_with_auth(Some(&format!("Bearer {}", jwt)));
+        assert_eq!(
+            expect_auth_failure(ingress_mw.left(envelope).await),
+            "Mesh JWKS key cannot verify token"
+        );
+    }
+
     #[tokio::test]
     async fn test_runbeam_ingress_jwks_error_status_is_unavailable() {
         let url =
@@ -1225,43 +1252,43 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_runbeam_ingress_jwks_non_rsa_key_is_unavailable() {
+    async fn test_runbeam_ingress_jwks_non_rsa_key_is_auth_failure() {
         let body = serde_json::json!({
             "keys": [{ "kty": "EC", "kid": RUNBEAM_KID, "crv": "P-256", "x": "AA", "y": "AA" }]
         })
         .to_string();
         let url = start_faulty_jwks_server(http::StatusCode::OK, body).await;
-        assert_jwks_failure_is_unavailable(url).await;
+        assert_unusable_key_is_auth_failure(url).await;
     }
 
     #[tokio::test]
-    async fn test_runbeam_ingress_jwks_key_missing_modulus_is_unavailable() {
+    async fn test_runbeam_ingress_jwks_key_missing_modulus_is_auth_failure() {
         let body = serde_json::json!({
             "keys": [{ "kty": "RSA", "kid": RUNBEAM_KID, "e": "AQAB" }]
         })
         .to_string();
         let url = start_faulty_jwks_server(http::StatusCode::OK, body).await;
-        assert_jwks_failure_is_unavailable(url).await;
+        assert_unusable_key_is_auth_failure(url).await;
     }
 
     #[tokio::test]
-    async fn test_runbeam_ingress_jwks_key_missing_exponent_is_unavailable() {
+    async fn test_runbeam_ingress_jwks_key_missing_exponent_is_auth_failure() {
         let body = serde_json::json!({
             "keys": [{ "kty": "RSA", "kid": RUNBEAM_KID, "n": "AQAB" }]
         })
         .to_string();
         let url = start_faulty_jwks_server(http::StatusCode::OK, body).await;
-        assert_jwks_failure_is_unavailable(url).await;
+        assert_unusable_key_is_auth_failure(url).await;
     }
 
     #[tokio::test]
-    async fn test_runbeam_ingress_jwks_key_invalid_components_is_unavailable() {
+    async fn test_runbeam_ingress_jwks_key_invalid_components_is_auth_failure() {
         let body = serde_json::json!({
             "keys": [{ "kty": "RSA", "kid": RUNBEAM_KID, "n": "!!!", "e": "AQAB" }]
         })
         .to_string();
         let url = start_faulty_jwks_server(http::StatusCode::OK, body).await;
-        assert_jwks_failure_is_unavailable(url).await;
+        assert_unusable_key_is_auth_failure(url).await;
     }
 
     #[tokio::test]
