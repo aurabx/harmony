@@ -184,6 +184,10 @@ Failed validation causes:
 - **Startup**: Application fails to start with error details
 - **Hot-Reload**: Configuration reverts to previous state, error logged
 
+Every `.toml` file in `pipelines_path`, `transforms_path` and `mesh_path` must be readable and parse as Harmony configuration. A file that fails either check fails the whole load, and the error names the file. Harmony does not skip such a file.
+
+Warnings raised while loading, such as a backend whose `target_ref` does not exist, are written to stderr. The configured logger starts only after the load finishes, so these messages use a plain stderr logger. Set `RUST_LOG` to change its level. The default is `info`.
+
 ## Schema Versioning
 
 Each schema has a version field (e.g., `version = "1.11.0"`):

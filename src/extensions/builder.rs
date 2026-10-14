@@ -138,7 +138,8 @@ impl HarmonyBuilder {
     /// * `Ok(builder)` - Builder with loaded configuration
     /// * `Err(error)` - Configuration loading failed
     pub fn from_config_path(config_path: &str) -> Result<Self, crate::config::config::ConfigError> {
-        let config = Config::load(config_path)?;
+        // Logging starts in `run`, so the load needs its own scoped logger.
+        let config = crate::logging::with_bootstrap_logging(|| Config::load(config_path))?;
         Ok(Self {
             config,
             config_path: Some(config_path.to_string()),
