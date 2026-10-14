@@ -16,6 +16,11 @@ pub struct ConfigDiff {
 
     /// Networks to remove
     pub networks_to_remove: Vec<String>,
+
+    /// Sections that changed but are only read at startup. The new values
+    /// are stored, but they take effect only after a process restart.
+    #[serde(default)]
+    pub restart_required_changes: Vec<String>,
 }
 
 impl ConfigDiff {
@@ -28,7 +33,9 @@ impl ConfigDiff {
 
     /// Returns true if there are any changes at all
     pub fn has_changes(&self) -> bool {
-        !self.zero_downtime_changes.is_empty() || self.requires_adapter_restart()
+        !self.zero_downtime_changes.is_empty()
+            || !self.restart_required_changes.is_empty()
+            || self.requires_adapter_restart()
     }
 }
 
@@ -39,6 +46,7 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigDiff {
         adapter_restarts_required: Vec::new(),
         networks_to_add: Vec::new(),
         networks_to_remove: Vec::new(),
+        restart_required_changes: Vec::new(),
     };
 
     // Check for network topology changes
@@ -108,14 +116,14 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigDiff {
         diff.zero_downtime_changes.push("backends".to_string());
     }
 
-    // Check for logging changes (zero-downtime)
+    // The logger is installed once by logging::init_logging.
     if old.logging != new.logging {
-        diff.zero_downtime_changes.push("logging".to_string());
+        diff.restart_required_changes.push("logging".to_string());
     }
 
-    // Check for storage changes (zero-downtime)
+    // The storage backend is created once at startup and held in globals.
     if old.storage != new.storage {
-        diff.zero_downtime_changes.push("storage".to_string());
+        diff.restart_required_changes.push("storage".to_string());
     }
 
     diff
@@ -133,6 +141,45 @@ mod tests {
 
         assert!(!diff.has_changes());
         assert!(!diff.requires_adapter_restart());
+    }
+
+    /// The logger is installed once at startup, so a log_level change cannot
+    /// be applied live and must not be reported as applied.
+    #[test]
+    fn test_logging_change_requires_restart() {
+        let old_config = Config::default();
+        let mut new_config = Config::default();
+        new_config.logging.log_level = "debug".to_string();
+
+        let diff = compute_diff(&old_config, &new_config);
+
+        assert!(diff.has_changes());
+        assert!(!diff.requires_adapter_restart());
+        assert_eq!(diff.restart_required_changes, vec!["logging".to_string()]);
+        assert!(diff.zero_downtime_changes.is_empty());
+    }
+
+    /// The storage backend is built once at startup, so a storage change
+    /// cannot be applied live and must not be reported as applied.
+    #[test]
+    fn test_storage_change_requires_restart() {
+        let old_config = Config::default();
+        let mut new_config = Config::default();
+        new_config.storage.backend = "something-else".to_string();
+
+        let diff = compute_diff(&old_config, &new_config);
+
+        assert!(diff.has_changes());
+        assert_eq!(diff.restart_required_changes, vec!["storage".to_string()]);
+        assert!(diff.zero_downtime_changes.is_empty());
+    }
+
+    /// Diffs serialised before restart_required_changes existed must still load.
+    #[test]
+    fn test_diff_without_restart_required_changes_deserialises() {
+        let json = r#"{"zero_downtime_changes":[],"adapter_restarts_required":[],"networks_to_add":[],"networks_to_remove":[]}"#;
+        let diff: ConfigDiff = serde_json::from_str(json).expect("old diff shape must parse");
+        assert!(diff.restart_required_changes.is_empty());
     }
 
     #[test]

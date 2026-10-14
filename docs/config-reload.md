@@ -30,14 +30,19 @@ These changes are picked up immediately on the next request with no service inte
   - Timeouts and retry policies
   - Connection pool settings
   
-- **Logging settings**
-  - Log levels
-  - File paths
-  - Output formats
+### Process Restart Required
 
-- **Storage configuration**
-  - Backend type (filesystem, database)
-  - Paths and connection strings
+Harmony reads these sections once at startup. A reload stores the new values but does not apply them. The watcher logs `Config changes need a restart to take effect: [...]` at WARN level. Restart Harmony to apply them.
+
+- **Logging settings** (`[logging]`)
+  - Log level
+  - Log file path
+  - Writing to a file
+- **Storage configuration** (`[storage]`)
+  - Backend type
+  - Paths and options
+
+`RUST_LOG` also takes effect only at startup.
 
 ### Adapter Restart Required
 

@@ -95,6 +95,12 @@ impl ConfigWatcher {
                                 diff.zero_downtime_changes
                             );
                         }
+                        if !diff.restart_required_changes.is_empty() {
+                            tracing::warn!(
+                                "Config changes need a restart to take effect: {:?}",
+                                diff.restart_required_changes
+                            );
+                        }
                     }
                     last_reload = tokio::time::Instant::now();
                 }
