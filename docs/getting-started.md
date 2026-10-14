@@ -97,7 +97,7 @@ Conventions
 Harmony uses environment variables for runtime configuration and security settings. These are optional for local development but recommended for production deployments.
 
 ### Quick Reference
-**RUST_LOG** - Logging verbosity (optional, default: `info`)
+**RUST_LOG** - Logging verbosity (optional). Overrides `logging.log_level` when set. If unset, `logging.log_level` applies (default: `error`). An invalid value is reported on stderr and ignored.
 - Example: `RUST_LOG=harmony=debug,info`
 - Controls tracing output; use `debug` for development, `info` for production
 
