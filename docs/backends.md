@@ -455,6 +455,8 @@ write_pattern = "{StudyInstanceUID}/{SeriesInstanceUID}/{SOPInstanceUID}.dcm"
 - The endpoint sends the instance inside the request as `part10_b64`. The backend never reads the `file` path in the body.
 - `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID` and `PatientID` come from the instance. A value that breaks the placeholder rules fails the store. The device then gets status `0xC000` and keeps its copy.
 - A body with no Part 10 instance fails the write.
+- A resend of the same bytes counts as stored. Different bytes at an existing path fail the write, so a peer cannot replace an archived instance by reusing its UIDs.
+- Error messages do not include the write path, which may hold patient data.
 - An unknown `content` value fails every write.
 
 ### Echo (Test)

@@ -7,7 +7,7 @@ use axum::{body::Body, response::Response};
 use chrono::Utc;
 use futures_util::StreamExt;
 use object_store::local::LocalFileSystem;
-use object_store::{ObjectStore, path::Path as ObjectStorePath};
+use object_store::{ObjectStore, PutMode, PutOptions, path::Path as ObjectStorePath};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -227,7 +227,61 @@ impl StorageBackend {
 
         let clean_path = resolved.trim_start_matches('/');
         ObjectStorePath::parse(clean_path)
-            .map_err(|e| Error::from(format!("Invalid write path: {}", e)))
+            .map_err(|e| {
+                tracing::debug!("Invalid storage write path: {}", e);
+                Error::from("the resolved write path has a segment that is not allowed")
+            })
+    }
+
+    /// Write a DICOM instance without replacing a different one.
+    ///
+    /// A device may resend an instance it already sent, so identical bytes
+    /// at the path count as stored. Different bytes fail the write: a peer
+    /// must not replace an archived instance by reusing its UIDs.
+    async fn put_dicom_instance(
+        store: &dyn ObjectStore,
+        path: &ObjectStorePath,
+        bytes: bytes::Bytes,
+    ) -> Result<(), Error> {
+        let create = PutOptions {
+            mode: PutMode::Create,
+            ..Default::default()
+        };
+        match store.put_opts(path, bytes.clone().into(), create).await {
+            Ok(_) => Ok(()),
+            Err(object_store::Error::AlreadyExists { .. }) => {
+                let existing = store
+                    .get(path)
+                    .await
+                    .map_err(Self::write_error)?
+                    .bytes()
+                    .await
+                    .map_err(Self::write_error)?;
+                if existing == bytes {
+                    Ok(())
+                } else {
+                    Err(Error::from(
+                        "a different instance is already stored at the write path",
+                    ))
+                }
+            }
+            Err(e) => Err(Self::write_error(e)),
+        }
+    }
+
+    /// Describe a store error without its message. object_store messages
+    /// hold the full path, which may hold patient data.
+    fn write_error(e: object_store::Error) -> Error {
+        tracing::debug!("Storage write failed: {}", e);
+        let kind = match e {
+            object_store::Error::NotFound { .. } => "not found",
+            object_store::Error::AlreadyExists { .. } => "already exists",
+            object_store::Error::PermissionDenied { .. } => "permission denied",
+            object_store::Error::Unauthenticated { .. } => "unauthenticated",
+            object_store::Error::NotImplemented => "not supported by this store",
+            _ => "store error",
+        };
+        Error::from(format!("Failed to write to storage: {}", kind))
     }
 
     fn placeholder_value(name: &str, envelope: &RequestEnvelope<Vec<u8>>) -> Option<String> {
@@ -382,8 +436,11 @@ impl ServiceHandler<Value> for StorageBackend {
              let bytes = self.write_bytes(options, &envelope.original_data)?;
              let path = self.resolve_write_path(pattern, &envelope)?;
 
-             store.put(&path, bytes.into()).await
-                .map_err(|e| Error::from(format!("Failed to write to storage: {}", e)))?;
+             if self.write_content(options).map_err(Error::from)? == WriteContent::DicomPart10 {
+                 Self::put_dicom_instance(store.as_ref(), &path, bytes::Bytes::from(bytes)).await?;
+             } else {
+                 store.put(&path, bytes.into()).await.map_err(Self::write_error)?;
+             }
              
              // Return location
              let mut headers = HashMap::new();
@@ -691,5 +748,36 @@ mod tests {
 
         let err = write_path_with("tenant", "acme", "{tenant.dcm").err().unwrap();
         assert!(err.to_string().contains("no closing"), "unexpected error: {}", err);
+    }
+
+    #[tokio::test]
+    async fn test_dicom_part10_keeps_an_identical_resend_and_refuses_a_different_one() {
+        use base64::Engine;
+        let dir = tempdir().unwrap();
+        let options = part10_options(&dir.path().to_string_lossy());
+        let body = |part10: &[u8]| {
+            store_envelope(serde_json::json!({
+                "part10_b64": base64::engine::general_purpose::STANDARD.encode(part10),
+            }))
+        };
+        let backend = StorageBackend::default();
+        let original = fake_part10();
+
+        backend.backend_outgoing_request(body(&original), &options).await.unwrap();
+        backend
+            .backend_outgoing_request(body(&original), &options)
+            .await
+            .expect("an identical resend counts as stored");
+
+        let mut other = fake_part10();
+        other.push(9);
+        let err = backend
+            .backend_outgoing_request(body(&other), &options)
+            .await
+            .err()
+            .expect("different bytes at the same path are refused");
+        assert!(err.to_string().contains("already stored"), "unexpected error: {}", err);
+        let stored = std::fs::read(dir.path().join("1.2.3").join("1.2.3.4.dcm")).unwrap();
+        assert_eq!(stored, original);
     }
 }
