@@ -79,6 +79,7 @@ async fn handle_association_inner(
                 if let Err(e) = pdu_handler::handle_pdata(
                     scp,
                     &mut association,
+                    peer_addr,
                     data,
                     &mut assembler,
                 )

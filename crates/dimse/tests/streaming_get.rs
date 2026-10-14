@@ -56,6 +56,7 @@ struct GatedProvider {
 impl QueryProvider for GatedProvider {
     async fn find(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
         _max_results: u32,
@@ -65,6 +66,7 @@ impl QueryProvider for GatedProvider {
 
     async fn locate(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
     ) -> dimse::Result<BoxDatasetStream> {
@@ -73,6 +75,7 @@ impl QueryProvider for GatedProvider {
 
     async fn get(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
     ) -> dimse::Result<RetrieveStream> {
@@ -91,7 +94,11 @@ impl QueryProvider for GatedProvider {
         Ok(RetrieveStream::new(Box::pin(datasets)))
     }
 
-    async fn store(&self, _dataset: DatasetStream) -> dimse::Result<()> {
+    async fn store(
+        &self,
+        _peer_addr: std::net::SocketAddr,
+        _dataset: DatasetStream,
+    ) -> dimse::Result<()> {
         Ok(())
     }
 }

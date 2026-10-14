@@ -1,5 +1,7 @@
 //! P-DATA handling: reassembly of DIMSE messages and routing to commands
 
+use std::net::SocketAddr;
+
 use dicom_dictionary_std::tags;
 use dicom_ul::association::server::AsyncServerAssociation;
 use tokio::net::TcpStream;
@@ -19,12 +21,13 @@ use super::DimseScp;
 pub async fn handle_pdata(
     scp: &DimseScp,
     association: &mut AsyncServerAssociation<TcpStream>,
+    peer_addr: SocketAddr,
     pdata: Vec<dicom_ul::pdu::PDataValue>,
     assembler: &mut MessageAssembler,
 ) -> Result<()> {
     for pdata_value in pdata {
         if let Some(message) = assembler.push(pdata_value)? {
-            dispatch_message(scp, association, message).await?;
+            dispatch_message(scp, association, peer_addr, message).await?;
         }
     }
     Ok(())
@@ -34,6 +37,7 @@ pub async fn handle_pdata(
 async fn dispatch_message(
     scp: &DimseScp,
     association: &mut AsyncServerAssociation<TcpStream>,
+    peer_addr: SocketAddr,
     message: DimseMessage,
 ) -> Result<()> {
     let command_field = message
@@ -70,6 +74,7 @@ async fn dispatch_message(
     commands::dispatch_command(
         scp,
         association,
+        peer_addr,
         command_field,
         message_id,
         message.data,

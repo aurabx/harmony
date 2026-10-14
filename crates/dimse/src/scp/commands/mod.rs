@@ -6,6 +6,8 @@ pub mod get;
 pub mod r#move;
 pub mod store;
 
+use std::net::SocketAddr;
+
 use dicom_ul::association::server::AsyncServerAssociation;
 use tokio::net::TcpStream;
 
@@ -88,6 +90,7 @@ pub fn commands_with_data_sets(config: &crate::config::DimseConfig) -> Vec<u16> 
 pub async fn dispatch_command(
     scp: &DimseScp,
     association: &mut AsyncServerAssociation<TcpStream>,
+    peer_addr: SocketAddr,
     command_field: u16,
     message_id: u16,
     identifier_data: Vec<u8>,
@@ -105,6 +108,7 @@ pub async fn dispatch_command(
             find::handle_c_find(
                 scp,
                 association,
+                peer_addr,
                 message_id,
                 identifier_data,
                 presentation_context_id,
@@ -116,6 +120,7 @@ pub async fn dispatch_command(
             r#move::handle_c_move(
                 scp,
                 association,
+                peer_addr,
                 message_id,
                 identifier_data,
                 presentation_context_id,
@@ -128,6 +133,7 @@ pub async fn dispatch_command(
             get::handle_c_get(
                 scp,
                 association,
+                peer_addr,
                 message_id,
                 identifier_data,
                 presentation_context_id,
@@ -139,6 +145,7 @@ pub async fn dispatch_command(
             store::handle_c_store(
                 scp,
                 association,
+                peer_addr,
                 message_id,
                 identifier_data,
                 presentation_context_id,

@@ -33,6 +33,7 @@ struct MockQueryProvider;
 impl QueryProvider for MockQueryProvider {
     async fn find(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
         _max_results: u32,
@@ -43,6 +44,7 @@ impl QueryProvider for MockQueryProvider {
 
     async fn locate(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
     ) -> dimse::Result<BoxDatasetStream> {
@@ -51,13 +53,18 @@ impl QueryProvider for MockQueryProvider {
 
     async fn get(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
     ) -> dimse::Result<RetrieveStream> {
         Ok(RetrieveStream::from_vec(Vec::new()))
     }
 
-    async fn store(&self, _dataset: DatasetStream) -> dimse::Result<()> {
+    async fn store(
+        &self,
+        _peer_addr: std::net::SocketAddr,
+        _dataset: DatasetStream,
+    ) -> dimse::Result<()> {
         Ok(())
     }
 }

@@ -1,5 +1,7 @@
 //! C-MOVE command handler
 
+use std::net::SocketAddr;
+
 use dicom_encoding::text::SpecificCharacterSet;
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
@@ -24,6 +26,7 @@ const PENDING_RESPONSE_INTERVAL: u16 = 10;
 pub async fn handle_c_move(
     scp: &DimseScp,
     association: &mut AsyncServerAssociation<TcpStream>,
+    peer_addr: SocketAddr,
     message_id: u16,
     identifier_data: Vec<u8>,
     presentation_context_id: u8,
@@ -102,7 +105,11 @@ pub async fn handle_c_move(
 
     // Start the retrieval. Each dataset is stored to the destination as soon
     // as it arrives.
-    let retrieve = match scp.query_provider.get(query_level, &parameters).await {
+    let retrieve = match scp
+        .query_provider
+        .get(peer_addr, query_level, &parameters)
+        .await
+    {
         Ok(retrieve) => retrieve,
         Err(e) => {
             error!("C-MOVE query failed: {}", e);

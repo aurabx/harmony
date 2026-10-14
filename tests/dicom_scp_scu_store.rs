@@ -1,5 +1,5 @@
 //! Integration tests for a C-STORE that a `dicom_scp` endpoint hands to a
-//! `dicom_scu` backend in the same pipeline, with no middleware.
+//! `dicom_scu` backend in the same pipeline.
 //!
 //! The backend must send the received instance to the PACS (AURA-2476). Each
 //! test calls the DIMSE adapter's `store`, the function the SCP calls for a
@@ -8,6 +8,9 @@
 //!
 //! An instance with compressed pixel data must reach the PACS in its own
 //! transfer syntax, with its pixel fragments unchanged (AURA-2470).
+//!
+//! An `ip_allow` policy on a `dicom_scp` pipeline must see the SCU's address,
+//! so it admits a client inside the allowlist and denies one outside it.
 
 use dicom_core::value::{PixelFragmentSequence, Value};
 use dicom_core::{DataElement, PrimitiveValue, VR};
@@ -45,6 +48,7 @@ struct RecordingPacs {
 impl QueryProvider for RecordingPacs {
     async fn find(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
         _max_results: u32,
@@ -54,6 +58,7 @@ impl QueryProvider for RecordingPacs {
 
     async fn locate(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
     ) -> dimse::Result<BoxDatasetStream> {
@@ -62,13 +67,18 @@ impl QueryProvider for RecordingPacs {
 
     async fn get(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
     ) -> dimse::Result<RetrieveStream> {
         Ok(RetrieveStream::new(dataset_stream_from_vec(Vec::new())))
     }
 
-    async fn store(&self, dataset: DatasetStream) -> dimse::Result<()> {
+    async fn store(
+        &self,
+        _peer_addr: std::net::SocketAddr,
+        dataset: DatasetStream,
+    ) -> dimse::Result<()> {
         let instance = StoredInstance {
             transfer_syntax: dataset.metadata().transfer_syntax.clone(),
             object: dataset.to_object().await?,
@@ -237,6 +247,51 @@ host = "127.0.0.1"
 port = {down_pacs_port}
 local_aet = "HARMONY_S2"
 
+# dicom_scp -> dicom_scu behind an IP allowlist, PACS is up
+[pipelines.to_pacs_ip_gated]
+networks = ["default"]
+endpoints = ["scp_to_pacs_ip_gated"]
+backends = ["pacs_ip_gated"]
+middleware = ["ip_gate"]
+
+[endpoints.scp_to_pacs_ip_gated]
+service = "dicom_scp"
+[endpoints.scp_to_pacs_ip_gated.options]
+local_aet = "HARMONY_S5"
+port = 11117
+enable_find = true
+enable_get = true
+enable_store = true
+
+[backends.pacs_ip_gated]
+service = "dicom_scu"
+[backends.pacs_ip_gated.options]
+aet = "TEST_PACS"
+host = "127.0.0.1"
+port = {pacs_port}
+local_aet = "HARMONY_S5"
+
+[middleware.ip_gate]
+type = "policies"
+[middleware.ip_gate.options]
+policies = ["ip_gate_policy"]
+
+[policies.ip_gate_policy]
+id = "ip_gate_policy"
+enabled = true
+rules = ["modality_network"]
+
+[rules.modality_network]
+id = "modality_network"
+type = "ip_allow"
+weight = 100
+enabled = true
+[rules.modality_network.options]
+ip_addresses = ["10.0.0.0/8"]
+
+[middleware_types.policies]
+module = ""
+
 [services.dicom_scp]
 module = ""
 
@@ -281,11 +336,23 @@ async fn send_sample(pipeline: &str, endpoint: &str) -> dimse::Result<()> {
 /// Hand `dataset` to `pipeline` the way the SCP does, and remove the copy the
 /// adapter wrote on this host.
 async fn send(pipeline: &str, endpoint: &str, dataset: DatasetStream) -> dimse::Result<()> {
+    // A loopback peer, as the SCP would pass for a local SCU.
+    send_from("127.0.0.1:40000", pipeline, endpoint, dataset).await
+}
+
+/// Hand `dataset` to `pipeline` as if the SCU connected from `peer`.
+async fn send_from(
+    peer: &str,
+    pipeline: &str,
+    endpoint: &str,
+    dataset: DatasetStream,
+) -> dimse::Result<()> {
     // No storage backend is configured, so the adapter writes its copy here.
     let stored_file = PathBuf::from("./tmp/dimse").join(format!("{}.dcm", dataset.metadata().id));
 
+    let peer: std::net::SocketAddr = peer.parse().expect("valid peer address");
     let outcome = PipelineQueryProvider::new(pipeline, endpoint)
-        .store(dataset)
+        .store(peer, dataset)
         .await;
     // A store that fails early writes no copy. Its error must reach the test.
     if stored_file.exists() {
@@ -453,4 +520,122 @@ async fn dicom_scu_backend_reports_a_store_the_pacs_did_not_take() {
         "the store should fail at the PACS connection: {}",
         message
     );
+}
+
+/// Send the sample instance to `pipeline` as if the SCU connected from `peer`.
+async fn send_sample_from(peer: &str, pipeline: &str, endpoint: &str) -> dimse::Result<()> {
+    let source = dicom_object::open_file(sample_path()).expect("open sample instance");
+    send_from(
+        peer,
+        pipeline,
+        endpoint,
+        DatasetStream::from_object(source.into_inner()),
+    )
+    .await
+}
+
+/// An `ip_allow` rule on a `dicom_scp` pipeline sees the SCU's address. Before
+/// the DIMSE adapter recorded it, the client IP was unknown and the allowlist
+/// denied every C-STORE.
+#[tokio::test]
+#[serial_test::serial(recording_pacs)]
+async fn ip_allowlist_admits_a_dimse_client_inside_it() {
+    let stored = pacs();
+
+    send_sample_from("10.1.2.3:40000", "to_pacs_ip_gated", "scp_to_pacs_ip_gated")
+        .await
+        .expect("10.1.2.3 is inside the allowlist, so the C-STORE should succeed");
+
+    let stored = std::mem::take(&mut *stored.lock().unwrap());
+    assert_eq!(stored.len(), 1, "the PACS should hold exactly one instance");
+}
+
+#[tokio::test]
+#[serial_test::serial(recording_pacs)]
+async fn ip_allowlist_denies_a_dimse_client_outside_it() {
+    let stored = pacs();
+
+    let error = send_sample_from(
+        "203.0.113.9:40000",
+        "to_pacs_ip_gated",
+        "scp_to_pacs_ip_gated",
+    )
+    .await
+    .expect_err("203.0.113.9 is outside the allowlist, so the C-STORE must fail");
+
+    // An unknown address would also be denied, for the wrong reason. The
+    // policy must have compared the client's address against the allowlist.
+    let message = error.to_string();
+    assert!(
+        message.contains("not in the IP allowlist"),
+        "the policy should deny the client by its address: {}",
+        message
+    );
+    assert!(
+        std::mem::take(&mut *stored.lock().unwrap()).is_empty(),
+        "a denied C-STORE must not reach the PACS"
+    );
+}
+
+/// Run `operation` from an address inside and one outside the allowlist on
+/// the IP-gated pipeline. The PACS serves no queries, so an admitted request
+/// may still fail at the backend. It must not fail at the policy.
+async fn assert_ip_allowlist_gates<F, Fut, T>(operation: F)
+where
+    F: Fn(std::net::SocketAddr) -> Fut,
+    Fut: std::future::Future<Output = dimse::Result<T>>,
+{
+    pacs();
+
+    if let Err(error) = operation("10.1.2.3:40000".parse().unwrap()).await {
+        let message = error.to_string();
+        assert!(
+            !message.contains("allowlist"),
+            "10.1.2.3 is inside the allowlist and must pass the policy: {}",
+            message
+        );
+    }
+
+    let message = match operation("203.0.113.9:40000".parse().unwrap()).await {
+        Ok(_) => panic!("203.0.113.9 is outside the allowlist, so the request must fail"),
+        Err(error) => error.to_string(),
+    };
+    assert!(
+        message.contains("not in the IP allowlist"),
+        "the policy should deny the client by its address: {}",
+        message
+    );
+}
+
+fn gated_provider() -> PipelineQueryProvider {
+    PipelineQueryProvider::new("to_pacs_ip_gated", "scp_to_pacs_ip_gated")
+}
+
+fn study_parameters() -> HashMap<String, String> {
+    HashMap::from([("0020000D".to_string(), "1.2.3".to_string())])
+}
+
+#[tokio::test]
+#[serial_test::serial(recording_pacs)]
+async fn ip_allowlist_gates_a_dimse_c_find() {
+    assert_ip_allowlist_gates(|peer| async move {
+        gated_provider()
+            .find(peer, QueryLevel::Study, &study_parameters(), 0)
+            .await
+            .map(|_| ())
+    })
+    .await;
+}
+
+/// C-MOVE runs through the same `get` call on the provider.
+#[tokio::test]
+#[serial_test::serial(recording_pacs)]
+async fn ip_allowlist_gates_a_dimse_c_get() {
+    assert_ip_allowlist_gates(|peer| async move {
+        gated_provider()
+            .get(peer, QueryLevel::Study, &study_parameters())
+            .await
+            .map(|_| ())
+    })
+    .await;
 }

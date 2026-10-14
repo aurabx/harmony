@@ -306,8 +306,10 @@ async fn send(
     // No storage backend is configured, so the adapter writes its copy here.
     let stored_file = PathBuf::from("./tmp/dimse").join(format!("{}.dcm", dataset.metadata().id));
 
+    // A loopback peer, as the SCP would pass for a local SCU.
+    let peer: std::net::SocketAddr = "127.0.0.1:40000".parse().expect("valid peer address");
     let outcome = PipelineQueryProvider::new(pipeline, endpoint)
-        .store(dataset)
+        .store(peer, dataset)
         .await;
     (outcome, stored_file)
 }
