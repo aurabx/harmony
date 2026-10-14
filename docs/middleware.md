@@ -107,6 +107,8 @@ Error handling: Authentication failures (missing/invalid/expired tokens) return 
 ### Transform (JOLT)
 Applies JSON-to-JSON transformations using JOLT specifications. Supports configurable application on request/response sides with error handling options.
 
+The transform works on JSON bodies only. A response with a text body, such as `text/html`, `text/plain` or `application/xml`, passes through unchanged. So does a body that is not valid JSON, even when its `Content-Type` says JSON. Do not rely on a response `transform` to remove data from a non-JSON response.
+
 **Cloud Integration**: When configurations are sourced from Runbeam Cloud, transform specifications (JOLT files) are automatically downloaded before the configuration is applied. The gateway:
 - Extracts transform IDs from middleware `spec_path` fields
 - Downloads JOLT specifications from Runbeam Cloud Transform API
