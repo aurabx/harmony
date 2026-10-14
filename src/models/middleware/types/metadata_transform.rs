@@ -200,10 +200,10 @@ impl Middleware for MetadataTransformMiddleware {
                 }
 
                 // Apply transform to create/modify target_details
-                tracing::debug!("Metadata transform input: {}", serde_json::to_string_pretty(&input_json).unwrap_or_default());
+                tracing::debug!("Metadata transform input: {}", crate::logging::json_shape(&input_json));
                 match self.engine.transform(input_json) {
                     Ok(transformed) => {
-                        tracing::debug!("Metadata transform output: {}", serde_json::to_string_pretty(&transformed).unwrap_or_default());
+                        tracing::debug!("Metadata transform output: {}", crate::logging::json_shape(&transformed));
                         // Create or update target_details from transformed JSON
                         let target_details = self.json_to_target_details(&transformed)?;
 
@@ -402,6 +402,45 @@ mod tests {
             .normalized_data(Some(serde_json::Value::Null))
             .build()
             .unwrap()
+    }
+
+    #[tokio::test]
+    async fn target_details_debug_log_does_not_contain_request_values() {
+        let marker = "DOE^JANE-PHI-MARKER";
+        let spec = json!([{ "operation": "shift", "spec": { "uri": "uri" } }]);
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+
+        let middleware = MetadataTransformMiddleware::new(MetadataTransformConfig {
+            spec_path: temp_file.path().to_string_lossy().to_string(),
+            apply: "left".to_string(),
+            fail_on_error: false,
+            transform_target: "target_details".to_string(),
+        })
+        .unwrap();
+
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("GET")
+            .uri(format!("/patients?name={marker}"))
+            .header("x-patient-name", marker)
+            .query_param("name", vec![marker.to_string()])
+            .original_data(serde_json::Value::Null)
+            .normalized_data(Some(serde_json::Value::Null))
+            .build()
+            .unwrap();
+
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        let _ = middleware.left(envelope).await;
+
+        let out = log.contents();
+        assert!(
+            out.contains("Metadata transform input"),
+            "input shape should be logged: {out}"
+        );
+        assert!(
+            !out.contains(marker),
+            "request values leaked into log: {out}"
+        );
     }
 
     #[tokio::test]

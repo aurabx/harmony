@@ -175,3 +175,75 @@ pub fn init_logging(config: &Config) {
         let _ = stdout_subscriber(choice.filter, std::io::stdout).try_init();
     }
 }
+
+/// Describes a JSON payload for a log line without any of its values.
+///
+/// Payloads carry patient data, so debug logs show only the top-level keys,
+/// or the item count of an array, and the serialised size.
+pub fn json_shape(value: &serde_json::Value) -> String {
+    let size = serde_json::to_vec(value)
+        .map(|bytes| format!("{} bytes", bytes.len()))
+        .unwrap_or_else(|e| format!("size unknown: {}", e));
+    match value {
+        serde_json::Value::Object(map) => {
+            let keys: Vec<&str> = map.keys().map(String::as_str).collect();
+            format!("object with keys [{}], {}", keys.join(", "), size)
+        }
+        serde_json::Value::Array(items) => format!("array of {} items, {}", items.len(), size),
+        serde_json::Value::Null => "null".to_string(),
+        _ => format!("scalar, {}", size),
+    }
+}
+
+/// Captures DEBUG-and-above events on the current thread, for tests that
+/// check what a code path writes to the log.
+#[cfg(test)]
+pub(crate) mod test_capture {
+    use std::io;
+    use std::sync::{Arc, Mutex};
+    use tracing::subscriber::DefaultGuard;
+    use tracing_subscriber::fmt::MakeWriter;
+
+    #[derive(Clone, Default)]
+    pub(crate) struct CapturedLog(Arc<Mutex<Vec<u8>>>);
+
+    impl CapturedLog {
+        pub(crate) fn contents(&self) -> String {
+            String::from_utf8(self.0.lock().expect("log buffer lock").clone()).expect("utf-8 log")
+        }
+    }
+
+    impl io::Write for CapturedLog {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            self.0
+                .lock()
+                .expect("log buffer lock")
+                .extend_from_slice(buf);
+            Ok(buf.len())
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
+        }
+    }
+
+    impl<'a> MakeWriter<'a> for CapturedLog {
+        type Writer = CapturedLog;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            self.clone()
+        }
+    }
+
+    /// Installs a DEBUG subscriber for the current thread until the guard drops.
+    /// `#[tokio::test]` runs on one thread, so this also covers awaited code.
+    pub(crate) fn capture_debug() -> (CapturedLog, DefaultGuard) {
+        let log = CapturedLog::default();
+        let subscriber = tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .with_writer(log.clone())
+            .finish();
+        let guard = tracing::subscriber::set_default(subscriber);
+        (log, guard)
+    }
+}

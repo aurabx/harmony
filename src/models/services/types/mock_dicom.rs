@@ -159,7 +159,7 @@ impl MockDicomData {
 
     /// Handle a mock C-FIND request
     pub fn handle_find_query(&self, params: &HashMap<String, String>) -> Vec<serde_json::Value> {
-        debug!("[MOCK DICOM] C-FIND query params: {:?}", params);
+        debug!("[MOCK DICOM] C-FIND query tags: {:?}", query_tags(params));
 
         // Determine query level based on present parameters
         let query_level = if params.get("00080018").is_some_and(|v| !v.is_empty()) {
@@ -598,6 +598,14 @@ impl ServiceHandler<Value> for MockDicomEndpoint {
     }
 }
 
+/// The query's tag numbers, sorted, without their values. Query values can be
+/// patient names or IDs, so only the tags go to the log.
+fn query_tags(params: &HashMap<String, String>) -> Vec<&str> {
+    let mut tags: Vec<&str> = params.keys().map(String::as_str).collect();
+    tags.sort_unstable();
+    tags
+}
+
 impl MockDicomEndpoint {
     /// Handle C-FIND operations
     async fn handle_c_find(
@@ -654,7 +662,7 @@ impl MockDicomEndpoint {
         if path.contains("/series") || path.contains("/instances") {
             debug!("[MOCK DICOM] C-FIND Query:");
             debug!("[MOCK DICOM]   Path: {}", path);
-            debug!("[MOCK DICOM]   Query: {:?}", params);
+            debug!("[MOCK DICOM]   Query tags: {:?}", query_tags(&params));
         }
 
         // Handle query using mock data
@@ -799,5 +807,60 @@ impl MockDicomEndpoint {
         // Update envelope with mock result
         envelope.normalized_data = Some(result);
         Ok(envelope.clone())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::envelope::envelope::RequestEnvelopeBuilder;
+
+    const PHI_MARKER: &str = "DOE^JANE-PHI-MARKER";
+
+    #[test]
+    fn find_query_debug_log_does_not_contain_query_values() {
+        let mut params = HashMap::new();
+        params.insert("00100010".to_string(), PHI_MARKER.to_string());
+
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        MockDicomData::instance().handle_find_query(&params);
+
+        let out = log.contents();
+        assert!(
+            out.contains("00100010"),
+            "query tags should be logged: {out}"
+        );
+        assert!(
+            !out.contains(PHI_MARKER),
+            "query values leaked into log: {out}"
+        );
+    }
+
+    #[tokio::test]
+    async fn c_find_debug_log_does_not_contain_query_values() {
+        let body = serde_json::json!({
+            "identifier": { "00100010": { "vr": "PN", "Value": [{ "Alphabetic": PHI_MARKER }] } }
+        });
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("POST")
+            .uri("/find/series")
+            .original_data(serde_json::to_vec(&body).unwrap())
+            .build()
+            .unwrap();
+
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        MockDicomEndpoint
+            .handle_c_find(&envelope, "/find/series")
+            .await;
+
+        let out = log.contents();
+        assert!(
+            out.contains("00100010"),
+            "query tags should be logged: {out}"
+        );
+        assert!(
+            !out.contains(PHI_MARKER),
+            "query values leaked into log: {out}"
+        );
     }
 }
