@@ -8,7 +8,9 @@
 //! The subscriber is scoped, not global. A global one would occupy the slot the
 //! real logger installs into later, and the log file would never be written.
 
+use crate::config::config::Config;
 use tracing_subscriber::fmt::MakeWriter;
+use tracing_subscriber::prelude::*;
 use tracing_subscriber::EnvFilter;
 
 /// Runs `f` with a stderr subscriber active on the current thread.
@@ -32,4 +34,41 @@ where
         .with_target(false)
         .finish();
     tracing::subscriber::with_default(subscriber, f)
+}
+
+/// Installs the process-wide logger described by `config.logging`.
+///
+/// Writes to stdout, and also to `logging.log_file_path` when `log_to_file`
+/// is true. Uses `try_init`, so a second call is a no-op. Tests rely on that
+/// because several of them start Harmony in one process.
+///
+/// Panics if the log file cannot be created. Startup cannot continue with a
+/// configured log file that is not writable.
+pub fn init_logging(config: &Config) {
+    let logging = &config.logging;
+    if logging.log_to_file {
+        let file = std::fs::File::create(&logging.log_file_path).unwrap_or_else(|e| {
+            panic!(
+                "Failed to create log file '{}': {}",
+                logging.log_file_path, e
+            )
+        });
+        let file_layer = tracing_subscriber::fmt::layer()
+            .with_file(true)
+            .with_line_number(true)
+            .with_writer(file);
+        let stdout_layer = tracing_subscriber::fmt::layer()
+            .with_file(true)
+            .with_line_number(true);
+
+        let _ = tracing_subscriber::registry()
+            .with(file_layer)
+            .with(stdout_layer)
+            .try_init();
+    } else {
+        let _ = tracing_subscriber::fmt()
+            .with_file(true)
+            .with_line_number(true)
+            .try_init();
+    }
 }

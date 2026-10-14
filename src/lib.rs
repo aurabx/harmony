@@ -36,7 +36,6 @@ use crate::storage::create_storage_backend;
 use runbeam_sdk::{load_token, save_token};
 use std::path::Path;
 use std::sync::Arc;
-use tracing_subscriber::{self, prelude::*};
 
 pub async fn run(config: Config) {
     run_with_reload(config, None).await;
@@ -70,28 +69,7 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
         create_storage_backend(&config.storage).expect("Failed to create storage backend");
     crate::globals::set_storage(storage);
 
-    // Initialise logging
-    // Use try_init to allow multiple initializations in test environments
-    if config.logging.log_to_file {
-        let file_appender = tracing_subscriber::fmt::layer()
-            .with_file(true)
-            .with_line_number(true)
-            .with_writer(std::fs::File::create(&config.logging.log_file_path).unwrap());
-
-        let stdout_appender = tracing_subscriber::fmt::layer()
-            .with_file(true)
-            .with_line_number(true);
-
-        let _ = tracing_subscriber::registry()
-            .with(file_appender)
-            .with(stdout_appender)
-            .try_init();
-    } else {
-        let _ = tracing_subscriber::fmt()
-            .with_file(true)
-            .with_line_number(true)
-            .try_init();
-    }
+    crate::logging::init_logging(&config);
 
     tracing::info!("🔧 Starting Harmony '{}'", config.proxy.effective_id());
 
