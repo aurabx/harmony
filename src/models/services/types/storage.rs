@@ -184,8 +184,9 @@ impl StorageBackend {
 
     /// Resolve `write_pattern` to the path of the file a write creates.
     ///
-    /// Each `{name}` is replaced once. The value comes from request metadata,
-    /// then normalized data, then the `{uuid}` and `{timestamp}` tokens.
+    /// Each `{name}` is replaced once. `{uuid}` and `{timestamp}` are
+    /// generated. Any other value comes from request metadata, then
+    /// normalized data.
     /// A value is never scanned for further placeholders.
     ///
     /// Values come from the client: a DICOM header, a JWT claim. So a value
@@ -284,7 +285,14 @@ impl StorageBackend {
         Error::from(format!("Failed to write to storage: {}", kind))
     }
 
+    /// `uuid` and `timestamp` are reserved. Request data cannot set them, so
+    /// a client cannot choose the name of a file the pattern makes unique.
     fn placeholder_value(name: &str, envelope: &RequestEnvelope<Vec<u8>>) -> Option<String> {
+        match name {
+            "uuid" => return Some(Uuid::new_v4().to_string()),
+            "timestamp" => return Some(Utc::now().to_rfc3339()),
+            _ => {}
+        }
         if let Some(value) = envelope.request_details.metadata.get(name) {
             return Some(value.clone());
         }
@@ -296,11 +304,7 @@ impl StorageBackend {
         {
             return Some(value.to_string());
         }
-        match name {
-            "uuid" => Some(Uuid::new_v4().to_string()),
-            "timestamp" => Some(Utc::now().to_rfc3339()),
-            _ => None,
-        }
+        None
     }
 
     fn check_segment_value(name: &str, value: &str) -> Result<(), Error> {
@@ -624,6 +628,7 @@ mod tests {
         let read_resp = backend.backend_outgoing_request(read_env, &options).await.unwrap();
         assert_eq!(read_resp.response_details.status, 404);
     }
+
     fn fake_part10() -> Vec<u8> {
         let mut bytes = vec![0u8; 128];
         bytes.extend_from_slice(b"DICM");
@@ -779,5 +784,19 @@ mod tests {
         assert!(err.to_string().contains("already stored"), "unexpected error: {}", err);
         let stored = std::fs::read(dir.path().join("1.2.3").join("1.2.3.4.dcm")).unwrap();
         assert_eq!(stored, original);
+    }
+
+    #[test]
+    fn test_write_path_uuid_cannot_be_set_by_the_request() {
+        let mut envelope = create_test_envelope();
+        envelope.request_details.metadata.insert("uuid".to_string(), "victim".to_string());
+        envelope.normalized_data = Some(serde_json::json!({ "uuid": "victim" }));
+
+        let path = StorageBackend::default()
+            .resolve_write_path("files/{uuid}.bin", &envelope)
+            .unwrap();
+
+        assert_ne!(path.as_ref(), "files/victim.bin");
+        assert!(Uuid::parse_str(path.as_ref().trim_start_matches("files/").trim_end_matches(".bin")).is_ok());
     }
 }

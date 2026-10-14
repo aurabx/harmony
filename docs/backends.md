@@ -418,6 +418,7 @@ Patterns can use placeholders replaced at runtime:
 
 **Placeholder rules for `write_pattern`**:
 - Each placeholder is filled once. A value is not scanned for further placeholders.
+- `{uuid}` and `{timestamp}` are always generated. Request metadata or data with those names is ignored.
 - A value fills part of one path segment. A write fails when a value is empty, is `.` or `..`, or holds `/` or `\`.
 - A write fails when a placeholder has no value in the request.
 - `read_pattern` does not follow these rules.
@@ -451,7 +452,10 @@ content = "dicom_part10"
 write_pattern = "{StudyInstanceUID}/{SeriesInstanceUID}/{SOPInstanceUID}.dcm"
 ``` path=null start=null
 
-- The backend runs after the pipeline's middleware. A C-STORE that `policies` denies is not written.
+- The backend runs after the pipeline's middleware. The backend does not write a C-STORE that `policies` denies.
+- The endpoint also keeps a working copy of each instance under `[storage]/dimse` while the pipeline runs.
+- The backend must be the pipeline's first backend. Otherwise the endpoint does not send the instance, and every store fails.
+- A middleware that rewrites the request body must keep `part10_b64`. If it drops it, every store fails.
 - The endpoint sends the instance inside the request as `part10_b64`. The backend never reads the `file` path in the body.
 - `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID` and `PatientID` come from the instance. A value that breaks the placeholder rules fails the store. The device then gets status `0xC000` and keeps its copy.
 - A body with no Part 10 instance fails the write.
