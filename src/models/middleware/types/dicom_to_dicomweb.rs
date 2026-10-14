@@ -304,6 +304,12 @@ impl DicomToDicomwebMiddleware {
         Ok(())
     }
 
+    /// True when the response envelope holds a body that was not parsed as JSON:
+    /// text kept as a string, or bytes kept under `body_b64`.
+    fn is_non_json_body(data: &Value) -> bool {
+        data.is_string() || data.get("body_b64").is_some_and(Value::is_string)
+    }
+
     /// Transform C-FIND response from QIDO-RS JSON to DIMSE format
     fn transform_cfind_response(
         &self,
@@ -334,6 +340,23 @@ impl DicomToDicomwebMiddleware {
             .cloned();
 
         if let Some(data) = results {
+            // A string or a `body_b64` wrapper means the body was not JSON (an
+            // HTML login page, a proxy error page). It is not a match.
+            if Self::is_non_json_body(&data) {
+                let dicom_status = dicom_status::FAILURE_UNABLE_TO_PROCESS;
+                warn!(
+                    "C-FIND QIDO-RS response with HTTP {} is not JSON (content-type {:?}), mapping to DICOM status 0x{:04X}",
+                    http_status,
+                    envelope.response_details.headers.get("content-type"),
+                    dicom_status
+                );
+                envelope.response_details.metadata.insert(
+                    "dicom_status".to_string(),
+                    format!("0x{:04X}", dicom_status),
+                );
+                return Ok(());
+            }
+
             // Validate it's an array
             if data.is_array() {
                 let count = data.as_array().map(|a| a.len()).unwrap_or(0);
@@ -709,5 +732,96 @@ impl DicomToDicomwebMiddleware {
             500..=599 => dicom_status::FAILURE_UNABLE_TO_PROCESS,
             _ => dicom_status::FAILURE_UNABLE_TO_PROCESS,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::models::envelope::command::{Command, Operation};
+    use crate::models::envelope::envelope::RequestDetails;
+
+    /// Runs a backend response through the same conversions the executor
+    /// applies, then through the middleware's response side.
+    async fn qido_response_after_right(
+        status: u16,
+        content_type: &str,
+        body: &[u8],
+    ) -> ResponseEnvelope<Value> {
+        let headers = HashMap::from([("content-type".to_string(), content_type.to_string())]);
+        let backend_response = ResponseEnvelope::from_backend_with_command(
+            RequestDetails::default(),
+            status,
+            headers,
+            body.to_vec(),
+            None,
+            Some(Command::new(Operation::Query)),
+        );
+        let json_envelope = backend_response.to_json().expect("to_json failed");
+        DicomToDicomwebMiddleware::new()
+            .right(json_envelope)
+            .await
+            .expect("right failed")
+    }
+
+    fn metadata<'a>(envelope: &'a ResponseEnvelope<Value>, key: &str) -> Option<&'a str> {
+        envelope
+            .response_details
+            .metadata
+            .get(key)
+            .map(String::as_str)
+    }
+
+    #[tokio::test]
+    async fn cfind_counts_the_results_in_a_json_array() {
+        let envelope = qido_response_after_right(
+            200,
+            "application/dicom+json",
+            br#"[{"0020000D":{"vr":"UI","Value":["1.2.3"]}},{"0020000D":{"vr":"UI","Value":["1.2.4"]}}]"#,
+        )
+        .await;
+        assert_eq!(metadata(&envelope, "result_count"), Some("2"));
+        assert_eq!(metadata(&envelope, "dicom_status"), Some("0x0000"));
+    }
+
+    #[tokio::test]
+    async fn cfind_treats_an_empty_json_response_as_no_matches() {
+        let envelope = qido_response_after_right(200, "application/dicom+json", b"").await;
+        assert_eq!(metadata(&envelope, "result_count"), Some("0"));
+        assert_eq!(metadata(&envelope, "dicom_status"), Some("0x0000"));
+    }
+
+    #[tokio::test]
+    async fn cfind_fails_when_a_200_response_is_html() {
+        let envelope = qido_response_after_right(
+            200,
+            "text/html",
+            b"<html><body>Please sign in</body></html>",
+        )
+        .await;
+        assert_eq!(metadata(&envelope, "dicom_status"), Some("0xC000"));
+        assert_ne!(
+            metadata(&envelope, "result_count"),
+            Some("1"),
+            "an HTML page is not a match"
+        );
+    }
+
+    #[tokio::test]
+    async fn cfind_fails_when_a_200_response_is_labelled_json_but_is_not() {
+        let envelope = qido_response_after_right(
+            200,
+            "application/dicom+json",
+            b"<html>502 Bad Gateway</html>",
+        )
+        .await;
+        assert_eq!(metadata(&envelope, "dicom_status"), Some("0xC000"));
+        assert_ne!(metadata(&envelope, "result_count"), Some("1"));
+    }
+
+    #[tokio::test]
+    async fn cfind_maps_a_404_to_no_matches() {
+        let envelope = qido_response_after_right(404, "text/html", b"<h1>Not found</h1>").await;
+        assert_eq!(metadata(&envelope, "dicom_status"), Some("0x0000"));
     }
 }

@@ -652,8 +652,9 @@ impl ResponseEnvelope<Vec<u8>> {
             match serde_json::from_slice::<serde_json::Value>(&self.original_data) {
                 Ok(json) => (Some(json.clone()), json),
                 Err(_) => {
-                    // Failed to parse as JSON, keep as null but preserve bytes
-                    (None, serde_json::Value::Null)
+                    // The body claims to be JSON but is not (an HTML error page, a
+                    // byte order mark). Keep the bytes so the client still gets them.
+                    (None, body_b64_wrapper(&self.original_data))
                 }
             }
         } else {
@@ -780,7 +781,10 @@ impl ResponseEnvelope<serde_json::Value> {
     }
 }
 
+/// Media types are case-insensitive (RFC 9110), and `is_definitely_binary`
+/// already lowercases, so this check must agree with it.
 fn is_json_content_type(content_type: &str) -> bool {
+    let content_type = content_type.to_ascii_lowercase();
     content_type.contains("application/json")
         || content_type.contains("application/fhir+json")
         || content_type.contains("application/dicom+json")
@@ -1262,5 +1266,104 @@ mod tests {
         json_env.normalized_data = Some(serde_json::json!({"rewritten": true}));
         let bytes_env = json_env.to_bytes().expect("to_bytes failed");
         assert_eq!(bytes_env.original_data, br#"{"rewritten":true}"#);
+    }
+
+    #[test]
+    fn test_response_envelope_to_json_holds_text_as_string_and_keeps_headers() {
+        let json_env = text_response("text/html", b"<p>hi</p>")
+            .to_json()
+            .expect("to_json failed");
+        assert_eq!(json_env.original_data, serde_json::json!("<p>hi</p>"));
+        assert!(
+            json_env.normalized_data.is_none(),
+            "text must not be offered to middleware as normalized JSON"
+        );
+        assert_eq!(json_env.response_details.status, 200);
+        assert_eq!(
+            json_env.response_details.headers.get("content-type"),
+            Some(&"text/html".to_string())
+        );
+    }
+
+    #[test]
+    fn test_response_envelope_to_json_wraps_non_utf8_text_as_body_b64() {
+        let json_env = text_response("text/plain", &[0x68, 0xe9])
+            .to_json()
+            .expect("to_json failed");
+        assert!(json_env.original_data.get("body_b64").is_some());
+    }
+
+    #[test]
+    fn test_response_envelope_empty_text_bodies_stay_empty() {
+        // HEAD, 204 and 304 responses carry a content type and no body.
+        for status in [200u16, 204, 304] {
+            let mut resp = text_response("text/html", b"");
+            resp.response_details.status = status;
+            let bytes_env = resp
+                .to_json()
+                .expect("to_json failed")
+                .to_bytes()
+                .expect("to_bytes failed");
+            assert!(bytes_env.original_data.is_empty(), "status {status}");
+            assert_eq!(bytes_env.response_details.status, status);
+            assert_eq!(
+                bytes_env.response_details.headers.get("content-type"),
+                Some(&"text/html".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn test_response_envelope_text_error_bodies_roundtrip() {
+        for status in [404u16, 500, 502] {
+            let mut resp = text_response("text/html", b"<h1>upstream error</h1>");
+            resp.response_details.status = status;
+            let bytes_env = resp
+                .to_json()
+                .expect("to_json failed")
+                .to_bytes()
+                .expect("to_bytes failed");
+            assert_eq!(bytes_env.original_data, b"<h1>upstream error</h1>");
+            assert_eq!(bytes_env.response_details.status, status);
+        }
+    }
+
+    #[test]
+    fn test_response_envelope_invalid_json_body_is_preserved() {
+        let cases: [(&str, &[u8]); 3] = [
+            ("application/json", b"<html>502 Bad Gateway</html>"),
+            ("application/json", b"\xef\xbb\xbf{\"bom\":true}"),
+            ("application/fhir+json", b"not json at all"),
+        ];
+        for (content_type, body) in cases {
+            let bytes_env = text_response(content_type, body)
+                .to_json()
+                .expect("to_json failed")
+                .to_bytes()
+                .expect("to_bytes failed");
+            assert_eq!(
+                bytes_env.original_data, body,
+                "body lost for content-type {content_type}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_response_envelope_content_type_match_is_case_insensitive() {
+        let json_env = text_response("Application/JSON", br#"{"a":1}"#)
+            .to_json()
+            .expect("to_json failed");
+        assert_eq!(
+            json_env.normalized_data,
+            Some(serde_json::json!({"a": 1})),
+            "mixed-case JSON content type must still be parsed"
+        );
+
+        let bytes_env = text_response("TEXT/HTML", b"<p>hi</p>")
+            .to_json()
+            .expect("to_json failed")
+            .to_bytes()
+            .expect("to_bytes failed");
+        assert_eq!(bytes_env.original_data, b"<p>hi</p>");
     }
 }

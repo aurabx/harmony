@@ -1463,6 +1463,84 @@ module = ""
         assert_eq!(received_pixels, source_pixels, "pixel data changed in the round trip");
     }
 
+    /// A backend response after the executor's JSON round trip, as
+    /// `response_to_datasets` receives it.
+    fn backend_response_after_round_trip(
+        status: u16,
+        content_type: Option<&str>,
+        body: &[u8],
+    ) -> ResponseEnvelope<Vec<u8>> {
+        let headers = content_type
+            .map(|ct| HashMap::from([("content-type".to_string(), ct.to_string())]))
+            .unwrap_or_default();
+        ResponseEnvelope::from_backend_with_command(
+            bridge_request_details(),
+            status,
+            headers,
+            body.to_vec(),
+            None,
+            None,
+        )
+        .to_json()
+        .expect("to_json failed")
+        .to_bytes()
+        .expect("to_bytes failed")
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_fails_when_a_200_response_is_html() {
+        // A login or error page served with 200 is not "no results".
+        let envelope = backend_response_after_round_trip(
+            200,
+            Some("text/html"),
+            b"<html><body>Please sign in</body></html>",
+        );
+        let error = match PipelineQueryProvider::response_to_datasets(envelope).await {
+            Ok(datasets) => panic!("expected an error, got {} datasets", datasets.len()),
+            Err(error) => error,
+        };
+        assert!(
+            error
+                .to_string()
+                .contains("Failed to parse response as JSON"),
+            "unexpected error: {error}"
+        );
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_fails_when_a_json_labelled_body_is_not_json() {
+        let envelope = backend_response_after_round_trip(
+            200,
+            Some("application/json"),
+            b"<html>502 Bad Gateway</html>",
+        );
+        assert!(PipelineQueryProvider::response_to_datasets(envelope)
+            .await
+            .is_err());
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_returns_nothing_for_an_empty_200_response() {
+        let envelope = backend_response_after_round_trip(200, Some("text/plain"), b"");
+        let datasets = PipelineQueryProvider::response_to_datasets(envelope)
+            .await
+            .expect("an empty body is an empty result");
+        assert!(datasets.is_empty());
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_reads_json_that_has_no_content_type() {
+        let envelope = backend_response_after_round_trip(
+            200,
+            None,
+            br#"[{"00100020":{"vr":"LO","Value":["PATIENT1"]}}]"#,
+        );
+        let datasets = PipelineQueryProvider::response_to_datasets(envelope)
+            .await
+            .expect("JSON without a content type is still JSON");
+        assert_eq!(datasets.len(), 1);
+    }
+
     /// The final response of a store pipeline, as `store` sees it.
     fn store_response(
         dicom_status: Option<&str>,
