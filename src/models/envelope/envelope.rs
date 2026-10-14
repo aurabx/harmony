@@ -1222,7 +1222,9 @@ mod tests {
 
     #[test]
     fn test_response_envelope_text_body_survives_json_extractor_style_copy() {
-        // json_extractor copies original_data into normalized_data when unset.
+        // A middleware that copies original_data into normalized_data (as the
+        // json_extractor does on the request side) must not make to_bytes quote
+        // the text.
         let mut json_env = text_response("text/html", b"<p>hi</p>")
             .to_json()
             .expect("to_json failed");
@@ -1252,6 +1254,8 @@ mod tests {
 
     #[test]
     fn test_response_envelope_middleware_object_on_text_response_serializes_as_json() {
+        // Documents existing behaviour: an object in normalized_data is written
+        // as JSON and the text content type is left unchanged.
         let mut json_env = text_response("text/html", b"<p>hi</p>")
             .to_json()
             .expect("to_json failed");
