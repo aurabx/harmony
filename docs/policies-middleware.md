@@ -1,6 +1,6 @@
 # Policies Middleware
 
-**Last Updated**: 2026-10-13
+**Last Updated**: 2026-10-15
 
 The policies middleware provides comprehensive policy-based access control, rate limiting, and request filtering through a flexible rule system.
 
@@ -80,6 +80,13 @@ An `ip_allow` rule restricts who may use the pipeline. Other allow rules cannot 
 - **Logs.** An outside client is logged at `info` with the client IP and the ids of every `ip_allow` rule checked. An unknown client IP is logged at `warn`.
 
 The client IP comes from the envelope's `remote_addr` metadata (then `client_ip`). The HTTP adapter sets `remote_addr` from the TCP peer address for HTTP/1.1 and HTTP/2. It does not read `X-Forwarded-For`.
+
+**IPv4-mapped addresses.** A dual-stack listener (`bind_address = "::"` with `IPV6_V6ONLY=0`, the default on Linux and macOS) reports an IPv4 client as an IPv4-mapped IPv6 address, such as `::ffff:10.1.2.3`. IP rules and rate limits treat that address as the plain IPv4 address `10.1.2.3`:
+
+- An `ip_allow` or `ip_deny` CIDR written in IPv4, such as `10.0.0.0/8`, matches the mapped form.
+- A CIDR written as an IPv6 network still matches the mapped form as received. `::ffff:10.0.0.0/104` keeps working.
+- `remote_addr` itself is not changed. Logs and other middleware see the address as the listener reported it.
+- Only `::ffff:0:0/96` is folded to IPv4. Other addresses that embed an IPv4 address, such as 6to4 (`2002::/16`), Teredo (`2001::/32`) and NAT64 (`64:ff9b::/96`), stay IPv6. An IPv4 `ip_deny` CIDR does not block them. Add the IPv6 ranges to the rule if you need to.
 
 **Example:**
 
@@ -314,6 +321,7 @@ window_seconds = 60  # 100 requests per minute
 
 **Behavior:**
 - Tracks request count per client IP using thread-safe RwLock
+- An IPv4-mapped address (`::ffff:a.b.c.d`) and the plain IPv4 address share one bucket. Different spellings of one IPv6 address, such as `2001:DB8:0::1` and `2001:db8::1`, also share one bucket
 - Sliding window: resets when `window_seconds` expires
 - Within limit: Rule evaluates to NO_MATCH
 - Limit exceeded: Rule evaluates to DENY
