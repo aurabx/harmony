@@ -124,3 +124,25 @@ fn file_mode_filters_both_file_and_stdout() {
         assert!(!out.contains("debug-marker"), "{name} output: {out}");
     }
 }
+
+/// A bare word such as "warning" parses as a target directive, which would
+/// silently turn off almost all logging. It must be rejected instead.
+#[test]
+#[should_panic(expected = "logging.log_level 'warning'")]
+fn log_level_that_is_not_a_level_name_panics() {
+    select_filter(None, "warning");
+}
+
+#[test]
+#[should_panic(expected = "logging.log_level 'harmony=debug'")]
+fn log_level_directive_is_rejected() {
+    select_filter(None, "harmony=debug");
+}
+
+/// A valid RUST_LOG must not hide a broken log_level, because the process
+/// would start fine and then log nothing once RUST_LOG is removed.
+#[test]
+#[should_panic(expected = "logging.log_level 'warning'")]
+fn invalid_log_level_is_rejected_even_when_rust_log_is_valid() {
+    select_filter(Some("debug"), "warning");
+}

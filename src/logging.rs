@@ -36,6 +36,9 @@ where
     tracing::subscriber::with_default(subscriber, f)
 }
 
+/// The values `logging.log_level` accepts. Matches `LoggingConfig::validate`.
+pub const LOG_LEVELS: [&str; 5] = ["trace", "debug", "info", "warn", "error"];
+
 /// A `RUST_LOG` value that could not be parsed, and why.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RejectedRustLog {
@@ -58,9 +61,20 @@ pub struct LogFilter {
 /// Takes the environment value as an argument so it can be tested without
 /// mutating process state.
 ///
-/// Panics if `log_level` does not parse. Config validation limits it to
-/// trace, debug, info, warn or error, all of which do.
+/// Panics if `log_level` is not one of [`LOG_LEVELS`], even when `RUST_LOG`
+/// wins. Config validation already enforces this for loaded files, but a
+/// `Config` built in code reaches here unvalidated. `EnvFilter` would read a
+/// bare word such as "warning" as a target name and silently log almost
+/// nothing.
 pub fn select_filter(rust_log: Option<&str>, log_level: &str) -> LogFilter {
+    if !LOG_LEVELS.contains(&log_level) {
+        panic!(
+            "logging.log_level '{}' must be one of: {}",
+            log_level,
+            LOG_LEVELS.join(", ")
+        );
+    }
+
     let mut rejected_rust_log = None;
     if let Some(value) = rust_log.filter(|v| !v.trim().is_empty()) {
         match EnvFilter::try_new(value) {
@@ -79,14 +93,8 @@ pub fn select_filter(rust_log: Option<&str>, log_level: &str) -> LogFilter {
         }
     }
 
-    let filter = EnvFilter::try_new(log_level).unwrap_or_else(|e| {
-        panic!(
-            "logging.log_level '{}' is not a valid filter: {}",
-            log_level, e
-        )
-    });
     LogFilter {
-        filter,
+        filter: EnvFilter::new(log_level),
         rejected_rust_log,
     }
 }
