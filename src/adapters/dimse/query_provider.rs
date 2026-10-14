@@ -1,5 +1,6 @@
 use crate::adapters::dimse::envelope_unwrapper::{unwrap_response, UnwrappedContent};
 use crate::adapters::dimse::status_mapper;
+use crate::config::config::Config;
 use crate::globals::{get_config, get_storage};
 use crate::models::envelope::command::{Command, Operation};
 use crate::models::envelope::envelope::ResponseEnvelope;
@@ -187,13 +188,11 @@ impl PipelineQueryProvider {
     /// executes pipeline, and returns response envelope.
     async fn run(
         &self,
+        config: &Config,
         command: Command,
         body: serde_json::Value,
         mut meta: HashMap<String, String>,
     ) -> DimseResult<ResponseEnvelope<Vec<u8>>> {
-        let config =
-            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
-
         // Resolve endpoint service and options
         let endpoint = config.endpoints.get(&self.endpoint).ok_or_else(|| {
             DimseError::operation_failed(format!("Unknown endpoint '{}'", self.endpoint))
@@ -246,14 +245,12 @@ impl PipelineQueryProvider {
     /// is still producing the rest.
     async fn run_streaming(
         &self,
+        config: &Config,
         command: Command,
         body: serde_json::Value,
         mut meta: HashMap<String, String>,
     ) -> DimseResult<BoxDatasetStream> {
         use futures_util::StreamExt;
-
-        let config =
-            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
 
         // Resolve endpoint service and options
         let endpoint = config.endpoints.get(&self.endpoint).ok_or_else(|| {
@@ -343,14 +340,12 @@ impl PipelineQueryProvider {
     /// down to a single envelope. The stream must yield at least one envelope.
     async fn run_streaming_response(
         &self,
+        config: &Config,
         command: Command,
         body: serde_json::Value,
         mut meta: HashMap<String, String>,
     ) -> DimseResult<ResponseEnvelope<Vec<u8>>> {
         use futures_util::StreamExt;
-
-        let config =
-            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
 
         // Resolve endpoint service and options
         let endpoint = config.endpoints.get(&self.endpoint).ok_or_else(|| {
@@ -740,9 +735,9 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let command = Command::new(Operation::Query).with_source("dimse_adapter");
         if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
             tracing::info!("Using streaming pipeline for C-FIND");
-            self.run_streaming(command, body, meta).await
+            self.run_streaming(&config, command, body, meta).await
         } else {
-            let response_envelope = self.run(command, body, meta).await?;
+            let response_envelope = self.run(&config, command, body, meta).await?;
             let datasets = Self::response_to_datasets(response_envelope).await?;
             Ok(dataset_stream_from_vec(datasets))
         }
@@ -773,8 +768,11 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = serde_json::to_value(&wrapper)
             .map_err(|e| DimseError::operation_failed(format!("Wrapper serialize: {}", e)))?;
 
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
         let response_envelope = self
             .run(
+                &config,
                 Command::new(Operation::Move).with_source("dimse_adapter"),
                 body,
                 meta,
@@ -823,9 +821,9 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             tracing::info!("Using streaming pipeline for C-GET");
             // The bridge does not know the instance count up front, so the SCP
             // sends no Pending responses for this retrieval.
-            Ok(RetrieveStream::new(self.run_streaming(command, body, meta).await?))
+            Ok(RetrieveStream::new(self.run_streaming(&config, command, body, meta).await?))
         } else {
-            let response_envelope = self.run(command, body, meta).await?;
+            let response_envelope = self.run(&config, command, body, meta).await?;
             let datasets = Self::response_to_datasets(response_envelope).await?;
             Ok(RetrieveStream::from_vec(datasets))
         }
@@ -927,14 +925,17 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let command = Command::new(Operation::Store).with_source("dimse_adapter");
         let response = if streaming {
             tracing::info!("Using streaming pipeline for C-STORE");
-            self.run_streaming_response(command, body, meta).await?
+            self.run_streaming_response(&config, command, body, meta)
+                .await?
         } else {
-            self.run(command, body, meta).await?
+            self.run(&config, command, body, meta).await?
         };
 
         Self::check_store_response(&response)?;
         // A dicom_scp pipeline with no backend uses this copy as its store
-        // (AURA-2083, tests/dicom/cstore_filesystem.rs).
+        // (AURA-2083, tests/dicom/cstore_filesystem.rs). `pipeline_cfg` is from
+        // the snapshot the pipeline ran with, so a reload during the store
+        // cannot make this decision disagree with what ran.
         if pipeline_cfg.backends.is_empty() {
             stored_copy.keep();
         }

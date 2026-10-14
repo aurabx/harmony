@@ -684,6 +684,31 @@ async fn no_backend_pipeline_removes_the_copy_of_a_denied_store() {
     );
 }
 
+/// The pipeline is looked up after the adapter writes its copy, so an
+/// unknown pipeline is an early failure that must still remove it.
+#[tokio::test]
+async fn store_to_an_unknown_pipeline_removes_the_copy() {
+    pacs();
+
+    let dataset = sample_instance();
+    let copy = adapter_copy_path(&dataset);
+
+    let error = send("no_such_pipeline", "scp_to_pacs", dataset)
+        .await
+        .expect_err("the pipeline does not exist, so the store must fail");
+    assert!(
+        error
+            .to_string()
+            .contains("Pipeline 'no_such_pipeline' not found"),
+        "the store should fail at the pipeline lookup: {}",
+        error
+    );
+    assert!(
+        !copy.exists(),
+        "an early failure must remove the adapter's copy"
+    );
+}
+
 /// Run `operation` from an address inside and one outside the allowlist on
 /// the IP-gated pipeline. The PACS serves no queries, so an admitted request
 /// may still fail at the backend. It must not fail at the policy.
