@@ -81,6 +81,8 @@ An `ip_allow` rule restricts who may use the pipeline. Other allow rules cannot 
 
 The client IP comes from the envelope's `remote_addr` metadata (then `client_ip`). The HTTP adapter sets `remote_addr` from the TCP peer address for HTTP/1.1 and HTTP/2. The HTTP/3 adapter sets it from the QUIC peer address. The DIMSE adapter sets it from the TCP peer address of the SCU's association, so the same rules apply to a `dicom_scp` endpoint. None of them reads `X-Forwarded-For`. HTTP/3 listeners turn QUIC connection migration off, so `remote_addr` is always the address the handshake checked. A client whose IP changes must open a new connection.
 
+On a `dicom_scp` endpoint, the DIMSE adapter writes its copy of a C-STORE instance to disk before the pipeline runs. It removes that copy after the store. A successful store through a pipeline with no backend is the exception: it keeps the copy as the stored instance. A denied store never keeps it. Put `policies` before `dimse_to_jmix` in the middleware chain. `dimse_to_jmix` moves the instance into its staging folder, and a later denial cannot undo that.
+
 **Example:**
 
 ```toml

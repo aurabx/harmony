@@ -271,6 +271,21 @@ host = "127.0.0.1"
 port = {pacs_port}
 local_aet = "HARMONY_S5"
 
+# dicom_scp with no backend behind an IP allowlist. The adapter's copy is
+# the stored instance.
+[pipelines.no_backend_ip_gated]
+networks = ["default"]
+endpoints = ["scp_no_backend_ip_gated"]
+backends = []
+middleware = ["ip_gate"]
+
+[endpoints.scp_no_backend_ip_gated]
+service = "dicom_scp"
+[endpoints.scp_no_backend_ip_gated.options]
+local_aet = "HARMONY_S6"
+port = 11118
+enable_store = true
+
 [middleware.ip_gate]
 type = "policies"
 [middleware.ip_gate.options]
@@ -327,37 +342,61 @@ fn element_bytes(object: &InMemDicomObject, name: &str) -> Vec<u8> {
         .to_vec()
 }
 
-/// Send the sample instance to `pipeline` the way the SCP does.
-async fn send_sample(pipeline: &str, endpoint: &str) -> dimse::Result<()> {
+/// The sample instance as the SCP hands it to the adapter.
+fn sample_instance() -> DatasetStream {
     let source = dicom_object::open_file(sample_path()).expect("open sample instance");
-    send(pipeline, endpoint, DatasetStream::from_object(source.into_inner())).await
+    DatasetStream::from_object(source.into_inner())
 }
 
-/// Hand `dataset` to `pipeline` the way the SCP does, and remove the copy the
-/// adapter wrote on this host.
+/// Where the adapter writes its copy of `dataset`. No storage backend is
+/// configured, so it uses `./tmp/dimse`.
+fn adapter_copy_path(dataset: &DatasetStream) -> PathBuf {
+    PathBuf::from("./tmp/dimse").join(format!("{}.dcm", dataset.metadata().id))
+}
+
+/// Send the sample instance to `pipeline` the way the SCP does.
+async fn send_sample(pipeline: &str, endpoint: &str) -> dimse::Result<()> {
+    send(pipeline, endpoint, sample_instance()).await
+}
+
+/// Hand `dataset` to `pipeline` the way the SCP does.
 async fn send(pipeline: &str, endpoint: &str, dataset: DatasetStream) -> dimse::Result<()> {
     // A loopback peer, as the SCP would pass for a local SCU.
     send_from("127.0.0.1:40000", pipeline, endpoint, dataset).await
 }
 
 /// Hand `dataset` to `pipeline` as if the SCU connected from `peer`.
+async fn store_from(
+    peer: &str,
+    pipeline: &str,
+    endpoint: &str,
+    dataset: DatasetStream,
+) -> dimse::Result<()> {
+    let peer: std::net::SocketAddr = peer.parse().expect("valid peer address");
+    PipelineQueryProvider::new(pipeline, endpoint)
+        .store(peer, dataset)
+        .await
+}
+
+/// Hand `dataset` to `pipeline` as if the SCU connected from `peer`.
+///
+/// Whatever the outcome, the adapter must have removed its copy of the
+/// instance by the time the store returns. Every pipeline sent through here
+/// has a backend, or denies the store.
 async fn send_from(
     peer: &str,
     pipeline: &str,
     endpoint: &str,
     dataset: DatasetStream,
 ) -> dimse::Result<()> {
-    // No storage backend is configured, so the adapter writes its copy here.
-    let stored_file = PathBuf::from("./tmp/dimse").join(format!("{}.dcm", dataset.metadata().id));
-
-    let peer: std::net::SocketAddr = peer.parse().expect("valid peer address");
-    let outcome = PipelineQueryProvider::new(pipeline, endpoint)
-        .store(peer, dataset)
-        .await;
-    // A store that fails early writes no copy. Its error must reach the test.
-    if stored_file.exists() {
-        std::fs::remove_file(&stored_file).expect("remove the adapter's copy");
-    }
+    let stored_file = adapter_copy_path(&dataset);
+    let outcome = store_from(peer, pipeline, endpoint, dataset).await;
+    assert!(
+        !stored_file.exists(),
+        "the adapter's copy must be removed when the store finishes ({:?}): {}",
+        outcome,
+        stored_file.display()
+    );
     outcome
 }
 
@@ -366,9 +405,15 @@ async fn send_from(
 async fn assert_pipeline_sends_the_instance_to_the_pacs(pipeline: &str, endpoint: &str) {
     let stored = pacs();
 
-    send_sample(pipeline, endpoint)
+    let dataset = sample_instance();
+    let copy = adapter_copy_path(&dataset);
+    send(pipeline, endpoint, dataset)
         .await
         .expect("the PACS is up, so the C-STORE should succeed");
+    assert!(
+        !copy.exists(),
+        "a successful store must remove the adapter's copy"
+    );
 
     let stored = std::mem::take(&mut *stored.lock().unwrap());
     assert_eq!(stored.len(), 1, "the PACS should hold exactly one instance");
@@ -508,9 +553,15 @@ async fn backend_named_dicom_sends_the_received_instance_to_the_pacs() {
 async fn dicom_scu_backend_reports_a_store_the_pacs_did_not_take() {
     pacs();
 
-    let error = send_sample("to_down_pacs", "scp_to_down_pacs")
+    let dataset = sample_instance();
+    let copy = adapter_copy_path(&dataset);
+    let error = send("to_down_pacs", "scp_to_down_pacs", dataset)
         .await
         .expect_err("nothing listens on the PACS port, so the store must fail");
+    assert!(
+        !copy.exists(),
+        "a failed store must remove the adapter's copy"
+    );
 
     // The failure must be the connection to the PACS. A body the backend
     // could not read would also fail the store, for the wrong reason.
@@ -524,14 +575,7 @@ async fn dicom_scu_backend_reports_a_store_the_pacs_did_not_take() {
 
 /// Send the sample instance to `pipeline` as if the SCU connected from `peer`.
 async fn send_sample_from(peer: &str, pipeline: &str, endpoint: &str) -> dimse::Result<()> {
-    let source = dicom_object::open_file(sample_path()).expect("open sample instance");
-    send_from(
-        peer,
-        pipeline,
-        endpoint,
-        DatasetStream::from_object(source.into_inner()),
-    )
-    .await
+    send_from(peer, pipeline, endpoint, sample_instance()).await
 }
 
 /// An `ip_allow` rule on a `dicom_scp` pipeline sees the SCU's address. Before
@@ -555,13 +599,22 @@ async fn ip_allowlist_admits_a_dimse_client_inside_it() {
 async fn ip_allowlist_denies_a_dimse_client_outside_it() {
     let stored = pacs();
 
-    let error = send_sample_from(
+    // The adapter writes its copy before the policy runs, so a denied client
+    // must not leave it behind.
+    let dataset = sample_instance();
+    let copy = adapter_copy_path(&dataset);
+    let error = send_from(
         "203.0.113.9:40000",
         "to_pacs_ip_gated",
         "scp_to_pacs_ip_gated",
+        dataset,
     )
     .await
     .expect_err("203.0.113.9 is outside the allowlist, so the C-STORE must fail");
+    assert!(
+        !copy.exists(),
+        "a denied store must remove the adapter's copy"
+    );
 
     // An unknown address would also be denied, for the wrong reason. The
     // policy must have compared the client's address against the allowlist.
@@ -574,6 +627,60 @@ async fn ip_allowlist_denies_a_dimse_client_outside_it() {
     assert!(
         std::mem::take(&mut *stored.lock().unwrap()).is_empty(),
         "a denied C-STORE must not reach the PACS"
+    );
+}
+
+/// A pipeline with no backend keeps the adapter's copy as the stored
+/// instance, but only once the store succeeds.
+#[tokio::test]
+async fn no_backend_pipeline_keeps_the_copy_of_an_admitted_store() {
+    pacs();
+
+    let dataset = sample_instance();
+    let copy = adapter_copy_path(&dataset);
+
+    let outcome = store_from(
+        "10.1.2.3:40000",
+        "no_backend_ip_gated",
+        "scp_no_backend_ip_gated",
+        dataset,
+    )
+    .await;
+    let kept = copy.exists();
+    if kept {
+        std::fs::remove_file(&copy).expect("remove the kept copy");
+    }
+
+    outcome.expect("10.1.2.3 is inside the allowlist, so the C-STORE should succeed");
+    assert!(
+        kept,
+        "a successful store with no backend must keep the adapter's copy"
+    );
+}
+
+#[tokio::test]
+async fn no_backend_pipeline_removes_the_copy_of_a_denied_store() {
+    pacs();
+
+    let dataset = sample_instance();
+    let copy = adapter_copy_path(&dataset);
+
+    let error = send_from(
+        "203.0.113.9:40000",
+        "no_backend_ip_gated",
+        "scp_no_backend_ip_gated",
+        dataset,
+    )
+    .await
+    .expect_err("203.0.113.9 is outside the allowlist, so the C-STORE must fail");
+    assert!(
+        error.to_string().contains("not in the IP allowlist"),
+        "the policy should deny the client by its address: {}",
+        error
+    );
+    assert!(
+        !copy.exists(),
+        "a denied store must remove the adapter's copy"
     );
 }
 

@@ -67,6 +67,54 @@ impl InlineInstance {
     }
 }
 
+/// The adapter's on-disk copy of one received C-STORE instance.
+///
+/// The copy is written before the pipeline runs, so the `policies`
+/// middleware (IP allow and deny lists, rate limits) only sees the request
+/// after the file exists. Removing the file on drop means every way out of
+/// `store()` deletes it unless `keep` was called: a policy denial, a backend
+/// failure, an early error, or a success. Without this, a denied client could
+/// fill the disk and leave unvetted PHI on it.
+///
+/// A missing file is not an error. `dimse_to_jmix` moves the file into its
+/// staging folder while the pipeline runs.
+struct StoredInstanceCopy {
+    path: PathBuf,
+    kept: bool,
+}
+
+impl StoredInstanceCopy {
+    fn new(path: PathBuf) -> Self {
+        Self { path, kept: false }
+    }
+
+    fn path(&self) -> &std::path::Path {
+        &self.path
+    }
+
+    /// Leave the file on disk when the copy is dropped.
+    fn keep(mut self) {
+        self.kept = true;
+    }
+}
+
+impl Drop for StoredInstanceCopy {
+    fn drop(&mut self) {
+        if self.kept {
+            return;
+        }
+        match std::fs::remove_file(&self.path) {
+            Ok(()) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => tracing::warn!(
+                "Failed to remove the stored C-STORE instance {}: {}",
+                self.path.display(),
+                e
+            ),
+        }
+    }
+}
+
 /// DIMSE query provider that integrates with the pipeline system
 ///
 /// This provider implements the dimse::scp::QueryProvider trait to handle
@@ -818,10 +866,13 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             }
         };
 
-        let temp_file = dataset
-            .to_temp_file(&target_dir)
-            .await
-            .map_err(|e| DimseError::operation_failed(format!("store dataset: {}", e)))?;
+        let stored_copy = StoredInstanceCopy::new(
+            dataset
+                .to_temp_file(&target_dir)
+                .await
+                .map_err(|e| DimseError::operation_failed(format!("store dataset: {}", e)))?,
+        );
+        let temp_file = stored_copy.path();
 
         // Build metadata from DICOM tags for path resolution
         let mut meta = peer_meta(peer_addr);
@@ -854,7 +905,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         // The bytes are read back from the file just written so the inline
         // copy and the file are identical.
         let inline_instance = if Self::store_needs_inline_instance(pipeline_cfg, &config) {
-            let part10 = tokio::fs::read(&temp_file).await.map_err(|e| {
+            let part10 = tokio::fs::read(temp_file).await.map_err(|e| {
                 DimseError::operation_failed(format!(
                     "read stored instance {}: {}",
                     temp_file.display(),
@@ -869,7 +920,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         let body = Self::build_store_body(
             ds_meta.sop_class_uid.as_deref(),
             dicom_json,
-            &temp_file,
+            temp_file,
             inline_instance,
         );
 
@@ -881,7 +932,13 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             self.run(command, body, meta).await?
         };
 
-        Self::check_store_response(&response)
+        Self::check_store_response(&response)?;
+        // A dicom_scp pipeline with no backend uses this copy as its store
+        // (AURA-2083, tests/dicom/cstore_filesystem.rs).
+        if pipeline_cfg.backends.is_empty() {
+            stored_copy.keep();
+        }
+        Ok(())
     }
 }
 
@@ -1763,5 +1820,47 @@ module = ""
             "the reason must be cut, got {} bytes",
             error.len()
         );
+    }
+
+    fn stored_copy_work_dir() -> tempfile::TempDir {
+        let tmp_root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("tmp");
+        std::fs::create_dir_all(&tmp_root).expect("create ./tmp");
+        tempfile::tempdir_in(&tmp_root).expect("create work dir")
+    }
+
+    #[test]
+    fn test_stored_instance_copy_removes_the_file_on_drop() {
+        let work_dir = stored_copy_work_dir();
+        let path = work_dir.path().join("instance.dcm");
+        std::fs::write(&path, b"instance").expect("write instance");
+
+        drop(StoredInstanceCopy::new(path.clone()));
+
+        assert!(
+            !path.exists(),
+            "the copy must be removed: {}",
+            path.display()
+        );
+    }
+
+    #[test]
+    fn test_stored_instance_copy_keeps_the_file_when_kept() {
+        let work_dir = stored_copy_work_dir();
+        let path = work_dir.path().join("kept.dcm");
+        std::fs::write(&path, b"instance").expect("write instance");
+
+        StoredInstanceCopy::new(path.clone()).keep();
+
+        assert!(path.exists(), "a kept copy must stay: {}", path.display());
+    }
+
+    #[test]
+    fn test_stored_instance_copy_ignores_a_file_already_moved() {
+        let work_dir = stored_copy_work_dir();
+        let path = work_dir.path().join("moved.dcm");
+
+        drop(StoredInstanceCopy::new(path.clone()));
+
+        assert!(!path.exists());
     }
 }
