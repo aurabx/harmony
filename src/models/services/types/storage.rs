@@ -14,11 +14,42 @@ use std::collections::HashMap;
 use std::sync::Arc;
 use uuid::Uuid;
 
+use super::dicom_store_body::part10_from_store_body;
+
+/// The `content` value that writes the DICOM Part 10 instance of a C-STORE.
+pub(crate) const CONTENT_DICOM_PART10: &str = "dicom_part10";
+
+/// What a write puts in the file.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum WriteContent {
+    /// The request body, unchanged. This is the default.
+    Body,
+    /// The DICOM Part 10 instance in the body. A `dicom_scp` endpoint's body
+    /// is JSON that describes the instance, so writing it as-is would store
+    /// the JSON, not the image.
+    DicomPart10,
+}
+
+impl WriteContent {
+    fn parse(value: Option<&str>) -> Result<Self, String> {
+        match value {
+            None => Ok(Self::Body),
+            Some(CONTENT_DICOM_PART10) => Ok(Self::DicomPart10),
+            Some(other) => Err(format!(
+                "unknown content '{}'; the only accepted value is '{}'",
+                other, CONTENT_DICOM_PART10
+            )),
+        }
+    }
+}
+
 #[derive(Debug, Deserialize, Clone, Default)]
 pub struct StorageBackend {
     pub root: Option<String>,
     pub write_pattern: Option<String>,
     pub read_pattern: Option<String>,
+    /// `dicom_part10` writes the instance of a C-STORE instead of the body.
+    pub content: Option<String>,
     // S3 configuration
     pub region: Option<String>,
     pub bucket: Option<String>,
@@ -120,12 +151,130 @@ impl StorageBackend {
         let clean_path = path_str.trim_start_matches('/');
         Ok(ObjectStorePath::parse(clean_path).map_err(|e| Error::from(format!("Invalid path: {}", e)))?)
     }
+
+    /// Read the `content` option. An option value overrides the struct field.
+    fn write_content(&self, options: &HashMap<String, Value>) -> Result<WriteContent, String> {
+        let value = match options.get("content") {
+            Some(Value::String(s)) => Some(s.as_str()),
+            Some(other) => return Err(format!("content must be a string, got {}", other)),
+            None => self.content.as_deref(),
+        };
+        WriteContent::parse(value)
+    }
+
+    /// The bytes a write puts in the file, chosen by `content`.
+    ///
+    /// In `dicom_part10` mode a body with no Part 10 instance fails the write.
+    /// A `dicom_scp` endpoint then answers the sending device with a failure
+    /// status, so the device keeps its copy. The `file` path in the body is
+    /// never read.
+    fn write_bytes(&self, options: &HashMap<String, Value>, body: &[u8]) -> Result<Vec<u8>, Error> {
+        match self.write_content(options).map_err(Error::from)? {
+            WriteContent::Body => Ok(body.to_vec()),
+            WriteContent::DicomPart10 => part10_from_store_body(body)
+                .map(|part10| part10.into_owned())
+                .map_err(|e| {
+                    Error::from(format!(
+                        "storage backend with content = '{}': {}",
+                        CONTENT_DICOM_PART10, e
+                    ))
+                }),
+        }
+    }
+
+    /// Resolve `write_pattern` to the path of the file a write creates.
+    ///
+    /// Each `{name}` is replaced once. The value comes from request metadata,
+    /// then normalized data, then the `{uuid}` and `{timestamp}` tokens.
+    /// A value is never scanned for further placeholders.
+    ///
+    /// Values come from the client: a DICOM header, a JWT claim. So a value
+    /// fills part of one path segment and no more. A value that is empty, is
+    /// `.` or `..`, or holds `/` or `\` fails the write. A placeholder with no
+    /// value also fails it. Left in the path as text, it would send every such
+    /// request to the same file.
+    ///
+    /// Error messages name the placeholder but not its value, which may be
+    /// patient data.
+    fn resolve_write_path(
+        &self,
+        pattern: &str,
+        envelope: &RequestEnvelope<Vec<u8>>,
+    ) -> Result<ObjectStorePath, Error> {
+        let mut resolved = String::with_capacity(pattern.len());
+        let mut rest = pattern;
+        while let Some(start) = rest.find('{') {
+            resolved.push_str(&rest[..start]);
+            let after = &rest[start + 1..];
+            let end = after.find('}').ok_or_else(|| {
+                Error::from(format!(
+                    "write_pattern '{}' has a '{{' with no closing '}}'",
+                    pattern
+                ))
+            })?;
+            let name = &after[..end];
+            let value = Self::placeholder_value(name, envelope).ok_or_else(|| {
+                Error::from(format!(
+                    "write_pattern placeholder '{{{}}}' has no value in the request",
+                    name
+                ))
+            })?;
+            Self::check_segment_value(name, &value)?;
+            resolved.push_str(&value);
+            rest = &after[end + 1..];
+        }
+        resolved.push_str(rest);
+
+        let clean_path = resolved.trim_start_matches('/');
+        ObjectStorePath::parse(clean_path)
+            .map_err(|e| Error::from(format!("Invalid write path: {}", e)))
+    }
+
+    fn placeholder_value(name: &str, envelope: &RequestEnvelope<Vec<u8>>) -> Option<String> {
+        if let Some(value) = envelope.request_details.metadata.get(name) {
+            return Some(value.clone());
+        }
+        if let Some(value) = envelope
+            .normalized_data
+            .as_ref()
+            .and_then(|nd| nd.get(name))
+            .and_then(Value::as_str)
+        {
+            return Some(value.to_string());
+        }
+        match name {
+            "uuid" => Some(Uuid::new_v4().to_string()),
+            "timestamp" => Some(Utc::now().to_rfc3339()),
+            _ => None,
+        }
+    }
+
+    fn check_segment_value(name: &str, value: &str) -> Result<(), Error> {
+        let reason = if value.is_empty() {
+            "is empty"
+        } else if value == "." || value == ".." {
+            "is a relative path segment"
+        } else if value.contains(['/', '\\']) {
+            "contains a path separator"
+        } else {
+            return Ok(());
+        };
+        Err(Error::from(format!(
+            "write_pattern placeholder '{{{}}}' {}",
+            name, reason
+        )))
+    }
 }
 
 #[async_trait]
 impl ServiceType for StorageBackend {
-    fn validate(&self, _options: &HashMap<String, Value>) -> Result<(), ConfigError> {
-        Ok(())
+    fn validate(&self, options: &HashMap<String, Value>) -> Result<(), ConfigError> {
+        self.write_content(options)
+            .map(|_| ())
+            .map_err(|reason| ConfigError::InvalidBackend {
+                name: "storage".to_string(),
+                reason,
+            })
     }
 
     fn build_router(&self, _options: &HashMap<String, Value>) -> Vec<crate::router::route_config::RouteConfig> {
@@ -230,9 +379,10 @@ impl ServiceHandler<Value> for StorageBackend {
                 .or(self.write_pattern.as_deref())
                 .ok_or(Error::from("Missing write_pattern for storage backend"))?;
 
-             let path = self.resolve_path(pattern, &envelope, options)?;
-             
-             store.put(&path, envelope.original_data.clone().into()).await
+             let bytes = self.write_bytes(options, &envelope.original_data)?;
+             let path = self.resolve_write_path(pattern, &envelope)?;
+
+             store.put(&path, bytes.into()).await
                 .map_err(|e| Error::from(format!("Failed to write to storage: {}", e)))?;
              
              // Return location
@@ -416,5 +566,130 @@ mod tests {
 
         let read_resp = backend.backend_outgoing_request(read_env, &options).await.unwrap();
         assert_eq!(read_resp.response_details.status, 404);
+    }
+    fn fake_part10() -> Vec<u8> {
+        let mut bytes = vec![0u8; 128];
+        bytes.extend_from_slice(b"DICM");
+        bytes.extend_from_slice(&[1u8; 64]);
+        bytes
+    }
+
+    fn part10_options(root: &str) -> HashMap<String, Value> {
+        let mut options = HashMap::new();
+        options.insert("root".to_string(), Value::String(root.to_string()));
+        options.insert("content".to_string(), Value::String("dicom_part10".to_string()));
+        options.insert(
+            "write_pattern".to_string(),
+            Value::String("{StudyInstanceUID}/{SOPInstanceUID}.dcm".to_string()),
+        );
+        options
+    }
+
+    fn store_envelope(body: Value) -> RequestEnvelope<Vec<u8>> {
+        let mut envelope = create_test_envelope();
+        envelope.request_details.method = "POST".to_string();
+        let metadata = &mut envelope.request_details.metadata;
+        metadata.insert("StudyInstanceUID".to_string(), "1.2.3".to_string());
+        metadata.insert("SOPInstanceUID".to_string(), "1.2.3.4".to_string());
+        envelope.original_data = serde_json::to_vec(&body).unwrap();
+        envelope
+    }
+
+    #[tokio::test]
+    async fn test_dicom_part10_writes_the_inline_instance() {
+        use base64::Engine;
+        let dir = tempdir().unwrap();
+        let options = part10_options(&dir.path().to_string_lossy());
+        let part10 = fake_part10();
+        let envelope = store_envelope(serde_json::json!({
+            "dataset": {},
+            "file": "/somewhere/else.dcm",
+            "part10_b64": base64::engine::general_purpose::STANDARD.encode(&part10),
+        }));
+
+        let response = StorageBackend::default()
+            .backend_outgoing_request(envelope, &options)
+            .await
+            .unwrap();
+
+        assert_eq!(response.response_details.status, 201);
+        let written = std::fs::read(dir.path().join("1.2.3").join("1.2.3.4.dcm")).unwrap();
+        assert_eq!(written, part10);
+    }
+
+    #[tokio::test]
+    async fn test_dicom_part10_rejects_a_body_that_only_names_a_file() {
+        let dir = tempdir().unwrap();
+        let options = part10_options(&dir.path().to_string_lossy());
+        let envelope = store_envelope(serde_json::json!({
+            "dataset": {},
+            "file": "/etc/passwd",
+        }));
+
+        let err = StorageBackend::default()
+            .backend_outgoing_request(envelope, &options)
+            .await
+            .err()
+            .expect("a body with no instance fails the write");
+
+        assert!(err.to_string().contains("'file'"), "unexpected error: {}", err);
+        assert!(!dir.path().join("1.2.3").exists(), "nothing is written");
+    }
+
+    #[test]
+    fn test_validate_rejects_an_unknown_content() {
+        let mut options = HashMap::new();
+        options.insert("content".to_string(), Value::String("dicom".to_string()));
+
+        let err = StorageBackend::default().validate(&options).err();
+
+        assert!(
+            matches!(err, Some(ConfigError::InvalidBackend { ref reason, .. }) if reason.contains("dicom_part10")),
+            "unexpected result: {:?}",
+            err
+        );
+        assert!(StorageBackend::default().validate(&HashMap::new()).is_ok());
+    }
+
+    fn write_path_with(key: &str, value: &str, pattern: &str) -> Result<ObjectStorePath, Error> {
+        let mut envelope = create_test_envelope();
+        envelope.request_details.metadata.insert(key.to_string(), value.to_string());
+        StorageBackend::default().resolve_write_path(pattern, &envelope)
+    }
+
+    #[test]
+    fn test_write_path_fills_placeholders_once() {
+        let path = write_path_with("PatientID", "{uuid}", "{PatientID}.dcm").unwrap();
+        assert_eq!(path.as_ref(), "{uuid}.dcm", "a value is not scanned for placeholders");
+
+        let path = write_path_with("tenant", "acme", "/{tenant}/a-{uuid}.bin").unwrap();
+        assert!(path.as_ref().starts_with("acme/a-"));
+        assert!(!path.as_ref().contains('{'));
+    }
+
+    #[test]
+    fn test_write_path_rejects_values_that_leave_their_segment() {
+        for (value, reason) in [
+            ("../../etc", "path separator"),
+            ("a/b", "path separator"),
+            ("a\\b", "path separator"),
+            ("..", "relative path segment"),
+            (".", "relative path segment"),
+            ("", "is empty"),
+        ] {
+            let err = write_path_with("PatientID", value, "{PatientID}/x.dcm")
+                .err()
+                .unwrap_or_else(|| panic!("value {:?} must be rejected", value));
+            assert!(err.to_string().contains(reason), "{:?}: unexpected error: {}", value, err);
+        }
+    }
+
+    #[test]
+    fn test_write_path_rejects_a_placeholder_with_no_value() {
+        let err = write_path_with("tenant", "acme", "{SOPInstanceUID}.dcm").err().unwrap();
+        assert!(err.to_string().contains("{SOPInstanceUID}"), "unexpected error: {}", err);
+
+        let err = write_path_with("tenant", "acme", "{tenant.dcm").err().unwrap();
+        assert!(err.to_string().contains("no closing"), "unexpected error: {}", err);
     }
 }

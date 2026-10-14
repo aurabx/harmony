@@ -1,6 +1,6 @@
 # Backends
 
-**Last Updated**: 2026-09-24
+**Last Updated**: 2026-10-15
 
 Backends enable the pipeline to communicate with external systems (targets). Backends operate within the unified `PipelineExecutor` and handle the "backend invocation" step of the pipeline.
 
@@ -384,6 +384,7 @@ A backend for reading and writing files to local storage or S3-compatible object
 - **Write** (POST/PUT or Store/Update): Writes request body to path resolved from `write_pattern`
 - Supports path templating with metadata, UUIDs, and timestamps
 - Returns `Location` header and JSON status on successful write
+- `content = "dicom_part10"` writes the DICOM Part 10 instance of a C-STORE instead of the request body (see [Storing received C-STORE instances](#storing-received-c-store-instances))
 
 **Configuration**:
 ```toml
@@ -415,6 +416,12 @@ Patterns can use placeholders replaced at runtime:
 - `{metadata_key}`: Replaced by value from request metadata (e.g. `{tenant}` from JWT)
 - `{field_name}`: Replaced by value from normalized data (e.g. `{PatientID}`)
 
+**Placeholder rules for `write_pattern`**:
+- Each placeholder is filled once. A value is not scanned for further placeholders.
+- A value fills part of one path segment. A write fails when a value is empty, is `.` or `..`, or holds `/` or `\`.
+- A write fails when a placeholder has no value in the request.
+- `read_pattern` does not follow these rules.
+
 **Example**:
 ```toml
 [backends.patient_docs]
@@ -424,6 +431,31 @@ root = "./patient_data"
 # Write to: ./patient_data/{tenant}/{PatientID}/{uuid}.dcm
 write_pattern = "{tenant}/{PatientID}/{uuid}.dcm"
 ``` path=null start=null
+
+#### Storing received C-STORE instances
+
+Put a `storage` backend with `content = "dicom_part10"` behind a `dicom_scp` endpoint to keep each instance a device sends.
+
+```toml
+[pipelines.archive]
+networks = ["default"]
+endpoints = ["scp"]
+middleware = ["site_policy"]
+backends = ["dicom_archive"]
+
+[backends.dicom_archive]
+service = "storage"
+[backends.dicom_archive.options]
+root = "./data/archive"
+content = "dicom_part10"
+write_pattern = "{StudyInstanceUID}/{SeriesInstanceUID}/{SOPInstanceUID}.dcm"
+``` path=null start=null
+
+- The backend runs after the pipeline's middleware. A C-STORE that `policies` denies is not written.
+- The endpoint sends the instance inside the request as `part10_b64`. The backend never reads the `file` path in the body.
+- `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID` and `PatientID` come from the instance. A value that breaks the placeholder rules fails the store. The device then gets status `0xC000` and keeps its copy.
+- A body with no Part 10 instance fails the write.
+- An unknown `content` value fails every write.
 
 ### Echo (Test)
 

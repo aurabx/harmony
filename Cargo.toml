@@ -135,6 +135,10 @@ name = "dicom_cstore_filesystem"
 path = "tests/dicom/cstore_filesystem.rs"
 
 [[test]]
+name = "dicom_cstore_storage_backend"
+path = "tests/dicom/cstore_storage_backend.rs"
+
+[[test]]
 name = "dicomweb_frames_qrscp"
 path = "tests/dicomweb/dicomweb_frames_qrscp.rs"
 

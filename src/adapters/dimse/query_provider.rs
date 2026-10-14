@@ -368,6 +368,8 @@ impl PipelineQueryProvider {
     /// itself: the `dicom_scu` or `dicom_scu_streaming` backend, which never
     /// opens a path it is given, or the `dicom_to_http` middleware in front of
     /// an `http_streaming_backend`, which sends the instance to another host.
+    /// A `storage` backend with `content = "dicom_part10"` also needs it,
+    /// because it writes the instance and does not read the adapter's file.
     /// Every other pipeline is spared the extra copy.
     ///
     /// `dicom_to_http` in front of the `http` backend is left out on purpose.
@@ -388,6 +390,16 @@ impl PipelineQueryProvider {
         if ["dicom_scu", "dicom", "dicom_scu_streaming"]
             .iter()
             .any(|service| backend.service.eq_ignore_ascii_case(service))
+        {
+            return true;
+        }
+        if backend.service.eq_ignore_ascii_case("storage")
+            && backend
+                .options
+                .as_ref()
+                .and_then(|options| options.get("content"))
+                .and_then(|content| content.as_str())
+                == Some(crate::models::services::types::storage::CONTENT_DICOM_PART10)
         {
             return true;
         }
@@ -1345,6 +1357,24 @@ module = ""
         assert!(!needs("http_streaming_backend", None));
         assert!(!needs("http", Table("dicom_to_dicomweb")), "reads the local file");
         assert!(!needs("http", None));
+    }
+
+    #[test]
+    fn test_instance_goes_inline_to_a_part10_storage_backend() {
+        let needs = |content: Option<&str>| {
+            let mut config = inline_config("storage", MiddlewareRef::None);
+            let mut options = HashMap::new();
+            options.insert("root".to_string(), serde_json::json!("./tmp/archive"));
+            if let Some(content) = content {
+                options.insert("content".to_string(), serde_json::json!(content));
+            }
+            config.backends.get_mut("out").expect("backend present").options = Some(options);
+            let pipeline = config.pipelines.get("store").expect("pipeline present");
+            PipelineQueryProvider::store_needs_inline_instance(pipeline, &config)
+        };
+
+        assert!(needs(Some("dicom_part10")), "the backend writes the instance");
+        assert!(!needs(None), "the backend writes the request body");
     }
 
     #[test]
