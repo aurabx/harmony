@@ -559,8 +559,9 @@ impl MeshAuthMiddleware {
     /// Validate the mesh JWT on an incoming request.
     ///
     /// Fails with `AuthFailure` when the Authorization header is missing, the
-    /// token does not verify, or its `mesh_id` is not this mesh. On success the
-    /// validated claims are recorded in the request metadata.
+    /// token does not verify, or its `mesh_id` is not this mesh. Fails with
+    /// `AuthUnavailable` when the Runbeam JWKS source cannot supply a usable
+    /// key. On success the validated claims are recorded in the request metadata.
     async fn authenticate_ingress_request(
         &self,
         mut envelope: RequestEnvelope<serde_json::Value>,
@@ -1157,17 +1158,26 @@ mod tests {
         );
     }
 
-    /// Serve `body` with `status` at /jwks.json, to stand in for a faulty key source.
+    /// Serve `body` with `status`, to stand in for a faulty key source.
+    ///
+    /// Each server gets a unique path because `JWKS_CACHE` is process-wide and
+    /// keyed by URL. A later test that reuses a freed port must not hit an
+    /// entry cached by an earlier one.
     async fn start_faulty_jwks_server(status: http::StatusCode, body: String) -> String {
+        static NEXT_ID: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+        let path = format!(
+            "/jwks-{}.json",
+            NEXT_ID.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
+        );
         let app = axum::Router::new().route(
-            "/jwks.json",
+            &path,
             axum::routing::get(move || {
                 let body = body.clone();
                 async move { (status, body) }
             }),
         );
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
-        let url = format!("http://{}/jwks.json", listener.local_addr().unwrap());
+        let url = format!("http://{}{}", listener.local_addr().unwrap(), path);
         tokio::spawn(async move {
             axum::serve(listener, app).await.unwrap();
         });
@@ -1203,11 +1213,9 @@ mod tests {
 
     #[tokio::test]
     async fn test_runbeam_ingress_jwks_unreachable_is_unavailable() {
-        // Bind then drop a listener so the port is known to refuse connections.
-        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}/jwks.json", listener.local_addr().unwrap());
-        drop(listener);
-        assert_jwks_failure_is_unavailable(url).await;
+        // Port 1 is privileged and unused, so the connection is refused. A
+        // freed ephemeral port could be taken by a parallel test.
+        assert_jwks_failure_is_unavailable("http://127.0.0.1:1/jwks.json".to_string()).await;
     }
 
     #[tokio::test]
@@ -1230,6 +1238,26 @@ mod tests {
     async fn test_runbeam_ingress_jwks_key_missing_modulus_is_unavailable() {
         let body = serde_json::json!({
             "keys": [{ "kty": "RSA", "kid": RUNBEAM_KID, "e": "AQAB" }]
+        })
+        .to_string();
+        let url = start_faulty_jwks_server(http::StatusCode::OK, body).await;
+        assert_jwks_failure_is_unavailable(url).await;
+    }
+
+    #[tokio::test]
+    async fn test_runbeam_ingress_jwks_key_missing_exponent_is_unavailable() {
+        let body = serde_json::json!({
+            "keys": [{ "kty": "RSA", "kid": RUNBEAM_KID, "n": "AQAB" }]
+        })
+        .to_string();
+        let url = start_faulty_jwks_server(http::StatusCode::OK, body).await;
+        assert_jwks_failure_is_unavailable(url).await;
+    }
+
+    #[tokio::test]
+    async fn test_runbeam_ingress_jwks_key_invalid_components_is_unavailable() {
+        let body = serde_json::json!({
+            "keys": [{ "kty": "RSA", "kid": RUNBEAM_KID, "n": "!!!", "e": "AQAB" }]
         })
         .to_string();
         let url = start_faulty_jwks_server(http::StatusCode::OK, body).await;
