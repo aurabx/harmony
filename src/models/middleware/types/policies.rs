@@ -111,8 +111,30 @@ impl CompiledIpRule {
         })
     }
 
+    /// True when `ip` falls in any of the rule's networks.
+    ///
+    /// On a dual-stack listener an IPv4 client arrives as an IPv4-mapped IPv6
+    /// address (`::ffff:a.b.c.d`), and `IpNetwork::contains` never matches a V6
+    /// address against a V4 network. So the canonical (plain IPv4) form is
+    /// tested as well as the address as received. Testing both keeps rules
+    /// written as IPv6 networks, such as `::ffff:10.0.0.0/104`, matching.
     fn matches(&self, ip: &IpAddr) -> bool {
-        self.networks.iter().any(|network| network.contains(*ip))
+        let canonical = ip.to_canonical();
+        self.networks
+            .iter()
+            .any(|network| network.contains(canonical) || network.contains(*ip))
+    }
+}
+
+/// Key that identifies a client in the rate-limit state.
+///
+/// An IPv4-mapped IPv6 address and its plain IPv4 form are the same client, so
+/// both map to the plain IPv4 text. A value that is not an IP address is used
+/// as given.
+fn rate_limit_client_key(raw_client_ip: &str) -> String {
+    match IpAddr::from_str(raw_client_ip) {
+        Ok(ip) => ip.to_canonical().to_string(),
+        Err(_) => raw_client_ip.to_string(),
     }
 }
 
@@ -629,7 +651,7 @@ impl PoliciesMiddleware {
             .metadata
             .get("remote_addr")
             .or_else(|| envelope.request_details.metadata.get("client_ip"))
-            .cloned()
+            .map(|raw| rate_limit_client_key(raw))
             .unwrap_or_else(|| "unknown".to_string());
 
         // Create unique key for this rate limit rule
@@ -3794,5 +3816,138 @@ mod tests {
             "Error was: {}",
             err_msg
         );
+    }
+
+    // ============================================
+    // IPv4-mapped IPv6 client addresses
+    // ============================================
+    //
+    // A dual-stack listener (bind "::", IPV6_V6ONLY=0) reports an IPv4 client
+    // as ::ffff:a.b.c.d. These tests check that such a client is treated as
+    // the IPv4 address it carries.
+
+    #[tokio::test]
+    async fn test_ipv4_mapped_client_matches_ipv4_allowlist() {
+        let middleware = PoliciesMiddleware::new(allowlist_with_method_allow()).unwrap();
+
+        assert!(
+            middleware
+                .left(gate_envelope("GET", Some("::ffff:10.1.2.3")))
+                .await
+                .is_ok(),
+            "::ffff:10.1.2.3 is 10.1.2.3 and is inside 10.0.0.0/8"
+        );
+        assert_access_denied(
+            middleware
+                .left(gate_envelope("GET", Some("::ffff:203.0.113.9")))
+                .await,
+        );
+    }
+
+    #[tokio::test]
+    async fn test_ipv4_mapped_client_matches_ipv4_deny() {
+        let blocklist_only = PoliciesMiddleware::new(single_policy(vec![
+            ip_rule("blocklist", "ip_deny", &["203.0.113.0/24"]),
+            method_rule("method_filter", "allow", &["GET"]),
+        ]))
+        .unwrap();
+        assert_access_denied(
+            blocklist_only
+                .left(gate_envelope("GET", Some("::ffff:203.0.113.5")))
+                .await,
+        );
+        assert!(blocklist_only
+            .left(gate_envelope("GET", Some("::ffff:198.51.100.5")))
+            .await
+            .is_ok());
+
+        let deny_inside_allowlist = PoliciesMiddleware::new(single_policy(vec![
+            ip_rule("internal_networks", "ip_allow", &["10.0.0.0/8"]),
+            ip_rule("quarantine", "ip_deny", &["10.9.0.0/16"]),
+            method_rule("method_filter", "allow", &["GET"]),
+        ]))
+        .unwrap();
+        // The allowlist admits a mapped client, so the 10.9 denial below comes
+        // from the deny rule and not from the gate.
+        assert!(deny_inside_allowlist
+            .left(gate_envelope("GET", Some("::ffff:10.1.1.1")))
+            .await
+            .is_ok());
+        assert_access_denied(
+            deny_inside_allowlist
+                .left(gate_envelope("GET", Some("::ffff:10.9.1.1")))
+                .await,
+        );
+    }
+
+    #[test]
+    fn test_ip_rule_written_as_ipv6_mapped_network_still_matches() {
+        let rule = CompiledIpRule::new(&["::ffff:10.0.0.0/104".to_string()]).unwrap();
+
+        let mapped = IpAddr::from_str("::ffff:10.1.2.3").unwrap();
+        assert!(rule.matches(&mapped));
+
+        let ipv4_rule = CompiledIpRule::new(&["10.0.0.0/8".to_string()]).unwrap();
+        assert!(ipv4_rule.matches(&mapped));
+        assert!(!ipv4_rule.matches(&IpAddr::from_str("2001:db8::1").unwrap()));
+    }
+
+    #[test]
+    fn test_rate_limit_client_key_folds_ipv4_mapped_address() {
+        assert_eq!(rate_limit_client_key("::ffff:10.0.0.10"), "10.0.0.10");
+        assert_eq!(rate_limit_client_key("10.0.0.10"), "10.0.0.10");
+        assert_eq!(rate_limit_client_key("2001:db8::1"), "2001:db8::1");
+        // Parsing also normalises IPv6 text, so spellings of one address share a key.
+        assert_eq!(rate_limit_client_key("2001:DB8:0::1"), "2001:db8::1");
+        assert_eq!(rate_limit_client_key("not-an-ip"), "not-an-ip");
+    }
+
+    #[tokio::test]
+    async fn test_rate_limit_ipv4_mapped_and_plain_share_a_bucket() {
+        let mut options = HashMap::new();
+        options.insert("max_requests".to_string(), serde_json::json!(2));
+        options.insert("window_seconds".to_string(), serde_json::json!(60));
+        let middleware = PoliciesMiddleware::new(single_policy(vec![
+            Rule {
+                id: Some("allow_rule".to_string()),
+                name: None,
+                rule_type: "allow_all".to_string(),
+                weight: 100,
+                enabled: true,
+                options: HashMap::new(),
+            },
+            Rule {
+                id: Some("rate_limit".to_string()),
+                name: None,
+                rule_type: "rate_limit".to_string(),
+                weight: 50,
+                enabled: true,
+                options,
+            },
+        ]))
+        .unwrap();
+
+        assert!(middleware
+            .left(create_test_envelope("10.0.0.10"))
+            .await
+            .is_ok());
+        assert!(middleware
+            .left(create_test_envelope("::ffff:10.0.0.10"))
+            .await
+            .is_ok());
+
+        // Both forms counted against one bucket, so the third request is over
+        // the limit whichever form it uses.
+        assert!(
+            middleware
+                .left(create_test_envelope("::ffff:10.0.0.10"))
+                .await
+                .is_err(),
+            "mapped and plain forms of one client must share a rate-limit bucket"
+        );
+        assert!(middleware
+            .left(create_test_envelope("10.0.0.10"))
+            .await
+            .is_err());
     }
 }
