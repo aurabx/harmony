@@ -610,10 +610,7 @@ impl ResponseEnvelope<Vec<u8>> {
             .cloned()
             .unwrap_or_default();
 
-        let is_json = content_type.contains("application/json")
-            || content_type.contains("application/fhir+json")
-            || content_type.contains("application/dicom+json")
-            || content_type.contains("+json");
+        let is_json = is_json_content_type(&content_type);
 
         // Check for binary content types that need base64 preservation
         // Uses the protocol-agnostic core::content::mime module for comprehensive detection
@@ -621,18 +618,32 @@ impl ResponseEnvelope<Vec<u8>> {
 
         // For binary content, preserve as base64 so middleware can access it
         if is_binary && !self.original_data.is_empty() {
-            use base64::Engine;
-            let b64 = base64::engine::general_purpose::STANDARD.encode(&self.original_data);
-            let binary_wrapper = serde_json::json!({
-                "body_b64": b64,
-                "content_length": self.original_data.len()
-            });
+            let binary_wrapper = body_b64_wrapper(&self.original_data);
             return Ok(ResponseEnvelope {
                 request_details: self.request_details,
                 response_details: self.response_details,
                 command: self.command,
                 original_data: binary_wrapper.clone(),
                 normalized_data: Some(binary_wrapper),
+                normalized_snapshot: self.normalized_snapshot,
+            });
+        }
+
+        // Non-JSON, non-binary bodies (text/html, text/plain, application/xml, ...)
+        // are kept as a string so `to_bytes` can write them back verbatim. Bytes
+        // that are not valid UTF-8 fall back to the base64 wrapper so they are
+        // never altered or dropped. `normalized_data` is left to the middleware.
+        if !is_json && !self.original_data.is_empty() {
+            let original_json = match std::str::from_utf8(&self.original_data) {
+                Ok(text) => serde_json::Value::String(text.to_owned()),
+                Err(_) => body_b64_wrapper(&self.original_data),
+            };
+            return Ok(ResponseEnvelope {
+                request_details: self.request_details,
+                response_details: self.response_details,
+                command: self.command,
+                original_data: original_json,
+                normalized_data: self.normalized_data,
                 normalized_snapshot: self.normalized_snapshot,
             });
         }
@@ -704,7 +715,9 @@ impl ResponseEnvelope<serde_json::Value> {
 
         // Prefer normalized_data for body (may have been modified by middleware)
         // Fall back to original_data if normalized_data is None
-        let body_bytes = if let Some(ref normalized) = self.normalized_data {
+        let body_bytes = if let Some(text) = self.raw_text_body() {
+            text.as_bytes().to_vec()
+        } else if let Some(ref normalized) = self.normalized_data {
             let bytes = serde_json::to_vec(normalized).map_err(|e| {
                 crate::utils::Error::from(format!("Failed to serialize normalized_data: {}", e))
             })?;
@@ -738,6 +751,50 @@ impl ResponseEnvelope<serde_json::Value> {
             normalized_snapshot: self.normalized_snapshot,
         })
     }
+}
+
+impl ResponseEnvelope<serde_json::Value> {
+    /// Returns the body as text when it must be written out verbatim.
+    ///
+    /// A string body under a non-JSON content type is raw text, not a JSON
+    /// string, so quoting it would corrupt the response. When there is no
+    /// content type, `normalized_data` still means "serialize as JSON", which
+    /// is what middleware-built responses rely on.
+    fn raw_text_body(&self) -> Option<&str> {
+        let content_type = self
+            .response_details
+            .headers
+            .get("content-type")
+            .or_else(|| self.response_details.headers.get("Content-Type"));
+        let is_text_context = match content_type {
+            Some(ct) => !is_json_content_type(ct),
+            None => self.normalized_data.is_none(),
+        };
+        if !is_text_context {
+            return None;
+        }
+        self.normalized_data
+            .as_ref()
+            .unwrap_or(&self.original_data)
+            .as_str()
+    }
+}
+
+fn is_json_content_type(content_type: &str) -> bool {
+    content_type.contains("application/json")
+        || content_type.contains("application/fhir+json")
+        || content_type.contains("application/dicom+json")
+        || content_type.contains("+json")
+}
+
+/// Wraps raw bytes so middleware can carry them through the JSON envelope.
+/// `to_bytes` decodes `body_b64` back to the original bytes.
+fn body_b64_wrapper(bytes: &[u8]) -> serde_json::Value {
+    use base64::Engine;
+    serde_json::json!({
+        "body_b64": base64::engine::general_purpose::STANDARD.encode(bytes),
+        "content_length": bytes.len()
+    })
 }
 
 /// Command helpers for ResponseEnvelope
@@ -1113,5 +1170,93 @@ mod tests {
 
         let bytes_env = json_env.to_bytes().expect("to_bytes failed");
         assert_eq!(bytes_env.original_data, body);
+    }
+
+    fn text_response(content_type: &str, body: &[u8]) -> ResponseEnvelope<Vec<u8>> {
+        let mut headers = std::collections::HashMap::new();
+        if !content_type.is_empty() {
+            headers.insert("content-type".to_string(), content_type.to_string());
+        }
+        ResponseEnvelope::from_backend_with_command(
+            RequestDetails::default(),
+            200,
+            headers,
+            body.to_vec(),
+            None,
+            None,
+        )
+    }
+
+    #[test]
+    fn test_response_envelope_text_bodies_roundtrip_verbatim() {
+        let cases: [(&str, &[u8]); 4] = [
+            ("text/html", b"<html><body>hello</body></html>"),
+            ("text/plain; charset=utf-8", b"hello plain"),
+            ("application/xml", b"<a><b>hello xml</b></a>"),
+            ("text/csv", b"id,name\n1,Alice\n"),
+        ];
+        for (content_type, body) in cases {
+            let json_env = text_response(content_type, body)
+                .to_json()
+                .expect("to_json failed");
+            let bytes_env = json_env.to_bytes().expect("to_bytes failed");
+            assert_eq!(
+                bytes_env.original_data, body,
+                "body lost for content-type {content_type}"
+            );
+            assert_eq!(
+                bytes_env.response_details.headers.get("content-type"),
+                Some(&content_type.to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn test_response_envelope_text_body_without_content_type_roundtrips() {
+        let json_env = text_response("", b"no content type")
+            .to_json()
+            .expect("to_json failed");
+        let bytes_env = json_env.to_bytes().expect("to_bytes failed");
+        assert_eq!(bytes_env.original_data, b"no content type");
+    }
+
+    #[test]
+    fn test_response_envelope_text_body_survives_json_extractor_style_copy() {
+        // json_extractor copies original_data into normalized_data when unset.
+        let mut json_env = text_response("text/html", b"<p>hi</p>")
+            .to_json()
+            .expect("to_json failed");
+        json_env.normalized_data = Some(json_env.original_data.clone());
+        let bytes_env = json_env.to_bytes().expect("to_bytes failed");
+        assert_eq!(bytes_env.original_data, b"<p>hi</p>");
+    }
+
+    #[test]
+    fn test_response_envelope_non_utf8_text_body_roundtrips_losslessly() {
+        let body: &[u8] = &[0x68, 0xe9, 0x6c, 0x6c, 0xf6]; // latin-1, not valid UTF-8
+        let json_env = text_response("text/plain", body)
+            .to_json()
+            .expect("to_json failed");
+        let bytes_env = json_env.to_bytes().expect("to_bytes failed");
+        assert_eq!(bytes_env.original_data, body);
+    }
+
+    #[test]
+    fn test_response_envelope_json_string_body_stays_quoted() {
+        let json_env = text_response("application/json", b"\"just a string\"")
+            .to_json()
+            .expect("to_json failed");
+        let bytes_env = json_env.to_bytes().expect("to_bytes failed");
+        assert_eq!(bytes_env.original_data, b"\"just a string\"");
+    }
+
+    #[test]
+    fn test_response_envelope_middleware_object_on_text_response_serializes_as_json() {
+        let mut json_env = text_response("text/html", b"<p>hi</p>")
+            .to_json()
+            .expect("to_json failed");
+        json_env.normalized_data = Some(serde_json::json!({"rewritten": true}));
+        let bytes_env = json_env.to_bytes().expect("to_bytes failed");
+        assert_eq!(bytes_env.original_data, br#"{"rewritten":true}"#);
     }
 }
