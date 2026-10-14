@@ -1,5 +1,7 @@
 //! C-FIND command handler
 
+use std::net::SocketAddr;
+
 use dicom_encoding::text::SpecificCharacterSet;
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
@@ -19,6 +21,7 @@ use crate::scp::DimseScp;
 pub async fn handle_c_find(
     scp: &DimseScp,
     association: &mut AsyncServerAssociation<TcpStream>,
+    peer_addr: SocketAddr,
     message_id: u16,
     identifier_data: Vec<u8>,
     presentation_context_id: u8,
@@ -78,7 +81,11 @@ pub async fn handle_c_find(
     );
 
     // Query the provider. Matches are sent as they arrive.
-    let mut datasets = match scp.query_provider.find(query_level, &parameters, 0).await {
+    let mut datasets = match scp
+        .query_provider
+        .find(peer_addr, query_level, &parameters, 0)
+        .await
+    {
         Ok(datasets) => datasets,
         Err(e) => {
             error!("C-FIND query failed: {}", e);

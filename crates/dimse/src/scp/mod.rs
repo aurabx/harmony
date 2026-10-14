@@ -27,11 +27,15 @@ use crate::{DimseError, Result};
 ///
 /// Query and retrieve results are streams, so the SCP can answer the client
 /// with each dataset as it arrives instead of waiting for the whole result.
+///
+/// Every method receives `peer_addr`, the TCP address of the association's
+/// requestor. Providers use it for access control, rate limiting and audit.
 #[async_trait]
 pub trait QueryProvider: Send + Sync {
     /// Find datasets matching the given query
     async fn find(
         &self,
+        peer_addr: SocketAddr,
         query_level: QueryLevel,
         parameters: &std::collections::HashMap<String, String>,
         max_results: u32,
@@ -40,6 +44,7 @@ pub trait QueryProvider: Send + Sync {
     /// Locate datasets for move operations
     async fn locate(
         &self,
+        peer_addr: SocketAddr,
         query_level: QueryLevel,
         parameters: &std::collections::HashMap<String, String>,
     ) -> Result<BoxDatasetStream>;
@@ -47,12 +52,13 @@ pub trait QueryProvider: Send + Sync {
     /// Retrieve datasets for get and move operations (C-GET, C-MOVE)
     async fn get(
         &self,
+        peer_addr: SocketAddr,
         query_level: QueryLevel,
         parameters: &std::collections::HashMap<String, String>,
     ) -> Result<RetrieveStream>;
 
     /// Store a dataset (for C-STORE operations)
-    async fn store(&self, dataset: DatasetStream) -> Result<()>;
+    async fn store(&self, peer_addr: SocketAddr, dataset: DatasetStream) -> Result<()>;
 }
 
 /// DIMSE Service Class Provider
@@ -171,6 +177,7 @@ impl DimseScp {
     #[allow(dead_code)]
     async fn handle_dimse_request(
         &self,
+        peer_addr: SocketAddr,
         request: DimseRequest,
         router: &Arc<dyn Router>,
     ) -> Result<()> {
@@ -210,7 +217,7 @@ impl DimseScp {
 
                 match self
                     .query_provider
-                    .find(query.query_level, &query.parameters, query.max_results)
+                    .find(peer_addr, query.query_level, &query.parameters, query.max_results)
                     .await
                 {
                     Ok(mut datasets) => {
@@ -278,7 +285,7 @@ impl DimseScp {
                 // For now, just locate the datasets and report status
                 match self
                     .query_provider
-                    .locate(query.query_level, &query.parameters)
+                    .locate(peer_addr, query.query_level, &query.parameters)
                     .await
                 {
                     Ok(datasets) => {
@@ -314,7 +321,7 @@ impl DimseScp {
 
                 match self
                     .query_provider
-                    .get(query.query_level, &query.parameters)
+                    .get(peer_addr, query.query_level, &query.parameters)
                     .await
                 {
                     Ok(retrieve) => {
@@ -388,7 +395,7 @@ impl DimseScp {
             DimseRequestPayload::Store(ref dataset) => {
                 debug!("Processing C-STORE request");
 
-                match self.query_provider.store(dataset.clone()).await {
+                match self.query_provider.store(peer_addr, dataset.clone()).await {
                     Ok(()) => {
                         let response = DimseResponse::store(request_id, true);
                         self.send_response(request, response, router).await?;

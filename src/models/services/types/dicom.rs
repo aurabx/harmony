@@ -1666,6 +1666,7 @@ mod tests {
     impl dimse::scp::QueryProvider for RecordingPacs {
         async fn find(
             &self,
+            _peer_addr: std::net::SocketAddr,
             _query_level: QueryLevel,
             _parameters: &HashMap<String, String>,
             _max_results: u32,
@@ -1675,6 +1676,7 @@ mod tests {
 
         async fn locate(
             &self,
+            _peer_addr: std::net::SocketAddr,
             _query_level: QueryLevel,
             _parameters: &HashMap<String, String>,
         ) -> dimse::Result<dimse::types::BoxDatasetStream> {
@@ -1683,6 +1685,7 @@ mod tests {
 
         async fn get(
             &self,
+            _peer_addr: std::net::SocketAddr,
             _query_level: QueryLevel,
             _parameters: &HashMap<String, String>,
         ) -> dimse::Result<dimse::types::RetrieveStream> {
@@ -1691,7 +1694,11 @@ mod tests {
             ))
         }
 
-        async fn store(&self, dataset: DatasetStream) -> dimse::Result<()> {
+        async fn store(
+            &self,
+            _peer_addr: std::net::SocketAddr,
+            dataset: DatasetStream,
+        ) -> dimse::Result<()> {
             let transfer_syntax = dataset.metadata().transfer_syntax.clone();
             let object = dataset.to_object().await?;
             self.received.lock().unwrap().push((transfer_syntax, object));

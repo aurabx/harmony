@@ -86,7 +86,16 @@ impl Http3Adapter {
         tls_config.alpn_protocols = vec![b"h3".to_vec()];
 
         let quic_tls = QuicServerConfig::try_from(tls_config)?;
-        Ok(ServerConfig::with_crypto(Arc::new(quic_tls)))
+        let mut server_config = ServerConfig::with_crypto(Arc::new(quic_tls));
+        // The peer address feeds ip_allow/ip_deny and rate limits. With
+        // migration on, quinn makes a new client address current as soon as
+        // one authenticated packet arrives from it, before PATH_CHALLENGE
+        // validates it. A key-holding client could then forge an allowlisted
+        // source IP for a request. With migration off, quinn drops packets
+        // from any address other than the one the handshake validated. A
+        // client whose IP changes must reconnect.
+        server_config.migration(false);
+        Ok(server_config)
     }
 
     async fn run_server(self, config: Arc<Config>, shutdown: CancellationToken) {
@@ -165,6 +174,11 @@ pub async fn handle_connection(
 ) -> anyhow::Result<()> {
     // Complete the QUIC handshake
     let connection = incoming.await?;
+    // Kept so the peer address is read for each request. build_server_config
+    // turns migration off, so this is the handshake-validated address. The
+    // per-request read keeps that true if migration is ever turned back on:
+    // a value cached at handshake would then go stale.
+    let quic_conn = connection.clone();
 
     // Upgrade to HTTP/3 connection
     let mut h3_conn = server::builder()
@@ -182,6 +196,7 @@ pub async fn handle_connection(
                         continue;
                     }
                 };
+                let peer_addr = quic_conn.remote_address();
 
                 // Read request body from DATA frames
                 let mut body_bytes: Vec<u8> = Vec::new();
@@ -332,8 +347,8 @@ pub async fn handle_connection(
 
                 // Build ProtocolCtx using shared helper
                 let path_prefix = get_path_prefix(options);
-                // HTTP/3: peer address plumbing not yet wired through this adapter,
-                // so no remote_addr is recorded. IP-based policies skip on HTTP/3.
+                // The QUIC peer address feeds remote_addr, which IP allowlists
+                // and per-IP rate limits key on.
                 let ctx = build_protocol_ctx(
                     &method,
                     &uri,
@@ -341,7 +356,7 @@ pub async fn handle_connection(
                     body_bytes,
                     path_prefix,
                     "http3",
-                    None,
+                    Some(peer_addr),
                 );
 
                 // Resolve service again (we dropped it earlier when leaving scope)

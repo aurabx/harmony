@@ -1,5 +1,7 @@
 //! C-GET command handler
 
+use std::net::SocketAddr;
+
 use dicom_encoding::text::SpecificCharacterSet;
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
@@ -32,6 +34,7 @@ enum SubOperationResult {
 pub async fn handle_c_get(
     scp: &DimseScp,
     association: &mut AsyncServerAssociation<TcpStream>,
+    peer_addr: SocketAddr,
     message_id: u16,
     identifier_data: Vec<u8>,
     presentation_context_id: u8,
@@ -77,7 +80,11 @@ pub async fn handle_c_get(
 
     // Start the retrieval. Datasets arrive as a stream and each one is sent to
     // the client as soon as it is available.
-    let retrieve = match scp.query_provider.get(query_level, &parameters).await {
+    let retrieve = match scp
+        .query_provider
+        .get(peer_addr, query_level, &parameters)
+        .await
+    {
         Ok(retrieve) => retrieve,
         Err(e) => {
             error!("C-GET query failed: {}", e);

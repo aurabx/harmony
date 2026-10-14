@@ -12,6 +12,7 @@ use dimse::types::{dataset_stream_from_vec, BoxDatasetStream, DatasetStream, Que
 use dimse::Result as DimseResult;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -638,15 +639,29 @@ impl PipelineQueryProvider {
     }
 }
 
+/// Start a pipeline metadata map with the association peer's address.
+///
+/// The IP goes under `remote_addr` (no port) and the port under `remote_port`,
+/// matching the HTTP adapter. The policies middleware reads `remote_addr` for
+/// IP allow and deny rules and for rate-limit keys, so DIMSE requests without
+/// it would share one "unknown" client.
+fn peer_meta(peer_addr: SocketAddr) -> HashMap<String, String> {
+    HashMap::from([
+        ("remote_addr".to_string(), peer_addr.ip().to_string()),
+        ("remote_port".to_string(), peer_addr.port().to_string()),
+    ])
+}
+
 #[async_trait]
 impl dimse::scp::QueryProvider for PipelineQueryProvider {
     async fn find(
         &self,
+        peer_addr: SocketAddr,
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
         max_results: u32,
     ) -> DimseResult<BoxDatasetStream> {
-        let mut meta = HashMap::new();
+        let mut meta = peer_meta(peer_addr);
         meta.insert("query_level".into(), format!("{}", query_level));
         meta.insert("max_results".into(), max_results.to_string());
 
@@ -687,10 +702,11 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
 
     async fn locate(
         &self,
+        peer_addr: SocketAddr,
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
     ) -> DimseResult<BoxDatasetStream> {
-        let mut meta = HashMap::new();
+        let mut meta = peer_meta(peer_addr);
         meta.insert("query_level".into(), format!("{}", query_level));
 
         let cmd = tool::model::CommandMeta {
@@ -724,10 +740,11 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
 
     async fn get(
         &self,
+        peer_addr: SocketAddr,
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
     ) -> DimseResult<RetrieveStream> {
-        let mut meta = HashMap::new();
+        let mut meta = peer_meta(peer_addr);
         meta.insert("query_level".into(), format!("{}", query_level));
 
         let cmd = tool::model::CommandMeta {
@@ -766,7 +783,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         }
     }
 
-    async fn store(&self, dataset: DatasetStream) -> DimseResult<()> {
+    async fn store(&self, peer_addr: SocketAddr, dataset: DatasetStream) -> DimseResult<()> {
         // Resolve storage directory using global storage backend if available, otherwise fallback
         let target_dir = if let Some(storage) = get_storage() {
             // For filesystem backend, ensure_dir_str returns the full path
@@ -807,7 +824,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             .map_err(|e| DimseError::operation_failed(format!("store dataset: {}", e)))?;
 
         // Build metadata from DICOM tags for path resolution
-        let mut meta = HashMap::new();
+        let mut meta = peer_meta(peer_addr);
 
         // Extract key UIDs from dataset metadata for path templating
         let ds_meta = dataset.metadata();
@@ -961,38 +978,41 @@ impl MultiplexingQueryProvider {
 impl dimse::scp::QueryProvider for MultiplexingQueryProvider {
     async fn find(
         &self,
+        peer_addr: SocketAddr,
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
         max_results: u32,
     ) -> DimseResult<BoxDatasetStream> {
         self.provider_for(DimseOp::Find)
-            .find(query_level, parameters, max_results)
+            .find(peer_addr, query_level, parameters, max_results)
             .await
     }
 
     async fn locate(
         &self,
+        peer_addr: SocketAddr,
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
     ) -> DimseResult<BoxDatasetStream> {
         self.provider_for(DimseOp::Move)
-            .locate(query_level, parameters)
+            .locate(peer_addr, query_level, parameters)
             .await
     }
 
     async fn get(
         &self,
+        peer_addr: SocketAddr,
         query_level: QueryLevel,
         parameters: &HashMap<String, String>,
     ) -> DimseResult<RetrieveStream> {
         self.provider_for(DimseOp::Get)
-            .get(query_level, parameters)
+            .get(peer_addr, query_level, parameters)
             .await
     }
 
-    async fn store(&self, dataset: DatasetStream) -> DimseResult<()> {
+    async fn store(&self, peer_addr: SocketAddr, dataset: DatasetStream) -> DimseResult<()> {
         self.provider_for(DimseOp::Store)
-            .store(dataset)
+            .store(peer_addr, dataset)
             .await
     }
 }
@@ -1042,6 +1062,28 @@ mod tests {
             meta.0.get("00100020").unwrap().match_type.as_deref(),
             Some("EXACT")
         );
+    }
+
+    /// The policies middleware parses `remote_addr` as a bare IP, so the port
+    /// must not be part of it.
+    #[test]
+    fn test_peer_meta_records_ipv4_without_port() {
+        let meta = peer_meta("203.0.113.42:51234".parse().unwrap());
+        assert_eq!(
+            meta.get("remote_addr").map(String::as_str),
+            Some("203.0.113.42")
+        );
+        assert_eq!(meta.get("remote_port").map(String::as_str), Some("51234"));
+    }
+
+    #[test]
+    fn test_peer_meta_records_ipv6_without_brackets() {
+        let meta = peer_meta("[2001:db8::1]:51234".parse().unwrap());
+        assert_eq!(
+            meta.get("remote_addr").map(String::as_str),
+            Some("2001:db8::1")
+        );
+        assert_eq!(meta.get("remote_port").map(String::as_str), Some("51234"));
     }
 
     #[test]

@@ -1,6 +1,7 @@
 //! Default query provider implementation
 
 use async_trait::async_trait;
+use std::net::SocketAddr;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
@@ -24,6 +25,7 @@ impl DefaultQueryProvider {
 impl QueryProvider for DefaultQueryProvider {
     async fn find(
         &self,
+        _peer_addr: SocketAddr,
         _query_level: QueryLevel,
         _parameters: &std::collections::HashMap<String, String>,
         _max_results: u32,
@@ -35,6 +37,7 @@ impl QueryProvider for DefaultQueryProvider {
 
     async fn locate(
         &self,
+        _peer_addr: SocketAddr,
         _query_level: QueryLevel,
         _parameters: &std::collections::HashMap<String, String>,
     ) -> Result<BoxDatasetStream> {
@@ -45,6 +48,7 @@ impl QueryProvider for DefaultQueryProvider {
 
     async fn get(
         &self,
+        _peer_addr: SocketAddr,
         _query_level: QueryLevel,
         _parameters: &std::collections::HashMap<String, String>,
     ) -> Result<RetrieveStream> {
@@ -53,7 +57,7 @@ impl QueryProvider for DefaultQueryProvider {
         Ok(RetrieveStream::from_vec(vec![]))
     }
 
-    async fn store(&self, dataset: DatasetStream) -> Result<()> {
+    async fn store(&self, _peer_addr: SocketAddr, dataset: DatasetStream) -> Result<()> {
         // Store the dataset to the storage directory
         let temp_file = dataset.to_temp_file(&self.storage_dir).await?;
         info!("Stored dataset to {}", temp_file.display());

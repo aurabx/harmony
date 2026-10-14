@@ -60,6 +60,7 @@ struct RecordingProvider {
 impl QueryProvider for RecordingProvider {
     async fn find(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
         _max_results: u32,
@@ -69,6 +70,7 @@ impl QueryProvider for RecordingProvider {
 
     async fn locate(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
     ) -> dimse::Result<BoxDatasetStream> {
@@ -77,13 +79,18 @@ impl QueryProvider for RecordingProvider {
 
     async fn get(
         &self,
+        _peer_addr: std::net::SocketAddr,
         _query_level: QueryLevel,
         _parameters: &HashMap<String, String>,
     ) -> dimse::Result<RetrieveStream> {
         Ok(RetrieveStream::new(dataset_stream_from_vec(Vec::new())))
     }
 
-    async fn store(&self, dataset: DatasetStream) -> dimse::Result<()> {
+    async fn store(
+        &self,
+        _peer_addr: std::net::SocketAddr,
+        dataset: DatasetStream,
+    ) -> dimse::Result<()> {
         let object = dataset.to_object().await?;
         self.received.lock().unwrap().push(object);
         Ok(())

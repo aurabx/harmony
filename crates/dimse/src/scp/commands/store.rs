@@ -1,5 +1,7 @@
 //! C-STORE command handler
 
+use std::net::SocketAddr;
+
 use dicom_encoding::text::SpecificCharacterSet;
 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
@@ -18,6 +20,7 @@ use crate::scp::response_builder;
 pub async fn handle_c_store(
     scp: &DimseScp,
     association: &mut AsyncServerAssociation<TcpStream>,
+    peer_addr: SocketAddr,
     message_id: u16,
     dataset_data: Vec<u8>,
     presentation_context_id: u8,
@@ -64,7 +67,7 @@ pub async fn handle_c_store(
     dataset.metadata_mut().transfer_syntax = Some(ts.uid().to_string());
 
     // Store the dataset
-    match scp.query_provider.store(dataset).await {
+    match scp.query_provider.store(peer_addr, dataset).await {
         Ok(()) => {
             // Send success response
             response_builder::send_store_response(association, message_id, 0x0000, presentation_context_id)
