@@ -86,7 +86,16 @@ impl Http3Adapter {
         tls_config.alpn_protocols = vec![b"h3".to_vec()];
 
         let quic_tls = QuicServerConfig::try_from(tls_config)?;
-        Ok(ServerConfig::with_crypto(Arc::new(quic_tls)))
+        let mut server_config = ServerConfig::with_crypto(Arc::new(quic_tls));
+        // The peer address feeds ip_allow/ip_deny and rate limits. With
+        // migration on, quinn makes a new client address current as soon as
+        // one authenticated packet arrives from it, before PATH_CHALLENGE
+        // validates it. A key-holding client could then forge an allowlisted
+        // source IP for a request. With migration off, quinn drops packets
+        // from any address other than the one the handshake validated. A
+        // client whose IP changes must reconnect.
+        server_config.migration(false);
+        Ok(server_config)
     }
 
     async fn run_server(self, config: Arc<Config>, shutdown: CancellationToken) {
@@ -165,10 +174,11 @@ pub async fn handle_connection(
 ) -> anyhow::Result<()> {
     // Complete the QUIC handshake
     let connection = incoming.await?;
-    // One QUIC connection has one peer, so every request on it shares this
-    // address. Quinn updates it on connection migration; reading it once per
-    // connection matches how the HTTP adapter records the TCP peer.
-    let peer_addr = connection.remote_address();
+    // Kept so the peer address is read for each request. build_server_config
+    // turns migration off, so this is the handshake-validated address. The
+    // per-request read keeps that true if migration is ever turned back on:
+    // a value cached at handshake would then go stale.
+    let quic_conn = connection.clone();
 
     // Upgrade to HTTP/3 connection
     let mut h3_conn = server::builder()
@@ -186,6 +196,7 @@ pub async fn handle_connection(
                         continue;
                     }
                 };
+                let peer_addr = quic_conn.remote_address();
 
                 // Read request body from DATA frames
                 let mut body_bytes: Vec<u8> = Vec::new();

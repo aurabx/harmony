@@ -528,7 +528,7 @@ async fn http3_status_behind_ip_gate(http_port: u16, http3_port: u16, cidr: &str
 /// request failed the gate with 403 because the client IP was unknown.
 #[tokio::test]
 async fn test_http3_ip_allow_admits_client_in_allowlist() {
-    let status = http3_status_behind_ip_gate(19083, 19446, "127.0.0.1/32").await;
+    let status = http3_status_behind_ip_gate(19087, 19446, "127.0.0.1/32").await;
     assert_eq!(status, 200, "loopback client should pass a 127.0.0.1/32 allowlist");
 }
 
@@ -536,6 +536,6 @@ async fn test_http3_ip_allow_admits_client_in_allowlist() {
 /// is still denied by an allowlist that does not contain it.
 #[tokio::test]
 async fn test_http3_ip_allow_denies_client_outside_allowlist() {
-    let status = http3_status_behind_ip_gate(19084, 19447, "10.0.0.0/8").await;
+    let status = http3_status_behind_ip_gate(19088, 19447, "10.0.0.0/8").await;
     assert_eq!(status, 403, "loopback client should fail a 10.0.0.0/8 allowlist");
 }

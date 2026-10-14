@@ -79,7 +79,7 @@ An `ip_allow` rule restricts who may use the pipeline. Other allow rules cannot 
 - **No `ip_allow` rules, no gate.** If no policy has an `ip_allow` rule, one matching allow rule and no deny still admits the request.
 - **Logs.** An outside client is logged at `info` with the client IP and the ids of every `ip_allow` rule checked. An unknown client IP is logged at `warn`.
 
-The client IP comes from the envelope's `remote_addr` metadata (then `client_ip`). The HTTP adapter sets `remote_addr` from the TCP peer address for HTTP/1.1 and HTTP/2. The HTTP/3 adapter sets it from the QUIC peer address. Neither reads `X-Forwarded-For`.
+The client IP comes from the envelope's `remote_addr` metadata (then `client_ip`). The HTTP adapter sets `remote_addr` from the TCP peer address for HTTP/1.1 and HTTP/2. The HTTP/3 adapter sets it from the QUIC peer address. Neither reads `X-Forwarded-For`. HTTP/3 listeners turn QUIC connection migration off, so `remote_addr` is always the address the handshake checked. A client whose IP changes must open a new connection.
 
 **Example:**
 
