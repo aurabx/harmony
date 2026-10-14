@@ -525,6 +525,7 @@ The config file watcher monitors your configuration file for changes with a 200m
 3. **Apply Strategy**:
    - **Zero-downtime changes**: Atomic config swap (instant)
    - **Adapter restarts**: Selective restart of affected networks only
+   - **Process restart required**: New values are stored but not applied. A WARN names the sections
 4. **Logging**: Reload results logged with details
 
 ### Change Classification
@@ -536,8 +537,13 @@ These changes are picked up on the next request with no service interruption:
 - **Middleware configuration**: Transform specs, auth rules, custom middleware options
 - **Route definitions**: Groups, endpoints, backends, path patterns
 - **Backend configuration**: Target URLs, timeouts, retry policies
-- **Logging settings**: Log levels, file paths, output formats
-- **Storage configuration**: Backend type, paths, connection strings
+
+#### Process Restart Required
+
+Harmony reads these sections once at startup. A reload stores the new values but does not apply them. The watcher logs `Config changes need a restart to take effect: [...]` at WARN level. Restart Harmony to apply them.
+
+- **Logging settings** (`[logging]`): Log level, log file path, writing to a file
+- **Storage configuration** (`[storage]`): Backend type, paths and options
 
 #### Adapter Restart Required (Brief Interruption)
 
