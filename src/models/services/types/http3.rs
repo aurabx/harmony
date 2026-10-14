@@ -273,31 +273,24 @@ impl ServiceHandler<Value> for Http3Backend {
             .parse::<http::Method>()
             .map_err(|_| Error::from(format!("Invalid HTTP method: {}", target_details.method)))?;
 
-        // Build path with query string
-        let path = if target_details.query_params.is_empty() {
-            target_details.uri.clone()
-        } else {
-            let query_string: String = target_details
-                .query_params
-                .iter()
-                .flat_map(|(key, values)| {
-                    values.iter().map(move |value| {
-                        format!(
-                            "{}={}",
-                            urlencoding::encode(key),
-                            urlencoding::encode(value)
-                        )
-                    })
-                })
-                .collect::<Vec<_>>()
-                .join("&");
-            format!("{}?{}", target_details.uri, query_string)
-        };
+        // The request path includes the connection's base_path, as the reqwest path does via full_url().
+        let path = crate::models::services::path_utils::http3_request_path(
+            conn.base_path.as_deref(),
+            &target_details.uri,
+            &target_details.query_params,
+        );
 
-        let headers = upstream_request_headers(
+        let mut headers = upstream_request_headers(
             &target_details.headers,
             &envelope.request_details.headers,
             InboundAuthorizationPolicy::from_backend_options(options)?,
+            "HTTP/3",
+        );
+        // Target authentication: the inbound Authorization was already dropped above, so
+        // the target's credential is the only one sent.
+        crate::models::services::backend_auth::apply_backend_authentication_to_headers(
+            &mut headers,
+            options,
             "HTTP/3",
         );
 
