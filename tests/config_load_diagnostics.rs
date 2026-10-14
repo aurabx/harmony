@@ -1,9 +1,10 @@
 //! Diagnostics emitted while loading config must reach the operator (AURA-2436).
 //!
 //! The binary loads config before the real logger exists. These tests cover
-//! the bootstrap logger that wraps the load.
+//! the bootstrap logger that wraps the load, and the rule that a pipeline file
+//! which cannot be parsed fails the load instead of being skipped.
 
-use harmony::config::config::Config;
+use harmony::config::config::{Config, ConfigError};
 use harmony::logging::with_bootstrap_writer;
 use std::io;
 use std::sync::{Arc, Mutex};
@@ -143,4 +144,42 @@ fn unresolved_backend_target_is_reported_during_load() {
         "expected a warning naming the backend and the target, got: {:?}",
         output
     );
+}
+
+#[test]
+fn unparseable_pipeline_file_fails_the_load() {
+    let (_dir, path) = write_config(MAIN_CONFIG, &[("broken.toml", "[pipelines.broken\n")]);
+
+    let err = Config::load(&path).expect_err("load must fail on an unparseable pipeline file");
+
+    match err {
+        ConfigError::InvalidProxy { reason, .. } => {
+            assert!(
+                reason.contains("broken.toml"),
+                "error must name the file, got: {}",
+                reason
+            );
+        }
+        other => panic!("unexpected error variant: {:?}", other),
+    }
+}
+
+#[test]
+fn valid_pipeline_file_still_loads() {
+    let pipeline = r#"
+[pipelines.extra]
+networks = ["default"]
+endpoints = ["extra_in"]
+backends = ["api_backend"]
+
+[endpoints.extra_in]
+service = "http"
+[endpoints.extra_in.options]
+path_prefix = "/extra"
+"#;
+    let (_dir, path) = write_config(MAIN_CONFIG, &[("extra.toml", pipeline)]);
+
+    let config = Config::load(&path).expect("valid pipeline file must load");
+
+    assert!(config.pipelines.contains_key("extra"));
 }

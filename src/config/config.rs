@@ -399,9 +399,8 @@ impl Config {
         config.resolved_mesh_path = Some(mesh_path.to_string_lossy().to_string());
 
         // Load additional configs
-        if let Ok(additional_configs) = Self::load_additional_configs(&config, config_path) {
-            config = Self::merge_configs(config, additional_configs);
-        }
+        let additional_configs = Self::load_additional_configs(&config, config_path)?;
+        config = Self::merge_configs(config, additional_configs);
 
         // Resolve references
         match resolve_references(&mut config) {
@@ -468,10 +467,17 @@ impl Config {
     fn load_additional_configs(
         config: &Config,
         base_config_path: &str,
-    ) -> Result<Vec<Config>, Box<dyn std::error::Error>> {
-        let base_dir = Path::new(base_config_path)
-            .parent()
-            .ok_or("Failed to retrieve base directory of config file")?;
+    ) -> Result<Vec<Config>, ConfigError> {
+        let base_dir =
+            Path::new(base_config_path)
+                .parent()
+                .ok_or_else(|| ConfigError::InvalidProxy {
+                    name: "config".to_string(),
+                    reason: format!(
+                        "Failed to retrieve base directory of config file '{}'",
+                        base_config_path
+                    ),
+                })?;
 
         let mut configs = Vec::new();
 
@@ -491,34 +497,36 @@ impl Config {
     }
 
     /// Loads configuration files from a directory
-    fn load_from_directory(dir: &Path) -> Result<Vec<Config>, Box<dyn std::error::Error>> {
+    fn load_from_directory(dir: &Path) -> Result<Vec<Config>, ConfigError> {
         if !dir.exists() {
             return Ok(vec![]); // Skip if the directory doesn't exist
         }
 
         let mut configs = Vec::new();
-        for entry in fs::read_dir(dir)? {
-            let entry = entry?;
+        let read_error = |e: std::io::Error| ConfigError::InvalidProxy {
+            name: "config".to_string(),
+            reason: format!("Failed to read config directory '{}': {}", dir.display(), e),
+        };
+        for entry in fs::read_dir(dir).map_err(read_error)? {
+            let entry = entry.map_err(read_error)?;
             let path = entry.path();
             if path.is_file() && path.extension().is_some_and(|ext| ext == "toml") {
-                match fs::read_to_string(&path) {
-                    Ok(contents) => {
-                        // Apply environment variable substitution
-                        let (contents_substituted, _audit) = substitute_env_vars(&contents);
-                        match toml::from_str::<Config>(&contents_substituted) {
-                            Ok(mut config) => {
-                                config.record_endpoint_sources(&path.to_string_lossy());
-                                configs.push(config);
-                            }
-                            Err(e) => {
-                                tracing::error!("Failed to parse config file {:?}: {}", path, e);
-                            }
-                        }
+                // A file that cannot be used would leave its routes missing
+                // while startup succeeds, so every failure here aborts the load.
+                let contents =
+                    fs::read_to_string(&path).map_err(|e| ConfigError::InvalidProxy {
+                        name: "config".to_string(),
+                        reason: format!("Failed to read config file '{}': {}", path.display(), e),
+                    })?;
+                let (contents_substituted, _audit) = substitute_env_vars(&contents);
+                let mut config = toml::from_str::<Config>(&contents_substituted).map_err(|e| {
+                    ConfigError::InvalidProxy {
+                        name: "config".to_string(),
+                        reason: format!("Failed to parse config file '{}': {}", path.display(), e),
                     }
-                    Err(e) => {
-                        tracing::error!("Failed to read config file {:?}: {}", path, e);
-                    }
-                }
+                })?;
+                config.record_endpoint_sources(&path.to_string_lossy());
+                configs.push(config);
             }
         }
 
