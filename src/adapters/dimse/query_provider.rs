@@ -8,11 +8,12 @@ use crate::pipeline::executor::PipelineExecutor;
 use async_trait::async_trait;
 use dicom_json_tool as tool;
 use dimse::error::DimseError;
+use dimse::scp::PeerAdmission;
 use dimse::types::{dataset_stream_from_vec, BoxDatasetStream, DatasetStream, QueryLevel, RetrieveStream};
 use dimse::Result as DimseResult;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
@@ -82,6 +83,17 @@ impl PipelineQueryProvider {
         Self {
             pipeline: pipeline.into(),
             endpoint: endpoint.into(),
+        }
+    }
+
+    /// Whether a peer at `ip` may open an association, judged by this
+    /// provider's pipeline in `config`.
+    fn admission(&self, config: &crate::config::config::Config, ip: IpAddr) -> PeerAdmission {
+        match peer_admission(config, &self.pipeline, ip) {
+            Ok(()) => PeerAdmission::Admit,
+            Err(reason) => PeerAdmission::Reject {
+                reason: format!("pipeline '{}': {}", self.pipeline, reason),
+            },
         }
     }
 
@@ -652,6 +664,48 @@ fn peer_meta(peer_addr: SocketAddr) -> HashMap<String, String> {
     ])
 }
 
+/// Decide whether a peer at `ip` may open a DIMSE association for `pipeline`.
+///
+/// Applies the `ip_allow` and `ip_deny` rules of every `policies` middleware
+/// on the pipeline's incoming chain, the same chain C-FIND, C-GET, C-MOVE and
+/// C-STORE pass through. Other rule types are left to those requests. A
+/// pipeline with no `policies` middleware admits every peer, as it admits
+/// every request. Returns the reason when the peer is refused, including when
+/// the pipeline or a policy cannot be read, because such a pipeline would
+/// fail every request anyway.
+fn peer_admission(
+    config: &crate::config::config::Config,
+    pipeline: &str,
+    ip: IpAddr,
+) -> std::result::Result<(), String> {
+    use crate::models::middleware::types::policies::{parse_config, IpAccessRules};
+
+    let pipeline_cfg = config
+        .pipelines
+        .get(pipeline)
+        .ok_or_else(|| format!("pipeline '{}' not found", pipeline))?;
+
+    let no_options = HashMap::new();
+    for name in pipeline_cfg.middleware.left_chain() {
+        // A name with no instance block is resolved as a middleware type with
+        // no options, as `build_middleware_instances_for_pipeline` does.
+        let (middleware_type, options) = match config.middleware.get(&name) {
+            Some(instance) => (instance.middleware_type.as_str(), &instance.options),
+            None => (name.as_str(), &no_options),
+        };
+        if !middleware_type.eq_ignore_ascii_case("policies") {
+            continue;
+        }
+        let rules = parse_config(options, &config.policies, &config.rules)
+            .and_then(|parsed| IpAccessRules::from_config(&parsed))
+            .map_err(|e| format!("middleware '{}' cannot be read: {}", name, e))?;
+        rules
+            .check_peer(ip)
+            .map_err(|reason| format!("middleware '{}': {}", name, reason))?;
+    }
+    Ok(())
+}
+
 #[async_trait]
 impl dimse::scp::QueryProvider for PipelineQueryProvider {
     async fn find(
@@ -783,6 +837,15 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         }
     }
 
+    /// Apply the pipeline's IP rules to the peer before the association is
+    /// accepted, so a denied peer cannot even get a C-ECHO reply. The config
+    /// is read per association, so a reload applies to new associations.
+    async fn admit_peer(&self, peer_addr: SocketAddr) -> DimseResult<PeerAdmission> {
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
+        Ok(self.admission(&config, peer_addr.ip()))
+    }
+
     async fn store(&self, peer_addr: SocketAddr, dataset: DatasetStream) -> DimseResult<()> {
         // Resolve storage directory using global storage backend if available, otherwise fallback
         let target_dir = if let Some(storage) = get_storage() {
@@ -910,6 +973,10 @@ pub struct MultiplexingQueryProvider {
     /// operation. This is the first provider added, providing backward
     /// compatibility with single-endpoint configurations.
     fallback: Arc<PipelineQueryProvider>,
+    /// Every provider on this listener, in route order. Admission checks all
+    /// of them, including an endpoint that enables only C-ECHO and so owns no
+    /// operation route.
+    all: Vec<Arc<PipelineQueryProvider>>,
 }
 
 impl MultiplexingQueryProvider {
@@ -925,6 +992,7 @@ impl MultiplexingQueryProvider {
 
         let mut op_routes: HashMap<DimseOp, Arc<PipelineQueryProvider>> = HashMap::new();
         let mut fallback: Option<Arc<PipelineQueryProvider>> = None;
+        let mut all: Vec<Arc<PipelineQueryProvider>> = Vec::new();
 
         for (pipeline, endpoint, ops) in routes {
             let provider = Arc::new(PipelineQueryProvider::new(
@@ -935,6 +1003,7 @@ impl MultiplexingQueryProvider {
             if fallback.is_none() {
                 fallback = Some(Arc::clone(&provider));
             }
+            all.push(Arc::clone(&provider));
 
             for op in ops {
                 if let Some(existing) = op_routes.get(&op) {
@@ -962,6 +1031,22 @@ impl MultiplexingQueryProvider {
         Self {
             op_routes,
             fallback: fallback.expect("at least one route"),
+            all,
+        }
+    }
+
+    /// Admit the peer when any pipeline on this listener admits it, judged
+    /// against `config`.
+    fn admission(&self, config: &crate::config::config::Config, ip: IpAddr) -> PeerAdmission {
+        let mut reasons = Vec::new();
+        for provider in &self.all {
+            match provider.admission(config, ip) {
+                PeerAdmission::Admit => return PeerAdmission::Admit,
+                PeerAdmission::Reject { reason } => reasons.push(reason),
+            }
+        }
+        PeerAdmission::Reject {
+            reason: reasons.join("; "),
         }
     }
 
@@ -1015,11 +1100,212 @@ impl dimse::scp::QueryProvider for MultiplexingQueryProvider {
             .store(peer_addr, dataset)
             .await
     }
+
+    /// Admit the peer when any pipeline on this listener admits it.
+    ///
+    /// Requiring all of them would lock a client of one pipeline out because
+    /// of another pipeline's rules. Each request is still checked by the
+    /// pipeline that handles its operation.
+    async fn admit_peer(&self, peer_addr: SocketAddr) -> DimseResult<PeerAdmission> {
+        let config =
+            get_config().ok_or_else(|| DimseError::operation_failed("Global config not set"))?;
+        Ok(self.admission(&config, peer_addr.ip()))
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    // ============================================
+    // Peer admission
+    // ============================================
+
+    /// Three pipelines: `office` allows only 192.168.0.0/16, `no_ten` denies
+    /// 10.0.0.0/8, and `open` has no policies middleware.
+    fn admission_config() -> crate::config::config::Config {
+        let toml = r#"
+[proxy]
+id = "peer-admission-test"
+
+[pipelines.office]
+endpoints = ["scp"]
+middleware = ["office_only"]
+
+[pipelines.no_ten]
+endpoints = ["scp"]
+middleware = ["block_ten"]
+
+[pipelines.open]
+endpoints = ["scp"]
+middleware = []
+
+[pipelines.broken]
+endpoints = ["scp"]
+middleware = ["bad_policy"]
+
+[endpoints.scp]
+service = "dicom_scp"
+
+[middleware.office_only]
+type = "policies"
+[middleware.office_only.options]
+policies = ["office"]
+
+[middleware.block_ten]
+type = "policies"
+[middleware.block_ten.options]
+policies = ["no_ten"]
+
+[middleware.bad_policy]
+type = "policies"
+[middleware.bad_policy.options]
+policies = ["does_not_exist"]
+
+[policies.office]
+id = "office"
+rules = ["office_networks"]
+
+[policies.no_ten]
+id = "no_ten"
+rules = ["ten_net", "anyone"]
+
+[rules.office_networks]
+id = "office_networks"
+type = "ip_allow"
+[rules.office_networks.options]
+ip_addresses = ["192.168.0.0/16"]
+
+[rules.ten_net]
+id = "ten_net"
+type = "ip_deny"
+[rules.ten_net.options]
+ip_addresses = ["10.0.0.0/8"]
+
+[rules.anyone]
+id = "anyone"
+type = "allow_all"
+"#;
+        toml::from_str(toml).expect("TOML parse error")
+    }
+
+    fn ip(text: &str) -> IpAddr {
+        text.parse().unwrap()
+    }
+
+    fn is_rejected(admission: &PeerAdmission) -> bool {
+        matches!(admission, PeerAdmission::Reject { .. })
+    }
+
+    #[test]
+    fn peer_admission_applies_the_pipeline_allowlist() {
+        let config = admission_config();
+        assert!(peer_admission(&config, "office", ip("192.168.1.20")).is_ok());
+        assert!(peer_admission(&config, "office", ip("10.0.0.1")).is_err());
+    }
+
+    #[test]
+    fn peer_admission_applies_ip_deny_rules() {
+        let config = admission_config();
+        let reason = peer_admission(&config, "no_ten", ip("10.9.9.9")).unwrap_err();
+        assert!(reason.contains("ten_net"), "reason should name the rule: {}", reason);
+        assert!(peer_admission(&config, "no_ten", ip("172.16.0.1")).is_ok());
+    }
+
+    #[test]
+    fn peer_admission_admits_any_peer_without_a_policies_middleware() {
+        let config = admission_config();
+        assert!(peer_admission(&config, "open", ip("10.0.0.1")).is_ok());
+    }
+
+    #[test]
+    fn peer_admission_fails_closed_for_an_unknown_pipeline() {
+        let config = admission_config();
+        let reason = peer_admission(&config, "missing", ip("192.168.1.20")).unwrap_err();
+        assert!(reason.contains("missing"), "{}", reason);
+    }
+
+    #[test]
+    fn peer_admission_fails_closed_for_an_unreadable_policy() {
+        let config = admission_config();
+        let reason = peer_admission(&config, "broken", ip("192.168.1.20")).unwrap_err();
+        assert!(reason.contains("bad_policy"), "{}", reason);
+    }
+
+    #[test]
+    fn pipeline_provider_rejection_names_the_pipeline() {
+        let config = admission_config();
+        let provider = PipelineQueryProvider::new("office", "scp");
+        match provider.admission(&config, ip("10.0.0.1")) {
+            PeerAdmission::Reject { reason } => {
+                assert!(reason.contains("pipeline 'office'"), "{}", reason)
+            }
+            PeerAdmission::Admit => panic!("10.0.0.1 is outside the office allowlist"),
+        }
+    }
+
+    /// A peer that one pipeline on the listener admits may connect. Its
+    /// requests are still checked by the pipeline for each operation.
+    #[test]
+    fn multiplexing_provider_admits_when_any_pipeline_admits() {
+        let config = admission_config();
+        let provider = MultiplexingQueryProvider::new(vec![
+            ("office".into(), "scp".into(), vec![DimseOp::Find]),
+            ("no_ten".into(), "scp".into(), vec![DimseOp::Store]),
+        ]);
+
+        // Outside the office allowlist, but no_ten admits it.
+        assert_eq!(provider.admission(&config, ip("172.16.0.1")), PeerAdmission::Admit);
+        // Inside the office allowlist, though no_ten denies 10.0.0.0/8 only.
+        assert_eq!(provider.admission(&config, ip("192.168.1.20")), PeerAdmission::Admit);
+    }
+
+    /// An endpoint that enables only C-ECHO owns no operation route. Its
+    /// pipeline still counts at admission.
+    #[test]
+    fn multiplexing_provider_checks_an_echo_only_pipeline() {
+        let config = admission_config();
+        // `broken` owns C-FIND and rejects every peer, so only the echo-only
+        // `office` pipeline can admit one.
+        let provider = MultiplexingQueryProvider::new(vec![
+            ("broken".into(), "scp".into(), vec![DimseOp::Find]),
+            ("office".into(), "scp".into(), vec![]),
+        ]);
+        assert_eq!(provider.admission(&config, ip("192.168.1.20")), PeerAdmission::Admit);
+        assert!(is_rejected(&provider.admission(&config, ip("172.16.0.1"))));
+    }
+
+    /// Only the incoming chain gates a request, so only it gates a peer.
+    #[test]
+    fn peer_admission_ignores_policies_on_the_outgoing_chain() {
+        let mut config = admission_config();
+        let toml = r#"
+endpoints = ["scp"]
+[middleware]
+left = []
+right = ["office_only"]
+"#;
+        let split: crate::models::pipelines::config::Pipeline =
+            toml::from_str(toml).expect("split pipeline TOML");
+        config.pipelines.insert("split".to_string(), split);
+
+        assert!(peer_admission(&config, "split", ip("10.0.0.1")).is_ok());
+    }
+
+    #[test]
+    fn multiplexing_provider_rejects_when_every_pipeline_rejects() {
+        let config = admission_config();
+        let provider = MultiplexingQueryProvider::new(vec![
+            ("office".into(), "scp".into(), vec![DimseOp::Find]),
+            ("no_ten".into(), "scp".into(), vec![DimseOp::Store]),
+        ]);
+
+        let admission = provider.admission(&config, ip("10.0.0.1"));
+        assert!(is_rejected(&admission));
+        if let PeerAdmission::Reject { reason } = admission {
+            assert!(reason.contains("'office'") && reason.contains("'no_ten'"), "{}", reason);
+        }
+    }
 
     #[test]
     fn test_query_provider_creation() {

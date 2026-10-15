@@ -81,6 +81,17 @@ An `ip_allow` rule restricts who may use the pipeline. Other allow rules cannot 
 
 The client IP comes from the envelope's `remote_addr` metadata (then `client_ip`). The HTTP adapter sets `remote_addr` from the TCP peer address for HTTP/1.1 and HTTP/2. The HTTP/3 adapter sets it from the QUIC peer address. The DIMSE adapter sets it from the TCP peer address of the SCU's association, so the same rules apply to a `dicom_scp` endpoint. None of them reads `X-Forwarded-For`. HTTP/3 listeners turn QUIC connection migration off, so `remote_addr` is always the address the handshake checked. A client whose IP changes must open a new connection.
 
+**DIMSE associations.** A `dicom_scp` pipeline checks IP rules twice.
+
+- **When the association opens.** The SCP checks the peer address before it accepts the A-ASSOCIATE-RQ. It uses the `ip_deny` rules and the `ip_allow` gate of every `policies` middleware on the pipeline's incoming chain. A denied peer gets an A-ASSOCIATE-RJ (rejected-permanent, no reason given). It cannot send any command, so it gets no C-ECHO reply.
+- **On each request.** C-FIND, C-GET, C-MOVE and C-STORE still run the whole middleware, with every rule type.
+- **Only IP rules at association time.** Rules such as `method`, `path`, `header` and `rate_limit` have no meaning before a request exists, so they are skipped. A pipeline with no IP rules admits every peer.
+- **Fail closed.** If the pipeline or one of its policies cannot be read, the association is rejected.
+- **Shared listeners.** When several `dicom_scp` endpoints share one port, a peer may connect if any of their pipelines admits it. That includes a pipeline with no IP rules. C-ECHO has no pipeline of its own, so such a peer gets a C-ECHO reply. Each other request is checked by the pipeline that handles its operation.
+- **Reloads.** The check reads the current config for each new association. Associations already open are not re-checked.
+- **DCMTK store.** If any endpoint on a port sets `use_dcmtk_store = true`, or sets `persistent_store_scp = true` (which turns `use_dcmtk_store` on by default), DCMTK `storescp` serves the whole port. It does not run this check, so no IP rule applies to any endpoint on that port.
+- **Logs.** A rejected peer is logged at `warn` with its address, the pipeline and the reason. If the check itself fails, for example because no config is loaded, the peer is rejected and the failure is logged at `error`.
+
 **IPv4-mapped addresses.** A dual-stack listener (`bind_address = "::"` with `IPV6_V6ONLY=0`, the default on Linux and macOS) reports an IPv4 client as an IPv4-mapped IPv6 address, such as `::ffff:10.1.2.3`. IP rules and rate limits treat that address as the plain IPv4 address `10.1.2.3`:
 
 - An `ip_allow` or `ip_deny` CIDR written in IPv4, such as `10.0.0.0/8`, matches the mapped form.

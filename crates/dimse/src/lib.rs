@@ -25,7 +25,7 @@ pub mod tls;
 pub use config::{DimseConfig, RemoteNode};
 pub use error::{DimseError, Result};
 pub use router::{DimseRequest, DimseResponse, InMemoryRouter, Router};
-pub use scp::{DimseScp, QueryProvider};
+pub use scp::{DimseScp, PeerAdmission, QueryProvider};
 pub use scu::DimseScu;
 pub use types::{DatasetStream, DimseCommand};
 
