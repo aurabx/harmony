@@ -219,10 +219,23 @@ pub fn without_query(url: &str) -> &str {
 /// check what a code path writes to the log.
 #[cfg(test)]
 pub(crate) mod test_capture {
+    use std::cell::RefCell;
     use std::io;
-    use std::sync::{Arc, Mutex};
-    use tracing::subscriber::DefaultGuard;
+    use std::sync::{Arc, Mutex, Once};
+    use tracing::subscriber::Interest;
     use tracing_subscriber::fmt::MakeWriter;
+    use tracing_subscriber::layer::{Context, Layer, SubscriberExt};
+
+    thread_local! {
+        /// The log that events on this thread go to, while a capture is active.
+        static ACTIVE: RefCell<Option<CapturedLog>> = const { RefCell::new(None) };
+    }
+
+    /// `try_with` because an event can fire while thread-locals are being
+    /// destroyed. Such an event is not captured.
+    fn active_log() -> Option<CapturedLog> {
+        ACTIVE.try_with(|slot| slot.borrow().clone()).ok().flatten()
+    }
 
     #[derive(Clone, Default)]
     pub(crate) struct CapturedLog(Arc<Mutex<Vec<u8>>>);
@@ -247,27 +260,139 @@ pub(crate) mod test_capture {
         }
     }
 
-    impl<'a> MakeWriter<'a> for CapturedLog {
-        type Writer = CapturedLog;
+    /// Writes to the active log, or discards when this thread has none.
+    struct ActiveLogSink(Option<CapturedLog>);
 
-        fn make_writer(&'a self) -> Self::Writer {
-            self.clone()
+    impl io::Write for ActiveLogSink {
+        fn write(&mut self, buf: &[u8]) -> io::Result<usize> {
+            match &mut self.0 {
+                Some(log) => log.write(buf),
+                None => Ok(buf.len()),
+            }
+        }
+
+        fn flush(&mut self) -> io::Result<()> {
+            Ok(())
         }
     }
 
-    /// Installs a DEBUG subscriber for the current thread until the guard drops.
-    /// `#[tokio::test]` runs on one thread, so this also covers awaited code.
-    pub(crate) fn capture_debug() -> (CapturedLog, DefaultGuard) {
+    /// Writes each formatted event to the emitting thread's active log.
+    struct ActiveLogSinkWriter;
+
+    impl<'a> MakeWriter<'a> for ActiveLogSinkWriter {
+        type Writer = ActiveLogSink;
+
+        fn make_writer(&'a self) -> Self::Writer {
+            ActiveLogSink(active_log())
+        }
+    }
+
+    /// Enables an event only on a thread with an active capture.
+    ///
+    /// `filter_fn` is not usable here: it caches its answer per callsite, so
+    /// a callsite first hit on a thread without a capture would stay off.
+    struct ActiveCaptureFilter;
+
+    impl<S: tracing::Subscriber> Layer<S> for ActiveCaptureFilter {
+        fn register_callsite(&self, _: &'static tracing::Metadata<'static>) -> Interest {
+            Interest::sometimes()
+        }
+
+        fn enabled(&self, _: &tracing::Metadata<'_>, _: Context<'_, S>) -> bool {
+            active_log().is_some()
+        }
+    }
+
+    /// Installs, once per test process, a global DEBUG subscriber that only
+    /// records events from threads with an active capture.
+    ///
+    /// A per-thread `set_default` subscriber raced with tests that log while
+    /// no subscriber exists: those can cache a callsite as never enabled, and
+    /// the capture then misses the event. The global subscriber registers
+    /// every callsite as "sometimes", so that cache entry can never form.
+    ///
+    /// Panics if another global subscriber is already installed, because the
+    /// captures would then record nothing.
+    fn install_global_subscriber() {
+        static INSTALL: Once = Once::new();
+        INSTALL.call_once(|| {
+            let subscriber = tracing_subscriber::fmt()
+                .with_max_level(tracing::Level::DEBUG)
+                .with_writer(ActiveLogSinkWriter)
+                .finish()
+                .with(ActiveCaptureFilter);
+            tracing::subscriber::set_global_default(subscriber)
+                .expect("test_capture needs the global subscriber, but one is already set");
+        });
+    }
+
+    /// Ends a capture when dropped, restoring any capture it replaced.
+    pub(crate) struct CaptureGuard {
+        previous: Option<CapturedLog>,
+    }
+
+    impl Drop for CaptureGuard {
+        fn drop(&mut self) {
+            let previous = self.previous.take();
+            ACTIVE.with(|slot| *slot.borrow_mut() = previous);
+        }
+    }
+
+    /// Captures DEBUG-and-above events on the current thread until the guard
+    /// drops. `#[tokio::test]` runs on one thread, so this also covers
+    /// awaited code. Events from other threads, such as `spawn_blocking`,
+    /// are not captured.
+    pub(crate) fn capture_debug() -> (CapturedLog, CaptureGuard) {
+        install_global_subscriber();
         let log = CapturedLog::default();
-        let subscriber = tracing_subscriber::fmt()
-            .with_max_level(tracing::Level::DEBUG)
-            .with_writer(log.clone())
-            .finish();
-        let guard = tracing::subscriber::set_default(subscriber);
-        // Tests running in parallel without a subscriber can cache a
-        // callsite as disabled while this one registers. Rebuilding after
-        // registration makes that much less likely, though not impossible.
-        tracing::callsite::rebuild_interest_cache();
-        (log, guard)
+        let previous = ACTIVE.with(|slot| slot.borrow_mut().replace(log.clone()));
+        (log, CaptureGuard { previous })
+    }
+
+    mod tests {
+        use super::capture_debug;
+
+        #[test]
+        fn captures_only_the_current_thread() {
+            let (log, _guard) = capture_debug();
+            std::thread::spawn(|| tracing::debug!("OTHER-THREAD-MARKER"))
+                .join()
+                .expect("join");
+            tracing::debug!("this-thread-shape");
+
+            let text = log.contents();
+            assert!(text.contains("this-thread-shape"), "log: {text}");
+            assert!(!text.contains("OTHER-THREAD-MARKER"), "log: {text}");
+        }
+
+        fn shared_callsite() {
+            tracing::debug!("shared-callsite-shape");
+        }
+
+        /// Other tests often reach a callsite first, on a thread with no
+        /// capture. That must not switch the callsite off for later captures.
+        #[test]
+        fn callsite_first_hit_without_capture_is_still_captured() {
+            drop(capture_debug());
+            std::thread::spawn(shared_callsite).join().expect("join");
+
+            let (log, _guard) = capture_debug();
+            shared_callsite();
+
+            let text = log.contents();
+            assert!(text.contains("shared-callsite-shape"), "log: {text}");
+        }
+
+        #[test]
+        fn nothing_is_captured_after_the_guard_drops() {
+            let (log, guard) = capture_debug();
+            tracing::debug!("before-drop-shape");
+            drop(guard);
+            tracing::debug!("AFTER-DROP-MARKER");
+
+            let text = log.contents();
+            assert!(text.contains("before-drop-shape"), "log: {text}");
+            assert!(!text.contains("AFTER-DROP-MARKER"), "log: {text}");
+        }
     }
 }
