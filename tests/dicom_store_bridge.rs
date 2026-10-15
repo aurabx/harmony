@@ -283,7 +283,7 @@ fn element_bytes(object: &dicom_object::InMemDicomObject, name: &str) -> Vec<u8>
 struct StoreRun {
     /// The single request the receiver got.
     request: RecordedRequest,
-    /// The copy the adapter wrote on the sending host.
+    /// The Part 10 bytes the adapter writes for its copy of the instance.
     stored_copy: Vec<u8>,
     /// Where that copy was, on the sending host.
     stored_path: String,
@@ -292,8 +292,23 @@ struct StoreRun {
 /// Send the sample instance to `pipeline` the way the SCP does. Returns what
 /// `store` returned and where the adapter wrote its copy of the instance.
 async fn send_sample(pipeline: &str, endpoint: &str) -> (dimse::Result<()>, PathBuf) {
+    send(pipeline, endpoint, sample_instance()).await
+}
+
+/// The sample instance as the SCP hands it to the adapter.
+fn sample_instance() -> DatasetStream {
     let source = dicom_object::open_file(sample_path()).expect("open sample instance");
-    send(pipeline, endpoint, DatasetStream::from_object(source.into_inner())).await
+    DatasetStream::from_object(source.into_inner())
+}
+
+/// The adapter removes its copy of the instance when the store finishes,
+/// whatever the outcome.
+fn assert_copy_removed(stored_file: &std::path::Path) {
+    assert!(
+        !stored_file.exists(),
+        "the adapter's copy must be removed when the store finishes: {}",
+        stored_file.display()
+    );
 }
 
 /// Hand `dataset` to `pipeline` the way the SCP does. Returns what `store`
@@ -316,11 +331,16 @@ async fn send(
 
 /// Send the sample instance to a pipeline whose receiver stores it.
 async fn store_sample(pipeline: &str, endpoint: &str, recorded: &Recorded) -> StoreRun {
-    let (outcome, stored_file) = send_sample(pipeline, endpoint).await;
+    let dataset = sample_instance();
+    // The adapter writes these bytes for a parsed instance, and deletes its
+    // copy before `store` returns, so take them before the send.
+    let stored_copy = dataset
+        .to_part10_bytes()
+        .expect("encode the sample instance as Part 10")
+        .to_vec();
+    let (outcome, stored_file) = send(pipeline, endpoint, dataset).await;
     outcome.unwrap_or_else(|e| panic!("C-STORE through '{}' should succeed: {}", pipeline, e));
-
-    let stored_copy = std::fs::read(&stored_file).expect("the adapter's copy of the instance");
-    std::fs::remove_file(&stored_file).expect("remove the adapter's copy");
+    assert_copy_removed(&stored_file);
 
     let mut recorded = recorded.lock().unwrap();
     assert_eq!(recorded.len(), 1, "receiver should get exactly one request");
@@ -444,7 +464,7 @@ async fn streaming_bridge_sends_a_compressed_instance_in_its_own_transfer_syntax
     let (outcome, stored_file) =
         send("streaming_bridge", "scp_streaming", compressed_instance()).await;
     outcome.expect("the receiver stores the instance, so the C-STORE should succeed");
-    std::fs::remove_file(&stored_file).expect("remove the adapter's copy");
+    assert_copy_removed(&stored_file);
 
     let mut recorded = bridges.streaming.lock().unwrap();
     assert_eq!(recorded.len(), 1, "receiver should get exactly one request");
@@ -513,7 +533,7 @@ async fn streaming_bridge_reports_a_store_the_receiver_could_not_complete() {
     let bridges = bridges();
 
     let (outcome, stored_file) = send_sample("failing_bridge", "scp_failing").await;
-    std::fs::remove_file(&stored_file).expect("remove the adapter's copy");
+    assert_copy_removed(&stored_file);
 
     // The instance did reach the receiver, so the error below comes from the
     // receiver's answer and not from a request that never left.
@@ -537,7 +557,7 @@ async fn single_node_pipeline_reports_a_store_the_pacs_did_not_take() {
     bridges();
 
     let (outcome, stored_file) = send_sample("single_node", "scp_single_node").await;
-    std::fs::remove_file(&stored_file).expect("remove the adapter's copy");
+    assert_copy_removed(&stored_file);
 
     let error = outcome.expect_err("nothing listens on the PACS port, so the store must fail");
     assert!(

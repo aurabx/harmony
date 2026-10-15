@@ -369,20 +369,41 @@ impl DatasetStream {
     /// meta group, then the dataset). Downstream consumers such as
     /// `dicom_object::open_file` and `dcmdump` require this framing; writing
     /// the raw dataset bytes here left C-STORE stages unreadable.
+    ///
+    /// If the write or copy fails, for example when the disk is full, the
+    /// target file is removed before the error is returned. A partial file
+    /// can hold PHI, and the caller only learns the path on success.
     pub async fn to_temp_file(&self, temp_dir: &std::path::Path) -> crate::error::Result<PathBuf> {
         let temp_file = temp_dir.join(format!("{}.dcm", self.metadata().id));
 
-        match self {
-            Self::File { path, .. } => {
-                tokio::fs::copy(path, &temp_file).await?;
-            }
+        let written = match self {
+            Self::File { path, .. } => tokio::fs::copy(path, &temp_file).await.map(|_| ()),
             _ => {
                 let bytes = self.to_part10_bytes()?;
-                tokio::fs::write(&temp_file, &bytes).await?;
+                tokio::fs::write(&temp_file, &bytes).await
             }
+        };
+        if let Err(e) = written {
+            remove_partial_file(&temp_file).await;
+            return Err(e.into());
         }
 
         Ok(temp_file)
+    }
+}
+
+/// Remove a file left by a failed write. A missing file means nothing was
+/// written. Any other removal error is logged, because the caller is already
+/// returning the write error.
+async fn remove_partial_file(path: &std::path::Path) {
+    match tokio::fs::remove_file(path).await {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+        Err(e) => tracing::warn!(
+            "Failed to remove the partial file {} after a failed write: {}",
+            path.display(),
+            e
+        ),
     }
 }
 
@@ -651,6 +672,28 @@ mod tests {
             .to_str()
             .expect("text");
         assert_eq!(name.trim(), "Test^Patient");
+    }
+
+    #[tokio::test]
+    async fn to_temp_file_leaves_no_target_when_the_copy_fails() {
+        let dir = tempfile::tempdir().expect("temp dir");
+        let dataset = DatasetStream::from_file(dir.path().join("missing-source.dcm"), false);
+        let target = dir.path().join(format!("{}.dcm", dataset.metadata().id));
+        // A partial file as an interrupted copy would leave it. A copy from a
+        // missing source fails, which is the failure this test can cause on
+        // demand.
+        std::fs::write(&target, b"partial").expect("write partial target");
+
+        dataset
+            .to_temp_file(dir.path())
+            .await
+            .expect_err("the source is missing, so the copy must fail");
+
+        assert!(
+            !target.exists(),
+            "a failed copy must not leave the target behind: {}",
+            target.display()
+        );
     }
 
     #[tokio::test]

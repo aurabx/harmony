@@ -92,6 +92,8 @@ The client IP comes from the envelope's `remote_addr` metadata (then `client_ip`
 - **DCMTK store.** If any endpoint on a port sets `use_dcmtk_store = true`, or sets `persistent_store_scp = true` (which turns `use_dcmtk_store` on by default), DCMTK `storescp` serves the whole port. It does not run this check, so no IP rule applies to any endpoint on that port.
 - **Logs.** A rejected peer is logged at `warn` with its address, the pipeline and the reason. If the check itself fails, for example because no config is loaded, the peer is rejected and the failure is logged at `error`.
 
+**C-STORE copies.** On a `dicom_scp` endpoint, the DIMSE adapter writes its copy of a C-STORE instance to disk before the pipeline runs. It removes that copy after the store. A successful store through a pipeline with no backend is the exception: it keeps the copy as the stored instance. The adapter never keeps its own copy of a denied store. Put `policies` before `dimse_to_jmix` in the middleware chain. `dimse_to_jmix` moves the instance into its staging folder, and a later denial cannot undo that.
+
 **IPv4-mapped addresses.** A dual-stack listener (`bind_address = "::"` with `IPV6_V6ONLY=0`, the default on Linux and macOS) reports an IPv4 client as an IPv4-mapped IPv6 address, such as `::ffff:10.1.2.3`. IP rules and rate limits treat that address as the plain IPv4 address `10.1.2.3`:
 
 - An `ip_allow` or `ip_deny` CIDR written in IPv4, such as `10.0.0.0/8`, matches the mapped form.
