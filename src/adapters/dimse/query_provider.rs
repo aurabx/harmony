@@ -228,7 +228,7 @@ impl PipelineQueryProvider {
 
         // Execute pipeline using PipelineExecutor
         let response_envelope =
-            PipelineExecutor::execute(request_envelope, &self.pipeline, pipeline_cfg, &config, &ctx)
+            PipelineExecutor::execute(request_envelope, &self.pipeline, pipeline_cfg, config, &ctx)
                 .await
                 .map_err(|e| {
                     DimseError::operation_failed(format!("Pipeline execution failed: {}", e))
@@ -290,7 +290,7 @@ impl PipelineQueryProvider {
 
         // Execute streaming pipeline
         let response_stream =
-            PipelineExecutor::execute_streaming(request_envelope, &self.pipeline, pipeline_cfg, &config, &ctx)
+            PipelineExecutor::execute_streaming(request_envelope, &self.pipeline, pipeline_cfg, config, &ctx)
                 .await
                 .map_err(|e| {
                     DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
@@ -380,7 +380,7 @@ impl PipelineQueryProvider {
         tracing::info!("Executing streaming pipeline for DIMSE operation: {} (single-envelope)", operation);
 
         let mut response_stream =
-            PipelineExecutor::execute_streaming(request_envelope, &self.pipeline, pipeline_cfg, &config, &ctx)
+            PipelineExecutor::execute_streaming(request_envelope, &self.pipeline, pipeline_cfg, config, &ctx)
                 .await
                 .map_err(|e| {
                     DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
