@@ -201,6 +201,11 @@ impl IpAccessRules {
         Ok(Self { allow, deny })
     }
 
+    /// True when there is no enabled `ip_allow` or `ip_deny` rule.
+    pub fn is_empty(&self) -> bool {
+        self.allow.is_empty() && self.deny.is_empty()
+    }
+
     /// The first `ip_allow` rule that `ip` matches.
     fn allowlist_match(&self, ip: &IpAddr) -> Option<&LabeledIpRule> {
         self.allow.iter().find(|r| r.compiled.matches(ip))

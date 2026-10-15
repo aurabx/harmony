@@ -86,11 +86,29 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigDiff {
             diff.adapter_restarts_required.push((*network_name).clone());
             continue;
         }
+
+        // DIMSE listeners come from endpoint and backend options, which are
+        // read only when the adapter starts. Restart when they change.
+        if crate::adapters::dimse::listener_signature(old, network_name)
+            != crate::adapters::dimse::listener_signature(new, network_name)
+        {
+            diff.adapter_restarts_required.push((*network_name).clone());
+            continue;
+        }
     }
 
     // Check for middleware changes (zero-downtime)
     if old.middleware != new.middleware {
         diff.zero_downtime_changes.push("middleware".to_string());
+    }
+
+    // Policies and rules are read by the policies middleware and the DIMSE
+    // peer check on each request or association (zero-downtime)
+    if old.policies != new.policies {
+        diff.zero_downtime_changes.push("policies".to_string());
+    }
+    if old.rules != new.rules {
+        diff.zero_downtime_changes.push("rules".to_string());
     }
 
     // Check for pipeline changes (zero-downtime)
@@ -215,5 +233,104 @@ mod tests {
         assert!(diff.requires_adapter_restart());
         assert!(diff.networks_to_add.contains(&"new_network".to_string()));
         assert!(diff.networks_to_remove.contains(&"old_network".to_string()));
+    }
+
+    /// A config with an HTTP pipeline and a DIMSE pipeline on `default`.
+    ///
+    /// `scp_options` is appended to the `dicom_scp` endpoint's options and
+    /// `policy_ips` fills the `ip_allow` rule on the DIMSE pipeline.
+    fn dimse_config(scp_options: &str, policy_ips: &str, http_prefix: &str) -> Config {
+        let toml = format!(
+            r#"
+[network.default]
+enable_wireguard = false
+interface = "wg0"
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+[pipelines.api]
+networks = ["default"]
+endpoints = ["api"]
+
+[pipelines.store]
+networks = ["default"]
+endpoints = ["store_scp"]
+middleware = ["gate"]
+
+[endpoints.api]
+service = "http"
+[endpoints.api.options]
+path_prefix = "{http_prefix}"
+
+[endpoints.store_scp]
+service = "dicom_scp"
+[endpoints.store_scp.options]
+local_aet = "STORE_SCP"
+port = 11112
+{scp_options}
+
+[middleware.gate]
+type = "policies"
+[middleware.gate.options]
+policies = ["office"]
+
+[policies.office]
+id = "office"
+rules = ["office_allow"]
+
+[rules.office_allow]
+id = "office_allow"
+type = "ip_allow"
+[rules.office_allow.options]
+ip_addresses = [{policy_ips}]
+"#
+        );
+        toml::from_str(&toml).expect("TOML parse error")
+    }
+
+    fn restarts_default(old: &Config, new: &Config) -> bool {
+        compute_diff(old, new)
+            .adapter_restarts_required
+            .contains(&"default".to_string())
+    }
+
+    /// Turning DCMTK off must restart the network, or the running storescp
+    /// keeps the port and the pipeline's IP rules never apply.
+    #[test]
+    fn dimse_listener_option_change_restarts_the_network() {
+        let old = dimse_config("use_dcmtk_store = true", "", "/api");
+        let new = dimse_config("use_dcmtk_store = false", "", "/api");
+        assert!(restarts_default(&old, &new));
+    }
+
+    #[test]
+    fn adding_a_dimse_endpoint_to_a_network_restarts_it() {
+        let mut old = dimse_config("", "", "/api");
+        old.pipelines.remove("store");
+        let new = dimse_config("", "", "/api");
+        assert!(restarts_default(&old, &new));
+    }
+
+    /// The internal SCP reads IP rules for each association, so a policy
+    /// change needs no restart.
+    #[test]
+    fn dimse_policy_change_does_not_restart_the_network() {
+        let old = dimse_config("", r#""10.0.0.0/8""#, "/api");
+        let new = dimse_config("", r#""192.168.0.0/16""#, "/api");
+        let diff = compute_diff(&old, &new);
+        assert!(!diff.requires_adapter_restart(), "{:?}", diff);
+        assert!(diff.zero_downtime_changes.contains(&"rules".to_string()));
+    }
+
+    #[test]
+    fn http_endpoint_change_does_not_restart_a_dimse_network() {
+        let old = dimse_config("", "", "/api");
+        let new = dimse_config("", "", "/api/v2");
+        let diff = compute_diff(&old, &new);
+        assert!(!diff.requires_adapter_restart(), "{:?}", diff);
+        assert!(diff
+            .zero_downtime_changes
+            .contains(&"endpoints".to_string()));
     }
 }

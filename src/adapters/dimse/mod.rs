@@ -8,7 +8,7 @@ use crate::models::protocol::Protocol;
 use async_trait::async_trait;
 use once_cell::sync::Lazy;
 use query_provider::DimseOp;
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::net::IpAddr;
 use std::sync::{Arc, Mutex};
 use tokio::task::JoinHandle;
@@ -30,10 +30,224 @@ pub struct DimseAdapter {
 }
 
 /// Collected SCP endpoint configuration before grouping.
-struct ScpEndpointConfig {
-    pipeline_name: String,
-    endpoint_name: String,
+#[derive(Debug, PartialEq)]
+pub(crate) struct ScpEndpointConfig {
+    pub(crate) pipeline_name: String,
+    pub(crate) endpoint_name: String,
+    /// The legacy `dicom`/`dicom_scu` backend this listener comes from, when
+    /// it is a persistent store SCP rather than a `dicom_scp` endpoint.
+    pub(crate) backend_name: Option<String>,
     options: HashMap<String, serde_json::Value>,
+}
+
+impl ScpEndpointConfig {
+    /// The config block that sets this listener's options, for messages.
+    pub(crate) fn config_label(&self) -> String {
+        match &self.backend_name {
+            Some(backend) => format!("backend '{}'", backend),
+            None => format!("endpoint '{}'", self.endpoint_name),
+        }
+    }
+
+    /// The option that hands this endpoint's port to DCMTK `storescp`, if any.
+    ///
+    /// An explicit `use_dcmtk_store` wins. Without it, `persistent_store_scp
+    /// = true` turns DCMTK on.
+    pub(crate) fn dcmtk_option(&self) -> Option<&'static str> {
+        match self
+            .options
+            .get("use_dcmtk_store")
+            .and_then(|v| v.as_bool())
+        {
+            Some(true) => Some("use_dcmtk_store"),
+            Some(false) => None,
+            None => self
+                .options
+                .get("persistent_store_scp")
+                .and_then(|v| v.as_bool())
+                .unwrap_or(false)
+                .then_some("persistent_store_scp"),
+        }
+    }
+}
+
+/// The endpoints served by one DIMSE listener on `(bind_addr, port)`.
+#[derive(Debug, PartialEq)]
+pub(crate) struct ListenerGroup {
+    pub(crate) bind_addr: IpAddr,
+    pub(crate) port: u16,
+    pub(crate) endpoints: Vec<ScpEndpointConfig>,
+}
+
+impl ListenerGroup {
+    /// The first endpoint that hands this listener to DCMTK `storescp`, with
+    /// the option that does it. One such endpoint decides for the whole port.
+    pub(crate) fn dcmtk_trigger(&self) -> Option<(&ScpEndpointConfig, &'static str)> {
+        self.endpoints
+            .iter()
+            .find_map(|ep| ep.dcmtk_option().map(|option| (ep, option)))
+    }
+}
+
+/// Collect the DIMSE listeners the adapter for `network_name` would start.
+///
+/// The adapter and config validation both use this, so they always agree on
+/// which endpoints share a port and whether DCMTK serves it. Groups come out
+/// in `(bind_addr, port)` order.
+pub(crate) fn listener_groups(config: &Config, network_name: &str) -> Vec<ListenerGroup> {
+    let network_config = config.network.get(network_name);
+    let mut groups: BTreeMap<(IpAddr, u16), Vec<ScpEndpointConfig>> = BTreeMap::new();
+    for ep in collect_scp_endpoints(config, network_name) {
+        let addr = DimseAdapter::resolve_bind_addr(&ep.options, network_config);
+        let port = DimseAdapter::resolve_port(&ep.options, network_config);
+        groups.entry((addr, port)).or_default().push(ep);
+    }
+    groups
+        .into_iter()
+        .map(|((bind_addr, port), endpoints)| ListenerGroup {
+            bind_addr,
+            port,
+            endpoints,
+        })
+        .collect()
+}
+
+/// Whether the adapter registry starts a DIMSE adapter for `network_name`.
+///
+/// Mirrors `AdapterRegistry::determine_required_protocols`: only a pipeline
+/// endpoint whose service needs `Protocol::Dimse` starts the adapter. A
+/// legacy persistent-SCP backend on its own does not, so it opens no
+/// listener.
+fn network_runs_dimse(config: &Config, network_name: &str) -> bool {
+    config
+        .pipelines
+        .values()
+        .filter(|p| p.networks.iter().any(|n| n == network_name))
+        .flat_map(|p| p.endpoints.iter())
+        .filter_map(|name| config.endpoints.get(name))
+        .filter_map(|ep| crate::models::services::services::resolve_service(&ep.service).ok())
+        .any(|service| service.required_protocol() == Protocol::Dimse)
+}
+
+/// The DIMSE listeners `network_name` runs under `config`, in a form that
+/// compares equal when the adapter would start the same listeners.
+///
+/// Listener settings are read once when the adapter starts, so a reload must
+/// restart the network whenever this changes. Otherwise a running storescp
+/// keeps a port the new config hands to the internal SCP, which is the one
+/// that enforces IP rules. Endpoints are sorted because their collection
+/// order follows a `HashMap`.
+pub(crate) fn listener_signature(config: &Config, network_name: &str) -> Vec<ListenerGroup> {
+    if !network_runs_dimse(config, network_name) {
+        return Vec::new();
+    }
+    let mut groups = listener_groups(config, network_name);
+    for group in &mut groups {
+        group.endpoints.sort_by(|a, b| {
+            (&a.pipeline_name, &a.endpoint_name).cmp(&(&b.pipeline_name, &b.endpoint_name))
+        });
+    }
+    groups
+}
+
+/// Every DIMSE listener the running proxy would open, across all networks
+/// that start a DIMSE adapter, in network-name order.
+pub(crate) fn all_listener_groups(config: &Config) -> Vec<ListenerGroup> {
+    let mut network_names: Vec<&String> = config.network.keys().collect();
+    network_names.sort();
+    network_names
+        .into_iter()
+        .filter(|network| network_runs_dimse(config, network))
+        .flat_map(|network| listener_groups(config, network))
+        .collect()
+}
+
+/// Why the DCMTK listener `dcmtk` cannot run, if it cannot.
+///
+/// DCMTK `storescp` writes incoming files without running a pipeline or the
+/// association-time IP check. It binds every interface, so it takes its port
+/// for every listener on that port, in any network. A pipeline with
+/// `ip_allow` or `ip_deny` rules on any of them would admit every peer. A
+/// policies middleware that cannot be read counts as a conflict, so the check
+/// fails closed. Returns `None` when `dcmtk` is not served by DCMTK.
+pub(crate) fn dcmtk_ip_rule_conflict(config: &Config, dcmtk: &ListenerGroup) -> Option<String> {
+    let (trigger, option) = dcmtk.dcmtk_trigger()?;
+    let groups = all_listener_groups(config);
+    let same_port = groups
+        .iter()
+        .filter(|g| g.port == dcmtk.port)
+        .flat_map(|g| g.endpoints.iter());
+    for ep in same_port {
+        let problem = match query_provider::pipeline_has_ip_rules(config, &ep.pipeline_name) {
+            Ok(false) => continue,
+            Ok(true) => "has ip_allow or ip_deny rules".to_string(),
+            Err(e) => format!("has a policies middleware that cannot be checked ({})", e),
+        };
+        return Some(format!(
+            "pipeline '{}' ({}) {}, but DIMSE port {} is served by DCMTK storescp, \
+             which cannot enforce IP rules. '{}' on {} turns DCMTK on. \
+             Set use_dcmtk_store = false there, or remove the IP rules",
+            ep.pipeline_name,
+            ep.config_label(),
+            problem,
+            dcmtk.port,
+            option,
+            trigger.config_label()
+        ));
+    }
+    None
+}
+
+/// Every `dicom_scp` endpoint and legacy persistent SCP backend on the
+/// pipelines that use `network_name`.
+fn collect_scp_endpoints(config: &Config, network_name: &str) -> Vec<ScpEndpointConfig> {
+    let mut scp_configs: Vec<ScpEndpointConfig> = Vec::new();
+
+    for (pipeline_name, pipeline_cfg) in &config.pipelines {
+        if !pipeline_cfg.networks.iter().any(|n| n == network_name) {
+            continue;
+        }
+
+        // Collect dicom_scp endpoints
+        for endpoint_name in &pipeline_cfg.endpoints {
+            if let Some(endpoint) = config.endpoints.get(endpoint_name) {
+                if endpoint.service == "dicom_scp" {
+                    scp_configs.push(ScpEndpointConfig {
+                        pipeline_name: pipeline_name.clone(),
+                        endpoint_name: endpoint_name.clone(),
+                        backend_name: None,
+                        options: endpoint.options.clone().unwrap_or_default(),
+                    });
+                }
+            }
+        }
+
+        // Also check for persistent SCP backends (legacy support)
+        for backend_name in &pipeline_cfg.backends {
+            if let Some(backend) = config.backends.get(backend_name) {
+                if backend.service == "dicom" || backend.service == "dicom_scu" {
+                    if let Some(options) = &backend.options {
+                        let needs_persistent = options
+                            .get("persistent_store_scp")
+                            .and_then(|v| v.as_bool())
+                            .unwrap_or(false)
+                            || (options.contains_key("host") && options.contains_key("port"));
+
+                        if needs_persistent && options.contains_key("incoming_store_port") {
+                            scp_configs.push(ScpEndpointConfig {
+                                pipeline_name: pipeline_name.clone(),
+                                endpoint_name: format!("persistent_{}", backend_name),
+                                backend_name: Some(backend_name.clone()),
+                                options: options.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    scp_configs
 }
 
 impl DimseAdapter {
@@ -335,55 +549,9 @@ impl ProtocolAdapter for DimseAdapter {
 
         tracing::debug!("Starting DIMSE adapter for network '{}'", network_name);
 
-        let network_config = config.network.get(&network_name).cloned();
+        let groups = listener_groups(&config, &network_name);
 
-        // Collect all DIMSE-related endpoints and backends for this network
-        let mut scp_configs: Vec<ScpEndpointConfig> = Vec::new();
-
-        for (pipeline_name, pipeline_cfg) in &config.pipelines {
-            if !pipeline_cfg.networks.contains(&network_name) {
-                continue;
-            }
-
-            // Collect dicom_scp endpoints
-            for endpoint_name in &pipeline_cfg.endpoints {
-                if let Some(endpoint) = config.endpoints.get(endpoint_name) {
-                    if endpoint.service == "dicom_scp" {
-                        scp_configs.push(ScpEndpointConfig {
-                            pipeline_name: pipeline_name.clone(),
-                            endpoint_name: endpoint_name.clone(),
-                            options: endpoint.options.clone().unwrap_or_default(),
-                        });
-                    }
-                }
-            }
-
-            // Also check for persistent SCP backends (legacy support)
-            for backend_name in &pipeline_cfg.backends {
-                if let Some(backend) = config.backends.get(backend_name) {
-                    if backend.service == "dicom" || backend.service == "dicom_scu" {
-                        if let Some(options) = &backend.options {
-                            let needs_persistent = options
-                                .get("persistent_store_scp")
-                                .and_then(|v| v.as_bool())
-                                .unwrap_or(false)
-                                || (options.contains_key("host")
-                                    && options.contains_key("port"));
-
-                            if needs_persistent && options.contains_key("incoming_store_port") {
-                                scp_configs.push(ScpEndpointConfig {
-                                    pipeline_name: pipeline_name.clone(),
-                                    endpoint_name: format!("persistent_{}", backend_name),
-                                    options: options.clone(),
-                                });
-                            }
-                        }
-                    }
-                }
-            }
-        }
-
-        if scp_configs.is_empty() {
+        if groups.is_empty() {
             tracing::debug!(
                 "No DIMSE endpoints or persistent SCPs found for network '{}'",
                 network_name
@@ -394,8 +562,9 @@ impl ProtocolAdapter for DimseAdapter {
         }
 
         // Log which DICOM endpoints will be served
-        let endpoint_names: Vec<&str> = scp_configs
+        let endpoint_names: Vec<&str> = groups
             .iter()
+            .flat_map(|g| g.endpoints.iter())
             .map(|c| c.endpoint_name.as_str())
             .collect();
         tracing::info!(
@@ -405,24 +574,15 @@ impl ProtocolAdapter for DimseAdapter {
             endpoint_names.join(", ")
         );
 
-        // Group endpoints by (bind_addr, port) so we start one listener per
-        // unique listen address.
-        let mut groups: HashMap<(IpAddr, u16), Vec<usize>> = HashMap::new();
-        for (idx, ep) in scp_configs.iter().enumerate() {
-            let addr = Self::resolve_bind_addr(&ep.options, network_config.as_ref());
-            let port = Self::resolve_port(&ep.options, network_config.as_ref());
-            groups.entry((addr, port)).or_default().push(idx);
-        }
-
         // Spawn task to manage all SCP listeners for this network
         let shutdown_clone = shutdown.clone();
         let handle = tokio::spawn(async move {
             let mut scp_handles = Vec::new();
 
-            for ((bind_addr, port), indices) in &groups {
-                // Collect references to the endpoints in this group
-                let group_endpoints: Vec<&ScpEndpointConfig> =
-                    indices.iter().map(|&i| &scp_configs[i]).collect();
+            for group in &groups {
+                let bind_addr = &group.bind_addr;
+                let port = &group.port;
+                let group_endpoints: Vec<&ScpEndpointConfig> = group.endpoints.iter().collect();
 
                 let group_names: Vec<String> = group_endpoints
                     .iter()
@@ -452,18 +612,23 @@ impl ProtocolAdapter for DimseAdapter {
                     })
                     .collect();
 
-                // Check if any endpoint in this group wants DCMTK storescp
-                let use_dcmtk = group_endpoints.iter().any(|ep| {
-                    let is_persistent = ep
-                        .options
-                        .get("persistent_store_scp")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(false);
-                    ep.options
-                        .get("use_dcmtk_store")
-                        .and_then(|v| v.as_bool())
-                        .unwrap_or(is_persistent)
-                });
+                let use_dcmtk = group.dcmtk_trigger().is_some();
+
+                // storescp runs no pipeline and no admission check, so it
+                // cannot enforce IP rules. Config validation rejects this.
+                // Refusing here keeps the port closed for a config that
+                // changed after validation, such as one a plugin edited.
+                if use_dcmtk {
+                    if let Some(reason) = dcmtk_ip_rule_conflict(&config, group) {
+                        tracing::error!(
+                            "Refusing to start DCMTK storescp on {}:{}: {}",
+                            bind_addr,
+                            port,
+                            reason
+                        );
+                        continue;
+                    }
+                }
 
                 let key = format!("{}:{}", bind_addr, port);
                 if !Self::register_scp(key.clone()) {
@@ -533,6 +698,30 @@ impl ProtocolAdapter for DimseAdapter {
     }
 }
 
+/// Wait for `child` to exit, or kill it when `shutdown` fires.
+///
+/// storescp knows nothing of Harmony's shutdown. Without this it would
+/// outlive its adapter and keep the port, admitting every peer under a
+/// config that no longer asks for DCMTK. Returns only once the process has
+/// exited and been reaped, so the port is free when the caller unregisters
+/// it and a restarted adapter can bind it.
+async fn supervise_child(
+    mut child: tokio::process::Child,
+    shutdown: CancellationToken,
+    name: &str,
+) {
+    tokio::select! {
+        status = child.wait() => match status {
+            Ok(status) => tracing::info!("{} exited: {}", name, status),
+            Err(e) => tracing::error!("{} exited with error: {}", name, e),
+        },
+        _ = shutdown.cancelled() => match child.kill().await {
+            Ok(()) => tracing::info!("{} stopped on shutdown", name),
+            Err(e) => tracing::error!("Failed to stop {} on shutdown: {}", name, e),
+        },
+    }
+}
+
 /// Build a multiplexing query provider from the given operation routes.
 fn build_provider(
     routes: Vec<(String, String, Vec<DimseOp>)>,
@@ -583,14 +772,12 @@ impl DimseAdapter {
                 storage_dir.display()
             );
 
+            // Backstop: if this task is aborted rather than shut down, the
+            // dropped Child still takes storescp with it.
+            cmd.kill_on_drop(true);
+
             match cmd.spawn() {
-                Ok(mut child) => {
-                    if let Err(e) = child.wait().await {
-                        tracing::error!("storescp exited with error: {}", e);
-                    } else {
-                        tracing::info!("storescp exited");
-                    }
-                }
+                Ok(child) => supervise_child(child, shutdown, "storescp").await,
                 Err(e) => {
                     tracing::error!(
                         "Failed to spawn storescp: {} -- falling back to internal SCP",
@@ -803,6 +990,7 @@ mod tests {
         let ep = ScpEndpointConfig {
             pipeline_name: "p1".into(),
             endpoint_name: "e1".into(),
+            backend_name: None,
             options: {
                 let mut m = HashMap::new();
                 m.insert("local_aet".into(), serde_json::json!("MY_SCP"));
@@ -827,6 +1015,7 @@ mod tests {
         let ep1 = ScpEndpointConfig {
             pipeline_name: "p1".into(),
             endpoint_name: "e1".into(),
+            backend_name: None,
             options: {
                 let mut m = HashMap::new();
                 m.insert("local_aet".into(), serde_json::json!("SCP"));
@@ -838,6 +1027,7 @@ mod tests {
         let ep2 = ScpEndpointConfig {
             pipeline_name: "p2".into(),
             endpoint_name: "e2".into(),
+            backend_name: None,
             options: {
                 let mut m = HashMap::new();
                 m.insert("local_aet".into(), serde_json::json!("SCP"));
@@ -855,6 +1045,95 @@ mod tests {
         assert!(!cfg.enable_get, "get not enabled by either");
     }
 
+    /// Whether a process with `pid` still exists.
+    #[cfg(unix)]
+    fn process_exists(pid: u32) -> bool {
+        std::process::Command::new("kill")
+            .arg("-0")
+            .arg(pid.to_string())
+            .stderr(std::process::Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false)
+    }
+
+    /// A storescp left running after shutdown would keep its port and admit
+    /// every peer, so shutdown must kill and reap it.
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn supervise_child_kills_the_process_on_shutdown() {
+        let child = tokio::process::Command::new("sleep")
+            .arg("30")
+            .spawn()
+            .expect("spawn sleep");
+        let pid = child.id().expect("child pid");
+        let shutdown = CancellationToken::new();
+        let task = tokio::spawn(supervise_child(child, shutdown.clone(), "sleep"));
+
+        shutdown.cancel();
+        tokio::time::timeout(std::time::Duration::from_secs(5), task)
+            .await
+            .expect("supervise_child should return promptly after shutdown")
+            .expect("task should not panic");
+
+        assert!(!process_exists(pid), "process {} survived shutdown", pid);
+    }
+
+    #[cfg(unix)]
+    #[tokio::test]
+    async fn supervise_child_returns_when_the_process_exits() {
+        let child = tokio::process::Command::new("true")
+            .spawn()
+            .expect("spawn true");
+        tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            supervise_child(child, CancellationToken::new(), "true"),
+        )
+        .await
+        .expect("supervise_child should return when the process exits");
+    }
+
+    fn endpoint_with_options(options: serde_json::Value) -> ScpEndpointConfig {
+        ScpEndpointConfig {
+            pipeline_name: "p".into(),
+            endpoint_name: "e".into(),
+            backend_name: None,
+            options: serde_json::from_value(options).expect("options object"),
+        }
+    }
+
+    #[test]
+    fn dcmtk_option_follows_use_dcmtk_store_then_persistent_store_scp() {
+        let cases = [
+            (serde_json::json!({}), None),
+            (
+                serde_json::json!({"use_dcmtk_store": true}),
+                Some("use_dcmtk_store"),
+            ),
+            (
+                serde_json::json!({"persistent_store_scp": true}),
+                Some("persistent_store_scp"),
+            ),
+            (
+                serde_json::json!({"persistent_store_scp": true, "use_dcmtk_store": false}),
+                None,
+            ),
+            (
+                serde_json::json!({"persistent_store_scp": false, "use_dcmtk_store": true}),
+                Some("use_dcmtk_store"),
+            ),
+            // A non-bool use_dcmtk_store is ignored, as the adapter always did.
+            (
+                serde_json::json!({"persistent_store_scp": true, "use_dcmtk_store": "no"}),
+                Some("persistent_store_scp"),
+            ),
+        ];
+        for (options, expected) in cases {
+            let ep = endpoint_with_options(options.clone());
+            assert_eq!(ep.dcmtk_option(), expected, "options: {}", options);
+        }
+    }
+
     fn endpoint_with_limit(name: &str, limit: Option<u64>) -> ScpEndpointConfig {
         let mut options = HashMap::new();
         options.insert("local_aet".into(), serde_json::json!("SCP"));
@@ -864,6 +1143,7 @@ mod tests {
         ScpEndpointConfig {
             pipeline_name: name.into(),
             endpoint_name: name.into(),
+            backend_name: None,
             options,
         }
     }

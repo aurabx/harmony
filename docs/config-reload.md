@@ -1,6 +1,6 @@
 # Config Hot-Reload Strategy
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2026-10-15
 
 ## Overview
 
@@ -17,7 +17,7 @@ These changes are picked up immediately on the next request with no service inte
 
 - **Middleware configuration**
   - Transform specs
-  - Auth rules and policies
+  - Auth rules and policies, including the top-level `[policies]` and `[rules]` tables
   - Custom middleware options
   
 - **Route definitions**
@@ -56,6 +56,12 @@ These changes require restarting specific protocol adapters (brief interruption 
 - **WireGuard configuration**
   - Interface names
   - Peer settings
+
+- **DIMSE listeners**
+  - Any change to the `dicom_scp` endpoints or persistent-SCP backends a network serves, or to their options (port, bind address, AE title, enabled operations, `use_dcmtk_store`, `persistent_store_scp`)
+  - Adding the first or removing the last `dicom_scp` endpoint on a network
+  - This includes every option of a legacy `dicom_scu` backend with `persistent_store_scp` on a network that has a `dicom_scp` endpoint, even `host` or `aet`. Such a change restarts every adapter on that network.
+  - The listener reads these options only when it starts. Within a network, the restart stops the old listener, including a DCMTK `storescp` process, before the new one binds the port. Networks restart in no fixed order, so a port moving from one network to another may fail to bind until the other network has restarted.
 
 ## Implementation Architecture
 
