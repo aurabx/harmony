@@ -252,13 +252,21 @@ fn missing_authentication_reference_fails_validation() {
 
     let config: Config = toml::from_str(toml).expect("TOML parse should succeed");
     
-    // Config validation should succeed (it's a reference check, not a parse error)
-    // The error happens during middleware building
-    if let Err(e) = config.validate() {
-        panic!("Validation failed (should pass for missing auth ref): {:?}", e);
+    // Validation resolves each middleware instance, so the dangling
+    // reference is rejected at load.
+    match config.validate() {
+        Err(harmony::config::config::ConfigError::InvalidMiddleware { name, reason }) => {
+            assert_eq!(name, "jwt_middleware");
+            assert!(
+                reason.contains("unknown authentication 'nonexistent'"),
+                "unexpected reason: {}",
+                reason
+            );
+        }
+        other => panic!("expected InvalidMiddleware, got {:?}", other),
     }
-    
-    // Try to build middleware - this should fail
+
+    // Building the middleware directly fails the same way
     let result = harmony::models::middleware::middleware::build_middleware_instances_for_pipeline(
         &["jwt_middleware".to_string()],
         &config,

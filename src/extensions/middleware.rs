@@ -100,6 +100,21 @@ pub trait MiddlewareFactory: Send + Sync {
         // Default validation: try to create instance
         self.create(options, None).map(|_| ())
     }
+
+    /// Checks that a middleware instance can be built from `options` and `config`.
+    ///
+    /// Called by `Config::validate()` at load and reload, so a bad instance is
+    /// rejected before it serves traffic. The default builds the middleware
+    /// exactly as request handling does and discards it. Override this when
+    /// `create()` has side effects (spawning tasks, global registries) or
+    /// panics, and run only the parsing part.
+    fn validate_config(
+        &self,
+        options: &HashMap<String, Value>,
+        config: &Config,
+    ) -> Result<(), String> {
+        self.create(options, Some(config)).map(|_| ())
+    }
 }
 
 #[cfg(test)]

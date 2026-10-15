@@ -363,6 +363,15 @@ pub fn clear_rate_limit_registry_for_tests() {
     registry.clear();
 }
 
+/// Enabled policies with their IP and path rules pre-compiled.
+/// Output of `PoliciesMiddleware::compile`, before rate-limit state is attached.
+struct CompiledPolicies {
+    policies: Vec<Policy>,
+    compiled_ip_rules: HashMap<usize, CompiledIpRule>,
+    ip_access: IpAccessRules,
+    compiled_path_rules: HashMap<usize, CompiledPathRule>,
+}
+
 /// Policies middleware implementation
 pub struct PoliciesMiddleware {
     policies: Vec<Policy>,
@@ -395,6 +404,40 @@ impl PoliciesMiddleware {
     /// The middleware factory calls this with the middleware instance name from
     /// configuration so rebuilds across requests keep the running counts.
     pub fn with_instance_key(config: PoliciesConfig, instance_key: &str) -> Result<Self, String> {
+        let compiled = Self::compile(config)?;
+
+        tracing::info!(
+            "PoliciesMiddleware initialized with {} enabled policies (instance_key={})",
+            compiled.policies.len(),
+            instance_key
+        );
+
+        // Share bucket state across all PoliciesMiddleware instances built with
+        // the same instance_key. The registry starts the cleanup task exactly
+        // once per key.
+        let rate_limit_state = get_or_init_rate_limit_state(instance_key);
+
+        Ok(Self {
+            policies: compiled.policies,
+            compiled_ip_rules: compiled.compiled_ip_rules,
+            ip_access: compiled.ip_access,
+            compiled_path_rules: compiled.compiled_path_rules,
+            rate_limit_state,
+        })
+    }
+
+    /// Checks that `config` compiles into a working middleware.
+    ///
+    /// Runs the same checks as `with_instance_key` but does not touch the
+    /// rate-limit registry or start a cleanup task, so it is safe to call from
+    /// config validation, with or without a Tokio runtime.
+    pub fn validate_config(config: PoliciesConfig) -> Result<(), String> {
+        Self::compile(config).map(|_| ())
+    }
+
+    /// Filters to enabled policies and pre-compiles their IP and path rules.
+    /// Pure: no shared state, no tasks.
+    fn compile(config: PoliciesConfig) -> Result<CompiledPolicies, String> {
         if config.policies.is_empty() {
             return Err("Policies middleware requires at least one policy".to_string());
         }
@@ -516,23 +559,11 @@ impl PoliciesMiddleware {
             }
         }
 
-        tracing::info!(
-            "PoliciesMiddleware initialized with {} enabled policies (instance_key={})",
-            enabled_policies.len(),
-            instance_key
-        );
-
-        // Share bucket state across all PoliciesMiddleware instances built with
-        // the same instance_key. The registry starts the cleanup task exactly
-        // once per key.
-        let rate_limit_state = get_or_init_rate_limit_state(instance_key);
-
-        Ok(Self {
+        Ok(CompiledPolicies {
             policies: enabled_policies,
             compiled_ip_rules,
             ip_access,
             compiled_path_rules,
-            rate_limit_state,
         })
     }
 

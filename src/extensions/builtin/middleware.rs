@@ -31,7 +31,7 @@ impl MiddlewareFactory for JwtAuthFactory {
     ) -> Result<Box<dyn Middleware>, String> {
         let config = crate::models::middleware::types::jwtauth::parse_config(options)?;
         Ok(Box::new(
-            crate::models::middleware::types::jwtauth::JwtAuthMiddleware::new(config),
+            crate::models::middleware::types::jwtauth::JwtAuthMiddleware::try_new(config)?,
         ))
     }
 }
@@ -173,6 +173,16 @@ impl MiddlewareFactory for DimseToJmixFactory {
         Ok(Box::new(
             crate::models::middleware::types::dimse_to_jmix::DimseToJmixMiddleware::new(cfg),
         ))
+    }
+
+    /// Parses only. `DimseToJmixMiddleware::new` starts the process-wide sweep
+    /// task, which validation must not do.
+    fn validate_config(
+        &self,
+        options: &HashMap<String, Value>,
+        _config: &Config,
+    ) -> Result<(), String> {
+        crate::models::middleware::types::dimse_to_jmix::parse_config(options).map(|_| ())
     }
 }
 
@@ -395,6 +405,24 @@ impl MiddlewareFactory for PoliciesFactory {
                 instance_key,
             )?,
         ))
+    }
+
+    /// Resolves and compiles the policies without attaching rate-limit state.
+    /// `create()` registers shared state and spawns a cleanup task, which
+    /// validation must not do.
+    fn validate_config(
+        &self,
+        options: &HashMap<String, Value>,
+        config: &Config,
+    ) -> Result<(), String> {
+        let parsed_config = crate::models::middleware::types::policies::parse_config(
+            options,
+            &config.policies,
+            &config.rules,
+        )?;
+        crate::models::middleware::types::policies::PoliciesMiddleware::validate_config(
+            parsed_config,
+        )
     }
 }
 

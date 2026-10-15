@@ -746,7 +746,8 @@ ip_addresses = ["192.168.0.0/16"]
 }
 
 /// A policies middleware whose rules cannot be read might hold IP rules,
-/// so the check fails closed.
+/// so the config is rejected. Middleware validation catches it before the
+/// DCMTK check, which stays as a fail-closed backstop.
 #[test]
 fn dcmtk_store_with_an_unreadable_policies_middleware_is_rejected() {
     let toml = format!(
@@ -764,11 +765,14 @@ rules = ["anyone"]
         dcmtk_config("use_dcmtk_store = true", r#"["broken"]"#)
     );
     match load_resolved_config(&toml) {
-        Err(ConfigError::InvalidEndpoint { reason, .. }) => assert!(
-            reason.contains("has a policies middleware that cannot be checked"),
-            "unexpected reason: {}",
-            reason
-        ),
+        Err(ConfigError::InvalidMiddleware { name, reason }) => {
+            assert_eq!(name, "broken");
+            assert!(
+                reason.contains("requires at least one policy"),
+                "unexpected reason: {}",
+                reason
+            );
+        }
         other => panic!(
             "expected a fail-closed rejection, got {:?}",
             other.map(|_| "Ok(config)")

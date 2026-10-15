@@ -1,5 +1,6 @@
 use crate::config::config::{Config, ConfigError};
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
+use crate::models::middleware::instance::MiddlewareInstance;
 use crate::utils::Error;
 use async_trait::async_trait;
 use once_cell::sync::OnceCell;
@@ -86,6 +87,94 @@ pub fn resolve_middleware_type_with_config(
     reg.resolve_middleware(middleware_type, options, config)
 }
 
+/// Builds the options a middleware factory receives for instance `name`.
+///
+/// Merges the referenced authentication definition into the instance options
+/// and injects `authentication_def` and `__instance_name`. Request handling
+/// and config validation both call this, so a factory sees the same options
+/// in both places.
+pub fn resolve_instance_options(
+    name: &str,
+    instance: &MiddlewareInstance,
+    config: &Config,
+) -> Result<HashMap<String, Value>, String> {
+    let mut resolved_options = instance.options.clone();
+    if let Some(auth_ref) = &instance.authentication {
+        let auth_def = config.authentications.get(auth_ref).ok_or_else(|| {
+            format!(
+                "Middleware '{}' references unknown authentication '{}'",
+                name, auth_ref
+            )
+        })?;
+        // Merge authentication options into middleware options (legacy behavior)
+        for (key, value) in &auth_def.options {
+            resolved_options.insert(key.clone(), value.clone());
+        }
+        // Inject full authentication definition so helpers can apply headers
+        resolved_options.insert(
+            "authentication_def".to_string(),
+            serde_json::to_value(auth_def)
+                .map_err(|e| format!("Failed to serialize auth def: {}", e))?,
+        );
+    }
+
+    // Pass instance name for metadata lookup (webhook.<instance_name>)
+    resolved_options.insert("__instance_name".to_string(), serde_json::json!(name));
+    Ok(resolved_options)
+}
+
+/// Checks that middleware instance `name` can be built from `config`.
+pub fn validate_middleware_instance(
+    name: &str,
+    instance: &MiddlewareInstance,
+    config: &Config,
+) -> Result<(), String> {
+    let options = resolve_instance_options(name, instance, config)?;
+    validate_middleware_options(name, &instance.middleware_type, &options, config)
+}
+
+/// Checks a pipeline middleware name that has no `[middleware.<name>]` block.
+///
+/// `build_middleware_instances_for_pipeline` treats such a name as a type
+/// and builds it with empty options, so this validates exactly that.
+pub fn validate_middleware_type_reference(name: &str, config: &Config) -> Result<(), String> {
+    validate_middleware_options(name, name, &HashMap::new(), config)
+}
+
+/// Runs the registered validator for `middleware_type` against `options`.
+///
+/// Factories use `MiddlewareFactory::validate_config`, which runs the same
+/// option resolution as request handling without side effects. Auth
+/// providers use `AuthProvider::validate_config`. Returns `Ok` when nothing
+/// is registered for the type: custom factories and providers are registered
+/// by `HarmonyBuilder::run` after the first config load, and unknown built-in
+/// types are rejected separately by `Config::validate_middleware_types`.
+fn validate_middleware_options(
+    name: &str,
+    middleware_type: &str,
+    options: &HashMap<String, Value>,
+    config: &Config,
+) -> Result<(), String> {
+    crate::extensions::registry::initialize_builtin_factories_sync();
+    let registry = crate::extensions::get_registry();
+    let reg = registry
+        .read()
+        .map_err(|e| format!("Failed to acquire read lock on registry: {}", e))?;
+
+    if let Some(factory) = reg.find_middleware_factory(middleware_type) {
+        factory.validate_config(options, config)
+    } else if let Some(provider) = reg.find_auth_provider(middleware_type) {
+        provider.validate_config(options)
+    } else {
+        tracing::debug!(
+            "Skipping option validation for middleware '{}': nothing registered for type '{}'",
+            name,
+            middleware_type
+        );
+        Ok(())
+    }
+}
+
 /// Build middleware instances for a pipeline from configuration
 /// Returns a vector of constructed middleware objects in the order of pipeline names
 pub fn build_middleware_instances_for_pipeline(
@@ -97,29 +186,7 @@ pub fn build_middleware_instances_for_pipeline(
 
     for name in names {
         if let Some(middleware_instance) = config.middleware.get(name) {
-            // Resolve authentication reference if present
-            let mut resolved_options = middleware_instance.options.clone();
-            if let Some(auth_ref) = &middleware_instance.authentication {
-                if let Some(auth_def) = config.authentications.get(auth_ref) {
-                    // Merge authentication options into middleware options (legacy behavior)
-                    for (key, value) in &auth_def.options {
-                        resolved_options.insert(key.clone(), value.clone());
-                    }
-                    // Inject full authentication definition so helpers can apply headers
-                    resolved_options.insert(
-                        "authentication_def".to_string(),
-                        serde_json::to_value(auth_def).map_err(|e| format!("Failed to serialize auth def: {}", e))?,
-                    );
-                } else {
-                    return Err(format!(
-                        "Middleware '{}' references unknown authentication '{}'",
-                        name, auth_ref
-                    ));
-                }
-            }
-
-            // Pass instance name for metadata lookup (webhook.<instance_name>)
-            resolved_options.insert("__instance_name".to_string(), serde_json::json!(name));
+            let resolved_options = resolve_instance_options(name, middleware_instance, config)?;
 
             // Use new method that passes Config context for policies middleware
             let middleware = resolve_middleware_type_with_config(

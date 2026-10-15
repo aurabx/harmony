@@ -157,8 +157,20 @@ pub trait MiddlewareFactory: Send + Sync {
     fn validate(&self, options: &HashMap<String, Value>) -> Result<(), String> {
         self.create(options, None).map(|_| ())
     }
+
+    /// Called by config validation at load and reload for every
+    /// middleware instance of this type (default: builds and discards it)
+    fn validate_config(
+        &self,
+        options: &HashMap<String, Value>,
+        config: &Config,
+    ) -> Result<(), String> {
+        self.create(options, Some(config)).map(|_| ())
+    }
 }
 ```
+
+Override `validate_config` when `create()` has side effects, such as spawning tasks or writing to global state, or when it can panic. Run only the parsing part. Factories registered through `HarmonyBuilder` are added after the first config load, so their instances are checked on reload, not at startup.
 
 #### Example: Rate Limiting Middleware
 
