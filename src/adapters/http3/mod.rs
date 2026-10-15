@@ -22,6 +22,10 @@ use tokio_util::sync::CancellationToken;
 /// the close instead of waiting out their idle timeout.
 const HTTP3_CLOSE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
 
+/// How long a starting adapter keeps retrying a bind that fails because the
+/// UDP port is still held by a previous endpoint that is closing.
+const HTTP3_BIND_RETRY_WINDOW: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// HTTP/3 (QUIC) Protocol Adapter
 ///
 /// This adapter will host a QUIC + HTTP/3 server for a given network. It uses
@@ -102,6 +106,50 @@ impl Http3Adapter {
         Ok(server_config)
     }
 
+    /// Binds the QUIC endpoint, retrying while the port is still in use.
+    ///
+    /// A closing QUIC connection stays in quinn's endpoint for three probe
+    /// timeouts, which grow with the peer's RTT and cannot be cut short. On a
+    /// restart the previous endpoint can therefore still hold the UDP port.
+    /// Returns None if binding fails for another reason, the retry window
+    /// passes, or shutdown is requested.
+    async fn bind_endpoint(
+        &self,
+        server_config: ServerConfig,
+        shutdown: &CancellationToken,
+    ) -> Option<Endpoint> {
+        let give_up_at = tokio::time::Instant::now() + HTTP3_BIND_RETRY_WINDOW;
+        let mut delay = std::time::Duration::from_millis(50);
+        loop {
+            let error = match Endpoint::server(server_config.clone(), self.bind_addr) {
+                Ok(endpoint) => return Some(endpoint),
+                Err(e) => e,
+            };
+            let retry = error.kind() == std::io::ErrorKind::AddrInUse
+                && tokio::time::Instant::now() + delay < give_up_at;
+            if !retry {
+                tracing::error!(
+                    "Failed to bind HTTP/3 endpoint for network '{}' on {}: {}",
+                    self.network_name,
+                    self.bind_addr,
+                    error
+                );
+                return None;
+            }
+            tracing::debug!(
+                "HTTP/3 port {} for network '{}' still in use; retrying in {:?}",
+                self.bind_addr,
+                self.network_name,
+                delay
+            );
+            tokio::select! {
+                _ = shutdown.cancelled() => return None,
+                _ = tokio::time::sleep(delay) => {}
+            }
+            delay = (delay * 2).min(std::time::Duration::from_secs(1));
+        }
+    }
+
     async fn run_server(self, config: Arc<Config>, shutdown: CancellationToken) {
         let server_config = match self.build_server_config() {
             Ok(cfg) => cfg,
@@ -115,17 +163,8 @@ impl Http3Adapter {
             }
         };
 
-        let endpoint = match Endpoint::server(server_config, self.bind_addr) {
-            Ok(ep) => ep,
-            Err(e) => {
-                tracing::error!(
-                    "Failed to bind HTTP/3 endpoint for network '{}' on {}: {}",
-                    self.network_name,
-                    self.bind_addr,
-                    e
-                );
-                return;
-            }
+        let Some(endpoint) = self.bind_endpoint(server_config, &shutdown).await else {
+            return;
         };
 
         tracing::info!(
@@ -134,18 +173,24 @@ impl Http3Adapter {
             self.bind_addr
         );
 
+        // Connection tasks are tracked so shutdown can end them. Each holds a
+        // quinn Connection, which keeps the UDP socket open until dropped.
+        let mut connections = tokio::task::JoinSet::new();
+
         loop {
             tokio::select! {
                 _ = shutdown.cancelled() => {
                     tracing::info!("HTTP/3 adapter for network '{}' shutting down", self.network_name);
                     break;
                 }
+                // Reap finished connection tasks so the set does not grow.
+                Some(_) = connections.join_next(), if !connections.is_empty() => {}
                 incoming = endpoint.accept() => {
                     match incoming {
                         Some(incoming_conn) => {
                             let config = config.clone();
                             let network_name = self.network_name.clone();
-                            tokio::spawn(async move {
+                            connections.spawn(async move {
                                 if let Err(e) = super::http3::handle_connection(incoming_conn, config, network_name).await {
                                     tracing::warn!("HTTP/3 connection error: {}", e);
                                 }
@@ -160,12 +205,14 @@ impl Http3Adapter {
             }
         }
 
-        // Stopping the accept loop does not end open connections: quinn keeps
-        // the endpoint and its UDP socket alive while any connection is open,
-        // so they would keep serving (with the old TLS config after a cert
-        // rotation) and block a restart from binding the port. Close them,
-        // then give peers a short time to receive the close.
+        // Stopping the accept loop does not end open connections. quinn keeps
+        // the endpoint and its UDP socket alive while any connection is open
+        // or any Connection handle exists. Open connections would keep serving
+        // with the old TLS config after a cert rotation. Close them all, end
+        // the tasks holding handles (a closed connection cannot answer a
+        // request anyway), then give peers a short time to receive the close.
         endpoint.close(0u32.into(), b"server shutting down");
+        connections.shutdown().await;
         if tokio::time::timeout(HTTP3_CLOSE_DRAIN_TIMEOUT, endpoint.wait_idle())
             .await
             .is_err()
@@ -630,5 +677,43 @@ mod shutdown_tests {
             .expect("connection still open after adapter shutdown");
 
         std::net::UdpSocket::bind(bind_addr).expect("UDP port still bound after shutdown");
+    }
+
+    /// On a restart the previous endpoint may still hold the UDP port while
+    /// its connections finish closing. The new adapter must wait for the port
+    /// instead of giving up, or HTTP/3 stays down until the next reload.
+    #[tokio::test]
+    async fn start_waits_for_a_port_still_held_by_a_closing_endpoint() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let dir = tempfile::TempDir::new().unwrap();
+        let (cert_path, key_path, cert_pem) = write_test_cert(&dir);
+        let holder = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        let bind_addr = holder.local_addr().unwrap();
+
+        let adapter = Http3Adapter::new("test".to_string(), bind_addr, cert_path, key_path);
+        let shutdown = CancellationToken::new();
+        let server = adapter
+            .start(Arc::new(Config::default()), shutdown.clone())
+            .await
+            .unwrap();
+
+        tokio::time::sleep(Duration::from_millis(300)).await;
+        drop(holder);
+
+        let client = client_endpoint(&cert_pem);
+        let connection = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.connect(bind_addr, "localhost").unwrap(),
+        )
+        .await
+        .expect("adapter never bound the port after it was released")
+        .expect("handshake failed");
+        connection.close(0u32.into(), b"done");
+
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("adapter task did not finish")
+            .unwrap();
     }
 }

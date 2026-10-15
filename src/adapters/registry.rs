@@ -228,24 +228,33 @@ impl AdapterRegistry {
         let Some(handles) = self.adapters.write().await.remove(network_name) else {
             return Ok(());
         };
-
-        tracing::info!("⏳ Stopping adapters for network '{}'", network_name);
-
-        for handle in &handles {
-            handle.shutdown_token.cancel();
-        }
-
-        let deadline = tokio::time::Instant::now() + self.shutdown_timeout;
-        for handle in handles {
-            Self::await_adapter_until(handle, deadline, network_name).await;
-        }
-
+        self.stop_handles(vec![(network_name.to_string(), handles)]).await;
         Ok(())
     }
 
+    /// Cancels every given adapter at once, then waits for all of them
+    /// against one deadline, so stopping several networks takes at most one
+    /// `shutdown_timeout` in total.
+    async fn stop_handles(&self, networks: Vec<(String, Vec<AdapterHandle>)>) {
+        for (network_name, handles) in &networks {
+            tracing::info!("⏳ Stopping adapters for network '{}'", network_name);
+            for handle in handles {
+                handle.shutdown_token.cancel();
+            }
+        }
+
+        let deadline = tokio::time::Instant::now() + self.shutdown_timeout;
+        for (network_name, handles) in networks {
+            for handle in handles {
+                Self::await_adapter_until(handle, deadline, &network_name).await;
+            }
+        }
+    }
+
     /// Waits for one adapter task until `deadline`, then aborts it. Awaits
-    /// the aborted task too, so its sockets are closed before a restart
-    /// tries to bind them.
+    /// the aborted task too, so the adapter's own listener is closed before a
+    /// restart tries to bind it. Connection tasks the adapter spawned are not
+    /// children of this task; see AURA-2515 for plain HTTP.
     async fn await_adapter_until(
         handle: AdapterHandle,
         deadline: tokio::time::Instant,
@@ -291,15 +300,9 @@ impl AdapterRegistry {
 
     /// Stop all adapters in the registry
     pub async fn stop_all(&self) -> Result<()> {
-        let network_names: Vec<String> = {
-            let adapters = self.adapters.read().await;
-            adapters.keys().cloned().collect()
-        };
-
-        for network_name in network_names {
-            self.stop_network(&network_name).await?;
-        }
-
+        let networks: Vec<(String, Vec<AdapterHandle>)> =
+            self.adapters.write().await.drain().collect();
+        self.stop_handles(networks).await;
         Ok(())
     }
 
@@ -325,6 +328,41 @@ mod tests {
         let registry = AdapterRegistry::new();
         let networks = registry.get_running_networks().await;
         assert!(networks.is_empty());
+    }
+
+    /// An adapter handle whose task ignores cancellation and never ends.
+    fn handle_that_never_stops(network_name: &str) -> AdapterHandle {
+        AdapterHandle {
+            network_name: network_name.to_string(),
+            adapter_summary: "stuck adapter".to_string(),
+            task_handle: tokio::spawn(std::future::pending::<()>()),
+            shutdown_token: CancellationToken::new(),
+        }
+    }
+
+    /// stop_all must share one deadline across networks. Waiting one full
+    /// timeout per network could outlast a supervisor's shutdown grace period.
+    #[tokio::test]
+    async fn stop_all_uses_one_deadline_for_all_networks() {
+        let mut registry = AdapterRegistry::new();
+        registry.shutdown_timeout = Duration::from_millis(300);
+        {
+            let mut adapters = registry.adapters.write().await;
+            for name in ["a", "b", "c"] {
+                adapters.insert(name.to_string(), vec![handle_that_never_stops(name)]);
+            }
+        }
+
+        let started = tokio::time::Instant::now();
+        registry.stop_all().await.unwrap();
+        let elapsed = started.elapsed();
+
+        assert!(
+            elapsed < Duration::from_millis(600),
+            "stop_all took {:?}; three networks were waited on one after another",
+            elapsed
+        );
+        assert!(registry.get_running_networks().await.is_empty());
     }
 
     /// A plain-HTTP server with graceful shutdown, like the HTTP adapter's,
