@@ -7,6 +7,7 @@ use std::sync::Arc;
 use tower::ServiceExt;
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_transform_middleware_integration() {
     // Create a config that uses the transform middleware
     let spec_path = format!(
@@ -78,6 +79,7 @@ async fn test_transform_middleware_integration() {
         create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
+    harmony::globals::set_config(config_arc.clone());
     let app = build_network_router(config_arc, "default").await;
 
     // Test data that should be transformed by the JOLT spec
@@ -148,6 +150,7 @@ async fn test_transform_middleware_integration() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_transform_middleware_with_snapshot() {
     // This test validates the transform result using the JOLT engine directly,
     // ensuring we assert the output mapping logic.
@@ -188,6 +191,7 @@ async fn test_transform_middleware_with_snapshot() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_transform_middleware_error_handling() {
     // Test error handling when spec file doesn't exist
     let config_toml = r#"

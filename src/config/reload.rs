@@ -1,4 +1,5 @@
 use super::config::Config;
+use crate::adapters::registry::AdapterRegistry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -92,6 +93,15 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigDiff {
         // For now, treat any other network config change as requiring restart
         // TODO: Add dimse field checking when NetworkConfig has dimse
         if old_net != new_net {
+            diff.adapter_restarts_required.push((*network_name).clone());
+            continue;
+        }
+
+        // The adapters a network runs are chosen when it starts. Adding its
+        // first HTTP pipeline, or removing its last DIMSE one, needs a restart.
+        if AdapterRegistry::required_protocols(network_name, old).0
+            != AdapterRegistry::required_protocols(network_name, new).0
+        {
             diff.adapter_restarts_required.push((*network_name).clone());
             continue;
         }
@@ -511,5 +521,24 @@ interface = "wg0"
         );
         assert!(diff.has_changes());
         assert!(!diff.requires_adapter_restart());
+    }
+    /// A network with only DIMSE pipelines runs no HTTP adapter. Its first
+    /// HTTP pipeline must restart it, or the new routes never answer.
+    #[test]
+    fn adding_the_first_http_pipeline_restarts_the_network() {
+        let mut old = dimse_config("", "", "/api");
+        old.pipelines.remove("api");
+        let new = dimse_config("", "", "/api");
+        assert!(restarts_default(&old, &new));
+    }
+
+    /// Removing the last HTTP pipeline must restart the network, so its HTTP
+    /// adapter stops.
+    #[test]
+    fn removing_the_last_http_pipeline_restarts_the_network() {
+        let old = dimse_config("", "", "/api");
+        let mut new = dimse_config("", "", "/api");
+        new.pipelines.remove("api");
+        assert!(restarts_default(&old, &new));
     }
 }

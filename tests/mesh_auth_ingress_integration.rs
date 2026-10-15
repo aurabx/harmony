@@ -129,7 +129,9 @@ fn sign_token(secret: &str, mesh_id: &str) -> String {
 async fn send_through_mesh_ingress(authorization: Option<String>) -> (StatusCode, usize) {
     let (backend_url, hits, _handle) = start_counting_backend().await;
     let config = load_config_from_str(&mesh_ingress_config(&backend_url)).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(config), "default").await;
+    let config = Arc::new(config);
+    harmony::globals::set_config(config.clone());
+    let app = harmony::router::build_network_router(config, "default").await;
 
     let mut request = Request::builder().uri("/mesh/resource").method("GET");
     if let Some(value) = authorization {
@@ -145,6 +147,7 @@ async fn send_through_mesh_ingress(authorization: Option<String>) -> (StatusCode
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn missing_mesh_token_is_rejected_before_backend() {
     let (status, hits) = send_through_mesh_ingress(None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -152,6 +155,7 @@ async fn missing_mesh_token_is_rejected_before_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn garbage_mesh_token_is_rejected_before_backend() {
     let (status, hits) = send_through_mesh_ingress(Some("Bearer not-a-jwt".to_string())).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -159,6 +163,7 @@ async fn garbage_mesh_token_is_rejected_before_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn wrong_secret_mesh_token_is_rejected_before_backend() {
     let token = sign_token("not-the-mesh-secret", MESH_NAME);
     let (status, hits) = send_through_mesh_ingress(Some(format!("Bearer {}", token))).await;
@@ -170,6 +175,7 @@ async fn wrong_secret_mesh_token_is_rejected_before_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn mesh_id_mismatch_is_rejected_before_backend() {
     let token = sign_token(MESH_SECRET, "some_other_mesh");
     let (status, hits) = send_through_mesh_ingress(Some(format!("Bearer {}", token))).await;
@@ -181,6 +187,7 @@ async fn mesh_id_mismatch_is_rejected_before_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn valid_mesh_token_reaches_backend() {
     let token = sign_token(MESH_SECRET, MESH_NAME);
     let (status, hits) = send_through_mesh_ingress(Some(format!("Bearer {}", token))).await;

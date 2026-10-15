@@ -60,6 +60,7 @@ fn http_endpoints() -> Vec<(&'static str, Box<dyn ServiceType<ReqBody = Value>>)
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn every_http_endpoint_keeps_the_client_address() {
     for (name, service) in http_endpoints() {
         let envelope = service
@@ -85,6 +86,7 @@ async fn every_http_endpoint_keeps_the_client_address() {
 /// The DIMSE adapter puts the association peer in `ctx.meta`. The `dicom_scp`
 /// endpoint must carry it onto the envelope.
 #[tokio::test]
+#[serial_test::serial]
 async fn dicom_scp_endpoint_keeps_the_client_address() {
     let ctx = ProtocolCtx {
         protocol: Protocol::Dimse,
@@ -128,6 +130,7 @@ async fn dicom_scp_endpoint_keeps_the_client_address() {
 /// builds its envelope through the HTTP endpoint, so this fails if that
 /// delegation ever stops carrying the client address.
 #[tokio::test]
+#[serial_test::serial]
 async fn ip_allowlist_gates_a_fhir_endpoint() {
     use axum::body::Body;
     use axum::extract::ConnectInfo;

@@ -5,6 +5,7 @@ use axum::http::{Request, StatusCode};
 use tower::ServiceExt; // for .oneshot
 
 #[tokio::test]
+#[serial_test::serial]
 async fn router_builds_and_skips_conflicting_pipeline() {
     // Build a minimal Config with two pipelines that conflict on the same path
     let mut cfg: harmony::config::config::Config = Default::default();
@@ -56,7 +57,9 @@ async fn router_builds_and_skips_conflicting_pipeline() {
     cfg.pipelines.insert("p2".into(), p2);
 
     // Build the router for the "default" network
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Hit the conflicting route. The router should have registered exactly one of the pipelines,
     // and, critically, it must NOT panic. Expect 200 OK from the surviving route.

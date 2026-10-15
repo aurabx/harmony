@@ -58,6 +58,7 @@ async fn create_test_app(config_toml: &str) -> axum::Router {
         create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
+    harmony::globals::set_config(config_arc.clone());
     build_network_router(config_arc, "default").await
 }
 
@@ -66,6 +67,7 @@ async fn create_test_app(config_toml: &str) -> axum::Router {
 // ============================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_allow_all() {
     let config_toml = r#"
         [proxy]
@@ -145,6 +147,7 @@ async fn test_policy_allow_all() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_deny_all() {
     let config_toml = r#"
         [proxy]
@@ -228,6 +231,7 @@ async fn test_policy_deny_all() {
 // ============================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_ip_allow() {
     // Note: In oneshot test environment, remote_addr metadata is not populated
     // from socket connections, so this test demonstrates implicit deny behavior.
@@ -313,6 +317,7 @@ async fn test_policy_ip_allow() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_ip_deny() {
     let config_toml = r#"
         [proxy]
@@ -408,6 +413,7 @@ async fn test_policy_ip_deny() {
 // ============================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_path_allow_matches() {
     // Note: In oneshot test environment, path metadata is not automatically
     // populated from the URI. Path matching requires the HTTP adapter to extract
@@ -496,6 +502,7 @@ async fn test_policy_path_allow_matches() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_path_allow_no_match() {
     let config_toml = r#"
         [proxy]
@@ -579,6 +586,7 @@ async fn test_policy_path_allow_no_match() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_path_deny_blocks() {
     let config_toml = r#"
         [proxy]
@@ -677,6 +685,7 @@ async fn test_policy_path_deny_blocks() {
 // ============================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_method_allow_get() {
     let config_toml = r#"
         [proxy]
@@ -760,6 +769,7 @@ async fn test_policy_method_allow_get() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_method_deny_post() {
     let config_toml = r#"
         [proxy]
@@ -848,6 +858,7 @@ async fn test_policy_method_deny_post() {
 // ============================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_header_exact_match() {
     // Note: In oneshot test environment, HTTP headers from the Request are not
     // automatically transferred to the envelope.request_details.headers HashMap.
@@ -940,6 +951,7 @@ async fn test_policy_header_exact_match() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_header_no_match() {
     let config_toml = r#"
         [proxy]
@@ -1025,6 +1037,7 @@ async fn test_policy_header_no_match() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_header_contains_match() {
     let config_toml = r#"
         [proxy]
@@ -1116,6 +1129,7 @@ async fn test_policy_header_contains_match() {
 // ============================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_content_type_exact() {
     let config_toml = r#"
         [proxy]
@@ -1200,6 +1214,7 @@ async fn test_policy_content_type_exact() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_content_type_wildcard() {
     let config_toml = r#"
         [proxy]
@@ -1288,6 +1303,7 @@ async fn test_policy_content_type_wildcard() {
 // ============================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_query_param_exists() {
     let config_toml = r#"
         [proxy]
@@ -1380,6 +1396,7 @@ async fn test_policy_query_param_exists() {
 // ============================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_user_agent_regex_allow() {
     let config_toml = r#"
         [proxy]
@@ -1466,6 +1483,7 @@ async fn test_policy_user_agent_regex_allow() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_user_agent_regex_deny() {
     let config_toml = r#"
         [proxy]
@@ -1565,6 +1583,7 @@ async fn test_policy_user_agent_regex_deny() {
 // ============================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_time_based_always_allow() {
     let config_toml = r#"
         [proxy]
@@ -1652,6 +1671,7 @@ async fn test_policy_time_based_always_allow() {
 // ============================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_rate_limit_config_loads() {
     // Note: Rate limit tracking requires shared middleware state across requests.
     // Router cloning creates separate instances, so enforcement can't be tested
@@ -1752,6 +1772,7 @@ async fn test_policy_rate_limit_config_loads() {
 // ============================================
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_multiple_rules_evaluation_order() {
     let config_toml = r#"
         [proxy]
@@ -1847,6 +1868,7 @@ async fn test_policy_multiple_rules_evaluation_order() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_disabled_rule_ignored() {
     let config_toml = r#"
         [proxy]
@@ -1936,6 +1958,7 @@ async fn test_policy_disabled_rule_ignored() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_allow_plus_deny_equals_deny() {
     let config_toml = r#"
         [proxy]

@@ -13,6 +13,7 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn jwt_auth_allows_valid_bearer() {
     let toml = r#"
         [proxy]
@@ -68,7 +69,9 @@ async fn jwt_auth_allows_valid_bearer() {
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Generate HS256 JWT compatible with middleware fallback secret
     #[derive(Serialize)]
@@ -111,6 +114,7 @@ async fn jwt_auth_allows_valid_bearer() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn jwt_auth_rejects_invalid_bearer() {
     let toml = r#"
         [proxy]
@@ -164,7 +168,9 @@ async fn jwt_auth_rejects_invalid_bearer() {
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Invalid token
     let response = app

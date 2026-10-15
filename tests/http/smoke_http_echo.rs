@@ -62,10 +62,13 @@ async fn build_test_router() -> axum::Router<()> {
     let _ = std::fs::create_dir_all("../../tmp");
 
     let cfg = load_config_from_str(get_test_config()).expect("valid config");
-    harmony::router::build_network_router(Arc::new(cfg), "default").await
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    harmony::router::build_network_router(cfg, "default").await
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn smoke_http_get_echo_backend() {
     let app = build_test_router().await;
 
@@ -96,6 +99,7 @@ async fn smoke_http_get_echo_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn smoke_http_post_echo_backend() {
     let app = build_test_router().await;
 
@@ -130,6 +134,7 @@ async fn smoke_http_post_echo_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn smoke_http_put_echo_backend() {
     let app = build_test_router().await;
 
@@ -164,6 +169,7 @@ async fn smoke_http_put_echo_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn smoke_http_delete_echo_backend() {
     let app = build_test_router().await;
 

@@ -98,7 +98,7 @@ impl Http3Adapter {
         Ok(server_config)
     }
 
-    async fn run_server(self, config: Arc<Config>, shutdown: CancellationToken) {
+    async fn run_server(self, shutdown: CancellationToken) {
         let server_config = match self.build_server_config() {
             Ok(cfg) => cfg,
             Err(e) => {
@@ -139,10 +139,9 @@ impl Http3Adapter {
                 incoming = endpoint.accept() => {
                     match incoming {
                         Some(incoming_conn) => {
-                            let config = config.clone();
                             let network_name = self.network_name.clone();
                             tokio::spawn(async move {
-                                if let Err(e) = super::http3::handle_connection(incoming_conn, config, network_name).await {
+                                if let Err(e) = super::http3::handle_connection(incoming_conn, network_name).await {
                                     tracing::warn!("HTTP/3 connection error: {}", e);
                                 }
                             });
@@ -167,9 +166,11 @@ impl Http3Adapter {
 /// - Building a ProtocolCtx equivalent to HttpAdapter::http_request_to_protocol_ctx
 /// - Running the PipelineExecutor
 /// - Mapping the resulting HTTP response back onto HTTP/3 frames
+///
+/// Each request reads the live global config once, so a zero-downtime
+/// reload reaches the next request on an open connection.
 pub async fn handle_connection(
     incoming: quinn::Incoming,
-    config: Arc<Config>,
     network_name: String,
 ) -> anyhow::Result<()> {
     // Complete the QUIC handshake
@@ -215,6 +216,16 @@ pub async fn handle_connection(
                     path.trim_end_matches('/').to_string()
                 } else {
                     path.clone()
+                };
+
+                let config = match crate::adapters::http::router::live_config() {
+                    Ok(config) => config,
+                    Err(status) => {
+                        let resp = HttpResponse::builder().status(status).body(())?;
+                        stream.send_response(resp).await?;
+                        stream.finish().await?;
+                        continue;
+                    }
                 };
 
                 // Find matching pipeline + endpoint based on network, path and method
@@ -503,9 +514,10 @@ impl ProtocolAdapter for Http3Adapter {
         ))
     }
 
+    /// `config` is unused: requests read the live global config instead.
     async fn start(
         &self,
-        config: Arc<Config>,
+        _config: Arc<Config>,
         shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
         let adapter = Http3Adapter {
@@ -516,7 +528,7 @@ impl ProtocolAdapter for Http3Adapter {
         };
 
         Ok(tokio::spawn(async move {
-            adapter.run_server(config, shutdown).await;
+            adapter.run_server(shutdown).await;
         }))
     }
 

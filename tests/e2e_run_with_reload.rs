@@ -163,13 +163,17 @@ service = "echo"
 
 [middleware.test_middleware]
 type = "policies"
+[middleware.test_middleware.options]
+policies = ["allow_policy"]
 
-[[middleware.test_middleware.options.policies]]
+[policies.allow_policy]
 id = "allow_policy"
 enabled = true
+rules = ["allow_everyone"]
 
-[[middleware.test_middleware.options.policies.rules]]
-rule_type = "allow_all"
+[rules.allow_everyone]
+id = "allow_everyone"
+type = "allow_all"
 weight = 100
 enabled = true
 
@@ -691,4 +695,190 @@ interface = "lo0"
     .await;
     
     assert!(test_result.is_ok(), "Test timed out after 60 seconds");
+}
+
+/// Config for the live-reload tests: one HTTP pipeline on `default`, gated
+/// by an `ip_allow` rule over `cidr`, served under `path_prefix`.
+fn ip_gated_config(port: u16, cidr: &str, path_prefix: &str) -> String {
+    format!(
+        r#"
+[proxy]
+id = "e2e-live-reload"
+pipelines_path = "pipelines"
+transforms_path = "transforms"
+
+[logging]
+log_level = "info"
+log_to_file = false
+log_file_path = ""
+
+[storage]
+backend = "filesystem"
+
+[storage.options]
+path = "./tmp"
+
+[runbeam]
+enabled = false
+
+[network.default]
+interface = "lo0"
+enable_wireguard = false
+
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = {port}
+
+[management]
+enabled = true
+base_path = "admin"
+network = "default"
+
+[pipelines.gated]
+networks = ["default"]
+endpoints = ["gated_endpoint"]
+backends = ["echo_backend"]
+middleware = ["ip_gate"]
+
+[endpoints.gated_endpoint]
+service = "http"
+
+[endpoints.gated_endpoint.options]
+path_prefix = "{path_prefix}"
+
+[backends.echo_backend]
+service = "echo"
+
+[middleware.ip_gate]
+type = "policies"
+[middleware.ip_gate.options]
+policies = ["ip_policy"]
+
+[policies.ip_policy]
+id = "ip_policy"
+enabled = true
+rules = ["ip_allow_rule"]
+
+[rules.ip_allow_rule]
+id = "ip_allow_rule"
+type = "ip_allow"
+weight = 100
+enabled = true
+[rules.ip_allow_rule.options]
+ip_addresses = ["{cidr}"]
+
+[middleware_types.policies]
+module = ""
+
+[services.http]
+module = ""
+
+[services.echo]
+module = ""
+"#
+    )
+}
+
+/// Write `contents` as the config file, start `run_with_reload` on it, and
+/// wait until the management API answers on `port`.
+async fn start_reloading_server(
+    temp_dir: &TempDir,
+    contents: &str,
+    port: u16,
+) -> (PathBuf, tokio::task::JoinHandle<()>) {
+    let config_path = temp_dir.path().join("live-reload.toml");
+    fs::write(&config_path, contents).expect("write config");
+    fs::create_dir_all(temp_dir.path().join("pipelines")).ok();
+    fs::create_dir_all(temp_dir.path().join("transforms")).ok();
+
+    let mut config: Config = toml::from_str(contents).expect("parse config");
+    config.resolved_transforms_path =
+        Some(temp_dir.path().join("transforms").to_string_lossy().to_string());
+    config.resolved_mesh_path = Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
+    config.inject_management_service().expect("inject management");
+    config.validate().expect("validate config");
+
+    let path_str = config_path.to_string_lossy().to_string();
+    let handle = tokio::spawn(async move {
+        harmony::run_with_reload(config, Some(path_str)).await;
+    });
+    wait_for_server_ready(port, 30)
+        .await
+        .expect("server should start");
+    (config_path, handle)
+}
+
+/// GET `url` until it returns `expected` or `within` passes. Returns the
+/// last status seen, so a failed assertion shows what the server sent.
+async fn poll_status(client: &reqwest::Client, url: &str, expected: u16, within: Duration) -> u16 {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let status = client
+            .get(url)
+            .send()
+            .await
+            .map(|r| r.status().as_u16())
+            .unwrap_or(0);
+        if status == expected || tokio::time::Instant::now() >= deadline {
+            return status;
+        }
+        sleep(Duration::from_millis(200)).await;
+    }
+}
+
+async fn stop_reloading_server(handle: tokio::task::JoinHandle<()>) {
+    handle.abort();
+    if let Some(registry) = harmony::globals::get_adapter_registry() {
+        let _ = registry.stop_all().await;
+    }
+    sleep(Duration::from_secs(1)).await;
+}
+
+/// A reload that changes only an IP rule needs no adapter restart, so the
+/// running HTTP adapter must apply the new rule to the next request.
+#[tokio::test]
+#[serial]
+async fn test_reload_applies_policy_change_to_http_requests() {
+    let port = 19210;
+    let temp_dir = TempDir::new().unwrap();
+    let (config_path, handle) =
+        start_reloading_server(&temp_dir, &ip_gated_config(port, "127.0.0.1/32", "/gated"), port)
+            .await;
+    let client = reqwest::Client::new();
+    let url = format!("http://127.0.0.1:{}/gated/ping", port);
+
+    let before = poll_status(&client, &url, 200, Duration::from_secs(5)).await;
+
+    fs::write(&config_path, ip_gated_config(port, "10.0.0.0/8", "/gated")).expect("rewrite config");
+    let after = poll_status(&client, &url, 403, Duration::from_secs(10)).await;
+
+    stop_reloading_server(handle).await;
+    assert_eq!(before, 200, "127.0.0.1 should pass the 127.0.0.1/32 allowlist");
+    assert_eq!(after, 403, "after reload, 127.0.0.1 should fail the 10.0.0.0/8 allowlist");
+}
+
+/// A reload that changes only an endpoint path needs no adapter restart, so
+/// the running HTTP adapter must route by the new path.
+#[tokio::test]
+#[serial]
+async fn test_reload_applies_endpoint_path_change_to_http_routes() {
+    let port = 19211;
+    let temp_dir = TempDir::new().unwrap();
+    let (config_path, handle) =
+        start_reloading_server(&temp_dir, &ip_gated_config(port, "127.0.0.1/32", "/old"), port)
+            .await;
+    let client = reqwest::Client::new();
+    let old_url = format!("http://127.0.0.1:{}/old/ping", port);
+    let new_url = format!("http://127.0.0.1:{}/new/ping", port);
+
+    let before = poll_status(&client, &old_url, 200, Duration::from_secs(5)).await;
+
+    fs::write(&config_path, ip_gated_config(port, "127.0.0.1/32", "/new")).expect("rewrite config");
+    let new_after = poll_status(&client, &new_url, 200, Duration::from_secs(10)).await;
+    let old_after = poll_status(&client, &old_url, 404, Duration::from_secs(2)).await;
+
+    stop_reloading_server(handle).await;
+    assert_eq!(before, 200, "the old path should answer before the reload");
+    assert_eq!(new_after, 200, "after reload, the new path should answer");
+    assert_eq!(old_after, 404, "after reload, the old path should be gone");
 }

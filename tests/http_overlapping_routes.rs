@@ -114,7 +114,9 @@ const MAIN_TOML: &str = r#"
 async fn build_app(toml: &str) -> Router {
     let config: Config = toml::from_str(toml).expect("TOML parse error");
     config.validate().expect("valid config");
-    harmony::router::build_network_router(Arc::new(config), "default").await
+    let config = Arc::new(config);
+    harmony::globals::set_config(config.clone());
+    harmony::router::build_network_router(config, "default").await
 }
 
 async fn send(app: &Router, method: &str, uri: &str) -> axum::response::Response {
@@ -150,6 +152,7 @@ async fn routed_to(app: &Router, upstream: &Upstream, method: &str, uri: &str) -
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn ucp_checkout_routes_each_request_to_the_most_specific_endpoint() {
     let upstream = start_recording_upstream().await;
     let toml = [
@@ -205,6 +208,7 @@ async fn ucp_checkout_routes_each_request_to_the_most_specific_endpoint() {
 /// The pair from the AURA-2443 report: a collection endpoint and an action
 /// endpoint below it, with no item endpoint.
 #[tokio::test]
+#[serial_test::serial]
 async fn collection_and_action_endpoints_route_without_an_item_endpoint() {
     let upstream = start_recording_upstream().await;
     let toml = [
@@ -246,6 +250,7 @@ async fn collection_and_action_endpoints_route_without_an_item_endpoint() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn nested_literal_prefixes_route_to_the_longest_prefix() {
     let upstream = start_recording_upstream().await;
     let toml = [
@@ -306,6 +311,7 @@ fn jmix_pipeline_toml(base_url: &str) -> String {
 /// not receive a DELETE that the JMIX endpoint at `/api/jmix` refuses. The
 /// `/api` pipeline may have different auth, policies and backends.
 #[tokio::test]
+#[serial_test::serial]
 async fn method_the_most_specific_endpoint_lacks_gets_405_not_a_less_specific_endpoint() {
     let upstream = start_recording_upstream().await;
     let toml = [
@@ -384,6 +390,7 @@ fn load_error_text(result: Result<Config, ConfigError>) -> String {
 }
 
 #[test]
+#[serial_test::serial]
 fn ucp_checkout_config_loads() {
     let dir = TempDir::new().unwrap();
     let url = "http://127.0.0.1:1";
@@ -410,6 +417,7 @@ fn ucp_checkout_config_loads() {
 }
 
 #[test]
+#[serial_test::serial]
 fn identical_prefixes_fail_config_load_naming_both_endpoints_and_files() {
     let dir = TempDir::new().unwrap();
     let url = "http://127.0.0.1:1";
@@ -444,6 +452,7 @@ fn identical_prefixes_fail_config_load_naming_both_endpoints_and_files() {
 }
 
 #[test]
+#[serial_test::serial]
 fn same_shape_with_different_parameter_names_fails_config_load() {
     let dir = TempDir::new().unwrap();
     let url = "http://127.0.0.1:1";
@@ -592,6 +601,7 @@ mod method_scoped {
 /// path shape could never receive a request. Splitting methods across two
 /// endpoints does not change that.
 #[test]
+#[serial_test::serial]
 fn same_shape_with_disjoint_methods_fails_config_load() {
     method_scoped::register();
     let dir = TempDir::new().unwrap();
@@ -627,6 +637,7 @@ fn same_shape_with_disjoint_methods_fails_config_load() {
 }
 
 #[test]
+#[serial_test::serial]
 fn invalid_path_prefix_fails_config_load() {
     let dir = TempDir::new().unwrap();
     let url = "http://127.0.0.1:1";
@@ -640,6 +651,7 @@ fn invalid_path_prefix_fails_config_load() {
 }
 
 #[test]
+#[serial_test::serial]
 fn path_prefix_without_leading_slash_fails_config_load() {
     let dir = TempDir::new().unwrap();
     let url = "http://127.0.0.1:1";
@@ -655,6 +667,7 @@ fn path_prefix_without_leading_slash_fails_config_load() {
 /// `--validate-config` and a normal start both reject the config with exit
 /// code 1 and a message on stderr, like every other load error.
 #[test]
+#[serial_test::serial]
 fn binary_rejects_conflicting_routes_with_exit_code_1() {
     let dir = TempDir::new().unwrap();
     let url = "http://127.0.0.1:1";
@@ -715,6 +728,7 @@ fn binary_rejects_conflicting_routes_with_exit_code_1() {
 /// A config that never went through validation must not panic the router.
 /// The conflicting and invalid routes are left out and the rest still work.
 #[tokio::test]
+#[serial_test::serial]
 async fn router_does_not_panic_on_an_unvalidated_config() {
     let upstream = start_recording_upstream().await;
     let toml = [
@@ -727,7 +741,9 @@ async fn router_does_not_panic_on_an_unvalidated_config() {
     ]
     .join("\n");
     let config: Config = toml::from_str(&toml).expect("TOML parse error");
-    let app = harmony::router::build_network_router(Arc::new(config), "default").await;
+    let config = Arc::new(config);
+    harmony::globals::set_config(config.clone());
+    let app = harmony::router::build_network_router(config, "default").await;
 
     assert_eq!(routed_to(&app, &upstream, "GET", "/good/x").await, "good");
     // Pipelines register in name order, so the first duplicate keeps the path.

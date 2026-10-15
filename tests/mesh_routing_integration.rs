@@ -171,8 +171,10 @@ fn sign_mesh_token() -> String {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_mesh_route_takes_priority() {
     let config = Arc::new(make_test_config());
+    harmony::globals::set_config(config.clone());
     let router = build_network_router(config, "default").await;
 
     // Request to mesh URL (fhir.example.com) should be routed via mesh.
@@ -197,8 +199,10 @@ async fn test_mesh_route_takes_priority() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_mesh_route_without_token_is_unauthorized() {
     let config = Arc::new(make_test_config());
+    harmony::globals::set_config(config.clone());
     let router = build_network_router(config, "default").await;
 
     let request = Request::builder()
@@ -219,8 +223,10 @@ async fn test_mesh_route_without_token_is_unauthorized() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_normal_route_when_no_mesh_match() {
     let config = Arc::new(make_test_config());
+    harmony::globals::set_config(config.clone());
     let router = build_network_router(config, "default").await;
 
     // Request to normal API (not mesh URL) should use normal routing
@@ -242,8 +248,10 @@ async fn test_normal_route_when_no_mesh_match() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_404_when_no_route_matches() {
     let config = Arc::new(make_test_config());
+    harmony::globals::set_config(config.clone());
     let router = build_network_router(config, "default").await;
 
     // Request to unknown path with non-mesh host should 404
@@ -265,8 +273,10 @@ async fn test_404_when_no_route_matches() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_mesh_wrong_host_falls_through() {
     let config = Arc::new(make_test_config());
+    harmony::globals::set_config(config.clone());
     let router = build_network_router(config, "default").await;
 
     // Request with wrong host should NOT match mesh, should fall through
@@ -289,8 +299,10 @@ async fn test_mesh_wrong_host_falls_through() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_mesh_wrong_scheme_falls_through() {
     let config = Arc::new(make_test_config());
+    harmony::globals::set_config(config.clone());
     let router = build_network_router(config, "default").await;
 
     // Request with http (not https) should NOT match mesh ingress
@@ -313,6 +325,7 @@ async fn test_mesh_wrong_scheme_falls_through() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_empty_mesh_config_normal_routing_works() {
     let mut config = Config::default();
 
@@ -374,6 +387,7 @@ async fn test_empty_mesh_config_normal_routing_works() {
 
     // No mesh config at all
     let config = Arc::new(config);
+    harmony::globals::set_config(config.clone());
     let router = build_network_router(config, "default").await;
 
     let request = Request::builder()

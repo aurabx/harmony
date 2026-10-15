@@ -66,10 +66,13 @@ async fn build_test_router() -> axum::Router<()> {
     let _ = std::fs::create_dir_all("./tmp");
 
     let cfg = load_config_from_str(get_test_config()).expect("valid config");
-    harmony::router::build_network_router(Arc::new(cfg), "default").await
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    harmony::router::build_network_router(cfg, "default").await
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_path_filter_allowed_path_reaches_backend() {
     let app = build_test_router().await;
 
@@ -98,6 +101,7 @@ async fn test_path_filter_allowed_path_reaches_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_path_filter_denied_path_returns_404() {
     let app = build_test_router().await;
 

@@ -30,7 +30,9 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 async fn build_test_router(config_str: &str) -> Router<()> {
     let _ = std::fs::create_dir_all("./tmp");
     let cfg = load_config_from_str(config_str).expect("valid config");
-    harmony::router::build_network_router(Arc::new(cfg), "default").await
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    harmony::router::build_network_router(cfg, "default").await
 }
 
 /// Mock upstream JMIX server
@@ -186,6 +188,7 @@ module = ""
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_jmix_backend_post_forwarding() {
     // Reset global storage
     harmony::globals::reset_storage();
@@ -236,6 +239,7 @@ async fn test_jmix_backend_post_forwarding() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_jmix_backend_get_forwarding() {
     // Reset global storage
     harmony::globals::reset_storage();
@@ -285,6 +289,7 @@ async fn test_jmix_backend_get_forwarding() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_jmix_backend_get_manifest_forwarding() {
     // Reset global storage
     harmony::globals::reset_storage();

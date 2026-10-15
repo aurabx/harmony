@@ -21,6 +21,20 @@ mod tests {
         );
     }
 
+    /// HTTP route tables are cached per config by pointer, so reads between
+    /// reloads must return the published `Arc` itself, not a copy.
+    #[test]
+    #[serial]
+    fn get_config_returns_the_published_arc() {
+        let config = Arc::new(Config::default());
+        set_config(config.clone());
+
+        let first = get_config().expect("config was published");
+        let second = get_config().expect("config was published");
+        assert!(Arc::ptr_eq(&first, &config));
+        assert!(Arc::ptr_eq(&first, &second));
+    }
+
     #[test]
     #[serial]
     fn test_get_config_when_not_set() {
