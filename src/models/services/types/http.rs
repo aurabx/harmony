@@ -605,13 +605,18 @@ impl HttpEndpoint {
             request_builder = request_builder.body(envelope.original_data.clone());
         }
 
-        tracing::debug!("Sending HTTP request to: {}", full_url);
+        tracing::debug!(
+            "Sending HTTP request to: {}",
+            crate::logging::without_query(&full_url)
+        );
 
         // Execute the request
         let response = request_builder
             .send()
             .await
-            .map_err(|e| Error::from(format!("HTTP request failed: {}", e)))?;
+            // reqwest appends the full URL, query included, to its error
+            // text, and the router logs that text at ERROR.
+            .map_err(|e| Error::from(format!("HTTP request failed: {}", e.without_url())))?;
 
         let status = response.status().as_u16();
         tracing::debug!("HTTP backend response status: {}", status);
@@ -628,7 +633,12 @@ impl HttpEndpoint {
         let body_bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::from(format!("Failed to read response body: {}", e)))?
+            .map_err(|e| {
+                Error::from(format!(
+                    "Failed to read response body: {}",
+                    e.without_url()
+                ))
+            })?
             .to_vec();
 
         Ok((status, response_headers, body_bytes))
@@ -814,5 +824,58 @@ mod tests {
         assert_eq!(url, "http://127.0.0.1:8080");
         let parsed = reqwest::Url::parse(&url).expect("valid URL");
         assert_eq!(parsed.path(), "/");
+    }
+
+    /// A search request with a patient name and birthdate, sent to a
+    /// plain-HTTP backend on `port`.
+    fn search_target(port: u16, marker: &str) -> TargetDetails {
+        let mut query_params = HashMap::new();
+        query_params.insert("name".to_string(), vec![marker.to_string()]);
+        query_params.insert("birthdate".to_string(), vec!["1970-01-01".to_string()]);
+        TargetDetails {
+            base_url: format!("http://127.0.0.1:{}", port),
+            method: "GET".to_string(),
+            uri: "/Patient".to_string(),
+            query_params,
+            ..TargetDetails::default()
+        }
+    }
+
+    fn empty_envelope() -> RequestEnvelope<Vec<u8>> {
+        RequestEnvelope::new(Default::default(), vec![])
+    }
+
+    /// reqwest appends the full URL, query included, to its error text. The
+    /// router logs that text at ERROR, the default level.
+    #[tokio::test]
+    async fn send_error_does_not_contain_search_values() {
+        let marker = "DOE-PHI-MARKER";
+        let err = HttpEndpoint {}
+            .make_http_request(&search_target(1, marker), &empty_envelope(), &HashMap::new())
+            .await
+            .err()
+            .expect("port 1 must refuse the connection");
+
+        let text = format!("{} {:?}", err, err);
+        assert!(text.contains("HTTP request failed"), "error: {text}");
+        assert!(!text.contains(marker), "search values leaked: {text}");
+        assert!(!text.contains("birthdate"), "query string leaked: {text}");
+    }
+
+    #[tokio::test]
+    async fn debug_log_does_not_contain_query_string() {
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        let marker = "DOE-PHI-MARKER";
+        let _ = HttpEndpoint {}
+            .make_http_request(&search_target(1, marker), &empty_envelope(), &HashMap::new())
+            .await;
+
+        let text = log.contents();
+        assert!(
+            text.contains("Sending HTTP request to: http://127.0.0.1:1/Patient"),
+            "log: {text}"
+        );
+        assert!(!text.contains(marker), "search values leaked: {text}");
+        assert!(!text.contains("birthdate"), "query string leaked: {text}");
     }
 }

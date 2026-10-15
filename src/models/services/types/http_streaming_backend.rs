@@ -207,7 +207,8 @@ impl StreamingBackend for HttpStreamingBackend {
             .unwrap_or_default();
         let url = format!("{}{}{}", base_url, path_prefix, path);
 
-        info!("Streaming from URL: {}", url);
+        // The path can hold identifiers such as a patient ID.
+        debug!("Streaming from URL: {}", url);
 
         // Build HTTP client
         let client = reqwest::Client::builder()
@@ -251,7 +252,9 @@ impl StreamingBackend for HttpStreamingBackend {
         let response = request
             .send()
             .await
-            .map_err(|e| Error::from(format!("HTTP request failed: {}", e)))?;
+            // reqwest appends the full URL, path included, to its error
+            // text, and the router logs that text at ERROR.
+            .map_err(|e| Error::from(format!("HTTP request failed: {}", e.without_url())))?;
 
         // Check status
         let status = response.status();
@@ -341,7 +344,7 @@ impl HttpStreamingBackend {
                     futures_util::stream::iter(envelopes)
                 }
                 Err(e) => {
-                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e)))])
+                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e.without_url())))])
                 }
             }
         });
@@ -488,7 +491,7 @@ impl HttpStreamingBackend {
                     futures_util::stream::iter(envelopes)
                 }
                 Err(e) => {
-                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e)))])
+                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e.without_url())))])
                 }
             }
         });
@@ -566,7 +569,7 @@ impl HttpStreamingBackend {
                     futures_util::stream::iter(envelopes)
                 }
                 Err(e) => {
-                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e)))])
+                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e.without_url())))])
                 }
             }
         });
@@ -708,5 +711,41 @@ mod tests {
             HttpStreamingBackend::extract_boundary("application/json"),
             None
         );
+    }
+
+    /// The path can hold identifiers such as a patient ID, and reqwest
+    /// appends the full URL to its error text. The router logs that text at
+    /// ERROR, the default level.
+    #[tokio::test]
+    async fn send_error_does_not_contain_request_path() {
+        let marker = "DOE-PHI-MARKER";
+        let mut options = HashMap::new();
+        options.insert(
+            "base_url".to_string(),
+            Value::String("http://127.0.0.1:1".to_string()),
+        );
+        let mut envelope: RequestEnvelope<Vec<u8>> =
+            RequestEnvelope::new(Default::default(), vec![]);
+        envelope.request_details.method = "GET".to_string();
+        envelope
+            .request_details
+            .metadata
+            .insert("path".to_string(), format!("Patient/{}", marker));
+
+        let backend = HttpStreamingBackend {
+            base_url: None,
+            format: None,
+            chunk_timeout_secs: None,
+            max_chunk_size: None,
+        };
+        let err = backend
+            .backend_outgoing_stream(envelope, &options)
+            .await
+            .err()
+            .expect("port 1 must refuse the connection");
+
+        let text = format!("{} {:?}", err, err);
+        assert!(text.contains("HTTP request failed"), "error: {text}");
+        assert!(!text.contains(marker), "request path leaked: {text}");
     }
 }
