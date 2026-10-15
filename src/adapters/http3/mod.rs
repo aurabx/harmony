@@ -18,6 +18,10 @@ use std::sync::Arc;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
 
+/// How long shutdown waits for closed connections to drain, so peers see
+/// the close instead of waiting out their idle timeout.
+const HTTP3_CLOSE_DRAIN_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(2);
+
 /// HTTP/3 (QUIC) Protocol Adapter
 ///
 /// This adapter will host a QUIC + HTTP/3 server for a given network. It uses
@@ -154,6 +158,23 @@ impl Http3Adapter {
                     }
                 }
             }
+        }
+
+        // Stopping the accept loop does not end open connections: quinn keeps
+        // the endpoint and its UDP socket alive while any connection is open,
+        // so they would keep serving (with the old TLS config after a cert
+        // rotation) and block a restart from binding the port. Close them,
+        // then give peers a short time to receive the close.
+        endpoint.close(0u32.into(), b"server shutting down");
+        if tokio::time::timeout(HTTP3_CLOSE_DRAIN_TIMEOUT, endpoint.wait_idle())
+            .await
+            .is_err()
+        {
+            tracing::warn!(
+                "HTTP/3 adapter for network '{}': connections did not drain within {:?}",
+                self.network_name,
+                HTTP3_CLOSE_DRAIN_TIMEOUT
+            );
         }
 
         tracing::info!("HTTP/3 adapter for network '{}' shut down", self.network_name);
@@ -522,5 +543,92 @@ impl ProtocolAdapter for Http3Adapter {
 
     fn summary(&self) -> String {
         format!("Http3Adapter(network={}, bind={})", self.network_name, self.bind_addr)
+    }
+}
+
+#[cfg(test)]
+mod shutdown_tests {
+    use super::*;
+    use std::time::Duration;
+
+    /// Writes a self-signed cert and key for localhost into `dir` and returns
+    /// (cert_path, key_path, cert_pem).
+    fn write_test_cert(dir: &tempfile::TempDir) -> (String, String, String) {
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()])
+            .expect("generate self-signed cert");
+        let cert_pem = cert.serialize_pem().expect("serialize cert");
+        let cert_path = dir.path().join("cert.pem");
+        let key_path = dir.path().join("key.pem");
+        std::fs::write(&cert_path, &cert_pem).unwrap();
+        std::fs::write(&key_path, cert.serialize_private_key_pem()).unwrap();
+        (
+            cert_path.to_string_lossy().into_owned(),
+            key_path.to_string_lossy().into_owned(),
+            cert_pem,
+        )
+    }
+
+    fn client_endpoint(cert_pem: &str) -> Endpoint {
+        use rustls::pki_types::CertificateDer;
+        let mut roots = rustls::RootCertStore::empty();
+        for cert in rustls_pemfile::certs(&mut cert_pem.as_bytes()) {
+            roots.add(CertificateDer::from(cert.unwrap())).unwrap();
+        }
+        let mut tls = rustls::ClientConfig::builder()
+            .with_root_certificates(roots)
+            .with_no_client_auth();
+        tls.alpn_protocols = vec![b"h3".to_vec()];
+        let quic = quinn::crypto::rustls::QuicClientConfig::try_from(tls).unwrap();
+        let mut endpoint = Endpoint::client("127.0.0.1:0".parse().unwrap()).unwrap();
+        endpoint.set_default_client_config(quinn::ClientConfig::new(Arc::new(quic)));
+        endpoint
+    }
+
+    /// Picks a free UDP port on localhost.
+    fn free_udp_addr() -> SocketAddr {
+        let socket = std::net::UdpSocket::bind("127.0.0.1:0").unwrap();
+        socket.local_addr().unwrap()
+    }
+
+    /// Cancelling shutdown must end open QUIC connections, so none keep
+    /// serving with the old TLS config, and must release the UDP port so a
+    /// restart can bind it again.
+    #[tokio::test]
+    async fn shutdown_closes_open_connections_and_releases_port() {
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+        let dir = tempfile::TempDir::new().unwrap();
+        let (cert_path, key_path, cert_pem) = write_test_cert(&dir);
+        let bind_addr = free_udp_addr();
+
+        let adapter = Http3Adapter::new("test".to_string(), bind_addr, cert_path, key_path);
+        let shutdown = CancellationToken::new();
+        let server = adapter
+            .start(Arc::new(Config::default()), shutdown.clone())
+            .await
+            .unwrap();
+        tokio::time::sleep(Duration::from_millis(100)).await;
+
+        let client = client_endpoint(&cert_pem);
+        let connection = tokio::time::timeout(
+            Duration::from_secs(5),
+            client.connect(bind_addr, "localhost").unwrap(),
+        )
+        .await
+        .expect("handshake timed out")
+        .expect("handshake failed");
+
+        shutdown.cancel();
+        tokio::time::timeout(Duration::from_secs(5), server)
+            .await
+            .expect("adapter task did not finish")
+            .unwrap();
+
+        // quinn's default idle timeout is 30 s, so a close within 3 s means
+        // the server closed the connection.
+        tokio::time::timeout(Duration::from_secs(3), connection.closed())
+            .await
+            .expect("connection still open after adapter shutdown");
+
+        std::net::UdpSocket::bind(bind_addr).expect("UDP port still bound after shutdown");
     }
 }

@@ -4,9 +4,15 @@ use crate::models::protocol::Protocol;
 use anyhow::Result;
 use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::RwLock;
 use tokio::task::JoinHandle;
 use tokio_util::sync::CancellationToken;
+
+/// How long stop_network waits for an adapter task before aborting it.
+/// The plain-HTTP adapter's graceful shutdown waits for every in-flight
+/// request, so a slow client could otherwise stall a reload forever.
+const ADAPTER_SHUTDOWN_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Handle for a running adapter
 pub struct AdapterHandle {
@@ -19,12 +25,14 @@ pub struct AdapterHandle {
 /// Registry for managing protocol adapters
 pub struct AdapterRegistry {
     adapters: Arc<RwLock<HashMap<String, Vec<AdapterHandle>>>>,
+    shutdown_timeout: Duration,
 }
 
 impl AdapterRegistry {
     pub fn new() -> Self {
         Self {
             adapters: Arc::new(RwLock::new(HashMap::new())),
+            shutdown_timeout: ADAPTER_SHUTDOWN_TIMEOUT,
         }
     }
 
@@ -211,29 +219,67 @@ impl AdapterRegistry {
     }
 
     /// Stop all adapters for a network
+    ///
+    /// The network's handles are taken out of the registry before waiting, so
+    /// the registry lock is not held while adapters drain. Each adapter gets
+    /// until a shared deadline (`shutdown_timeout` from now) to finish; any
+    /// still running then is aborted.
     pub async fn stop_network(&self, network_name: &str) -> Result<()> {
-        let mut adapters = self.adapters.write().await;
+        let Some(handles) = self.adapters.write().await.remove(network_name) else {
+            return Ok(());
+        };
 
-        if let Some(handles) = adapters.remove(network_name) {
-            tracing::info!("⏳ Stopping adapters for network '{}'", network_name);
+        tracing::info!("⏳ Stopping adapters for network '{}'", network_name);
 
-            // Trigger shutdown for all adapters
-            for handle in &handles {
-                handle.shutdown_token.cancel();
-            }
+        for handle in &handles {
+            handle.shutdown_token.cancel();
+        }
 
-            // Wait for all to complete
-            for handle in handles {
-                let _ = handle.task_handle.await;
-                tracing::info!(
-                    "✓ Stopped {} for network '{}'",
-                    handle.adapter_summary,
-                    network_name
-                );
-            }
+        let deadline = tokio::time::Instant::now() + self.shutdown_timeout;
+        for handle in handles {
+            Self::await_adapter_until(handle, deadline, network_name).await;
         }
 
         Ok(())
+    }
+
+    /// Waits for one adapter task until `deadline`, then aborts it. Awaits
+    /// the aborted task too, so its sockets are closed before a restart
+    /// tries to bind them.
+    async fn await_adapter_until(
+        handle: AdapterHandle,
+        deadline: tokio::time::Instant,
+        network_name: &str,
+    ) {
+        let AdapterHandle {
+            adapter_summary,
+            mut task_handle,
+            ..
+        } = handle;
+
+        match tokio::time::timeout_at(deadline, &mut task_handle).await {
+            Ok(Ok(())) => {
+                tracing::info!("✓ Stopped {} for network '{}'", adapter_summary, network_name);
+            }
+            Ok(Err(e)) => {
+                tracing::error!(
+                    "{} for network '{}' ended with an error: {}",
+                    adapter_summary,
+                    network_name,
+                    e
+                );
+            }
+            Err(_) => {
+                tracing::warn!(
+                    "{} for network '{}' did not stop within the shutdown timeout; aborting it",
+                    adapter_summary,
+                    network_name
+                );
+                task_handle.abort();
+                // The JoinError here only reports the cancellation just requested.
+                let _ = task_handle.await;
+            }
+        }
     }
 
     /// Restart adapters for a network (stop + start)
@@ -279,5 +325,85 @@ mod tests {
         let registry = AdapterRegistry::new();
         let networks = registry.get_running_networks().await;
         assert!(networks.is_empty());
+    }
+
+    /// A plain-HTTP server with graceful shutdown, like the HTTP adapter's,
+    /// whose only route never answers. Returns the bound address and the
+    /// server task.
+    async fn spawn_server_with_stuck_route(
+        shutdown: CancellationToken,
+    ) -> (std::net::SocketAddr, JoinHandle<()>) {
+        let app = axum::Router::new().route(
+            "/stuck",
+            axum::routing::get(|| std::future::pending::<&'static str>()),
+        );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let task = tokio::spawn(async move {
+            let _ = axum::serve(listener, app)
+                .with_graceful_shutdown(async move { shutdown.cancelled().await })
+                .await;
+        });
+        (addr, task)
+    }
+
+    /// Opens a connection and sends a request to the stuck route. The
+    /// returned stream must be kept alive to hold the request in flight.
+    async fn hold_stuck_request(addr: std::net::SocketAddr) -> tokio::net::TcpStream {
+        use tokio::io::AsyncWriteExt;
+        let mut stream = tokio::net::TcpStream::connect(addr).await.unwrap();
+        stream
+            .write_all(b"GET /stuck HTTP/1.1\r\nHost: localhost\r\n\r\n")
+            .await
+            .unwrap();
+        // Give the server time to accept the connection and start the handler.
+        tokio::time::sleep(Duration::from_millis(100)).await;
+        stream
+    }
+
+    /// axum's graceful shutdown waits for every in-flight request. A request
+    /// that never finishes must not stall stop_network past its timeout, and
+    /// must not keep the registry locked while stop_network waits.
+    #[tokio::test]
+    async fn stop_network_does_not_wait_forever_for_stuck_connection() {
+        let mut registry = AdapterRegistry::new();
+        registry.shutdown_timeout = Duration::from_millis(300);
+
+        let shutdown = CancellationToken::new();
+        let (addr, task) = spawn_server_with_stuck_route(shutdown.clone()).await;
+        registry.adapters.write().await.insert(
+            "stuck".to_string(),
+            vec![AdapterHandle {
+                network_name: "stuck".to_string(),
+                adapter_summary: "test server".to_string(),
+                task_handle: task,
+                shutdown_token: shutdown,
+            }],
+        );
+        let _client = hold_stuck_request(addr).await;
+
+        let registry = Arc::new(registry);
+        let stopping = {
+            let registry = registry.clone();
+            tokio::spawn(async move { registry.stop_network("stuck").await })
+        };
+
+        // The registry must stay readable while the stop is in progress.
+        tokio::time::sleep(Duration::from_millis(50)).await;
+        let running = tokio::time::timeout(Duration::from_millis(100), registry.get_running_networks())
+            .await
+            .expect("registry lock was held while stop_network waited");
+        assert!(running.is_empty());
+
+        tokio::time::timeout(Duration::from_secs(2), stopping)
+            .await
+            .expect("stop_network did not return after its timeout")
+            .unwrap()
+            .unwrap();
+
+        // The listener is gone, so a restart could bind the port again.
+        tokio::net::TcpListener::bind(addr)
+            .await
+            .expect("port still bound after stop_network");
     }
 }
