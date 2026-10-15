@@ -1,7 +1,7 @@
 use serde::Deserialize;
 
 /// Content parsing size limits
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct ContentLimits {
     /// Maximum body size in bytes (default: 10MB)
     #[serde(default = "default_max_body_size")]
@@ -33,7 +33,7 @@ impl Default for ContentLimits {
 }
 
 /// Represents the configuration for the proxy
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct ProxyConfig {
     /// Unique identifier for this proxy instance (required if name not provided)
     #[serde(default)]

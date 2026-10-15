@@ -536,8 +536,8 @@ These changes are picked up on the next request with no service interruption:
 - **Middleware configuration**: Transform specs, auth rules, custom middleware options
 - **Route definitions**: Groups, endpoints, backends, path patterns
 - **Backend configuration**: Target URLs, timeouts, retry policies
-- **Logging settings**: Log levels, file paths, output formats
-- **Storage configuration**: Backend type, paths, connection strings
+- **Policies and rules**: The top-level `[policies]` and `[rules]` tables
+- **Other tables read when used**: `[authentications]`, `[targets]`, `[peers]`, `[management]`
 
 #### Adapter Restart Required (Brief Interruption)
 
@@ -547,6 +547,12 @@ These changes require restarting specific protocol adapters (~1-2 second interru
 - **Adding/removing networks**: New adapters started or old ones stopped
 - **WireGuard configuration**: Interface names, peer settings
 - **Protocol-specific settings**: TLS certificates, connection pool sizes
+- **DIMSE listeners**: Any change to a network's `dicom_scp` endpoints or persistent-SCP backends
+- **Mesh routing**: Any change to `[mesh]`, `[ingress]`, `[egress]` or `[remote_ingress]` restarts every network
+
+#### Process Restart Required
+
+`[logging]`, `[storage]`, `[provider]`, `[proxy]`, `[runbeam]`, `[services]`, `[middleware_types]` and `[extensions]` are read wholly or partly at startup. A reload swaps in their new values and logs a warning. Restart the process for full effect. See [config-reload.md](config-reload.md) for details.
 
 ### Usage
 
