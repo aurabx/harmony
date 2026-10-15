@@ -413,12 +413,10 @@ async fn flush_idle_studies() -> Result<(), String> {
     };
 
     for (study_uid, state) in due {
+        // The Study Instance UID identifies a patient's study, so it is
+        // not logged here or in flush_study.
         if let Err(e) = flush_study(&study_uid, &state).await {
-            tracing::error!(
-                "dimse_to_jmix: flush failed for study {}: {}",
-                study_uid,
-                e
-            );
+            tracing::error!("dimse_to_jmix: study flush failed: {}", e);
         }
     }
     Ok(())
@@ -439,10 +437,12 @@ async fn flush_study(study_uid: &str, state: &StudyState) -> Result<(), String> 
     let (zip_path, jmix_id) = build_jmix_package(study_uid, state).await?;
 
     // Best-effort staging cleanup: never fail the flush over cleanup.
+    // The staging directory is named after the Study Instance UID, so the
+    // package id stands in for it.
     if let Err(e) = std::fs::remove_dir_all(&state.staging_dir) {
         tracing::warn!(
-            "dimse_to_jmix: could not remove staging {}: {}",
-            state.staging_dir.display(),
+            "dimse_to_jmix: could not remove staging directory for package {}: {}",
+            jmix_id,
             e
         );
     }
@@ -450,16 +450,14 @@ async fn flush_study(study_uid: &str, state: &StudyState) -> Result<(), String> 
     if !state.upstream_base_url.is_empty() {
         if let Err(e) = post_zip_upstream(&zip_path, state).await {
             tracing::error!(
-                "dimse_to_jmix: upstream POST failed for study {} (id {}): {}",
-                study_uid,
+                "dimse_to_jmix: upstream POST failed for package {}: {}",
                 jmix_id,
                 e
             );
         }
     } else {
         tracing::debug!(
-            "dimse_to_jmix: no upstream base URL for study {}; local package built at {}",
-            study_uid,
+            "dimse_to_jmix: no upstream base URL; local package built at {}",
             zip_path.display()
         );
     }
@@ -886,5 +884,58 @@ mod tests {
             2,
             "each study should produce its own package"
         );
+    }
+
+    /// Stage one instance under `study_uid`, then flush it with the log
+    /// captured. Returns the captured log text.
+    async fn flush_with_captured_log(prefix: &str, study_uid: &str, base_url: &str) -> String {
+        reset_storage();
+        clear_registry_for_test();
+        let storage = create_test_storage(prefix);
+        set_storage(storage.clone());
+        let dimse_dir = storage.ensure_dir_str("dimse").expect("dimse dir");
+        let temp_file = dimse_dir.join("CT.1.1.dcm");
+        seed_instance(&temp_file);
+
+        let mw = DimseToJmixMiddleware::new(DimseToJmixConfig {
+            idle_ms: 0,
+            sweep_interval_ms: 10_000,
+            ..DimseToJmixConfig::default()
+        });
+        mw.left(cstore_envelope(&temp_file.to_string_lossy(), study_uid, base_url))
+            .await
+            .expect("middleware left");
+
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        force_flush_now().await.expect("force flush");
+        log.contents()
+    }
+
+    /// A Study Instance UID identifies a patient's imaging study. The upload
+    /// failure is logged at ERROR, the default level.
+    #[tokio::test(flavor = "current_thread")]
+    #[serial]
+    async fn upload_failure_log_does_not_contain_study_uid() {
+        let marker = "1.2.826.0.1.424242.987654";
+        let text = flush_with_captured_log("dtj-upload-fail", marker, "http://127.0.0.1:1").await;
+
+        assert!(
+            text.contains("dimse_to_jmix: upstream POST failed for package"),
+            "log: {text}"
+        );
+        assert!(!text.contains(marker), "study UID leaked: {text}");
+    }
+
+    #[tokio::test(flavor = "current_thread")]
+    #[serial]
+    async fn local_package_log_does_not_contain_study_uid() {
+        let marker = "1.2.826.0.1.424242.123456";
+        let text = flush_with_captured_log("dtj-local-only", marker, "").await;
+
+        assert!(
+            text.contains("dimse_to_jmix: no upstream base URL; local package"),
+            "log: {text}"
+        );
+        assert!(!text.contains(marker), "study UID leaked: {text}");
     }
 }

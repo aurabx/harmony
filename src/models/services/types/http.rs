@@ -421,9 +421,12 @@ impl ServiceHandler<Value> for HttpEndpoint {
 
         let path_prefix = options.get("path_prefix").and_then(|v| v.as_str());
         if has_non_http_scheme(&target_details.uri) {
+            // The rest of the URI can carry identifiers, so only the scheme
+            // is logged. has_non_http_scheme guarantees "://" is present.
+            let scheme = target_details.uri.split("://").next().unwrap_or_default();
             tracing::debug!(
-                "HTTP backend ignoring non-HTTP request URI '{}' as backend path",
-                target_details.uri
+                "HTTP backend ignoring non-HTTP request URI with scheme '{}' as backend path",
+                scheme
             );
         }
         target_details.uri = backend_request_path(&target_details.uri, path_prefix);
@@ -901,6 +904,33 @@ mod tests {
         );
         assert!(!text.contains(marker), "search values leaked: {text}");
         assert!(!text.contains("birthdate"), "query string leaked: {text}");
+    }
+
+    /// A DIMSE request URI can carry identifiers after the scheme.
+    #[tokio::test]
+    async fn non_http_uri_log_shows_only_the_scheme() {
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        let marker = "DOE-PHI-MARKER";
+        let mut envelope = empty_envelope();
+        envelope.target_details = Some(TargetDetails {
+            base_url: "http://127.0.0.1:1".to_string(),
+            method: "POST".to_string(),
+            uri: format!("dimse://scp/{}", marker),
+            ..TargetDetails::default()
+        });
+        let mut options = HashMap::new();
+        options.insert(
+            "base_url".to_string(),
+            Value::String("http://127.0.0.1:1".to_string()),
+        );
+        let _ = HttpEndpoint {}.backend_outgoing_request(envelope, &options).await;
+
+        let text = log.contents();
+        assert!(
+            text.contains("HTTP backend ignoring non-HTTP request URI with scheme 'dimse'"),
+            "log: {text}"
+        );
+        assert!(!text.contains(marker), "request URI leaked: {text}");
     }
 
     /// A backend that promises more body than it sends makes reading the
