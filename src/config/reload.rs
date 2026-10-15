@@ -99,8 +99,8 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigDiff {
 
         // The adapters a network runs are chosen when it starts. Adding its
         // first HTTP pipeline, or removing its last DIMSE one, needs a restart.
-        if AdapterRegistry::determine_required_protocols(network_name, old)
-            != AdapterRegistry::determine_required_protocols(network_name, new)
+        if AdapterRegistry::required_protocols(network_name, old).0
+            != AdapterRegistry::required_protocols(network_name, new).0
         {
             diff.adapter_restarts_required.push((*network_name).clone());
             continue;

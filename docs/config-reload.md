@@ -13,7 +13,7 @@ Harmony supports hot-reloading configuration changes without requiring a full ap
 
 ### Zero-Downtime Changes (No Adapter Restart)
 
-These changes are picked up immediately on the next request with no service interruption. HTTP, HTTP/3 and DIMSE requests all read the live config. Each request reads it once, so a reload that lands mid-request does not mix old and new values.
+These changes are picked up immediately on the next request with no service interruption. HTTP, HTTP/3 and DIMSE requests all read the live config. For HTTP and HTTP/3, route lookup and the pipeline run use one snapshot, read when the request arrives.
 
 - **Middleware configuration**
   - Transform specs
@@ -50,6 +50,7 @@ These changes require restarting specific protocol adapters (brief interruption 
 - **Mesh routing**
   - Any change to `[mesh]`, `[ingress]`, `[egress]` or `[remote_ingress]` restarts every network
   - Each HTTP router indexes mesh ingress URLs when it starts
+  - Networks restart one at a time. Until a network restarts, a request that matches one of its mesh ingress URLs gets 503, so it never runs under mixed old and new mesh rules
   
 - **Protocol-specific settings**
   - TLS certificates

@@ -30,71 +30,21 @@ impl AdapterRegistry {
 
     /// Determine which protocols are required for a given network based on configured services
     ///
-    /// Returns a HashSet of protocols that need adapters for this network.
-    /// Scans all pipelines that reference the network and maps their endpoint services to protocols.
-    pub(crate) fn determine_required_protocols(
-        network_name: &str,
-        config: &Config,
-    ) -> HashSet<Protocol> {
-        let mut required_protocols = HashSet::new();
-        let mut found_pipelines = Vec::new();
-
-        // Find all pipelines that include this network
-        for (pipeline_name, pipeline_cfg) in &config.pipelines {
-            if pipeline_cfg.networks.contains(&network_name.to_string()) {
-                found_pipelines.push(pipeline_name.as_str());
-                tracing::debug!(
-                    "Pipeline '{}' includes network '{}'",
-                    pipeline_name,
-                    network_name
-                );
-
-                // Examine all endpoints in this pipeline
-                for endpoint_name in &pipeline_cfg.endpoints {
-                    if let Some(endpoint) = config.endpoints.get(endpoint_name) {
-                        let service_type = &endpoint.service;
-                        tracing::debug!(
-                            "Examining endpoint '{}' with service type '{}'",
-                            endpoint_name,
-                            service_type
-                        );
-
-                        // Get the protocol from the service definition
-                        match crate::models::services::services::resolve_service(service_type) {
-                            Ok(service) => {
-                                let protocol = service.required_protocol();
-                                tracing::debug!(
-                                    "Service '{}' requires protocol {:?}",
-                                    service_type,
-                                    protocol
-                                );
-                                required_protocols.insert(protocol);
-                            }
-                            Err(e) => {
-                                tracing::warn!(
-                                    "Failed to resolve service '{}' in endpoint '{}': {}",
-                                    service_type,
-                                    endpoint_name,
-                                    e
-                                );
-                            }
-                        }
-                    } else {
-                        tracing::warn!(
-                            "Endpoint '{}' referenced in pipeline '{}' not found in config",
-                            endpoint_name,
-                            pipeline_name
-                        );
-                    }
-                }
-            }
+    /// Returns a HashSet of protocols that need adapters for this network,
+    /// and logs any endpoint or service that could not be resolved.
+    fn determine_required_protocols(network_name: &str, config: &Config) -> HashSet<Protocol> {
+        let (required_protocols, problems) = Self::required_protocols(network_name, config);
+        for problem in &problems {
+            tracing::warn!("{}", problem);
         }
 
-        if found_pipelines.is_empty() {
+        let has_pipelines = config
+            .pipelines
+            .values()
+            .any(|p| p.networks.iter().any(|n| n == network_name));
+        if !has_pipelines {
             tracing::warn!("Network '{}' has no pipelines configured", network_name);
-        }
-
-        if required_protocols.is_empty() && !found_pipelines.is_empty() {
+        } else if required_protocols.is_empty() {
             tracing::warn!(
                 "Network '{}' has pipelines but no recognized service types that require protocol adapters",
                 network_name
@@ -102,6 +52,47 @@ impl AdapterRegistry {
         }
 
         required_protocols
+    }
+
+    /// The protocols `network_name` needs adapters for, with a message for
+    /// each endpoint or service that could not be resolved.
+    ///
+    /// Scans every pipeline on the network and maps its endpoints' services
+    /// to protocols. Does not log, so a reload can compare old and new
+    /// configs without repeating warnings.
+    pub(crate) fn required_protocols(
+        network_name: &str,
+        config: &Config,
+    ) -> (HashSet<Protocol>, Vec<String>) {
+        let mut required_protocols = HashSet::new();
+        let mut problems = Vec::new();
+
+        let pipelines = config
+            .pipelines
+            .iter()
+            .filter(|(_, p)| p.networks.iter().any(|n| n == network_name));
+        for (pipeline_name, pipeline_cfg) in pipelines {
+            for endpoint_name in &pipeline_cfg.endpoints {
+                let Some(endpoint) = config.endpoints.get(endpoint_name) else {
+                    problems.push(format!(
+                        "Endpoint '{}' referenced in pipeline '{}' not found in config",
+                        endpoint_name, pipeline_name
+                    ));
+                    continue;
+                };
+                match crate::models::services::services::resolve_service(&endpoint.service) {
+                    Ok(service) => {
+                        required_protocols.insert(service.required_protocol());
+                    }
+                    Err(e) => problems.push(format!(
+                        "Failed to resolve service '{}' in endpoint '{}': {}",
+                        endpoint.service, endpoint_name, e
+                    )),
+                }
+            }
+        }
+
+        (required_protocols, problems)
     }
 
     /// Start all adapters for a network

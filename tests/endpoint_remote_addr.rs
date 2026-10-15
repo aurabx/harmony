@@ -208,7 +208,6 @@ async fn ip_allowlist_gates_a_fhir_endpoint() {
         .expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
-    harmony::globals::set_config(config.clone());
     let app = build_network_router(config, "default").await;
 
     let request_from = |peer: &str| {
