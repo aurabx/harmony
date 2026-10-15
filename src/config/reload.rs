@@ -16,6 +16,12 @@ pub struct ConfigDiff {
 
     /// Networks to remove
     pub networks_to_remove: Vec<String>,
+
+    /// Tables that changed and are read, wholly or partly, at startup. The
+    /// new values are swapped in and reach anything that reads the live
+    /// config, but full effect needs a process restart.
+    #[serde(default)]
+    pub process_restart_required: Vec<String>,
 }
 
 impl ConfigDiff {
@@ -28,7 +34,9 @@ impl ConfigDiff {
 
     /// Returns true if there are any changes at all
     pub fn has_changes(&self) -> bool {
-        !self.zero_downtime_changes.is_empty() || self.requires_adapter_restart()
+        !self.zero_downtime_changes.is_empty()
+            || self.requires_adapter_restart()
+            || !self.process_restart_required.is_empty()
     }
 }
 
@@ -39,6 +47,7 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigDiff {
         adapter_restarts_required: Vec::new(),
         networks_to_add: Vec::new(),
         networks_to_remove: Vec::new(),
+        process_restart_required: Vec::new(),
     };
 
     // Check for network topology changes
@@ -86,39 +95,123 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigDiff {
             diff.adapter_restarts_required.push((*network_name).clone());
             continue;
         }
+
+        // DIMSE listeners come from endpoint and backend options, which are
+        // read only when the adapter starts. Restart when they change.
+        if crate::adapters::dimse::listener_signature(old, network_name)
+            != crate::adapters::dimse::listener_signature(new, network_name)
+        {
+            diff.adapter_restarts_required.push((*network_name).clone());
+            continue;
+        }
     }
 
-    // Check for middleware changes (zero-downtime)
-    if old.middleware != new.middleware {
-        diff.zero_downtime_changes.push("middleware".to_string());
-    }
-
-    // Check for pipeline changes (zero-downtime)
-    if old.pipelines != new.pipelines {
-        diff.zero_downtime_changes.push("pipelines".to_string());
-    }
-
-    // Check for endpoint changes (zero-downtime)
-    if old.endpoints != new.endpoints {
-        diff.zero_downtime_changes.push("endpoints".to_string());
-    }
-
-    // Check for backend changes (zero-downtime)
-    if old.backends != new.backends {
-        diff.zero_downtime_changes.push("backends".to_string());
-    }
-
-    // Check for logging changes (zero-downtime)
-    if old.logging != new.logging {
-        diff.zero_downtime_changes.push("logging".to_string());
-    }
-
-    // Check for storage changes (zero-downtime)
-    if old.storage != new.storage {
-        diff.zero_downtime_changes.push("storage".to_string());
-    }
+    classify_tables(old, new, &mut diff);
 
     diff
+}
+
+/// Sort every changed top-level table by how a reload applies it.
+///
+/// `Config` is destructured without `..`, so adding a field fails to compile
+/// until it is placed here. A table left out of every list would make a
+/// reload that changes only that table look like no change, and the watcher
+/// would drop the reload.
+fn classify_tables(old: &Config, new: &Config, diff: &mut ConfigDiff) {
+    let Config {
+        // Compared per network in `compute_diff`.
+        network: _,
+        // Read when used, so the config swap applies them.
+        middleware,
+        policies,
+        rules,
+        pipelines,
+        endpoints,
+        backends,
+        authentications,
+        // Merged into backends, endpoints and pipelines at load, so their
+        // effect also shows in those tables.
+        targets,
+        peers,
+        management,
+        // Indexed into each HTTP router's mesh registry when it starts.
+        mesh,
+        ingress,
+        egress,
+        remote_ingress,
+        // Read wholly or partly at startup: the log subscriber, the storage
+        // backend, cloud polling, plugin setup, file paths, and service and
+        // middleware type registries that can only be set once.
+        logging,
+        storage,
+        provider,
+        proxy,
+        runbeam,
+        services,
+        middleware_types,
+        extensions,
+        // Derived from other fields, or not configuration.
+        transforms: _,
+        resolved_transforms_path: _,
+        resolved_mesh_path: _,
+        unresolved_backends: _,
+        endpoint_sources: _,
+    } = new;
+
+    let zero_downtime = [
+        ("middleware", *middleware != old.middleware),
+        ("policies", *policies != old.policies),
+        ("rules", *rules != old.rules),
+        ("pipelines", *pipelines != old.pipelines),
+        ("endpoints", *endpoints != old.endpoints),
+        ("backends", *backends != old.backends),
+        ("authentications", *authentications != old.authentications),
+        ("targets", *targets != old.targets),
+        ("peers", *peers != old.peers),
+        ("management", *management != old.management),
+    ];
+    diff.zero_downtime_changes.extend(
+        zero_downtime
+            .iter()
+            .filter(|(_, changed)| *changed)
+            .map(|(name, _)| name.to_string()),
+    );
+
+    let mesh_changed = *mesh != old.mesh
+        || *ingress != old.ingress
+        || *egress != old.egress
+        || *remote_ingress != old.remote_ingress;
+    if mesh_changed {
+        let mut kept: Vec<&String> = new
+            .network
+            .keys()
+            .filter(|name| old.network.contains_key(*name))
+            .filter(|name| !diff.adapter_restarts_required.contains(name))
+            .collect();
+        kept.sort();
+        diff.adapter_restarts_required
+            .extend(kept.into_iter().cloned());
+    }
+
+    let startup_only = [
+        ("logging", *logging != old.logging),
+        ("storage", *storage != old.storage),
+        ("provider", *provider != old.provider),
+        ("proxy", *proxy != old.proxy),
+        ("runbeam", *runbeam != old.runbeam),
+        ("services", *services != old.services),
+        (
+            "middleware_types",
+            *middleware_types != old.middleware_types,
+        ),
+        ("extensions", *extensions != old.extensions),
+    ];
+    diff.process_restart_required.extend(
+        startup_only
+            .iter()
+            .filter(|(_, changed)| *changed)
+            .map(|(name, _)| name.to_string()),
+    );
 }
 
 #[cfg(test)]
@@ -215,5 +308,208 @@ mod tests {
         assert!(diff.requires_adapter_restart());
         assert!(diff.networks_to_add.contains(&"new_network".to_string()));
         assert!(diff.networks_to_remove.contains(&"old_network".to_string()));
+    }
+
+    /// A config with an HTTP pipeline and a DIMSE pipeline on `default`.
+    ///
+    /// `scp_options` is appended to the `dicom_scp` endpoint's options and
+    /// `policy_ips` fills the `ip_allow` rule on the DIMSE pipeline.
+    fn dimse_config(scp_options: &str, policy_ips: &str, http_prefix: &str) -> Config {
+        let toml = format!(
+            r#"
+[network.default]
+enable_wireguard = false
+interface = "wg0"
+[network.default.http]
+bind_address = "127.0.0.1"
+bind_port = 8080
+
+[pipelines.api]
+networks = ["default"]
+endpoints = ["api"]
+
+[pipelines.store]
+networks = ["default"]
+endpoints = ["store_scp"]
+middleware = ["gate"]
+
+[endpoints.api]
+service = "http"
+[endpoints.api.options]
+path_prefix = "{http_prefix}"
+
+[endpoints.store_scp]
+service = "dicom_scp"
+[endpoints.store_scp.options]
+local_aet = "STORE_SCP"
+port = 11112
+{scp_options}
+
+[middleware.gate]
+type = "policies"
+[middleware.gate.options]
+policies = ["office"]
+
+[policies.office]
+id = "office"
+rules = ["office_allow"]
+
+[rules.office_allow]
+id = "office_allow"
+type = "ip_allow"
+[rules.office_allow.options]
+ip_addresses = [{policy_ips}]
+"#
+        );
+        toml::from_str(&toml).expect("TOML parse error")
+    }
+
+    fn restarts_default(old: &Config, new: &Config) -> bool {
+        compute_diff(old, new)
+            .adapter_restarts_required
+            .contains(&"default".to_string())
+    }
+
+    /// Turning DCMTK off must restart the network, or the running storescp
+    /// keeps the port and the pipeline's IP rules never apply.
+    #[test]
+    fn dimse_listener_option_change_restarts_the_network() {
+        let old = dimse_config("use_dcmtk_store = true", "", "/api");
+        let new = dimse_config("use_dcmtk_store = false", "", "/api");
+        assert!(restarts_default(&old, &new));
+    }
+
+    #[test]
+    fn adding_a_dimse_endpoint_to_a_network_restarts_it() {
+        let mut old = dimse_config("", "", "/api");
+        old.pipelines.remove("store");
+        let new = dimse_config("", "", "/api");
+        assert!(restarts_default(&old, &new));
+    }
+
+    /// The internal SCP reads IP rules for each association, so a policy
+    /// change needs no restart.
+    #[test]
+    fn dimse_policy_change_does_not_restart_the_network() {
+        let old = dimse_config("", r#""10.0.0.0/8""#, "/api");
+        let new = dimse_config("", r#""192.168.0.0/16""#, "/api");
+        let diff = compute_diff(&old, &new);
+        assert!(!diff.requires_adapter_restart(), "{:?}", diff);
+        assert!(diff.zero_downtime_changes.contains(&"rules".to_string()));
+    }
+
+    #[test]
+    fn http_endpoint_change_does_not_restart_a_dimse_network() {
+        let old = dimse_config("", "", "/api");
+        let new = dimse_config("", "", "/api/v2");
+        let diff = compute_diff(&old, &new);
+        assert!(!diff.requires_adapter_restart(), "{:?}", diff);
+        assert!(diff
+            .zero_downtime_changes
+            .contains(&"endpoints".to_string()));
+    }
+
+    /// Two networks, `a` and `b`, plus whatever `extra` adds.
+    fn tables_config(extra: &str) -> Config {
+        let toml = format!(
+            r#"
+[network.a]
+enable_wireguard = false
+interface = "wg0"
+
+[network.b]
+enable_wireguard = false
+interface = "wg0"
+{extra}
+"#
+        );
+        toml::from_str(&toml).expect("TOML parse error")
+    }
+
+    /// A reload that changes only one of these tables used to be dropped as
+    /// "no changes".
+    #[test]
+    fn tables_read_on_use_are_zero_downtime_changes() {
+        let cases = [
+            (
+                "authentications",
+                "[authentications.basic]\nid = \"basic\"\nmethod = \"basic\"",
+            ),
+            (
+                "targets",
+                "[targets.pacs]\nconnection = { host = \"pacs.example.test\" }",
+            ),
+            (
+                "peers",
+                "[peers.clinic]\nconnection = { host = \"clinic.example.test\" }",
+            ),
+            ("management", "[management]\nenabled = true"),
+        ];
+        let old = tables_config("");
+        for (table, extra) in cases {
+            let new = tables_config(extra);
+            let diff = compute_diff(&old, &new);
+            assert_eq!(
+                diff.zero_downtime_changes,
+                vec![table.to_string()],
+                "table {}",
+                table
+            );
+            assert!(!diff.requires_adapter_restart(), "table {}", table);
+        }
+    }
+
+    /// The HTTP router indexes mesh ingress URLs when it starts, so a change
+    /// to any mesh table restarts every network kept by the reload.
+    #[test]
+    fn mesh_table_changes_restart_every_kept_network() {
+        let cases = [
+            (
+                "mesh",
+                "[mesh.m]\ntype = \"http\"\nprovider = \"local\"\ningress = []\negress = []",
+            ),
+            (
+                "ingress",
+                "[ingress.in]\npipeline = \"p\"\ntype = \"http\"\nurls = [\"http://a.test\"]",
+            ),
+            ("egress", "[egress.out]\npipeline = \"p\"\ntype = \"http\""),
+            (
+                "remote_ingress",
+                "[remote_ingress.far]\nurls = [\"http://far.test\"]",
+            ),
+        ];
+        let old = tables_config("");
+        for (table, extra) in cases {
+            let new = tables_config(&format!(
+                "[network.c]\nenable_wireguard = false\ninterface = \"wg0\"\n\n{}",
+                extra
+            ));
+            let diff = compute_diff(&old, &new);
+            assert_eq!(
+                diff.adapter_restarts_required,
+                vec!["a", "b"],
+                "table {}",
+                table
+            );
+            assert_eq!(diff.networks_to_add, vec!["c"], "table {}", table);
+        }
+    }
+
+    /// Startup-only tables are reported so the watcher can warn, and the
+    /// reload is still applied.
+    #[test]
+    fn startup_only_tables_require_a_process_restart() {
+        let old = tables_config("");
+        let new = tables_config(
+            "[proxy]\nid = \"renamed\"\n\n[services.http]\nmodule = \"\"\n\n\
+             [logging]\nlog_level = \"trace\"\n\n[provider.runbeam]\napi = \"https://example.test\"",
+        );
+        let diff = compute_diff(&old, &new);
+        assert_eq!(
+            diff.process_restart_required,
+            vec!["logging", "provider", "proxy", "services"]
+        );
+        assert!(diff.has_changes());
+        assert!(!diff.requires_adapter_restart());
     }
 }

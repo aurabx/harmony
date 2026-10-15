@@ -4,6 +4,7 @@ use crate::config::config::Config;
 use crate::globals::{get_config, get_storage};
 use crate::models::envelope::command::{Command, Operation};
 use crate::models::envelope::envelope::{LocalInstanceFile, ResponseEnvelope};
+use crate::models::middleware::types::policies::IpAccessRules;
 use crate::models::protocol::{Protocol, ProtocolCtx};
 use crate::pipeline::executor::PipelineExecutor;
 use async_trait::async_trait;
@@ -736,21 +737,17 @@ fn peer_meta(peer_addr: SocketAddr) -> HashMap<String, String> {
     ])
 }
 
-/// Decide whether a peer at `ip` may open a DIMSE association for `pipeline`.
+/// Compile the IP rules of every `policies` middleware on `pipeline`'s
+/// incoming chain, the same chain C-FIND, C-GET, C-MOVE and C-STORE pass
+/// through.
 ///
-/// Applies the `ip_allow` and `ip_deny` rules of every `policies` middleware
-/// on the pipeline's incoming chain, the same chain C-FIND, C-GET, C-MOVE and
-/// C-STORE pass through. Other rule types are left to those requests. A
-/// pipeline with no `policies` middleware admits every peer, as it admits
-/// every request. Returns the reason when the peer is refused, including when
-/// the pipeline or a policy cannot be read, because such a pipeline would
-/// fail every request anyway.
-fn peer_admission(
+/// Returns each middleware name with its rules. Fails when the pipeline or a
+/// policy cannot be read.
+fn pipeline_ip_access_rules(
     config: &crate::config::config::Config,
     pipeline: &str,
-    ip: IpAddr,
-) -> std::result::Result<(), String> {
-    use crate::models::middleware::types::policies::{parse_config, IpAccessRules};
+) -> std::result::Result<Vec<(String, IpAccessRules)>, String> {
+    use crate::models::middleware::types::policies::parse_config;
 
     let pipeline_cfg = config
         .pipelines
@@ -758,6 +755,7 @@ fn peer_admission(
         .ok_or_else(|| format!("pipeline '{}' not found", pipeline))?;
 
     let no_options = HashMap::new();
+    let mut all_rules = Vec::new();
     for name in pipeline_cfg.middleware.left_chain() {
         // A name with no instance block is resolved as a middleware type with
         // no options, as `build_middleware_instances_for_pipeline` does.
@@ -771,6 +769,39 @@ fn peer_admission(
         let rules = parse_config(options, &config.policies, &config.rules)
             .and_then(|parsed| IpAccessRules::from_config(&parsed))
             .map_err(|e| format!("middleware '{}' cannot be read: {}", name, e))?;
+        all_rules.push((name, rules));
+    }
+    Ok(all_rules)
+}
+
+/// Whether any `policies` middleware on `pipeline`'s incoming chain has an
+/// enabled `ip_allow` or `ip_deny` rule.
+///
+/// Fails when the pipeline or a policy cannot be read, so callers can fail
+/// closed.
+pub(crate) fn pipeline_has_ip_rules(
+    config: &crate::config::config::Config,
+    pipeline: &str,
+) -> std::result::Result<bool, String> {
+    Ok(pipeline_ip_access_rules(config, pipeline)?
+        .iter()
+        .any(|(_, rules)| !rules.is_empty()))
+}
+
+/// Decide whether a peer at `ip` may open a DIMSE association for `pipeline`.
+///
+/// Applies the `ip_allow` and `ip_deny` rules of every `policies` middleware
+/// on the pipeline's incoming chain. Other rule types are left to the
+/// requests. A pipeline with no `policies` middleware admits every peer, as
+/// it admits every request. Returns the reason when the peer is refused,
+/// including when the pipeline or a policy cannot be read, because such a
+/// pipeline would fail every request anyway.
+fn peer_admission(
+    config: &crate::config::config::Config,
+    pipeline: &str,
+    ip: IpAddr,
+) -> std::result::Result<(), String> {
+    for (name, rules) in pipeline_ip_access_rules(config, pipeline)? {
         rules
             .check_peer(ip)
             .map_err(|reason| format!("middleware '{}': {}", name, reason))?;

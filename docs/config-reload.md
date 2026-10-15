@@ -1,6 +1,6 @@
 # Config Hot-Reload Strategy
 
-**Last Updated**: 2025-11-30
+**Last Updated**: 2026-10-15
 
 ## Overview
 
@@ -17,7 +17,7 @@ These changes are picked up immediately on the next request with no service inte
 
 - **Middleware configuration**
   - Transform specs
-  - Auth rules and policies
+  - Auth rules and policies, including the top-level `[policies]` and `[rules]` tables
   - Custom middleware options
   
 - **Route definitions**
@@ -30,14 +30,9 @@ These changes are picked up immediately on the next request with no service inte
   - Timeouts and retry policies
   - Connection pool settings
   
-- **Logging settings**
-  - Log levels
-  - File paths
-  - Output formats
-
-- **Storage configuration**
-  - Backend type (filesystem, database)
-  - Paths and connection strings
+- **Other tables read when used**
+  - `[authentications]`, `[targets]`, `[peers]` and `[management]`
+  - Targets, peers and management are merged into backends, endpoints and pipelines at load, so their effect also shows there
 
 ### Adapter Restart Required
 
@@ -47,6 +42,10 @@ These changes require restarting specific protocol adapters (brief interruption 
   - Bind addresses
   - Bind ports
   - Adding/removing networks
+
+- **Mesh routing**
+  - Any change to `[mesh]`, `[ingress]`, `[egress]` or `[remote_ingress]` restarts every network
+  - Each HTTP router indexes mesh ingress URLs when it starts
   
 - **Protocol-specific settings**
   - TLS certificates
@@ -56,6 +55,28 @@ These changes require restarting specific protocol adapters (brief interruption 
 - **WireGuard configuration**
   - Interface names
   - Peer settings
+
+- **DIMSE listeners**
+  - Any change to the `dicom_scp` endpoints or persistent-SCP backends a network serves, or to their options (port, bind address, AE title, enabled operations, `use_dcmtk_store`, `persistent_store_scp`)
+  - Adding the first or removing the last `dicom_scp` endpoint on a network
+  - This includes every option of a legacy `dicom_scu` backend with `persistent_store_scp` on a network that has a `dicom_scp` endpoint, even `host` or `aet`. Such a change restarts every adapter on that network.
+  - The listener reads these options only when it starts. Within a network, the restart stops the old listener, including a DCMTK `storescp` process, before the new one binds the port. Networks restart in no fixed order, so a port moving from one network to another may fail to bind until the other network has restarted.
+
+### Process Restart Required
+
+These tables are read wholly or partly at startup:
+
+- `[logging]`: the log subscriber and log file are set up once.
+- `[storage]`: the storage backend is created once.
+- `[provider]`: the provider resolver is updated on reload, but cloud polling keeps its old interval.
+- `[proxy]`: file paths are read at startup, and some fields are read live.
+- `[runbeam]`: cloud polling starts at startup, and some fields are read live.
+- `[services]` and `[middleware_types]`: these fill registries that can be set only once.
+- `[extensions]`: plugins read these when they start.
+
+A reload that changes them still swaps in the new config, so anything that reads the live config sees the new values. The watcher logs a warning naming the tables. Restart the process for full effect.
+
+`compute_diff` lists every `Config` field by name. Adding a field fails to compile until it is put in one of these groups.
 
 ## Implementation Architecture
 
@@ -259,9 +280,10 @@ See [configuration.md](configuration.md#cloud-configuration-polling) for authori
 
 ### Partial Reload Failure
 
-- If adapter restart fails, old adapter keeps running
-- Error logged with network name
-- Other networks unaffected
+- The new config is swapped in before any adapter is stopped, restarted or started. Restarted adapters and the DIMSE peer check never run under the old config.
+- Every network in the diff is attempted, even after one fails.
+- The reload returns an error naming each network that failed. The new config stays active, because it was validated before this point.
+- A network whose restart failed may be left stopped. The watcher remembers it and restarts it on the next reload, even if that reload changes nothing. To retry after fixing an outside cause, such as a port in use, save the config file again.
 
 ## Testing Strategy
 
@@ -308,6 +330,7 @@ async fn test_invalid_config_rejected() {
 - **In-flight requests**: Requests in progress during adapter restart may fail
 - **Connection draining**: No graceful connection draining (future enhancement)
 - **Config rollback**: No automatic rollback on partial failure (future enhancement)
+- **HTTP adapters keep their start-time config**: the HTTP router builds its route table and mesh registry when the adapter starts, and runs each request's pipeline against the config it captured then. Changes listed as zero-downtime reach DIMSE at once, but reach HTTP traffic only when that network's adapters restart. This is a known defect to be fixed.
 - **Audit trail**: No config change history tracking (future enhancement)
 
 ## Best Practices

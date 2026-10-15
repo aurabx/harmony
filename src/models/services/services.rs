@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 
-#[derive(Debug, Deserialize, Default, Clone)]
+#[derive(Debug, Deserialize, Default, Clone, PartialEq)]
 #[serde(default)]
 pub struct ServiceConfig {
     /// Optional unique identifier (ULID) for this service type
