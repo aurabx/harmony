@@ -170,7 +170,9 @@ pub trait MiddlewareFactory: Send + Sync {
 }
 ```
 
-Override `validate_config` when `create()` has side effects, such as spawning tasks or writing to global state, or when it can panic. Run only the parsing part. Factories registered through `HarmonyBuilder` are added after the first config load, so their instances are checked on reload, not at startup.
+Config validation calls `validate_config`, not `validate`. Override `validate_config` when `create()` has side effects, such as spawning tasks or writing to global state, or when it can panic. Run only the parsing part.
+
+Factories registered through `HarmonyBuilder` are added after the first config load. Their instances are not checked at startup. They are checked on every reload. A bad instance can therefore start, then cause the next reload to be rejected.
 
 #### Example: Rate Limiting Middleware
 

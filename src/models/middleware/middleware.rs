@@ -146,9 +146,10 @@ pub fn validate_middleware_type_reference(name: &str, config: &Config) -> Result
 /// Factories use `MiddlewareFactory::validate_config`, which runs the same
 /// option resolution as request handling without side effects. Auth
 /// providers use `AuthProvider::validate_config`. Returns `Ok` when nothing
-/// is registered for the type: custom factories and providers are registered
-/// by `HarmonyBuilder::run` after the first config load, and unknown built-in
-/// types are rejected separately by `Config::validate_middleware_types`.
+/// is registered for the type, because custom factories and providers are
+/// registered by `HarmonyBuilder::run` after the first config load and are
+/// not declared anywhere in config. As a result a misspelled type is not
+/// caught here; it fails per request with "Unknown middleware type".
 fn validate_middleware_options(
     name: &str,
     middleware_type: &str,

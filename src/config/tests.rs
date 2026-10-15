@@ -332,3 +332,27 @@ fn test_bare_json_extractor_reference_in_pipeline_is_accepted() {
         result.err()
     );
 }
+
+#[test]
+fn test_dimse_to_jmix_middleware_rejects_empty_upstream_path() {
+    let toml = config_with_gate_middleware(
+        r#"
+        [middleware.gate]
+        type = "dimse_to_jmix"
+        [middleware.gate.options]
+        upstream_path = " "
+    "#,
+    );
+
+    match load_config_from_str(&toml) {
+        Err(ConfigError::InvalidMiddleware { name, reason }) => {
+            assert_eq!(name, "gate");
+            assert!(
+                reason.contains("upstream_path must not be empty"),
+                "unexpected reason: {}",
+                reason
+            );
+        }
+        other => panic!("expected InvalidMiddleware, got {:?}", other.map(|_| ())),
+    }
+}
