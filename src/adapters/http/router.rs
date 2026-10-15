@@ -7,6 +7,7 @@ use crate::models::middleware::{
 };
 use crate::pipeline::{PipelineError, PipelineExecutor};
 use crate::router::route_table::{method_list, RouteLookup, RouteTable};
+use arc_swap::ArcSwap;
 use axum::body::Body;
 use axum::extract::Request;
 use axum::response::{IntoResponse, Response};
@@ -26,13 +27,17 @@ use std::sync::Arc;
 ///
 /// Mesh routing takes priority: if a request matches a mesh ingress URL,
 /// it is routed to the ingress's endpoint regardless of other route matches.
+///
+/// Each request runs against the live global config, so a zero-downtime
+/// reload reaches the next request. `config` builds the mesh registry, which
+/// stays fixed until the adapter restarts; a mesh change restarts every
+/// network (see `config::reload`).
 pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Router {
     // Build mesh registry for priority routing (with remote reference resolution)
     let resolver = crate::globals::get_provider_resolver();
     let mesh_registry = Arc::new(
         MeshRegistry::from_config_with_resolver(&config, resolver).await
     );
-    let mesh_config = config.clone();
 
     tracing::info!(
         "🔧 Building router for network '{}' with {} pipelines",
@@ -40,9 +45,92 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
         config.pipelines.len()
     );
 
+    let routes = Arc::new(LiveRouteTable::new(config, network_name));
+    let dispatch = move |req: Request| {
+        let routes = routes.clone();
+        async move { dispatch_request(req, routes).await }
+    };
+    let mut app = Router::new()
+        .route("/", any(dispatch.clone()))
+        .route("/{*path}", any(dispatch));
+
+    // Add mesh routing layer - this runs FIRST before normal route matching
+    // If request matches a mesh ingress URL, it's handled here and normal routes are bypassed
+    if !mesh_registry.is_empty() {
+        let mesh_registry_layer = mesh_registry.clone();
+
+        app = app.layer(axum::middleware::from_fn(move |req: Request, next: axum::middleware::Next| {
+            let mesh_registry = mesh_registry_layer.clone();
+            async move {
+                mesh_routing_layer(req, next, mesh_registry).await
+            }
+        }));
+
+        tracing::info!("🔗 Mesh routing layer registered (priority routing)");
+    }
+
+    app
+}
+
+/// The config a request runs against: the one the last reload published.
+///
+/// `lib::run_with_reload` publishes the config before any adapter starts, so
+/// a missing config is a startup bug. The request fails with 500 rather than
+/// fall back to a config that may predate a reload.
+pub(crate) fn live_config() -> Result<Arc<Config>, StatusCode> {
+    crate::globals::get_config().ok_or_else(|| {
+        tracing::error!("Request rejected: no config has been published");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+/// The route table for one network, kept in step with the live config.
+///
+/// A zero-downtime reload can change endpoint paths and which pipelines run
+/// on a network, so the table cannot be fixed when the adapter starts. It is
+/// rebuilt the first time a request sees a newly published config. Between
+/// reloads the check is one pointer compare.
+struct LiveRouteTable {
+    network_name: String,
+    /// The config the table was built from, and the table.
+    current: ArcSwap<(Arc<Config>, Arc<RouteTable>)>,
+}
+
+impl LiveRouteTable {
+    fn new(config: Arc<Config>, network_name: &str) -> Self {
+        let table = Arc::new(build_route_table(&config, network_name));
+        Self {
+            network_name: network_name.to_string(),
+            current: ArcSwap::from_pointee((config, table)),
+        }
+    }
+
+    /// The table for `config`, rebuilt and cached if `config` is not the one
+    /// the cached table came from.
+    ///
+    /// Requests that straddle a reload may hold different configs and rebuild
+    /// in turn. Each still gets the table that matches its own config.
+    fn table_for(&self, config: &Arc<Config>) -> Arc<RouteTable> {
+        let current = self.current.load();
+        if Arc::ptr_eq(&current.0, config) {
+            return current.1.clone();
+        }
+        tracing::info!(
+            "🔄 Rebuilding routes for network '{}' from the reloaded config",
+            self.network_name
+        );
+        let table = Arc::new(build_route_table(config, &self.network_name));
+        self.current
+            .store(Arc::new((config.clone(), table.clone())));
+        table
+    }
+}
+
+/// Build the route table for `network_name` and log what it holds.
+fn build_route_table(config: &Config, network_name: &str) -> RouteTable {
     // Config validation rejects these problems at load time. A config that
     // skipped validation still gets a working router without the bad routes.
-    let (table, problems) = RouteTable::build(&config, network_name);
+    let (table, problems) = RouteTable::build(config, network_name);
     for problem in &problems {
         tracing::error!(
             "Route not registered on network '{}': {}",
@@ -59,43 +147,19 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
             entry.owner.pipeline
         );
     }
-
-    let table = Arc::new(table);
-    let dispatch = move |req: Request| {
-        let table = table.clone();
-        let config = config.clone();
-        async move { dispatch_request(req, table, config).await }
-    };
-    let mut app = Router::new()
-        .route("/", any(dispatch.clone()))
-        .route("/{*path}", any(dispatch));
-
-    // Add mesh routing layer - this runs FIRST before normal route matching
-    // If request matches a mesh ingress URL, it's handled here and normal routes are bypassed
-    if !mesh_registry.is_empty() {
-        let mesh_registry_layer = mesh_registry.clone();
-        let mesh_config_layer = mesh_config.clone();
-
-        app = app.layer(axum::middleware::from_fn(move |req: Request, next: axum::middleware::Next| {
-            let mesh_registry = mesh_registry_layer.clone();
-            let config = mesh_config_layer.clone();
-            async move {
-                mesh_routing_layer(req, next, config, mesh_registry).await
-            }
-        }));
-
-        tracing::info!("🔗 Mesh routing layer registered (priority routing)");
-    }
-
-    app
+    table
 }
 
 /// Send one request to the endpoint the route table picks for it.
-async fn dispatch_request(
-    mut req: Request,
-    table: Arc<RouteTable>,
-    config: Arc<Config>,
-) -> Response<Body> {
+///
+/// The config is read once, so route lookup and the pipeline run see the
+/// same config even if a reload lands mid-request.
+async fn dispatch_request(mut req: Request, routes: Arc<LiveRouteTable>) -> Response<Body> {
+    let config = match live_config() {
+        Ok(config) => config,
+        Err(status) => return status.into_response(),
+    };
+    let table = routes.table_for(&config);
     let (endpoint_name, pipeline_name) = match table.lookup(req.method(), req.uri().path()) {
         RouteLookup::Found(entry) => (entry.owner.endpoint.clone(), entry.owner.pipeline.clone()),
         RouteLookup::MethodNotAllowed(allowed) => {
@@ -120,7 +184,6 @@ async fn dispatch_request(
 async fn mesh_routing_layer(
     mut req: Request,
     next: axum::middleware::Next,
-    config: Arc<Config>,
     mesh_registry: Arc<MeshRegistry>,
 ) -> Response<Body> {
     use crate::models::mesh::config::IngressEgressMode;
@@ -158,6 +221,11 @@ async fn mesh_routing_layer(
             route_match.endpoint_name,
             route_match.context.mesh_name
         );
+
+        let config = match live_config() {
+            Ok(config) => config,
+            Err(status) => return status.into_response(),
+        };
 
         // Handle via mesh routing - bypasses normal routes
         return match handle_request_with_mesh(

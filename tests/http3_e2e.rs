@@ -273,6 +273,7 @@ async fn http3_post(
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http3_get_request() {
     install_crypto_provider();
 
@@ -301,6 +302,7 @@ async fn test_http3_get_request() {
     let cli = Cli::new(config_path);
     let config = Config::from_args(cli);
     let config_arc = Arc::new(config);
+    harmony::globals::set_config(config_arc.clone());
 
     let registry = Arc::new(AdapterRegistry::new());
     registry
@@ -332,6 +334,7 @@ async fn test_http3_get_request() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http3_post_request_with_body() {
     install_crypto_provider();
 
@@ -360,6 +363,7 @@ async fn test_http3_post_request_with_body() {
     let cli = Cli::new(config_path);
     let config = Config::from_args(cli);
     let config_arc = Arc::new(config);
+    harmony::globals::set_config(config_arc.clone());
 
     let registry = Arc::new(AdapterRegistry::new());
     registry
@@ -397,6 +401,7 @@ async fn test_http3_post_request_with_body() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http3_not_found() {
     install_crypto_provider();
 
@@ -425,6 +430,7 @@ async fn test_http3_not_found() {
     let cli = Cli::new(config_path);
     let config = Config::from_args(cli);
     let config_arc = Arc::new(config);
+    harmony::globals::set_config(config_arc.clone());
 
     let registry = Arc::new(AdapterRegistry::new());
     registry
@@ -504,6 +510,7 @@ async fn http3_status_behind_ip_gate(http_port: u16, http3_port: u16, cidr: &str
     let cli = Cli::new(config_path);
     let config = Config::from_args(cli);
     let config_arc = Arc::new(config);
+    harmony::globals::set_config(config_arc.clone());
 
     let registry = Arc::new(AdapterRegistry::new());
     registry
@@ -527,6 +534,7 @@ async fn http3_status_behind_ip_gate(http_port: u16, http3_port: u16, cidr: &str
 /// client passes an allowlist that contains it. Before the fix every HTTP/3
 /// request failed the gate with 403 because the client IP was unknown.
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http3_ip_allow_admits_client_in_allowlist() {
     let status = http3_status_behind_ip_gate(19087, 19446, "127.0.0.1/32").await;
     assert_eq!(status, 200, "loopback client should pass a 127.0.0.1/32 allowlist");
@@ -535,7 +543,74 @@ async fn test_http3_ip_allow_admits_client_in_allowlist() {
 /// AURA-2417: the gate compares the real peer address, so a loopback client
 /// is still denied by an allowlist that does not contain it.
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http3_ip_allow_denies_client_outside_allowlist() {
     let status = http3_status_behind_ip_gate(19088, 19447, "10.0.0.0/8").await;
     assert_eq!(status, 403, "loopback client should fail a 10.0.0.0/8 allowlist");
+}
+
+/// Send HTTP/3 GETs to `path` until one returns `expected` or `within`
+/// passes. Returns the last status seen; 0 means the request failed.
+async fn poll_http3_status(
+    cert_pem: &str,
+    addr: SocketAddr,
+    path: &str,
+    expected: u16,
+    within: Duration,
+) -> u16 {
+    let deadline = tokio::time::Instant::now() + within;
+    loop {
+        let status = http3_get(build_client_config(cert_pem), addr, path)
+            .await
+            .map(|(status, _)| status)
+            .unwrap_or(0);
+        if status == expected || tokio::time::Instant::now() >= deadline {
+            return status;
+        }
+        tokio::time::sleep(Duration::from_millis(200)).await;
+    }
+}
+
+/// A reload that changes only an IP rule needs no adapter restart, so the
+/// running HTTP/3 adapter must apply the new rule to the next request.
+#[tokio::test]
+#[serial_test::serial]
+async fn test_http3_reload_applies_policy_change() {
+    install_crypto_provider();
+    let (http_port, http3_port) = (19089, 19448);
+
+    let (cert_pem, key_pem) = generate_self_signed_cert();
+    let temp_dir = TempDir::new().unwrap();
+    let cert_path = temp_dir.path().join("cert.pem");
+    let key_path = temp_dir.path().join("key.pem");
+    fs::write(&cert_path, &cert_pem).unwrap();
+    fs::write(&key_path, &key_pem).unwrap();
+    let write_config = |cidr: &str| {
+        create_http3_test_config_with_middleware(
+            &temp_dir,
+            http_port,
+            http3_port,
+            cert_path.to_str().unwrap(),
+            key_path.to_str().unwrap(),
+            "\"ip_gate\"",
+            &ip_gate_middleware_toml(cidr),
+        )
+    };
+
+    let config_path = write_config("127.0.0.1/32");
+    let config = Config::from_args(Cli::new(config_path.clone()));
+    let server = tokio::spawn(harmony::run_with_reload(config, Some(config_path)));
+    let addr: SocketAddr = format!("127.0.0.1:{}", http3_port).parse().unwrap();
+
+    let before = poll_http3_status(&cert_pem, addr, "/api/ping", 200, Duration::from_secs(5)).await;
+
+    write_config("10.0.0.0/8");
+    let after = poll_http3_status(&cert_pem, addr, "/api/ping", 403, Duration::from_secs(10)).await;
+
+    server.abort();
+    if let Some(registry) = harmony::globals::get_adapter_registry() {
+        registry.stop_all().await.ok();
+    }
+    assert_eq!(before, 200, "127.0.0.1 should pass the 127.0.0.1/32 allowlist");
+    assert_eq!(after, 403, "after reload, 127.0.0.1 should fail the 10.0.0.0/8 allowlist");
 }

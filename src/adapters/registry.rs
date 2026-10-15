@@ -32,7 +32,10 @@ impl AdapterRegistry {
     ///
     /// Returns a HashSet of protocols that need adapters for this network.
     /// Scans all pipelines that reference the network and maps their endpoint services to protocols.
-    fn determine_required_protocols(network_name: &str, config: &Config) -> HashSet<Protocol> {
+    pub(crate) fn determine_required_protocols(
+        network_name: &str,
+        config: &Config,
+    ) -> HashSet<Protocol> {
         let mut required_protocols = HashSet::new();
         let mut found_pipelines = Vec::new();
 

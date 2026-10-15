@@ -2,14 +2,17 @@ use crate::adapters::registry::AdapterRegistry;
 use crate::config::config::Config;
 use crate::integrations::provider_resolver::ProviderResolver;
 use crate::storage::StorageBackend;
-use arc_swap::ArcSwap;
+use arc_swap::ArcSwapOption;
 use once_cell::sync::Lazy;
 use std::sync::{Arc, RwLock};
 use tokio::sync::mpsc;
 use tokio_util::sync::CancellationToken;
 
-/// Global configuration using ArcSwap for lock-free reads
-static CONFIG: Lazy<ArcSwap<Option<Config>>> = Lazy::new(|| ArcSwap::from_pointee(None));
+/// Global configuration using ArcSwap for lock-free reads.
+///
+/// HTTP and HTTP/3 adapters read this on every request, so a read hands out
+/// the stored `Arc` and never copies the `Config`.
+static CONFIG: Lazy<ArcSwapOption<Config>> = Lazy::new(|| ArcSwapOption::from(None));
 static STORAGE_CELL: Lazy<RwLock<Option<Arc<dyn StorageBackend>>>> =
     Lazy::new(|| RwLock::new(None));
 static ADAPTER_REGISTRY: Lazy<RwLock<Option<Arc<AdapterRegistry>>>> =
@@ -24,13 +27,15 @@ static CLOUD_POLL_TRIGGER: Lazy<RwLock<Option<mpsc::UnboundedSender<()>>>> =
 
 /// Set the global configuration (initial setup or reload)
 pub fn set_config(config: Arc<Config>) {
-    CONFIG.store(Arc::new(Some((*config).clone())));
+    CONFIG.store(Some(config));
 }
 
 /// Get the current configuration (lock-free read)
+///
+/// Returns the published `Arc` itself. Two calls between reloads return
+/// pointers that compare equal with `Arc::ptr_eq`.
 pub fn get_config() -> Option<Arc<Config>> {
-    let guard = CONFIG.load();
-    guard.as_ref().as_ref().map(|c| Arc::new(c.clone()))
+    CONFIG.load_full()
 }
 
 pub fn set_storage(storage: Arc<dyn StorageBackend>) {
