@@ -3,14 +3,15 @@
 use std::net::SocketAddr;
 use std::sync::atomic::Ordering;
 
-use dicom_ul::association::server::{AcceptAny, ServerAssociationOptions};
+use dicom_ul::association::server::{AccessControl, ServerAssociationOptions};
+use dicom_ul::pdu::{AssociationRJServiceUserReason, UserIdentity};
 use dicom_ul::prelude::*;
 use dicom_ul::Pdu;
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 
 use crate::{DimseError, Result};
 
-use super::DimseScp;
+use super::{DimseScp, PeerAdmission};
 use super::commands;
 use super::message_assembler::MessageAssembler;
 use super::pdu_handler;
@@ -43,13 +44,34 @@ async fn handle_association_inner(
 ) -> Result<()> {
     info!("Starting association with {}", peer_addr);
 
+    let verdict = peer_verdict(scp, peer_addr).await;
+
     // Build server association options based on config
     // Use promiscuous mode to accept any presentation context
     let scp_options = ServerAssociationOptions::new()
         .ae_title(scp.config.local_aet.as_str())
-        .ae_access_control(AcceptAny)
+        .ae_access_control(verdict)
         .max_pdu_length(scp.config.max_pdu)
         .promiscuous(true);
+
+    if !verdict.admit {
+        // The rejection was logged by `peer_verdict`. Reading the request only
+        // serves to answer it with an A-ASSOCIATE-RJ, so a silent peer is cut
+        // off after the connect timeout instead of holding an association slot.
+        match tokio::time::timeout(scp.config.connect_timeout(), scp_options.establish_async(stream))
+            .await
+        {
+            Ok(Ok(_)) => {
+                error!(
+                    "Association from {} was accepted although the peer was rejected; closing it",
+                    peer_addr
+                );
+            }
+            Ok(Err(e)) => debug!("Sent A-ASSOCIATE-RJ to {}: {}", peer_addr, e),
+            Err(_) => debug!("Rejected peer {} sent no association request in time", peer_addr),
+        }
+        return Ok(());
+    }
 
     // Establish the association
     let mut association = scp_options.establish_async(stream).await.map_err(|e| {
@@ -120,4 +142,50 @@ async fn handle_association_inner(
 
     info!("Association with {} completed", peer_addr);
     Ok(())
+}
+
+/// Ask the query provider whether `peer_addr` may open an association.
+///
+/// A provider error counts as a reject, so the SCP fails closed.
+async fn peer_verdict(scp: &DimseScp, peer_addr: SocketAddr) -> PeerVerdict {
+    match scp.query_provider.admit_peer(peer_addr).await {
+        Ok(PeerAdmission::Admit) => PeerVerdict { admit: true },
+        Ok(PeerAdmission::Reject { reason }) => {
+            warn!("Association from {} rejected: {}", peer_addr, reason);
+            PeerVerdict { admit: false }
+        }
+        Err(e) => {
+            error!(
+                "Association from {} rejected: peer admission check failed: {}",
+                peer_addr, e
+            );
+            PeerVerdict { admit: false }
+        }
+    }
+}
+
+/// Access control for one association, holding a decision made in advance.
+///
+/// `dicom_ul` checks access synchronously and without the peer address, so
+/// the async peer check runs first and its result is carried in here. A
+/// rejected peer gets a permanent A-ASSOCIATE-RJ from `dicom_ul`.
+#[derive(Debug, Clone, Copy)]
+struct PeerVerdict {
+    admit: bool,
+}
+
+impl AccessControl for PeerVerdict {
+    fn check_access(
+        &self,
+        _this_ae_title: &str,
+        _calling_ae_title: &str,
+        _called_ae_title: &str,
+        _user_identity: Option<&UserIdentity>,
+    ) -> std::result::Result<(), AssociationRJServiceUserReason> {
+        if self.admit {
+            Ok(())
+        } else {
+            Err(AssociationRJServiceUserReason::NoReasonGiven)
+        }
+    }
 }
