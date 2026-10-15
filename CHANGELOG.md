@@ -5,7 +5,7 @@
 ### Added
 - (AURA-2391) Native C-GET SCU on dicom-ul 0.10 with SCP/SCU role negotiation. Instances stream out as they are received; without an output directory nothing touches disk.
 - (AURA-2391) `transfer_syntaxes` option on `dicom_scu_streaming` to choose the transfer syntaxes proposed for C-GET storage contexts.
-- `content = "dicom_part10"` option on the `storage` backend. Behind a `dicom_scp` endpoint it writes each received C-STORE instance as a Part 10 file at `write_pattern`. It runs after the pipeline's middleware, so the backend does not write a C-STORE that `policies` denies. It never reads the `file` path in the request body. See docs/backends.md.
+- `content = "dicom_part10"` option on the `storage` backend. Behind a `dicom_scp` endpoint it writes each received C-STORE instance as a Part 10 file at `write_pattern`. It runs after the pipeline's middleware, so the backend does not write a C-STORE that `policies` denies. The endpoint hands the backend its working copy of the instance inside the process, and the backend uploads it in chunks, so instances up to the 4 GiB limit are not held in memory. It never reads the `file` path in the request body. A resend of identical bytes counts as stored, and different bytes at an existing path fail the store. See docs/backends.md.
 - (AURA-2433) `forward_authorization` backend option. Set it to `true` to pass the client's `Authorization` header to the upstream when the backend has no authentication of its own. See docs/backends.md.
 
 ### Changed

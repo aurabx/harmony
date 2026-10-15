@@ -454,12 +454,14 @@ write_pattern = "{StudyInstanceUID}/{SeriesInstanceUID}/{SOPInstanceUID}.dcm"
 
 - The backend runs after the pipeline's middleware. The backend does not write a C-STORE that `policies` denies.
 - The endpoint also keeps a working copy of each instance under `[storage]/dimse` while the pipeline runs.
-- The backend must be the pipeline's first backend. Otherwise the endpoint does not send the instance, and every store fails.
-- A middleware that rewrites the request body must keep `part10_b64`. If it drops it, every store fails.
-- The endpoint sends the instance inside the request as `part10_b64`. The backend never reads the `file` path in the body.
+- The backend must be the pipeline's first backend. Otherwise the endpoint does not hand it the instance, and every store fails.
+- The endpoint hands the backend its working copy of the instance inside the process. Middleware cannot see or change it, and a request cannot name it. The backend never reads the `file` path in the body.
+- The backend uploads the instance in 10 MiB chunks, so memory use stays small for large instances such as tomosynthesis. It uploads to a temporary name next to the final path, copies it to the final path, then deletes the temporary name.
+- Over HTTP, the backend takes the Part 10 file as the request body, or as base64 in `part10_b64` of a JSON body. That path holds the whole instance in memory.
 - `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID` and `PatientID` come from the instance. A value that breaks the placeholder rules fails the store. The device then gets status `0xC000` and keeps its copy.
 - A body with no Part 10 instance fails the write.
 - A resend of the same bytes counts as stored. Different bytes at an existing path fail the write, so a peer cannot replace an archived instance by reusing its UIDs.
+- On the local filesystem the final copy is atomic. On S3 it is a check followed by a copy, because Harmony does not configure S3 conditional copy. Two different instances with the same path that arrive at the same moment can both pass the check, and the second replaces the first.
 - Error messages do not include the write path, which may hold patient data.
 - An unknown `content` value fails every write.
 

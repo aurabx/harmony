@@ -455,6 +455,10 @@ impl PipelineExecutor {
             left_chain
         );
 
+        // Middleware never sees the endpoint's local file, so it cannot read
+        // it or swap it. It goes back on the envelope for the backend.
+        let local_instance = envelope.local_instance.take();
+
         // Convert to JSON envelope for middleware processing. `json_value` is
         // also kept as the baseline that tells us whether any middleware
         // replaced `original_data` (see `request_body_rewrite`).
@@ -525,7 +529,7 @@ impl PipelineExecutor {
         };
 
         // Convert back to Vec<u8> envelope
-        let processed_envelope = RequestEnvelope::builder()
+        let mut processed_envelope = RequestEnvelope::builder()
             .method(processed_json_envelope.request_details.method)
             .uri(processed_json_envelope.request_details.uri)
             .headers(processed_json_envelope.request_details.headers)
@@ -541,6 +545,7 @@ impl PipelineExecutor {
             .normalized_snapshot(processed_json_envelope.normalized_snapshot)
             .build()
             .expect("Failed to build processed_envelope");
+        processed_envelope.local_instance = local_instance;
 
         Ok(processed_envelope)
     }

@@ -86,6 +86,7 @@ mod tests {
             original_data: original_data.clone(),
             normalized_data: None,
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result = middleware.left(envelope).await.unwrap();
@@ -109,6 +110,7 @@ mod tests {
             original_data: original_data.clone(),
             normalized_data: Some(normalized_data.clone()),
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result = middleware.left(envelope).await.unwrap();
@@ -132,6 +134,7 @@ mod tests {
             original_data: original_data.clone(),
             normalized_data: None,
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result = middleware.left(envelope).await.unwrap();
@@ -154,6 +157,7 @@ mod tests {
             original_data: original_data.clone(),
             normalized_data: None,
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result = middleware.left(envelope).await.unwrap();
@@ -176,6 +180,7 @@ mod tests {
             original_data: original_data.clone(),
             normalized_data: None,
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result = middleware.left(envelope).await.unwrap();
@@ -204,6 +209,7 @@ mod tests {
             original_data: original_data.clone(),
             normalized_data: None,
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result = middleware.left(envelope).await.unwrap();
@@ -251,6 +257,7 @@ mod tests {
             original_data: original_data.clone(),
             normalized_data: None,
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result1 = middleware1.left(envelope.clone()).await.unwrap();

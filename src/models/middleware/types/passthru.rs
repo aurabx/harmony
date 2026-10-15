@@ -93,6 +93,7 @@ mod tests {
             original_data,
             normalized_data: Some(normalized_data),
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result = middleware.left(envelope).await.unwrap();
@@ -117,6 +118,7 @@ mod tests {
             original_data,
             normalized_data: None,
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result = middleware.left(envelope).await.unwrap();
@@ -141,6 +143,7 @@ mod tests {
             original_data,
             normalized_data: Some(normalized_data.clone()),
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result = middleware.left(envelope).await.unwrap();
@@ -236,6 +239,7 @@ mod tests {
             original_data,
             normalized_data: Some(json!({})),
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let after_left = middleware.left(request_envelope).await.unwrap();
@@ -276,6 +280,7 @@ mod tests {
             original_data,
             normalized_data: Some(json!({})),
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result1 = middleware1.left(envelope.clone()).await.unwrap();

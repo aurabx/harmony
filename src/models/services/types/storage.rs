@@ -6,15 +6,17 @@ use async_trait::async_trait;
 use axum::{body::Body, response::Response};
 use chrono::Utc;
 use futures_util::StreamExt;
+use object_store::buffered::BufWriter;
 use object_store::local::LocalFileSystem;
 use object_store::{ObjectStore, PutMode, PutOptions, path::Path as ObjectStorePath};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
 use std::sync::Arc;
+use tokio::io::{AsyncReadExt, AsyncSeekExt, AsyncWriteExt};
 use uuid::Uuid;
 
-use super::dicom_store_body::part10_from_store_body;
+use super::dicom_store_body::{is_part10, part10_from_store_body};
 
 /// The `content` value that writes the DICOM Part 10 instance of a C-STORE.
 pub(crate) const CONTENT_DICOM_PART10: &str = "dicom_part10";
@@ -270,6 +272,148 @@ impl StorageBackend {
         }
     }
 
+    /// Copy the endpoint's local copy of a DICOM instance to `path`.
+    ///
+    /// The file is uploaded in chunks to a temporary name next to `path`, so
+    /// memory use stays at about one chunk whatever the instance size. It is
+    /// then copied to `path` only if nothing is there yet, and the temporary
+    /// name is deleted. As with `put_dicom_instance`, identical bytes at
+    /// `path` count as stored and different bytes fail the write.
+    async fn copy_local_instance(
+        store: Arc<dyn ObjectStore>,
+        path: &ObjectStorePath,
+        local: &std::path::Path,
+    ) -> Result<(), Error> {
+        let mut file = tokio::fs::File::open(local)
+            .await
+            .map_err(|e| Self::local_error("open the received instance", e))?;
+        Self::check_part10_header(&mut file).await?;
+
+        let staging = ObjectStorePath::parse(format!("{}.partial-{}", path, Uuid::new_v4()))
+            .map_err(|e| {
+                tracing::debug!("Invalid storage staging path: {}", e);
+                Error::from("the resolved write path has a segment that is not allowed")
+            })?;
+        Self::upload_file(Arc::clone(&store), &staging, &mut file).await?;
+
+        let published = Self::publish_staged(store.as_ref(), &staging, path, local).await;
+        if let Err(e) = store.delete(&staging).await {
+            tracing::warn!("Failed to delete a staged storage upload: {}", Self::write_error(e));
+        }
+        published
+    }
+
+    /// Fail unless `file` starts like a DICOM Part 10 file, then rewind it.
+    async fn check_part10_header(file: &mut tokio::fs::File) -> Result<(), Error> {
+        let mut header = Vec::with_capacity(133);
+        (&mut *file)
+            .take(133)
+            .read_to_end(&mut header)
+            .await
+            .map_err(|e| Self::local_error("read the received instance", e))?;
+        if !is_part10(&header) {
+            return Err(Error::from(format!(
+                "storage backend with content = '{}': the received instance is not a DICOM Part 10 file",
+                CONTENT_DICOM_PART10
+            )));
+        }
+        file.seek(std::io::SeekFrom::Start(0))
+            .await
+            .map_err(|e| Self::local_error("read the received instance", e))?;
+        Ok(())
+    }
+
+    async fn upload_file(
+        store: Arc<dyn ObjectStore>,
+        staging: &ObjectStorePath,
+        file: &mut tokio::fs::File,
+    ) -> Result<(), Error> {
+        let mut writer = BufWriter::new(store, staging.clone());
+        let copied = tokio::io::copy(file, &mut writer).await;
+        let finished = match copied {
+            Ok(_) => writer.shutdown().await,
+            Err(e) => Err(e),
+        };
+        if let Err(e) = finished {
+            if let Err(abort) = writer.abort().await {
+                tracing::debug!("Failed to abort a storage upload: {}", abort);
+            }
+            return Err(Self::local_error("upload the received instance", e));
+        }
+        Ok(())
+    }
+
+    /// Copy `staging` to `path` unless something is already at `path`.
+    ///
+    /// S3 without a conditional-copy setting cannot do this atomically. There
+    /// the check and the copy are two calls. Two different instances with the
+    /// same path that arrive together can both pass the check, and the second
+    /// copy replaces the first.
+    async fn publish_staged(
+        store: &dyn ObjectStore,
+        staging: &ObjectStorePath,
+        path: &ObjectStorePath,
+        local: &std::path::Path,
+    ) -> Result<(), Error> {
+        match store.copy_if_not_exists(staging, path).await {
+            Ok(()) => Ok(()),
+            Err(object_store::Error::AlreadyExists { .. }) => {
+                Self::check_same_instance(store, path, local).await
+            }
+            Err(object_store::Error::NotSupported { .. }) => match store.head(path).await {
+                Ok(_) => Self::check_same_instance(store, path, local).await,
+                Err(object_store::Error::NotFound { .. }) => {
+                    store.copy(staging, path).await.map_err(Self::write_error)
+                }
+                Err(e) => Err(Self::write_error(e)),
+            },
+            Err(e) => Err(Self::write_error(e)),
+        }
+    }
+
+    /// Succeed when the object at `path` has the same bytes as `local`.
+    /// Both are read in chunks.
+    async fn check_same_instance(
+        store: &dyn ObjectStore,
+        path: &ObjectStorePath,
+        local: &std::path::Path,
+    ) -> Result<(), Error> {
+        let different =
+            || Error::from("a different instance is already stored at the write path");
+        let existing = store.get(path).await.map_err(Self::write_error)?;
+        let local_len = tokio::fs::metadata(local)
+            .await
+            .map_err(|e| Self::local_error("read the received instance", e))?
+            .len();
+        if existing.meta.size != local_len {
+            return Err(different());
+        }
+
+        let mut file = tokio::fs::File::open(local)
+            .await
+            .map_err(|e| Self::local_error("open the received instance", e))?;
+        let mut stream = existing.into_stream();
+        let mut buffer = Vec::new();
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.map_err(Self::write_error)?;
+            buffer.resize(chunk.len(), 0);
+            file.read_exact(&mut buffer)
+                .await
+                .map_err(|e| Self::local_error("read the received instance", e))?;
+            if buffer.as_slice() != chunk.as_ref() {
+                return Err(different());
+            }
+        }
+        Ok(())
+    }
+
+    /// Describe a local I/O error by its kind only. Its message may hold a
+    /// path.
+    fn local_error(action: &str, e: std::io::Error) -> Error {
+        tracing::debug!("Storage backend failed to {}: {}", action, e);
+        Error::from(format!("Failed to {}: {}", action, e.kind()))
+    }
+
     /// Describe a store error without its message. object_store messages
     /// hold the full path, which may hold patient data.
     fn write_error(e: object_store::Error) -> Error {
@@ -437,13 +581,23 @@ impl ServiceHandler<Value> for StorageBackend {
                 .or(self.write_pattern.as_deref())
                 .ok_or(Error::from("Missing write_pattern for storage backend"))?;
 
-             let bytes = self.write_bytes(options, &envelope.original_data)?;
+             let content = self.write_content(options).map_err(Error::from)?;
              let path = self.resolve_write_path(pattern, &envelope)?;
 
-             if self.write_content(options).map_err(Error::from)? == WriteContent::DicomPart10 {
-                 Self::put_dicom_instance(store.as_ref(), &path, bytes::Bytes::from(bytes)).await?;
-             } else {
-                 store.put(&path, bytes.into()).await.map_err(Self::write_error)?;
+             match (content, envelope.local_instance.as_ref()) {
+                 (WriteContent::DicomPart10, Some(local)) => {
+                     Self::copy_local_instance(Arc::clone(&store), &path, local.path()).await?;
+                 }
+                 (WriteContent::DicomPart10, None) => {
+                     let bytes = self.write_bytes(options, &envelope.original_data)?;
+                     Self::put_dicom_instance(store.as_ref(), &path, bytes::Bytes::from(bytes)).await?;
+                 }
+                 (WriteContent::Body, _) => {
+                     store
+                         .put(&path, envelope.original_data.clone().into())
+                         .await
+                         .map_err(Self::write_error)?;
+                 }
              }
              
              // Return location
@@ -798,5 +952,98 @@ mod tests {
 
         assert_ne!(path.as_ref(), "files/victim.bin");
         assert!(Uuid::parse_str(path.as_ref().trim_start_matches("files/").trim_end_matches(".bin")).is_ok());
+    }
+
+    fn local_instance_envelope(file: &std::path::Path) -> RequestEnvelope<Vec<u8>> {
+        let mut envelope = store_envelope(serde_json::json!({ "file": "/etc/passwd" }));
+        envelope.local_instance = Some(
+            crate::models::envelope::envelope::LocalInstanceFile::new(file.to_path_buf()),
+        );
+        envelope
+    }
+
+    /// Bigger than one 10 MiB upload chunk, so the copy takes several parts.
+    fn large_part10() -> Vec<u8> {
+        let mut bytes = fake_part10();
+        bytes.extend((0..30 * 1024 * 1024).map(|i| (i % 251) as u8));
+        bytes
+    }
+
+    #[tokio::test]
+    async fn test_dicom_part10_streams_the_local_instance() {
+        let root = tempdir().unwrap();
+        let input = tempdir().unwrap();
+        let options = part10_options(&root.path().to_string_lossy());
+        let instance = large_part10();
+        let local = input.path().join("received.dcm");
+        std::fs::write(&local, &instance).unwrap();
+
+        let response = StorageBackend::default()
+            .backend_outgoing_request(local_instance_envelope(&local), &options)
+            .await
+            .unwrap();
+
+        assert_eq!(response.response_details.status, 201);
+        let study_dir = root.path().join("1.2.3");
+        assert_eq!(std::fs::read(study_dir.join("1.2.3.4.dcm")).unwrap(), instance);
+        let names: Vec<_> = std::fs::read_dir(&study_dir)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(names, vec!["1.2.3.4.dcm"], "the staged upload is removed");
+    }
+
+    #[tokio::test]
+    async fn test_dicom_part10_local_instance_is_not_replaced_by_a_different_one() {
+        let root = tempdir().unwrap();
+        let input = tempdir().unwrap();
+        let options = part10_options(&root.path().to_string_lossy());
+        let backend = StorageBackend::default();
+        let original = input.path().join("original.dcm");
+        let mut original_bytes = large_part10();
+        std::fs::write(&original, &original_bytes).unwrap();
+
+        backend
+            .backend_outgoing_request(local_instance_envelope(&original), &options)
+            .await
+            .unwrap();
+        backend
+            .backend_outgoing_request(local_instance_envelope(&original), &options)
+            .await
+            .expect("an identical resend counts as stored");
+
+        // Same length, one byte different near the end.
+        let other = input.path().join("other.dcm");
+        let last = original_bytes.len() - 1;
+        original_bytes[last] ^= 0xFF;
+        std::fs::write(&other, &original_bytes).unwrap();
+        let err = backend
+            .backend_outgoing_request(local_instance_envelope(&other), &options)
+            .await
+            .err()
+            .expect("different bytes at the same path are refused");
+
+        assert!(err.to_string().contains("already stored"), "unexpected error: {}", err);
+        let stored = std::fs::read(root.path().join("1.2.3").join("1.2.3.4.dcm")).unwrap();
+        assert_eq!(stored, std::fs::read(&original).unwrap());
+        assert_eq!(std::fs::read_dir(root.path().join("1.2.3")).unwrap().count(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_dicom_part10_rejects_a_local_file_that_is_not_part10() {
+        let root = tempdir().unwrap();
+        let input = tempdir().unwrap();
+        let options = part10_options(&root.path().to_string_lossy());
+        let local = input.path().join("received.dcm");
+        std::fs::write(&local, vec![0u8; 500]).unwrap();
+
+        let err = StorageBackend::default()
+            .backend_outgoing_request(local_instance_envelope(&local), &options)
+            .await
+            .err()
+            .expect("a file that is not Part 10 is refused");
+
+        assert!(err.to_string().contains("not a DICOM Part 10 file"), "unexpected error: {}", err);
+        assert!(!root.path().join("1.2.3").exists());
     }
 }

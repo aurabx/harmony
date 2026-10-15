@@ -188,6 +188,7 @@ mod tests {
             original_data: json!({"test": "data"}),
             normalized_data: Some(json!({"key": "value"})),
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result = middleware.left(envelope.clone()).await.unwrap();
@@ -213,6 +214,7 @@ mod tests {
             original_data: json!({"test": "data"}),
             normalized_data: Some(json!({"key": "value"})),
             normalized_snapshot: None,
+            local_instance: None,
         };
 
         let result = middleware.left(envelope.clone()).await.unwrap();
