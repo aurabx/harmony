@@ -195,6 +195,26 @@ pub fn json_shape(value: &serde_json::Value) -> String {
     }
 }
 
+/// The keys of a map, sorted, without their values.
+///
+/// For logging headers or DICOM query parameters, whose values can be
+/// credentials or patient identifiers.
+pub fn sorted_keys<V>(map: &std::collections::HashMap<String, V>) -> Vec<&str> {
+    let mut keys: Vec<&str> = map.keys().map(String::as_str).collect();
+    keys.sort_unstable();
+    keys
+}
+
+/// A URL or path with its query string and fragment removed.
+///
+/// FHIR search parameters such as `name` and `birthdate` are patient data.
+pub fn without_query(url: &str) -> &str {
+    match url.find(|c| c == '?' || c == '#') {
+        Some(end) => &url[..end],
+        None => url,
+    }
+}
+
 /// Captures DEBUG-and-above events on the current thread, for tests that
 /// check what a code path writes to the log.
 #[cfg(test)]

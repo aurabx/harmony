@@ -159,7 +159,10 @@ impl MockDicomData {
 
     /// Handle a mock C-FIND request
     pub fn handle_find_query(&self, params: &HashMap<String, String>) -> Vec<serde_json::Value> {
-        debug!("[MOCK DICOM] C-FIND query tags: {:?}", query_tags(params));
+        debug!(
+            "[MOCK DICOM] C-FIND query tags: {:?}",
+            crate::logging::sorted_keys(params)
+        );
 
         // Determine query level based on present parameters
         let query_level = if params.get("00080018").is_some_and(|v| !v.is_empty()) {
@@ -598,14 +601,6 @@ impl ServiceHandler<Value> for MockDicomEndpoint {
     }
 }
 
-/// The query's tag numbers, sorted, without their values. Query values can be
-/// patient names or IDs, so only the tags go to the log.
-fn query_tags(params: &HashMap<String, String>) -> Vec<&str> {
-    let mut tags: Vec<&str> = params.keys().map(String::as_str).collect();
-    tags.sort_unstable();
-    tags
-}
-
 impl MockDicomEndpoint {
     /// Handle C-FIND operations
     async fn handle_c_find(
@@ -662,7 +657,10 @@ impl MockDicomEndpoint {
         if path.contains("/series") || path.contains("/instances") {
             debug!("[MOCK DICOM] C-FIND Query:");
             debug!("[MOCK DICOM]   Path: {}", path);
-            debug!("[MOCK DICOM]   Query tags: {:?}", query_tags(&params));
+            debug!(
+                "[MOCK DICOM]   Query tags: {:?}",
+                crate::logging::sorted_keys(&params)
+            );
         }
 
         // Handle query using mock data

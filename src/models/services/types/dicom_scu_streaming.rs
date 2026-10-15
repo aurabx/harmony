@@ -545,8 +545,12 @@ impl StreamingBackend for DicomScuStreamingBackend {
             .or_else(|| envelope.request_details.metadata.get("query_level"))
             .and_then(|s| Self::parse_query_level(s));
 
-        debug!("DIMSE streaming operation: {}, params: {:?}, explicit_level: {:?}", 
-            op_normalized, query_params, explicit_query_level);
+        debug!(
+            "DIMSE streaming operation: {}, query tags: {:?}, explicit_level: {:?}",
+            op_normalized,
+            crate::logging::sorted_keys(&query_params),
+            explicit_query_level
+        );
 
         match op_normalized.as_str() {
             "get" => {
@@ -1494,6 +1498,40 @@ mod tests {
         let body = env.normalized_data.expect("the response has a JSON body");
         assert_eq!(body.get("success"), Some(&serde_json::json!(false)));
         assert_eq!(body.get("error"), Some(&serde_json::json!("association failed")));
+    }
+
+    #[tokio::test]
+    async fn debug_log_does_not_contain_query_values() {
+        let marker = "DOE^JANE-PHI-MARKER";
+        let backend = make_backend(Some("REMOTE"), Some("127.0.0.1"), Some(4242));
+
+        let mut headers = HashMap::new();
+        headers.insert("x-dimse-op".to_string(), "unknown_op".to_string());
+        let body = serde_json::json!({
+            "identifier": { "00100010": { "vr": "PN", "Value": [{ "Alphabetic": marker }] } }
+        });
+        let envelope = crate::models::envelope::envelope::RequestEnvelope::builder()
+            .method("POST".to_string())
+            .uri("dimse://scp/unknown_op".to_string())
+            .headers(headers)
+            .original_data(serde_json::to_vec(&body).unwrap())
+            .build()
+            .expect("build envelope");
+        let options = make_options(&[
+            ("aet", serde_json::json!("REMOTE")),
+            ("host", serde_json::json!("127.0.0.1")),
+            ("port", serde_json::json!(4242)),
+        ]);
+
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        let _ = backend.backend_outgoing_stream(envelope, &options).await;
+
+        let out = log.contents();
+        assert!(
+            out.contains("00100010"),
+            "query tags should be logged: {out}"
+        );
+        assert!(!out.contains(marker), "query values leaked into log: {out}");
     }
 
     #[tokio::test]

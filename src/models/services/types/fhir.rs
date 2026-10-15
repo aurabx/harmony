@@ -241,7 +241,11 @@ impl ServiceHandler<Value> for FhirEndpoint {
                 &target_details.uri
             };
             target_details.uri = format!("{}{}", prefix, uri);
-            tracing::debug!("FHIR backend applied path_prefix '{}' to URI: {}", prefix, target_details.uri);
+            tracing::debug!(
+                "FHIR backend applied path_prefix '{}' to URI: {}",
+                prefix,
+                crate::logging::without_query(&target_details.uri)
+            );
         }
 
         tracing::debug!(
@@ -249,6 +253,7 @@ impl ServiceHandler<Value> for FhirEndpoint {
             target_details.method,
             target_details
                 .full_url()
+                .map(|url| crate::logging::without_query(&url).to_string())
                 .unwrap_or_else(|_| "<invalid-url>".to_string())
         );
 
@@ -430,7 +435,10 @@ impl FhirEndpoint {
             request_builder = request_builder.body(envelope.original_data.clone());
         }
 
-        tracing::debug!("Sending FHIR request to: {}", full_url);
+        tracing::debug!(
+            "Sending FHIR request to: {}",
+            crate::logging::without_query(&full_url)
+        );
 
         // Execute the request
         let response = request_builder
@@ -517,7 +525,7 @@ impl FhirEndpoint {
             "Sending FHIR HTTP/3 request to: {}:{}{}",
             conn.host,
             port,
-            path
+            crate::logging::without_query(&path)
         );
 
         let response = client
@@ -611,6 +619,52 @@ mod tests {
         let routes = endpoint.build_router(&options);
         assert_eq!(routes.len(), 1);
         assert!(routes[0].path.starts_with("/fallback"));
+    }
+
+    /// FHIR search parameters carry patient values, so the query string must
+    /// not reach the log. Port 1 refuses the connection, after the URL is logged.
+    #[tokio::test]
+    async fn debug_log_does_not_contain_query_string() {
+        let marker = "DOE-PHI-MARKER";
+        let endpoint = FhirEndpoint {};
+        let mut options = HashMap::new();
+        let connection = ConnectionConfig {
+            host: "127.0.0.1".to_string(),
+            protocol: Some("http".to_string()),
+            port: Some(1),
+            base_path: None,
+            ca_cert_path: None,
+        };
+        options.insert(
+            "connection".to_string(),
+            serde_json::to_value(connection).unwrap(),
+        );
+        options.insert("path_prefix".to_string(), serde_json::json!("/fhir"));
+
+        let mut query_params = HashMap::new();
+        query_params.insert("name".to_string(), vec![marker.to_string()]);
+        query_params.insert("birthdate".to_string(), vec!["1970-01-01".to_string()]);
+        let request_details = RequestDetails {
+            method: "GET".to_string(),
+            uri: "/Patient".to_string(),
+            query_params,
+            ..Default::default()
+        };
+        let envelope = RequestEnvelope::new(request_details, vec![]);
+
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        let _ = endpoint.backend_outgoing_request(envelope, &options).await;
+
+        let out = log.contents();
+        assert!(
+            out.contains("/fhir/Patient"),
+            "path should be logged: {out}"
+        );
+        assert!(!out.contains(marker), "query values leaked into log: {out}");
+        assert!(
+            !out.contains("birthdate"),
+            "query string leaked into log: {out}"
+        );
     }
 
     #[tokio::test]
