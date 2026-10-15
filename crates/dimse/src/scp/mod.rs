@@ -59,13 +59,35 @@ pub trait QueryProvider: Send + Sync {
 
     /// Store a dataset (for C-STORE operations)
     async fn store(&self, peer_addr: SocketAddr, dataset: DatasetStream) -> Result<()>;
+
+    /// Decide whether `peer_addr` may open an association.
+    ///
+    /// The SCP calls this once per TCP connection, before it answers the
+    /// A-ASSOCIATE-RQ. A rejected peer gets an A-ASSOCIATE-RJ and never
+    /// reaches any command, C-ECHO included. An `Err` is treated as a reject,
+    /// so a provider that cannot decide fails closed.
+    ///
+    /// The default admits every peer, which is the behaviour of an SCP with no
+    /// access control. Providers that enforce network policy override it.
+    async fn admit_peer(&self, _peer_addr: SocketAddr) -> Result<PeerAdmission> {
+        Ok(PeerAdmission::Admit)
+    }
+}
+
+/// Outcome of [`QueryProvider::admit_peer`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PeerAdmission {
+    /// The peer may negotiate an association.
+    Admit,
+    /// The peer is refused. `reason` is logged by the SCP; it is not sent to
+    /// the peer, because A-ASSOCIATE-RJ carries only a fixed reason code.
+    Reject { reason: String },
 }
 
 /// DIMSE Service Class Provider
 pub struct DimseScp {
     pub(crate) config: DimseConfig,
-    #[allow(dead_code)]
-    pub(crate) query_provider: Arc<dyn QueryProvider>, // TODO: Used for database queries
+    pub(crate) query_provider: Arc<dyn QueryProvider>,
     router: Option<Arc<dyn Router>>,
     pub(crate) active_associations: Arc<AtomicU32>,
 }

@@ -230,7 +230,10 @@ async fn test_dicom_scu_backend_cfind() {
 }
 
 /// Test 2: dicom_scp endpoint with incoming C-ECHO
+// The harness sets the process-wide config, which the SCP reads to check
+// each peer, so tests that start one must not overlap.
 #[tokio::test]
+#[serial_test::serial]
 async fn test_dicom_scp_endpoint_cfind() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -497,7 +500,10 @@ async fn test_legacy_dicom_service_backward_compat() {
 }
 
 /// Test 6: Pipeline integration - SCP endpoint receiving from external SCU
+// The harness sets the process-wide config, which the SCP reads to check
+// each peer, so tests that start one must not overlap.
 #[tokio::test]
+#[serial_test::serial]
 async fn test_pipeline_scp_receives_external_find() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");

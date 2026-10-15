@@ -126,6 +126,171 @@ impl CompiledIpRule {
     }
 }
 
+/// Label used in logs for a policy or rule: its id, else its name.
+fn label(id: &Option<String>, name: &Option<String>) -> String {
+    id.as_deref()
+        .or(name.as_deref())
+        .unwrap_or("unnamed")
+        .to_string()
+}
+
+/// One compiled `ip_allow` or `ip_deny` rule with the labels used in logs.
+#[derive(Debug, Clone)]
+struct LabeledIpRule {
+    policy: String,
+    rule: String,
+    compiled: CompiledIpRule,
+}
+
+/// The `ip_allow` and `ip_deny` rules of one policies middleware, compiled.
+///
+/// Only enabled rules in enabled policies are kept. The middleware uses this
+/// for its allowlist gate. The DIMSE adapter uses it to decide whether a peer
+/// may open an association, where no other rule type has a meaning. Both
+/// paths share it so they cannot disagree about which addresses match.
+#[derive(Debug, Clone)]
+pub struct IpAccessRules {
+    allow: Vec<LabeledIpRule>,
+    deny: Vec<LabeledIpRule>,
+}
+
+impl IpAccessRules {
+    /// Compile the IP rules of `config`.
+    ///
+    /// Fails on the same input the middleware rejects: no enabled policy, an
+    /// IP rule without an `ip_addresses` array, or an invalid address or CIDR.
+    pub fn from_config(config: &PoliciesConfig) -> Result<Self, String> {
+        let mut allow = Vec::new();
+        let mut deny = Vec::new();
+        let mut enabled_policies = 0usize;
+
+        for policy in config.policies.iter().filter(|p| p.enabled) {
+            enabled_policies += 1;
+            for rule in policy.rules.iter().filter(|r| r.enabled) {
+                let target = match rule.rule_type.as_str() {
+                    "ip_allow" => &mut allow,
+                    "ip_deny" => &mut deny,
+                    _ => continue,
+                };
+                let ip_addresses = rule
+                    .options
+                    .get("ip_addresses")
+                    .and_then(|v| v.as_array())
+                    .ok_or_else(|| {
+                        format!(
+                            "Rule '{}' (type {}) missing required 'ip_addresses' array",
+                            rule.name.as_deref().unwrap_or("unnamed"),
+                            rule.rule_type
+                        )
+                    })?;
+                let ip_strings: Vec<String> = ip_addresses
+                    .iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect();
+                target.push(LabeledIpRule {
+                    policy: label(&policy.id, &policy.name),
+                    rule: label(&rule.id, &rule.name),
+                    compiled: CompiledIpRule::new(&ip_strings)?,
+                });
+            }
+        }
+
+        if enabled_policies == 0 {
+            return Err("Policies middleware requires at least one enabled policy".to_string());
+        }
+        Ok(Self { allow, deny })
+    }
+
+    /// The first `ip_allow` rule that `ip` matches.
+    fn allowlist_match(&self, ip: &IpAddr) -> Option<&LabeledIpRule> {
+        self.allow.iter().find(|r| r.compiled.matches(ip))
+    }
+
+    /// Enforce the allowlist gate (AURA-2438).
+    ///
+    /// Every `ip_allow` rule forms one allowlist, a union within and across
+    /// policies. With no `ip_allow` rule there is no gate. Otherwise `ip` must
+    /// be known and match at least one rule; an unknown IP fails closed.
+    /// Returns the reason when the gate fails. Logs only.
+    fn check_allowlist(&self, ip: Option<IpAddr>, raw_ip: Option<&str>) -> Result<(), String> {
+        if self.allow.is_empty() {
+            return Ok(());
+        }
+        let rule_ids = self
+            .allow
+            .iter()
+            .map(|r| r.rule.as_str())
+            .collect::<Vec<_>>()
+            .join(", ");
+
+        let Some(ip) = ip else {
+            tracing::warn!(
+                "Request DENIED - an IP allowlist is configured (rules: {}) but the client IP is unknown (remote_addr={:?}); failing closed",
+                rule_ids,
+                raw_ip
+            );
+            return Err("Client IP is unknown and an IP allowlist match is required".to_string());
+        };
+
+        match self.allowlist_match(&ip) {
+            Some(rule) => {
+                tracing::debug!(
+                    "IP allowlist gate passed: policy='{}', rule='{}', client_ip={}",
+                    rule.policy,
+                    rule.rule,
+                    ip
+                );
+                Ok(())
+            }
+            None => {
+                tracing::info!(
+                    "Request DENIED - client_ip={} matches none of the IP allowlist rules (rules: {})",
+                    ip,
+                    rule_ids
+                );
+                Err("Client IP is not in the IP allowlist".to_string())
+            }
+        }
+    }
+
+    /// Decide whether a peer at `ip` may connect at all.
+    ///
+    /// The peer is refused when any `ip_deny` rule matches, or when an
+    /// `ip_allow` rule exists and none matches. There is no implicit deny:
+    /// rules of other types still decide each request inside the connection.
+    /// Returns the reason when the peer is refused. The caller logs it, so
+    /// this logs at `debug` only.
+    pub fn check_peer(&self, ip: IpAddr) -> Result<(), String> {
+        if let Some(rule) = self.deny.iter().find(|r| r.compiled.matches(&ip)) {
+            tracing::debug!(
+                "Peer {} matches ip_deny rule '{}' (policy '{}')",
+                ip,
+                rule.rule,
+                rule.policy
+            );
+            return Err(format!(
+                "Client IP matches ip_deny rule '{}' in policy '{}'",
+                rule.rule, rule.policy
+            ));
+        }
+        if self.allow.is_empty() {
+            return Ok(());
+        }
+        match self.allowlist_match(&ip) {
+            Some(rule) => {
+                tracing::debug!(
+                    "Peer {} matches ip_allow rule '{}' (policy '{}')",
+                    ip,
+                    rule.rule,
+                    rule.policy
+                );
+                Ok(())
+            }
+            None => Err("Client IP is not in the IP allowlist".to_string()),
+        }
+    }
+}
+
 /// Key that identifies a client in the rate-limit state.
 ///
 /// An IPv4-mapped IPv6 address and its plain IPv4 form are the same client, so
@@ -198,6 +363,8 @@ pub struct PoliciesMiddleware {
     policies: Vec<Policy>,
     // Pre-compiled IP rules for performance
     compiled_ip_rules: HashMap<usize, CompiledIpRule>, // policy_idx -> rule_idx key
+    // The same IP rules grouped for the allowlist gate
+    ip_access: IpAccessRules,
     // Pre-compiled path rules for performance
     compiled_path_rules: HashMap<usize, CompiledPathRule>,
     // Rate limit state tracking (client_ip + rule_key -> state).
@@ -235,6 +402,9 @@ impl PoliciesMiddleware {
             return Err("Policies middleware requires at least one enabled policy".to_string());
         }
 
+        let ip_access = IpAccessRules::from_config(&PoliciesConfig {
+            policies: enabled_policies.clone(),
+        })?;
         let mut compiled_ip_rules = HashMap::new();
         let mut compiled_path_rules = HashMap::new();
 
@@ -355,6 +525,7 @@ impl PoliciesMiddleware {
         Ok(Self {
             policies: enabled_policies,
             compiled_ip_rules,
+            ip_access,
             compiled_path_rules,
             rate_limit_state,
         })
@@ -415,8 +586,7 @@ impl PoliciesMiddleware {
     /// allowlist, because the combined result only needs one allow and no deny.
     ///
     /// Fails closed: when an allowlist exists, a request whose envelope has no
-    /// parseable client IP is denied. HTTP/3 does not record the peer address
-    /// yet (AURA-2417), so HTTP/3 requests always fail this gate.
+    /// parseable client IP is denied.
     ///
     /// Returns `AccessDenied` (HTTP 403) when the gate fails. Reads the
     /// envelope only; it has no side effects besides logging.
@@ -424,23 +594,6 @@ impl PoliciesMiddleware {
         &self,
         envelope: &RequestEnvelope<serde_json::Value>,
     ) -> Result<(), Error> {
-        let allowlist: Vec<(usize, usize, &Rule)> = self
-            .policies
-            .iter()
-            .enumerate()
-            .flat_map(|(policy_idx, policy)| {
-                policy
-                    .rules
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, r)| r.enabled && r.rule_type == "ip_allow")
-                    .map(move |(rule_idx, rule)| (policy_idx, rule_idx, rule))
-            })
-            .collect();
-        if allowlist.is_empty() {
-            return Ok(());
-        }
-
         let raw_client_ip = envelope
             .request_details
             .metadata
@@ -448,70 +601,9 @@ impl PoliciesMiddleware {
             .or_else(|| envelope.request_details.metadata.get("client_ip"));
         let client_ip = raw_client_ip.and_then(|raw| IpAddr::from_str(raw).ok());
 
-        let rule_label = |rule: &Rule| -> String {
-            rule.id
-                .as_deref()
-                .or(rule.name.as_deref())
-                .unwrap_or("unnamed")
-                .to_string()
-        };
-        let rule_ids = allowlist
-            .iter()
-            .map(|(_, _, r)| rule_label(r))
-            .collect::<Vec<_>>()
-            .join(", ");
-
-        let Some(ip) = client_ip else {
-            tracing::warn!(
-                "Request DENIED - an IP allowlist is configured (rules: {}) but the client IP is unknown (remote_addr={:?}); failing closed",
-                rule_ids,
-                raw_client_ip
-            );
-            return Err(Box::new(AccessDenied(
-                "Client IP is unknown and an IP allowlist match is required".to_string(),
-            )));
-        };
-
-        let matched_rule = allowlist.iter().find(|(policy_idx, rule_idx, _)| {
-            let key = policy_idx * 10000 + rule_idx;
-            match self.compiled_ip_rules.get(&key) {
-                Some(compiled) => compiled.matches(&ip),
-                None => {
-                    tracing::error!(
-                        "Compiled IP rule not found for key {} - this is a bug; treating as no match",
-                        key
-                    );
-                    false
-                }
-            }
-        });
-
-        match matched_rule {
-            Some((policy_idx, _, rule)) => {
-                let policy = &self.policies[*policy_idx];
-                tracing::debug!(
-                    "IP allowlist gate passed: policy='{}', rule='{}', client_ip={}",
-                    policy
-                        .id
-                        .as_deref()
-                        .or(policy.name.as_deref())
-                        .unwrap_or("unnamed"),
-                    rule_label(rule),
-                    ip
-                );
-                Ok(())
-            }
-            None => {
-                tracing::info!(
-                    "Request DENIED - client_ip={} matches none of the IP allowlist rules (rules: {})",
-                    ip,
-                    rule_ids
-                );
-                Err(Box::new(AccessDenied(
-                    "Client IP is not in the IP allowlist".to_string(),
-                )))
-            }
-        }
+        self.ip_access
+            .check_allowlist(client_ip, raw_client_ip.map(String::as_str))
+            .map_err(|reason| Box::new(AccessDenied(reason)) as Error)
     }
 
     /// Evaluate a single rule against the request envelope
@@ -3949,5 +4041,95 @@ mod tests {
             .left(create_test_envelope("10.0.0.10"))
             .await
             .is_err());
+    }
+
+    // ============================================
+    // Peer admission (DIMSE association gate)
+    // ============================================
+
+    fn peer(ip: &str) -> IpAddr {
+        IpAddr::from_str(ip).unwrap()
+    }
+
+    #[test]
+    fn peer_check_refuses_an_ip_deny_match() {
+        let rules = IpAccessRules::from_config(&single_policy(vec![
+            ip_rule("blocked", "ip_deny", &["10.0.0.0/8"]),
+            ip_rule("all", "ip_allow", &["0.0.0.0/0"]),
+        ]))
+        .unwrap();
+
+        let reason = rules.check_peer(peer("10.1.2.3")).unwrap_err();
+        assert!(reason.contains("blocked"), "reason should name the rule: {}", reason);
+        assert!(rules.check_peer(peer("192.168.1.1")).is_ok());
+    }
+
+    #[test]
+    fn peer_check_refuses_a_peer_outside_the_allowlist() {
+        let rules = IpAccessRules::from_config(&single_policy(vec![ip_rule(
+            "office",
+            "ip_allow",
+            &["192.168.0.0/16"],
+        )]))
+        .unwrap();
+
+        assert!(rules.check_peer(peer("192.168.4.4")).is_ok());
+        assert_eq!(
+            rules.check_peer(peer("10.0.0.1")).unwrap_err(),
+            "Client IP is not in the IP allowlist"
+        );
+    }
+
+    /// Other rule types decide each request, not the connection. A policy
+    /// with only a method rule must not refuse every peer.
+    #[test]
+    fn peer_check_admits_when_there_are_no_ip_rules() {
+        let rules = IpAccessRules::from_config(&single_policy(vec![method_rule(
+            "get_only",
+            "allow",
+            &["GET"],
+        )]))
+        .unwrap();
+
+        assert!(rules.check_peer(peer("203.0.113.9")).is_ok());
+    }
+
+    #[test]
+    fn peer_check_matches_ipv4_mapped_ipv6_peers() {
+        let rules = IpAccessRules::from_config(&single_policy(vec![ip_rule(
+            "blocked",
+            "ip_deny",
+            &["10.0.0.0/8"],
+        )]))
+        .unwrap();
+
+        assert!(rules.check_peer(peer("::ffff:10.0.0.5")).is_err());
+    }
+
+    #[test]
+    fn peer_check_ignores_disabled_rules_and_policies() {
+        let mut disabled_rule = ip_rule("blocked", "ip_deny", &["10.0.0.0/8"]);
+        disabled_rule.enabled = false;
+        let mut config = single_policy(vec![disabled_rule]);
+        config.policies.push(Policy {
+            id: Some("off".to_string()),
+            name: None,
+            enabled: false,
+            rules: vec![ip_rule("off_allow", "ip_allow", &["192.168.0.0/16"])],
+        });
+        let rules = IpAccessRules::from_config(&config).unwrap();
+
+        assert!(rules.check_peer(peer("10.0.0.5")).is_ok());
+    }
+
+    #[test]
+    fn ip_access_rules_reject_an_invalid_cidr() {
+        let err = IpAccessRules::from_config(&single_policy(vec![ip_rule(
+            "bad",
+            "ip_allow",
+            &["not-an-ip"],
+        )]))
+        .unwrap_err();
+        assert!(err.contains("not-an-ip"), "{}", err);
     }
 }
