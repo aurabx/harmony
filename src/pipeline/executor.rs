@@ -514,9 +514,13 @@ impl PipelineExecutor {
         // A middleware that replaced `original_data` produced the new request
         // body. Otherwise the received bytes go to the backend untouched.
         let written_body = std::mem::take(&mut processed_json_envelope.original_data);
+        let mut local_instance = local_instance;
         let body = match Self::request_body_rewrite(&json_value, written_body)? {
             None => envelope.original_data,
             Some(rewrite) => {
+                // The endpoint's file holds the instance as received. After a
+                // rewrite the backend must use the new body instead.
+                local_instance = None;
                 Self::align_body_headers(
                     &mut processed_json_envelope.request_details.headers,
                     &rewrite,
@@ -1255,6 +1259,58 @@ mod tests {
                 "content-type".to_string(),
                 "multipart/related; boundary=x".to_string()
             )])
+        );
+    }
+
+    async fn local_instance_after_middleware(middleware: Vec<String>) -> bool {
+        use crate::models::envelope::command::{Command, Operation};
+        use crate::models::envelope::envelope::LocalInstanceFile;
+        use base64::Engine;
+
+        let config = Config::default();
+        let pipeline = Pipeline {
+            description: "store pipeline".to_string(),
+            middleware: PipelineMiddleware::List(middleware),
+            ..Default::default()
+        };
+        let mut part10 = vec![0u8; 128];
+        part10.extend_from_slice(b"DICM");
+        part10.extend_from_slice(&[0u8; 16]);
+        let body = serde_json::json!({
+            "file": "/var/harmony/dimse/instance.dcm",
+            "part10_b64": base64::engine::general_purpose::STANDARD.encode(&part10),
+        });
+        let mut metadata = HashMap::new();
+        metadata.insert("protocol".to_string(), "dimse".to_string());
+        let mut envelope = RequestEnvelope::builder()
+            .method("POST")
+            .uri("/")
+            .metadata(metadata)
+            .command(Some(Command::new(Operation::Store)))
+            .original_data(serde_json::to_vec(&body).unwrap())
+            .normalized_data(Some(body))
+            .build()
+            .unwrap();
+        envelope.local_instance = Some(LocalInstanceFile::new(
+            "/var/harmony/dimse/instance.dcm".into(),
+        ));
+
+        let processed =
+            PipelineExecutor::process_incoming_middleware(envelope, "store", &pipeline, &config)
+                .await
+                .unwrap();
+        processed.local_instance.is_some()
+    }
+
+    #[tokio::test]
+    async fn test_local_instance_reaches_the_backend_unless_middleware_rewrote_the_body() {
+        assert!(
+            local_instance_after_middleware(vec![]).await,
+            "an untouched request keeps the endpoint's file"
+        );
+        assert!(
+            !local_instance_after_middleware(vec!["dicom_to_http".to_string()]).await,
+            "a rewritten body replaces the endpoint's file"
         );
     }
 

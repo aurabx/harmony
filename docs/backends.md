@@ -456,7 +456,9 @@ write_pattern = "{StudyInstanceUID}/{SeriesInstanceUID}/{SOPInstanceUID}.dcm"
 - The endpoint also keeps a working copy of each instance under `[storage]/dimse` while the pipeline runs.
 - The backend must be the pipeline's first backend. Otherwise the endpoint does not hand it the instance, and every store fails.
 - The endpoint hands the backend its working copy of the instance inside the process. Middleware cannot see or change it, and a request cannot name it. The backend never reads the `file` path in the body.
-- The backend uploads the instance in 10 MiB chunks, so memory use stays small for large instances such as tomosynthesis. It uploads to a temporary name next to the final path, copies it to the final path, then deletes the temporary name.
+- The backend uploads the instance in 10 MiB parts, at most two in flight. One store holds about 30 MiB, whatever the instance size, so large instances such as tomosynthesis fit. It uploads to a temporary name next to the final path (`<name>.partial-<uuid>`), copies it to the final path, then deletes the temporary name.
+- If the request is cancelled mid-store, a `.partial-` object or an incomplete S3 multipart upload can be left behind. On S3, add a lifecycle rule that removes incomplete multipart uploads and old `.partial-` objects.
+- A middleware that replaces the request body, for example with a changed Part 10 file in `body_b64`, takes effect. The backend then writes the new body and holds it in memory, as over HTTP.
 - Over HTTP, the backend takes the Part 10 file as the request body, or as base64 in `part10_b64` of a JSON body. That path holds the whole instance in memory.
 - `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID` and `PatientID` come from the instance. A value that breaks the placeholder rules fails the store. The device then gets status `0xC000` and keeps its copy.
 - A body with no Part 10 instance fails the write.

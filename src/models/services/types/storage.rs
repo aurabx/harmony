@@ -21,6 +21,11 @@ use super::dicom_store_body::{is_part10, part10_from_store_body};
 /// The `content` value that writes the DICOM Part 10 instance of a C-STORE.
 pub(crate) const CONTENT_DICOM_PART10: &str = "dicom_part10";
 
+/// Parts of one streamed upload that may be in flight at once. With 10 MiB
+/// parts, one upload holds about 30 MiB: the part being filled and two
+/// being sent.
+const UPLOAD_MAX_CONCURRENCY: usize = 2;
+
 /// What a write puts in the file.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum WriteContent {
@@ -274,8 +279,9 @@ impl StorageBackend {
 
     /// Copy the endpoint's local copy of a DICOM instance to `path`.
     ///
-    /// The file is uploaded in chunks to a temporary name next to `path`, so
-    /// memory use stays at about one chunk whatever the instance size. It is
+    /// The file is uploaded in 10 MiB parts to a temporary name next to
+    /// `path`, so memory use stays at about 30 MiB whatever the instance
+    /// size (see `UPLOAD_MAX_CONCURRENCY`). It is
     /// then copied to `path` only if nothing is there yet, and the temporary
     /// name is deleted. As with `put_dicom_instance`, identical bytes at
     /// `path` count as stored and different bytes fail the write.
@@ -288,6 +294,13 @@ impl StorageBackend {
             .await
             .map_err(|e| Self::local_error("open the received instance", e))?;
         Self::check_part10_header(&mut file).await?;
+
+        // A resend of a stored instance is compared without a second upload.
+        match store.head(path).await {
+            Ok(_) => return Self::check_same_instance(store.as_ref(), path, local).await,
+            Err(object_store::Error::NotFound { .. }) => {}
+            Err(e) => return Err(Self::write_error(e)),
+        }
 
         let staging = ObjectStorePath::parse(format!("{}.partial-{}", path, Uuid::new_v4()))
             .map_err(|e| {
@@ -328,19 +341,20 @@ impl StorageBackend {
         staging: &ObjectStorePath,
         file: &mut tokio::fs::File,
     ) -> Result<(), Error> {
-        let mut writer = BufWriter::new(store, staging.clone());
-        let copied = tokio::io::copy(file, &mut writer).await;
-        let finished = match copied {
-            Ok(_) => writer.shutdown().await,
-            Err(e) => Err(e),
-        };
-        if let Err(e) = finished {
+        let mut writer = BufWriter::new(store, staging.clone())
+            .with_max_concurrency(UPLOAD_MAX_CONCURRENCY);
+        if let Err(e) = tokio::io::copy(file, &mut writer).await {
             if let Err(abort) = writer.abort().await {
                 tracing::debug!("Failed to abort a storage upload: {}", abort);
             }
             return Err(Self::local_error("upload the received instance", e));
         }
-        Ok(())
+        // `abort` panics once `shutdown` has started. A failed multipart
+        // completion is aborted by object_store itself.
+        writer
+            .shutdown()
+            .await
+            .map_err(|e| Self::local_error("upload the received instance", e))
     }
 
     /// Copy `staging` to `path` unless something is already at `path`.
@@ -1045,5 +1059,167 @@ mod tests {
 
         assert!(err.to_string().contains("not a DICOM Part 10 file"), "unexpected error: {}", err);
         assert!(!root.path().join("1.2.3").exists());
+    }
+
+    /// An in-memory store that can refuse uploads, and that can lack
+    /// conditional copy as S3 does without extra setup.
+    #[derive(Debug)]
+    struct TestStore {
+        inner: object_store::memory::InMemory,
+        refuse_uploads: bool,
+        conditional_copy: bool,
+    }
+
+    impl TestStore {
+        fn new(refuse_uploads: bool, conditional_copy: bool) -> Arc<Self> {
+            Arc::new(Self {
+                inner: object_store::memory::InMemory::new(),
+                refuse_uploads,
+                conditional_copy,
+            })
+        }
+
+        fn refused() -> object_store::Error {
+            object_store::Error::Generic {
+                store: "test",
+                source: "upload refused".into(),
+            }
+        }
+    }
+
+    impl std::fmt::Display for TestStore {
+        fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            write!(f, "TestStore")
+        }
+    }
+
+    #[async_trait]
+    impl ObjectStore for TestStore {
+        async fn put_opts(
+            &self,
+            location: &ObjectStorePath,
+            payload: object_store::PutPayload,
+            opts: PutOptions,
+        ) -> object_store::Result<object_store::PutResult> {
+            if self.refuse_uploads {
+                return Err(Self::refused());
+            }
+            self.inner.put_opts(location, payload, opts).await
+        }
+
+        async fn put_multipart_opts(
+            &self,
+            location: &ObjectStorePath,
+            opts: object_store::PutMultipartOptions,
+        ) -> object_store::Result<Box<dyn object_store::MultipartUpload>> {
+            if self.refuse_uploads {
+                return Err(Self::refused());
+            }
+            self.inner.put_multipart_opts(location, opts).await
+        }
+
+        async fn get_opts(
+            &self,
+            location: &ObjectStorePath,
+            options: object_store::GetOptions,
+        ) -> object_store::Result<object_store::GetResult> {
+            self.inner.get_opts(location, options).await
+        }
+
+        async fn delete(&self, location: &ObjectStorePath) -> object_store::Result<()> {
+            self.inner.delete(location).await
+        }
+
+        fn list(
+            &self,
+            prefix: Option<&ObjectStorePath>,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<object_store::ObjectMeta>>
+        {
+            self.inner.list(prefix)
+        }
+
+        async fn list_with_delimiter(
+            &self,
+            prefix: Option<&ObjectStorePath>,
+        ) -> object_store::Result<object_store::ListResult> {
+            self.inner.list_with_delimiter(prefix).await
+        }
+
+        async fn copy(&self, from: &ObjectStorePath, to: &ObjectStorePath) -> object_store::Result<()> {
+            self.inner.copy(from, to).await
+        }
+
+        async fn copy_if_not_exists(
+            &self,
+            from: &ObjectStorePath,
+            to: &ObjectStorePath,
+        ) -> object_store::Result<()> {
+            if !self.conditional_copy {
+                return Err(object_store::Error::NotSupported {
+                    source: "no conditional copy".into(),
+                });
+            }
+            self.inner.copy_if_not_exists(from, to).await
+        }
+    }
+
+    async fn stored_keys(store: &TestStore) -> Vec<String> {
+        use futures_util::TryStreamExt;
+        let mut keys: Vec<String> = store
+            .list(None)
+            .map_ok(|meta| meta.location.to_string())
+            .try_collect()
+            .await
+            .unwrap();
+        keys.sort();
+        keys
+    }
+
+    #[tokio::test]
+    async fn test_copy_local_instance_reports_a_refused_upload_without_panicking() {
+        let input = tempdir().unwrap();
+        let path = ObjectStorePath::parse("1.2.3/1.2.3.4.dcm").unwrap();
+        for instance in [fake_part10(), large_part10()] {
+            let local = input.path().join("received.dcm");
+            std::fs::write(&local, &instance).unwrap();
+            let store = TestStore::new(true, true);
+
+            let err = StorageBackend::copy_local_instance(store.clone(), &path, &local)
+                .await
+                .err()
+                .expect("a refused upload fails the write");
+
+            assert!(err.to_string().contains("upload the received instance"), "unexpected error: {}", err);
+            assert!(stored_keys(&store).await.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn test_copy_local_instance_without_conditional_copy() {
+        let input = tempdir().unwrap();
+        let path = ObjectStorePath::parse("1.2.3/1.2.3.4.dcm").unwrap();
+        let store = TestStore::new(false, false);
+        let original = input.path().join("original.dcm");
+        std::fs::write(&original, fake_part10()).unwrap();
+
+        StorageBackend::copy_local_instance(store.clone(), &path, &original)
+            .await
+            .expect("the first store is copied");
+        StorageBackend::copy_local_instance(store.clone(), &path, &original)
+            .await
+            .expect("an identical resend counts as stored");
+        assert_eq!(stored_keys(&store).await, vec!["1.2.3/1.2.3.4.dcm"]);
+
+        let longer = input.path().join("longer.dcm");
+        let mut bytes = fake_part10();
+        bytes.push(7);
+        std::fs::write(&longer, &bytes).unwrap();
+        let err = StorageBackend::copy_local_instance(store.clone(), &path, &longer)
+            .await
+            .err()
+            .expect("an instance of another size is refused");
+        assert!(err.to_string().contains("already stored"), "unexpected error: {}", err);
+        let stored = store.get(&path).await.unwrap().bytes().await.unwrap();
+        assert_eq!(stored.as_ref(), fake_part10().as_slice());
     }
 }
