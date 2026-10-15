@@ -716,7 +716,13 @@ impl ProtocolAdapter for DimseAdapter {
                 };
 
                 match result {
-                    Ok(h) => scp_handles.0.push(h),
+                    Ok(h) => {
+                        // Tracked before the readiness wait, so the task is
+                        // aborted with the others if this one is aborted.
+                        scp_handles.0.push(h);
+                        // Best effort: try to connect to the listening port.
+                        Self::wait_for_scp_ready(*bind_addr, *port).await;
+                    }
                     Err(e) => {
                         tracing::error!(
                             "Failed to start DIMSE SCP on {}:{}: {}",
@@ -798,10 +804,12 @@ impl DimseAdapter {
         use tokio::process::Command;
 
         let storage_dir = dimse_config.storage_dir.clone();
-        let bind_addr = dimse_config.bind_addr;
 
+        // Built before spawning so the address is released even if the task
+        // is aborted before it first runs.
+        let registration = ScpRegistration(key);
         let handle = tokio::spawn(async move {
-            let _registration = ScpRegistration(key);
+            let _registration = registration;
             let _ = tokio::fs::create_dir_all(&storage_dir).await;
 
             // Try to start DCMTK storescp
@@ -842,9 +850,6 @@ impl DimseAdapter {
             }
         });
 
-        // Readiness loop (best-effort): try to connect to the listening port
-        Self::wait_for_scp_ready(bind_addr, port).await;
-
         Ok(handle)
     }
 
@@ -858,8 +863,11 @@ impl DimseAdapter {
         routes: Vec<(String, String, Vec<DimseOp>)>,
         shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
+        // Built before spawning so the address is released even if the task
+        // is aborted before it first runs.
+        let registration = ScpRegistration(key);
         let handle = tokio::spawn(async move {
-            let _registration = ScpRegistration(key);
+            let _registration = registration;
             let provider = build_provider(routes);
             let scp = dimse::DimseScp::new(dimse_config, provider);
 
@@ -876,9 +884,6 @@ impl DimseAdapter {
                 tracing::info!("DIMSE SCP '{}' stopped gracefully", local_aet);
             }
         });
-
-        // Readiness loop
-        Self::wait_for_scp_ready(bind_addr, port).await;
 
         Ok(handle)
     }

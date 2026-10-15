@@ -184,7 +184,11 @@ impl Http3Adapter {
                     break;
                 }
                 // Reap finished connection tasks so the set does not grow.
-                Some(_) = connections.join_next(), if !connections.is_empty() => {}
+                Some(finished) = connections.join_next(), if !connections.is_empty() => {
+                    if let Err(e) = finished {
+                        tracing::error!("HTTP/3 connection task for network '{}' panicked: {}", self.network_name, e);
+                    }
+                }
                 incoming = endpoint.accept() => {
                     match incoming {
                         Some(incoming_conn) => {
