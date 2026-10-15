@@ -7,7 +7,7 @@ use crate::models::middleware::{
 };
 use crate::pipeline::{PipelineError, PipelineExecutor};
 use crate::router::route_table::{method_list, RouteLookup, RouteTable};
-use arc_swap::ArcSwap;
+use arc_swap::{ArcSwap, ArcSwapOption};
 use axum::body::Body;
 use axum::extract::Request;
 use axum::response::{IntoResponse, Response};
@@ -47,7 +47,7 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
         config.pipelines.len()
     );
 
-    let mesh_source = config.clone();
+    let mesh_source = Arc::new(MeshSource::new(config.clone()));
     let routes = Arc::new(LiveRouteTable::new(config, network_name));
     let dispatch = move |req: Request| {
         let routes = routes.clone();
@@ -197,6 +197,40 @@ fn build_route_table(config: &Config, network_name: &str) -> RouteTable {
 /// The registry is fixed when the adapter starts. A mesh change publishes the
 /// new config, then restarts each network in turn. Until this network
 /// restarts, its registry and the live config disagree.
+/// The config a network's mesh registry was built from, and whether a live
+/// config still agrees with it.
+///
+/// After a reload that leaves the mesh tables alone, the network does not
+/// restart, so the live config pointer differs from `built_from` for good.
+/// The last live config found to match is kept, so each mesh request after
+/// such a reload pays one pointer compare, not a compare of every table.
+struct MeshSource {
+    built_from: Arc<Config>,
+    last_match: ArcSwapOption<Config>,
+}
+
+impl MeshSource {
+    fn new(built_from: Arc<Config>) -> Self {
+        Self {
+            built_from,
+            last_match: ArcSwapOption::from(None),
+        }
+    }
+
+    fn matches(&self, live: &Arc<Config>) -> bool {
+        if let Some(last) = self.last_match.load().as_ref() {
+            if Arc::ptr_eq(last, live) {
+                return true;
+            }
+        }
+        let matched = mesh_tables_match(&self.built_from, live);
+        if matched {
+            self.last_match.store(Some(live.clone()));
+        }
+        matched
+    }
+}
+
 fn mesh_tables_match(built_from: &Arc<Config>, live: &Arc<Config>) -> bool {
     Arc::ptr_eq(built_from, live)
         || (built_from.mesh == live.mesh
@@ -244,7 +278,7 @@ async fn mesh_routing_layer(
     mut req: Request,
     next: axum::middleware::Next,
     mesh_registry: Arc<MeshRegistry>,
-    mesh_source: Arc<Config>,
+    mesh_source: Arc<MeshSource>,
 ) -> Response<Body> {
     use crate::models::mesh::config::IngressEgressMode;
 
@@ -286,7 +320,7 @@ async fn mesh_routing_layer(
             Ok(config) => config,
             Err(status) => return status.into_response(),
         };
-        if !mesh_tables_match(&mesh_source, &config) {
+        if !mesh_source.matches(&config) {
             tracing::warn!(
                 "Mesh route for ingress '{}' refused: mesh config changed and this network has not restarted yet",
                 route_match.context.ingress_name
@@ -721,6 +755,25 @@ mod tests {
             crate::models::mesh::config::MeshIngress::default(),
         );
         assert!(!mesh_tables_match(&built_from, &Arc::new(changed)));
+    }
+
+    #[test]
+    fn mesh_source_remembers_the_last_matching_config() {
+        let source = MeshSource::new(Arc::new(Config::default()));
+        let live = Arc::new(Config::default());
+        assert!(source.matches(&live));
+        let last = source.last_match.load_full().expect("match is remembered");
+        assert!(Arc::ptr_eq(&last, &live));
+
+        let mut changed = Config::default();
+        changed.ingress.insert(
+            "api".to_string(),
+            crate::models::mesh::config::MeshIngress::default(),
+        );
+        let changed = Arc::new(changed);
+        assert!(!source.matches(&changed));
+        let last = source.last_match.load_full().expect("earlier match kept");
+        assert!(Arc::ptr_eq(&last, &live), "a mismatch must not be remembered");
     }
     use crate::pipeline::PipelineError;
     use http::StatusCode;
