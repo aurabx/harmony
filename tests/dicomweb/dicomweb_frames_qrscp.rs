@@ -12,6 +12,7 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_frames_with_dcmqrscp() {
     // Require dcmtk tools
     for bin in ["dcmqrscp", "storescu"].iter() {
@@ -258,7 +259,9 @@ async fn dicomweb_frames_with_dcmqrscp() {
     );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Issue DICOMweb frames request
     let url = format!(
@@ -298,6 +301,7 @@ async fn dicomweb_frames_with_dcmqrscp() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_multiframes_with_dcmqrscp() {
     // Require dcmtk tools
     for bin in ["dcmqrscp", "storescu"].iter() {
@@ -547,7 +551,9 @@ async fn dicomweb_multiframes_with_dcmqrscp() {
     );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Request frames 1 and 2
     let url = format!(

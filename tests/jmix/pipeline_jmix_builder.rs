@@ -22,6 +22,7 @@ fn find_samples_root() -> Option<PathBuf> {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
     // Skip if DCMTK tools are not present
     for bin in ["dcmqrscp", "storescu", "getscu"].iter() {
@@ -216,7 +217,9 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
     );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Step 1: query JMIX by StudyInstanceUID; if none exists, pipeline triggers DICOM C-GET and builds JMIX
     // The endpoint returns a ZIP file directly

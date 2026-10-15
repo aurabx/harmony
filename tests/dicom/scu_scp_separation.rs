@@ -137,6 +137,7 @@ async fn store_test_dataset(
 
 /// Test 1: dicom_scu backend with outgoing C-FIND
 #[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial]
 async fn test_dicom_scu_backend_cfind() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -200,7 +201,9 @@ async fn test_dicom_scu_backend_cfind() {
     );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let body = serde_json::json!({
         "identifier": {
@@ -317,6 +320,7 @@ async fn test_dicom_scp_endpoint_cfind() {
 
 /// Test 3: Configuration validation - dicom_scu cannot be used as endpoint
 #[tokio::test]
+#[serial_test::serial]
 async fn test_scu_cannot_be_endpoint() {
     let toml = r#"
         [proxy]
@@ -360,6 +364,7 @@ async fn test_scu_cannot_be_endpoint() {
 
 /// Test 4: Configuration validation - dicom_scp cannot be used as backend
 #[tokio::test]
+#[serial_test::serial]
 async fn test_scp_cannot_be_backend() {
     let toml = r#"
         [proxy]
@@ -408,6 +413,7 @@ async fn test_scp_cannot_be_backend() {
 
 /// Test 5: Backward compatibility - legacy "dicom" service maps to dicom_scu
 #[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial]
 async fn test_legacy_dicom_service_backward_compat() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -470,7 +476,9 @@ async fn test_legacy_dicom_service_backward_compat() {
     );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let body = serde_json::json!({
         "identifier": {
@@ -607,6 +615,7 @@ async fn test_pipeline_scp_receives_external_find() {
 
 /// Test 7: Full pipeline - HTTP -> SCU backend -> external PACS
 #[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial]
 async fn test_full_pipeline_http_to_scu_to_pacs() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -672,7 +681,9 @@ async fn test_full_pipeline_http_to_scu_to_pacs() {
     );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let body = serde_json::json!({
         "identifier": {
@@ -712,6 +723,7 @@ async fn test_full_pipeline_http_to_scu_to_pacs() {
 
 /// Test 8: dicom_scu backend C-STORE operation
 #[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial]
 async fn test_dicom_scu_backend_cstore() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -765,7 +777,9 @@ async fn test_dicom_scu_backend_cstore() {
     );
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Create a test DICOM file to send
     let mkuid = |suf: &str| {

@@ -70,10 +70,13 @@ async fn build_test_router() -> axum::Router<()> {
     let _ = std::fs::create_dir_all("./tmp");
 
     let cfg = load_config_from_str(get_test_config()).expect("valid config");
-    harmony::router::build_network_router(Arc::new(cfg), "default").await
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    harmony::router::build_network_router(cfg, "default").await
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_json_content_type() {
     let app = build_test_router().await;
 
@@ -111,6 +114,7 @@ async fn test_json_content_type() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_xml_content_type() {
     let app = build_test_router().await;
 
@@ -147,6 +151,7 @@ async fn test_xml_content_type() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_xml_with_attributes() {
     let app = build_test_router().await;
 
@@ -180,6 +185,7 @@ async fn test_xml_with_attributes() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_csv_content_type() {
     let app = build_test_router().await;
 
@@ -220,6 +226,7 @@ async fn test_csv_content_type() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_csv_with_formula_injection_prevention() {
     let app = build_test_router().await;
 
@@ -257,6 +264,7 @@ async fn test_csv_with_formula_injection_prevention() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_form_urlencoded_content_type() {
     let app = build_test_router().await;
 
@@ -294,6 +302,7 @@ async fn test_form_urlencoded_content_type() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_form_urlencoded_with_array_notation() {
     let app = build_test_router().await;
 
@@ -332,6 +341,7 @@ async fn test_form_urlencoded_with_array_notation() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_multipart_form_data() {
     let app = build_test_router().await;
 
@@ -396,6 +406,7 @@ async fn test_multipart_form_data() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_binary_content_type() {
     let app = build_test_router().await;
 
@@ -431,6 +442,7 @@ async fn test_binary_content_type() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_unsupported_content_type_falls_back_to_json() {
     let app = build_test_router().await;
 
@@ -463,6 +475,7 @@ async fn test_unsupported_content_type_falls_back_to_json() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_missing_content_type_defaults_to_json() {
     let app = build_test_router().await;
 
@@ -495,6 +508,7 @@ async fn test_missing_content_type_defaults_to_json() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_malformed_xml_partial_parse() {
     let app = build_test_router().await;
 
@@ -530,6 +544,7 @@ async fn test_malformed_xml_partial_parse() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_content_type_with_charset() {
     let app = build_test_router().await;
 
@@ -562,6 +577,7 @@ async fn test_content_type_with_charset() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_fhir_json_content_type() {
     let app = build_test_router().await;
 
@@ -599,6 +615,7 @@ async fn test_fhir_json_content_type() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_xml_nested_elements() {
     let app = build_test_router().await;
 

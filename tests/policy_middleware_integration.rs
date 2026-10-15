@@ -7,6 +7,7 @@ use tower::ServiceExt;
 
 /// Test that a request matching an allow rule and no deny rules is accepted
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_allow_rule_accepts() {
     let config_toml = r#"
         [proxy]
@@ -82,6 +83,7 @@ async fn test_policy_allow_rule_accepts() {
         create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
+    harmony::globals::set_config(config_arc.clone());
     let app = build_network_router(config_arc, "default").await;
 
     let response = app
@@ -101,6 +103,7 @@ async fn test_policy_allow_rule_accepts() {
 
 /// Test that a deny rule blocks the request
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_deny_rule_blocks() {
     let config_toml = r#"
         [proxy]
@@ -176,6 +179,7 @@ async fn test_policy_deny_rule_blocks() {
         create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
+    harmony::globals::set_config(config_arc.clone());
     let app = build_network_router(config_arc, "default").await;
 
     let response = app
@@ -195,6 +199,7 @@ async fn test_policy_deny_rule_blocks() {
 
 /// Test that allow + deny = deny
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_allow_plus_deny_blocks() {
     let config_toml = r#"
         [proxy]
@@ -278,6 +283,7 @@ async fn test_policy_allow_plus_deny_blocks() {
         create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
+    harmony::globals::set_config(config_arc.clone());
     let app = build_network_router(config_arc, "default").await;
 
     let response = app
@@ -297,6 +303,7 @@ async fn test_policy_allow_plus_deny_blocks() {
 
 /// Test IP allow rule with matching IP
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_ip_allow_matches() {
     let config_toml = r#"
         [proxy]
@@ -373,6 +380,7 @@ async fn test_policy_ip_allow_matches() {
         create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
+    harmony::globals::set_config(config_arc.clone());
     let app = build_network_router(config_arc, "default").await;
 
     let response = app
@@ -404,6 +412,7 @@ async fn test_policy_ip_allow_matches() {
 /// missing, so with a shared bucket the third request to the same rule
 /// under the same fallback key exceeds `max_requests=2` and returns 429.
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_rate_limit_enforcement() {
     // Reset the process-wide bucket registry so other tests in the binary
     // do not leak state into this one.
@@ -492,6 +501,7 @@ async fn test_policy_rate_limit_enforcement() {
         create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
+    harmony::globals::set_config(config_arc.clone());
     let app = build_network_router(config_arc, "default").await;
 
     // First and second requests fit inside max_requests=2 and succeed.
@@ -539,6 +549,7 @@ async fn test_policy_rate_limit_enforcement() {
 
 /// Test path matching with allow mode
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_path_allow() {
     let config_toml = r#"
         [proxy]
@@ -617,6 +628,7 @@ async fn test_policy_path_allow() {
         create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
+    harmony::globals::set_config(config_arc.clone());
     let app = build_network_router(config_arc, "default").await;
 
     // NOTE: Path matching requires `path` metadata which IS populated by the HTTP adapter
@@ -656,6 +668,7 @@ async fn test_policy_path_allow() {
 
 /// Test disabled policy is skipped
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_disabled_skipped() {
     let config_toml = r#"
         [proxy]
@@ -744,6 +757,7 @@ async fn test_policy_disabled_skipped() {
         create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
+    harmony::globals::set_config(config_arc.clone());
     let app = build_network_router(config_arc, "default").await;
 
     let response = app
@@ -763,6 +777,7 @@ async fn test_policy_disabled_skipped() {
 
 /// Test multiple policies with weight ordering
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_weight_ordering() {
     let config_toml = r#"
         [proxy]
@@ -846,6 +861,7 @@ async fn test_policy_weight_ordering() {
         create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
+    harmony::globals::set_config(config_arc.clone());
     let app = build_network_router(config_arc, "default").await;
 
     let response = app
@@ -871,6 +887,7 @@ async fn test_policy_weight_ordering() {
 /// The peer address is injected as axum `ConnectInfo`, which is how the HTTP
 /// adapter receives it from `into_make_service_with_connect_info`.
 #[tokio::test]
+#[serial_test::serial]
 async fn test_policy_ip_allowlist_gates_method_allow_via_connect_info() {
     use axum::extract::ConnectInfo;
     use std::net::SocketAddr;
@@ -959,6 +976,7 @@ async fn test_policy_ip_allowlist_gates_method_allow_via_connect_info() {
         create_storage_backend(&config_arc.storage).expect("Failed to create storage backend");
     harmony::globals::set_storage(storage);
 
+    harmony::globals::set_config(config_arc.clone());
     let app = build_network_router(config_arc, "default").await;
 
     let request_from = |peer: Option<&str>| {

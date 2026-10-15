@@ -20,6 +20,7 @@ fn basic_header(user: &str, pass: &str) -> String {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn basic_auth_allows_valid_credentials() {
     let toml = r#"
         [proxy]
@@ -66,7 +67,9 @@ async fn basic_auth_allows_valid_credentials() {
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let response = app
         .oneshot(
@@ -84,6 +87,7 @@ async fn basic_auth_allows_valid_credentials() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn basic_auth_rejects_invalid_credentials() {
     let toml = r#"
         [proxy]
@@ -130,7 +134,9 @@ async fn basic_auth_rejects_invalid_credentials() {
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Wrong password
     let response = app

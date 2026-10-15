@@ -26,6 +26,7 @@ fn generate_test_certificate(temp_dir: &TempDir) -> (String, String) {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial]
 async fn test_https_server_e2e() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
     let (cert_path, key_path) = generate_test_certificate(&temp_dir);
@@ -106,6 +107,7 @@ module = ""
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial]
 async fn test_force_https_redirect_e2e() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
 
@@ -193,6 +195,7 @@ module = ""
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial]
 async fn test_plain_http_e2e() {
     let temp_dir = TempDir::new().expect("Failed to create temp dir");
 

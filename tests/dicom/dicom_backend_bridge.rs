@@ -11,6 +11,7 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial]
 async fn http_to_dicom_backend_echo_succeeds() {
     // Find a free port
     let port = {
@@ -86,7 +87,9 @@ async fn http_to_dicom_backend_echo_succeeds() {
     }
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // POST /dicom/echo should trigger SCU echo in the DICOM backend and return a JSON body
     let response = app

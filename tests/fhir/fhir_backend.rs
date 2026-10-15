@@ -183,10 +183,13 @@ async fn build_test_router(backend_base_url: &str) -> Router<()> {
     let _ = std::fs::create_dir_all("../../tmp");
     let config_str = get_fhir_backend_config(backend_base_url);
     let cfg = load_config_from_str(&config_str).expect("valid config");
-    harmony::router::build_network_router(Arc::new(cfg), "default").await
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    harmony::router::build_network_router(cfg, "default").await
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_fhir_backend_get_patient() {
     let (backend_url, _handle) = build_mock_fhir_server().await;
     let app = build_test_router(&backend_url).await;
@@ -215,6 +218,7 @@ async fn test_fhir_backend_get_patient() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_fhir_backend_search_patients() {
     let (backend_url, _handle) = build_mock_fhir_server().await;
     let app = build_test_router(&backend_url).await;
@@ -244,6 +248,7 @@ async fn test_fhir_backend_search_patients() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_fhir_backend_create_patient() {
     let (backend_url, _handle) = build_mock_fhir_server().await;
     let app = build_test_router(&backend_url).await;
@@ -290,6 +295,7 @@ async fn test_fhir_backend_create_patient() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_fhir_backend_update_patient() {
     let (backend_url, _handle) = build_mock_fhir_server().await;
     let app = build_test_router(&backend_url).await;
@@ -327,6 +333,7 @@ async fn test_fhir_backend_update_patient() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_fhir_backend_delete_patient() {
     let (backend_url, _handle) = build_mock_fhir_server().await;
     let app = build_test_router(&backend_url).await;
@@ -346,6 +353,7 @@ async fn test_fhir_backend_delete_patient() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_fhir_backend_search_with_params() {
     let (backend_url, _handle) = build_mock_fhir_server().await;
     let app = build_test_router(&backend_url).await;
@@ -374,6 +382,7 @@ async fn test_fhir_backend_search_with_params() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_fhir_backend_content_type_preserved() {
     let (backend_url, _handle) = build_mock_fhir_server().await;
     let app = build_test_router(&backend_url).await;
@@ -410,6 +419,7 @@ async fn test_fhir_backend_content_type_preserved() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_fhir_backend_accepts_fhir_json() {
     let (backend_url, _handle) = build_mock_fhir_server().await;
     let app = build_test_router(&backend_url).await;
@@ -437,6 +447,7 @@ async fn test_fhir_backend_accepts_fhir_json() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_fhir_backend_normalizes_json() {
     let (backend_url, _handle) = build_mock_fhir_server().await;
     let app = build_test_router(&backend_url).await;
@@ -468,6 +479,7 @@ async fn test_fhir_backend_normalizes_json() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_fhir_backend_missing_base_url_fails_validation() {
     let toml = r#"
         [proxy]
@@ -506,7 +518,9 @@ async fn test_fhir_backend_missing_base_url_fails_validation() {
 
     let _ = std::fs::create_dir_all("../../tmp");
     let cfg = load_config_from_str(toml).expect("config should parse");
-    let router = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let router = harmony::router::build_network_router(cfg, "default").await;
 
     // Request should fail because backend lacks base_url
     let response = router

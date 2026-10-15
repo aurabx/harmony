@@ -25,6 +25,7 @@ fn init_test_globals(config: Arc<Config>) {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn router_builds_and_handles_404() {
     // Minimal config with one network and one empty pipeline bound to that network.
     let toml = r#"
@@ -55,7 +56,9 @@ async fn router_builds_and_handles_404() {
     let cfg: Config = load_config_from_str(toml).expect("valid config");
 
     // Build the router for the default network. This should not panic.
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Fire a simple request against root. Since we didn't mount any routes,
     // axum should return 404 NOT FOUND. The important part is that the router
@@ -69,6 +72,7 @@ async fn router_builds_and_handles_404() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn router_handles_basic_request() {
     // Minimal config with one network, one pipeline, and one endpoint.
     let toml = r#"
@@ -104,7 +108,9 @@ async fn router_handles_basic_request() {
     let cfg: Config = load_config_from_str(toml).expect("valid config");
 
     // Build the router for the default network.
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Send a request to the `/basic/get-route` endpoint (based on HttpEndpoint implementation).
     let response = app
@@ -123,6 +129,7 @@ async fn router_handles_basic_request() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn router_selects_correct_endpoint_based_on_path() {
     // Minimal configuration with two endpoints sharing one network.
     let toml = r#"
@@ -167,7 +174,9 @@ async fn router_selects_correct_endpoint_based_on_path() {
     let cfg = load_config_from_str(toml).expect("valid config");
 
     // Build the router for the default network
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Test `/basic/get-route` endpoint
     let response = app
@@ -217,6 +226,7 @@ async fn router_selects_correct_endpoint_based_on_path() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn router_handles_path_based_routing() {
     // Create a configuration with multiple endpoints
     let toml = r#"
@@ -269,6 +279,7 @@ async fn router_handles_path_based_routing() {
     init_test_globals(cfg_arc.clone());
 
     // Build the router
+    harmony::globals::set_config(cfg_arc.clone());
     let app = harmony::router::build_network_router(cfg_arc, "default").await;
 
     // Test first endpoint `/echo1/:path`

@@ -22,6 +22,7 @@ fn basic_header(user: &str, pass: &str) -> String {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn jwt_auth_with_authentication_reference() {
     let toml = r#"
         [proxy]
@@ -79,7 +80,9 @@ async fn jwt_auth_with_authentication_reference() {
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Generate valid JWT
     #[derive(Serialize)]
@@ -122,6 +125,7 @@ async fn jwt_auth_with_authentication_reference() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn basic_auth_with_authentication_reference() {
     let toml = r#"
         [proxy]
@@ -176,7 +180,9 @@ async fn basic_auth_with_authentication_reference() {
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Valid credentials
     let response = app
@@ -211,6 +217,7 @@ async fn basic_auth_with_authentication_reference() {
 }
 
 #[test]
+#[serial_test::serial]
 fn missing_authentication_reference_fails_validation() {
     let toml = r#"
         [proxy]
@@ -274,6 +281,7 @@ fn missing_authentication_reference_fails_validation() {
 }
 
 #[test]
+#[serial_test::serial]
 fn multiple_middlewares_can_share_authentication() {
     let toml = r#"
         [proxy]

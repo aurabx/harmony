@@ -55,6 +55,7 @@ async fn build_mock_echo_server() -> (String, tokio::task::JoinHandle<()>) {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_backend_bearer_auth_header() {
     let (backend_url, _handle) = build_mock_echo_server().await;
     let _ = std::fs::create_dir_all("../../tmp");
@@ -111,7 +112,9 @@ async fn test_backend_bearer_auth_header() {
     );
 
     let cfg = load_config_from_str(&config_str).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let payload = json!({"test": "data"});
 
@@ -144,6 +147,7 @@ async fn test_backend_bearer_auth_header() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_backend_basic_auth_header() {
     let (backend_url, _handle) = build_mock_echo_server().await;
     let _ = std::fs::create_dir_all("../../tmp");
@@ -201,7 +205,9 @@ async fn test_backend_basic_auth_header() {
     );
 
     let cfg = load_config_from_str(&config_str).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let payload = json!({"test": "data"});
 
@@ -237,6 +243,7 @@ async fn test_backend_basic_auth_header() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_backend_api_key_header() {
     let (backend_url, _handle) = build_mock_echo_server().await;
     let _ = std::fs::create_dir_all("../../tmp");
@@ -294,7 +301,9 @@ async fn test_backend_api_key_header() {
     );
 
     let cfg = load_config_from_str(&config_str).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let payload = json!({"test": "data"});
 
@@ -327,6 +336,7 @@ async fn test_backend_api_key_header() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_backend_custom_api_key_header() {
     let (backend_url, _handle) = build_mock_echo_server().await;
     let _ = std::fs::create_dir_all("../../tmp");
@@ -384,7 +394,9 @@ async fn test_backend_custom_api_key_header() {
     );
 
     let cfg = load_config_from_str(&config_str).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let payload = json!({"test": "data"});
 
@@ -417,6 +429,7 @@ async fn test_backend_custom_api_key_header() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_backend_no_auth_no_header() {
     let (backend_url, _handle) = build_mock_echo_server().await;
     let _ = std::fs::create_dir_all("../../tmp");
@@ -465,7 +478,9 @@ async fn test_backend_no_auth_no_header() {
     );
 
     let cfg = load_config_from_str(&config_str).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let payload = json!({"test": "data"});
 
@@ -505,6 +520,7 @@ async fn test_backend_no_auth_no_header() {
 /// token reaches the upstream through a backend that inherits it via
 /// `target_ref`.
 #[tokio::test]
+#[serial_test::serial]
 async fn test_target_bearer_auth_reaches_upstream_through_config_load() {
     let (backend_url, _handle) = build_mock_echo_server().await;
     let upstream_port = backend_url
@@ -567,7 +583,9 @@ module = ""
     std::fs::write(&config_path, config_str).expect("write config");
 
     let cfg = Config::load(config_path.to_str().expect("utf-8 path")).expect("config should load");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let response = app
         .oneshot(
