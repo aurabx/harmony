@@ -598,6 +598,7 @@ The server knows which project you are working in. Omit the `project` argument (
 
 - **Skills** — Follow loaded skill instructions. Skills may include companion scripts, templates, or reference docs in their directory.
 - **MCP Servers** — Call `automatic_list_mcp_servers` to see what servers are registered. Call `automatic_sync_project` after configuration changes.
+- **Enabling and Disabling MCP Servers** — Call `automatic_set_mcp_server_enabled` with `server` and `enabled` to switch one of a project's attached MCP servers off or on. A disabled server stays attached and `automatic_read_project` lists it under `disabled_mcp_servers`. The call does not sync to disk on its own. Call `automatic_sync_project` afterwards to remove the server from the agent config files, or to write it back. The call is refused for a server that is not attached, for the `automatic` server, and for a server an attached profile provides.
 - **Skill Discovery** — Call `automatic_search_skills` to find community skills on skills.sh when you need specialised guidance not covered by installed skills.
 - **Related Projects** — Before searching the filesystem or asking the user for sibling projects, call `automatic_get_related_projects`. It returns peer projects (name, description, directory, and the relative path from this project) for every Project Group this project belongs to. This is the authoritative source — related projects are intentionally not written into the instruction file.
 - **Other Projects** — Call `automatic_list_projects` to see every project registered in Automatic. Each entry has `name`, `local_key`, `id` and `directory`, and `current` marks this project.
@@ -697,7 +698,7 @@ USE OF THIS FRAMEWORK IS NON-NEGOTIABLE. Acknowledge that you have read this fil
 ## Phase 3: Plan
 
 - Outline your approach before writing any code. It does not need to be exhaustive — it needs to be honest.
-- Prefer the minimal scope of change that correctly solves the problem. Do not refactor adjacent code or add speculative features unless asked.
+- Prefer the minimal scope of change that correctly solves the problem. Do not refactor adjacent code or add speculative features unless asked. The problem includes every instance of the same defect, and any problem the change itself causes or exposes.
 - Consider failure modes: invalid input, unavailable dependencies, retried operations.
 - Validate your plan against the constraints from Phase 1. If there is a conflict, surface it rather than quietly working around it.
 
@@ -728,13 +729,18 @@ freely before the plan.
 Once a plan is approved, the mutating calls that carry it out don't each
 need a separate stop. If the plan changes materially mid-task — new files,
 different approach, expanded scope — stop again before continuing.
+Fixing a defect of the same kind as the task, a problem the change caused or
+exposed, or a review finding on the approved change is not a plan change and
+needs no new stop. A new stop is still needed for a different approach, an
+unrelated feature, a destructive action, or anything the user explicitly said
+not to change without asking.
 
 **Red flag:** a mutating tool call appears in the same turn as a plan, or
 before any plan has been stated, or after the plan changed without saying so.
 
 ## Phase 5: Implement
 
-- Edit only what is relevant to the task. If you notice a bug nearby, note it — do not silently fix it unless it is in scope.
+- Edit only what is relevant to the task. A defect is in scope, and is fixed and tested in the same piece of work, when it is the same kind of defect as the task, when the change causes or exposes it, or when a review of the change finds it. Say what was fixed in the summary. A defect unrelated to the task is noted and left, and it then gets a ticket.
 - Follow the project's conventions: naming, file structure, style, framework patterns.
 - Write type-safe, deterministic, defensively validated code. Refer to the project's coding patterns document.
 - Leave no placeholders or stubs without declaring them. Incomplete work must be disclosed, not hidden.
@@ -754,6 +760,7 @@ before any plan has been stated, or after the plan changed without saying so.
 - Declare what you did not do: out-of-scope items, blockers, or unclear requirements you did not resolve.
 - Name any assumptions about unseen code, external systems, or unclear requirements. Do not present uncertain work as definitive.
 - Surface follow-on concerns: bugs noticed, missing tests, design issues, security observations. Do not discard observations silently.
+- Report an item as not done only for one of three reasons. It needs an owner decision, and you give one recommendation. The user set an explicit gate on it. Or it is unrelated to the task, and you give the ticket. A list of known problems in or next to the changed code, left unfixed without one of those reasons, is a failed task.
 - Do not exaggerate confidence. If you are uncertain, say so.
 
 You are a senior developer. IT is your job to check inputs and outputs. Insert debugging when required. Don't make assumptions. Debug, investigate, then test.

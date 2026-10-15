@@ -5,6 +5,9 @@
     "codex",
     "cursor"
   ],
+  "contexts": [
+    "runbeam"
+  ],
   "custom_agents": [],
   "custom_commands": [],
   "custom_skills": [],
@@ -127,6 +130,13 @@
       "kind": "github",
       "source": "github/awesome-copilot"
     },
+    "integration-testing": {
+      "id": "aj-geddes/useful-ai-prompts/integration-testing",
+      "installed_at": "2026-10-14T19:34:09.165564+00:00",
+      "installed_sha": "facc5962390fcee5ae2748084a66bdb419b181405d772b5ba5c03b1e730e7ccc",
+      "kind": "github",
+      "source": "aj-geddes/useful-ai-prompts"
+    },
     "linear": {
       "id": "davila7/claude-code-templates/linear",
       "kind": "github",
@@ -148,7 +158,8 @@
     "linear",
     "aurabox-rest-api",
     "harmony-pipeline-builder",
-    "harmony-runner"
+    "harmony-runner",
+    "integration-testing"
   ],
   "tools": []
 }
