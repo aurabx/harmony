@@ -298,7 +298,7 @@ impl ServiceHandler<Value> for Http3Backend {
             "Sending HTTP/3 request to: {}:{}{}",
             conn.host,
             port,
-            path
+            crate::logging::without_query(&path)
         );
 
         let response = client

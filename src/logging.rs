@@ -264,6 +264,10 @@ pub(crate) mod test_capture {
             .with_writer(log.clone())
             .finish();
         let guard = tracing::subscriber::set_default(subscriber);
+        // Tests running in parallel without a subscriber can cache a
+        // callsite as disabled while this one registers. Rebuilding after
+        // registration makes that much less likely, though not impossible.
+        tracing::callsite::rebuild_interest_cache();
         (log, guard)
     }
 }
