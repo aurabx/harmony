@@ -3,7 +3,7 @@ use crate::adapters::dimse::status_mapper;
 use crate::config::config::Config;
 use crate::globals::{get_config, get_storage};
 use crate::models::envelope::command::{Command, Operation};
-use crate::models::envelope::envelope::ResponseEnvelope;
+use crate::models::envelope::envelope::{LocalInstanceFile, ResponseEnvelope};
 use crate::models::protocol::{Protocol, ProtocolCtx};
 use crate::pipeline::executor::PipelineExecutor;
 use async_trait::async_trait;
@@ -198,12 +198,16 @@ impl PipelineQueryProvider {
     ///
     /// Converts DIMSE operation to protocol context, builds envelope via service,
     /// executes pipeline, and returns response envelope.
+    /// `local_instance` is the adapter's copy of a received C-STORE
+    /// instance. It is set only for a backend that reads it (see
+    /// `store_attaches_local_instance`).
     async fn run(
         &self,
         config: &Config,
         command: Command,
         body: serde_json::Value,
         mut meta: HashMap<String, String>,
+        local_instance: Option<LocalInstanceFile>,
     ) -> DimseResult<ResponseEnvelope<Vec<u8>>> {
         // Resolve endpoint service and options
         let endpoint = config.endpoints.get(&self.endpoint).ok_or_else(|| {
@@ -228,10 +232,11 @@ impl PipelineQueryProvider {
         };
 
         // Let the service build the request envelope
-        let request_envelope = service
+        let mut request_envelope = service
             .build_protocol_envelope(ctx.clone(), options)
             .await
             .map_err(|e| DimseError::operation_failed(format!("Envelope build failed: {}", e)))?;
+        request_envelope.local_instance = local_instance;
 
         // Get pipeline configuration
         let pipeline_cfg = config.pipelines.get(&self.pipeline).ok_or_else(|| {
@@ -457,6 +462,30 @@ impl PipelineQueryProvider {
                     .map_or(name.as_str(), |m| m.middleware_type.as_str());
                 middleware_type.eq_ignore_ascii_case("dicom_to_http")
             })
+    }
+
+    /// True when the pipeline's backend copies the adapter's file itself: a
+    /// `storage` backend with `content = "dicom_part10"`. It gets the file as
+    /// `RequestEnvelope::local_instance` and streams it, so a large instance
+    /// is never held in memory.
+    fn store_attaches_local_instance(
+        pipeline: &crate::models::pipelines::config::Pipeline,
+        config: &crate::config::config::Config,
+    ) -> bool {
+        let Some(backend) = pipeline
+            .backends
+            .first()
+            .and_then(|name| config.backends.get(name))
+        else {
+            return false;
+        };
+        backend.service.eq_ignore_ascii_case("storage")
+            && backend
+                .options
+                .as_ref()
+                .and_then(|options| options.get("content"))
+                .and_then(|content| content.as_str())
+                == Some(crate::models::services::types::storage::CONTENT_DICOM_PART10)
     }
 
     /// Build the pipeline body for one received C-STORE instance.
@@ -791,7 +820,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             tracing::info!("Using streaming pipeline for C-FIND");
             self.run_streaming(&config, command, body, meta).await
         } else {
-            let response_envelope = self.run(&config, command, body, meta).await?;
+            let response_envelope = self.run(&config, command, body, meta, None).await?;
             let datasets = Self::response_to_datasets(response_envelope).await?;
             Ok(dataset_stream_from_vec(datasets))
         }
@@ -830,6 +859,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
                 Command::new(Operation::Move).with_source("dimse_adapter"),
                 body,
                 meta,
+                None,
             )
             .await?;
 
@@ -877,7 +907,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             // sends no Pending responses for this retrieval.
             Ok(RetrieveStream::new(self.run_streaming(&config, command, body, meta).await?))
         } else {
-            let response_envelope = self.run(&config, command, body, meta).await?;
+            let response_envelope = self.run(&config, command, body, meta, None).await?;
             let datasets = Self::response_to_datasets(response_envelope).await?;
             Ok(RetrieveStream::from_vec(datasets))
         }
@@ -991,7 +1021,9 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             self.run_streaming_response(&config, command, body, meta)
                 .await?
         } else {
-            self.run(&config, command, body, meta).await?
+            let local_instance = Self::store_attaches_local_instance(pipeline_cfg, &config)
+                .then(|| LocalInstanceFile::new(temp_file.to_path_buf()));
+            self.run(&config, command, body, meta, local_instance).await?
         };
 
         Self::check_store_response(&response)?;
@@ -1689,6 +1721,27 @@ module = ""
         assert!(!needs("http_streaming_backend", None));
         assert!(!needs("http", Table("dicom_to_dicomweb")), "reads the local file");
         assert!(!needs("http", None));
+    }
+
+    #[test]
+    fn test_part10_storage_backend_gets_the_local_file_not_an_inline_copy() {
+        let needs = |content: Option<&str>| {
+            let mut config = inline_config("storage", MiddlewareRef::None);
+            let mut options = HashMap::new();
+            options.insert("root".to_string(), serde_json::json!("./tmp/archive"));
+            if let Some(content) = content {
+                options.insert("content".to_string(), serde_json::json!(content));
+            }
+            config.backends.get_mut("out").expect("backend present").options = Some(options);
+            let pipeline = config.pipelines.get("store").expect("pipeline present");
+            (
+                PipelineQueryProvider::store_attaches_local_instance(pipeline, &config),
+                PipelineQueryProvider::store_needs_inline_instance(pipeline, &config),
+            )
+        };
+
+        assert_eq!(needs(Some("dicom_part10")), (true, false), "the backend streams the file");
+        assert_eq!(needs(None), (false, false), "the backend writes the request body");
     }
 
     #[test]

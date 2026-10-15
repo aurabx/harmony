@@ -1,5 +1,6 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 
 use super::command::{Command, Operation};
 
@@ -35,6 +36,27 @@ pub struct ContentMetadata {
     pub checksum: Option<String>,
 }
 
+/// A DICOM Part 10 file this process wrote for one request. The DIMSE
+/// adapter makes one for each C-STORE instance it receives.
+///
+/// Only code in this crate can create one, and serde never reads or writes
+/// it. So a client cannot point a backend at a file on this host. Backends
+/// read the instance from here instead of from a path in the request body.
+#[derive(Debug, Clone)]
+pub struct LocalInstanceFile {
+    path: PathBuf,
+}
+
+impl LocalInstanceFile {
+    pub(crate) fn new(path: PathBuf) -> Self {
+        Self { path }
+    }
+
+    pub fn path(&self) -> &Path {
+        &self.path
+    }
+}
+
 /// Represents an Envelope for passing data between endpoints, backends, and middleware.
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct RequestEnvelope<T> {
@@ -58,6 +80,10 @@ pub struct RequestEnvelope<T> {
     /// Only populated when transform middleware is used to preserve original state.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub normalized_snapshot: Option<serde_json::Value>,
+    /// The local copy of the request's DICOM instance, if the endpoint made
+    /// one. The executor hides it from middleware.
+    #[serde(skip)]
+    pub local_instance: Option<LocalInstanceFile>,
 }
 
 /// Details about the backend target that the request will be sent to.
@@ -212,6 +238,7 @@ where
             original_data,
             normalized_data,
             normalized_snapshot: None,
+            local_instance: None,
         }
     }
 
@@ -510,6 +537,7 @@ where
             original_data,
             normalized_data,
             normalized_snapshot: self.normalized_snapshot,
+            local_instance: None,
         })
     }
 }

@@ -1,6 +1,6 @@
 # Backends
 
-**Last Updated**: 2026-09-24
+**Last Updated**: 2026-10-15
 
 Backends enable the pipeline to communicate with external systems (targets). Backends operate within the unified `PipelineExecutor` and handle the "backend invocation" step of the pipeline.
 
@@ -384,6 +384,7 @@ A backend for reading and writing files to local storage or S3-compatible object
 - **Write** (POST/PUT or Store/Update): Writes request body to path resolved from `write_pattern`
 - Supports path templating with metadata, UUIDs, and timestamps
 - Returns `Location` header and JSON status on successful write
+- `content = "dicom_part10"` writes the DICOM Part 10 instance of a C-STORE instead of the request body (see [Storing received C-STORE instances](#storing-received-c-store-instances))
 
 **Configuration**:
 ```toml
@@ -415,6 +416,13 @@ Patterns can use placeholders replaced at runtime:
 - `{metadata_key}`: Replaced by value from request metadata (e.g. `{tenant}` from JWT)
 - `{field_name}`: Replaced by value from normalized data (e.g. `{PatientID}`)
 
+**Placeholder rules for `write_pattern`**:
+- Each placeholder is filled once. A value is not scanned for further placeholders.
+- `{uuid}` and `{timestamp}` are always generated. Request metadata or data with those names is ignored.
+- A value fills part of one path segment. A write fails when a value is empty, is `.` or `..`, or holds `/` or `\`.
+- A write fails when a placeholder has no value in the request.
+- `read_pattern` does not follow these rules.
+
 **Example**:
 ```toml
 [backends.patient_docs]
@@ -424,6 +432,40 @@ root = "./patient_data"
 # Write to: ./patient_data/{tenant}/{PatientID}/{uuid}.dcm
 write_pattern = "{tenant}/{PatientID}/{uuid}.dcm"
 ``` path=null start=null
+
+#### Storing received C-STORE instances
+
+Put a `storage` backend with `content = "dicom_part10"` behind a `dicom_scp` endpoint to keep each instance a device sends.
+
+```toml
+[pipelines.archive]
+networks = ["default"]
+endpoints = ["scp"]
+middleware = ["site_policy"]
+backends = ["dicom_archive"]
+
+[backends.dicom_archive]
+service = "storage"
+[backends.dicom_archive.options]
+root = "./data/archive"
+content = "dicom_part10"
+write_pattern = "{StudyInstanceUID}/{SeriesInstanceUID}/{SOPInstanceUID}.dcm"
+``` path=null start=null
+
+- The backend runs after the pipeline's middleware. The backend does not write a C-STORE that `policies` denies.
+- The endpoint also keeps a working copy of each instance under `[storage]/dimse` while the pipeline runs.
+- The backend must be the pipeline's first backend. Otherwise the endpoint does not hand it the instance, and every store fails.
+- The endpoint hands the backend its working copy of the instance inside the process. Middleware cannot see or change it, and a request cannot name it. The backend never reads the `file` path in the body.
+- The backend uploads the instance in 10 MiB parts, at most two in flight. One store holds about 30 MiB, whatever the instance size, so large instances such as tomosynthesis fit. It uploads to a temporary name next to the final path (`<name>.partial-<uuid>`), copies it to the final path, then deletes the temporary name.
+- If the request is cancelled mid-store, a `.partial-` object or an incomplete S3 multipart upload can be left behind. On S3, add a lifecycle rule that removes incomplete multipart uploads and old `.partial-` objects.
+- A middleware that replaces the request body, for example with a changed Part 10 file in `body_b64`, takes effect. The backend then writes the new body and holds it in memory, as over HTTP.
+- Over HTTP, the backend takes the Part 10 file as the request body, or as base64 in `part10_b64` of a JSON body. That path holds the whole instance in memory.
+- `StudyInstanceUID`, `SeriesInstanceUID`, `SOPInstanceUID` and `PatientID` come from the instance. A value that breaks the placeholder rules fails the store. The device then gets status `0xC000` and keeps its copy.
+- A body with no Part 10 instance fails the write.
+- A resend of the same bytes counts as stored. Different bytes at an existing path fail the write, so a peer cannot replace an archived instance by reusing its UIDs.
+- On the local filesystem the final copy is atomic. On S3 it is a check followed by a copy, because Harmony does not configure S3 conditional copy. Two different instances with the same path that arrive at the same moment can both pass the check, and the second replaces the first.
+- Error messages do not include the write path, which may hold patient data.
+- An unknown `content` value fails every write.
 
 ### Echo (Test)
 

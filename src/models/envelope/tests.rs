@@ -518,3 +518,23 @@ fn test_resolve_command_from_explicit_command() {
     assert_eq!(resolved.operation, Operation::Ping);
     assert_eq!(resolved.source, Some("test_source".to_string()));
 }
+
+#[test]
+fn test_local_instance_is_never_read_from_json() {
+    let json = serde_json::json!({
+        "request_details": {
+            "method": "POST", "uri": "/", "headers": {}, "cookies": {},
+            "query_params": {}, "cache_status": null, "metadata": {}
+        },
+        "backend_request_details": {
+            "method": "POST", "uri": "/", "headers": {}, "cookies": {},
+            "query_params": {}, "cache_status": null, "metadata": {}
+        },
+        "normalized_data": null,
+        "local_instance": { "path": "/etc/passwd" }
+    });
+
+    let envelope: RequestEnvelope<Vec<u8>> = serde_json::from_value(json).unwrap();
+
+    assert!(envelope.local_instance.is_none());
+}
