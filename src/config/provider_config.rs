@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 ///
 /// Providers define how resources are resolved - either locally from config files
 /// or remotely from a provider API (e.g., Runbeam Cloud).
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct ProviderConfig {
     /// Base URL for provider API. Required for remote providers, omitted for 'local'.
     #[serde(default, skip_serializing_if = "Option::is_none")]

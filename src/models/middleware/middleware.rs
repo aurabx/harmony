@@ -40,7 +40,7 @@ pub fn builtin_middleware_types() -> &'static [&'static str] {
     ]
 }
 
-#[derive(Debug, serde::Deserialize, Default, Clone)]
+#[derive(Debug, serde::Deserialize, Default, Clone, PartialEq)]
 #[serde(default)]
 pub struct MiddlewareConfig {
     pub module: String, // Path to the module or metadata

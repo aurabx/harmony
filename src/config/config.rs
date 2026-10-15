@@ -30,7 +30,7 @@ use std::path::Path;
 static DEFAULT_OPTIONS: Lazy<HashMap<String, serde_json::Value>> = Lazy::new(HashMap::new);
 
 /// Policy definition at top level
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct PolicyDefinition {
     pub id: String,
     pub name: Option<String>,
@@ -41,7 +41,7 @@ pub struct PolicyDefinition {
 }
 
 /// Rule definition at top level
-#[derive(Debug, Deserialize, Clone)]
+#[derive(Debug, Deserialize, Clone, PartialEq)]
 pub struct RuleDefinition {
     pub id: String,
     pub name: Option<String>,
@@ -635,6 +635,7 @@ impl Config {
         self.validate_endpoints()?;
         self.validate_routes()?;
         self.validate_backends()?;
+        self.validate_dimse_dcmtk_listeners()?;
         self.validate_targets()?;
         self.validate_peers()?;
         self.validate_storage()?;
@@ -841,6 +842,35 @@ impl Config {
             // Warn if middleware is empty
             if pipeline.middleware.is_empty() {
                 tracing::warn!("Pipeline '{}' has no middleware configured", name);
+            }
+        }
+        Ok(())
+    }
+
+    /// Reject DIMSE ports served by DCMTK `storescp` when any pipeline on
+    /// that port has `ip_allow` or `ip_deny` rules.
+    ///
+    /// `storescp` binds every interface and runs no admission check, so it
+    /// takes the port for every listener on it, in any network, and would
+    /// admit peers the rules refuse.
+    fn validate_dimse_dcmtk_listeners(&self) -> Result<(), ConfigError> {
+        use crate::adapters::dimse::{all_listener_groups, dcmtk_ip_rule_conflict};
+
+        for dcmtk in &all_listener_groups(self) {
+            let Some((trigger, _)) = dcmtk.dcmtk_trigger() else {
+                continue;
+            };
+            if let Some(reason) = dcmtk_ip_rule_conflict(self, dcmtk) {
+                return Err(match &trigger.backend_name {
+                    Some(backend) => ConfigError::InvalidBackend {
+                        name: backend.clone(),
+                        reason,
+                    },
+                    None => ConfigError::InvalidEndpoint {
+                        name: trigger.endpoint_name.clone(),
+                        reason,
+                    },
+                });
             }
         }
         Ok(())
