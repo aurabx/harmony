@@ -161,6 +161,7 @@ impl ServiceHandler<Value> for JmixBackend {
             target_details.method,
             target_details
                 .full_url()
+                .map(|url| crate::logging::without_query(&url).to_string())
                 .unwrap_or_else(|_| "<invalid-url>".to_string())
         );
 
@@ -362,13 +363,23 @@ impl JmixBackend {
             request_builder = request_builder.body(envelope.original_data.clone());
         }
 
-        tracing::debug!("Sending JMIX request to upstream: {}", full_url);
+        tracing::debug!(
+            "Sending JMIX request to upstream: {}",
+            crate::logging::without_query(&full_url)
+        );
 
         // Execute the request
         let response = request_builder
             .send()
             .await
-            .map_err(|e| Error::from(format!("JMIX request to upstream failed: {}", e)))?;
+            // reqwest appends the full URL, query included, to its error
+            // text, and the router logs that text at ERROR.
+            .map_err(|e| {
+                Error::from(format!(
+                    "JMIX request to upstream failed: {}",
+                    e.without_url()
+                ))
+            })?;
 
         let status = response.status().as_u16();
         tracing::debug!("JMIX upstream response status: {}", status);
@@ -385,7 +396,12 @@ impl JmixBackend {
         let body_bytes = response
             .bytes()
             .await
-            .map_err(|e| Error::from(format!("Failed to read JMIX response body: {}", e)))?
+            .map_err(|e| {
+                Error::from(format!(
+                    "Failed to read JMIX response body: {}",
+                    e.without_url()
+                ))
+            })?
             .to_vec();
 
         Ok((status, response_headers, body_bytes))
@@ -496,5 +512,112 @@ mod tests {
     #[test]
     fn test_map_backend_uri_empty_is_root() {
         assert_eq!(map_backend_uri("").expect("empty ok"), "");
+    }
+
+    /// A JMIX query with a patient name and birthdate, sent to a plain-HTTP
+    /// upstream on `port`.
+    fn search_target(port: u16, marker: &str) -> TargetDetails {
+        let mut query_params = HashMap::new();
+        query_params.insert("patient_name".to_string(), vec![marker.to_string()]);
+        query_params.insert("birthdate".to_string(), vec!["1970-01-01".to_string()]);
+        TargetDetails {
+            base_url: format!("http://127.0.0.1:{}", port),
+            method: "GET".to_string(),
+            uri: "/api/jmix".to_string(),
+            query_params,
+            ..TargetDetails::default()
+        }
+    }
+
+    fn empty_envelope() -> RequestEnvelope<Vec<u8>> {
+        RequestEnvelope::new(Default::default(), vec![])
+    }
+
+    /// reqwest appends the full URL, query included, to its error text. The
+    /// router logs that text at ERROR, the default level.
+    #[tokio::test]
+    async fn send_error_does_not_contain_search_values() {
+        let marker = "DOE-PHI-MARKER";
+        let err = JmixBackend {}
+            .make_jmix_request(&search_target(1, marker), &empty_envelope(), &HashMap::new())
+            .await
+            .err()
+            .expect("port 1 must refuse the connection");
+
+        let text = format!("{} {:?}", err, err);
+        assert!(text.contains("JMIX request to upstream failed"), "error: {text}");
+        assert!(!text.contains(marker), "search values leaked: {text}");
+        assert!(!text.contains("birthdate"), "query string leaked: {text}");
+    }
+
+    #[tokio::test]
+    async fn debug_log_does_not_contain_query_string() {
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        let marker = "DOE-PHI-MARKER";
+        let _ = JmixBackend {}
+            .make_jmix_request(&search_target(1, marker), &empty_envelope(), &HashMap::new())
+            .await;
+
+        let text = log.contents();
+        assert!(
+            text.contains("Sending JMIX request to upstream: http://127.0.0.1:1/api/jmix"),
+            "log: {text}"
+        );
+        assert!(!text.contains(marker), "search values leaked: {text}");
+        assert!(!text.contains("birthdate"), "query string leaked: {text}");
+    }
+
+    /// The executor-facing entry point logs the target before sending.
+    #[tokio::test]
+    async fn targeting_log_does_not_contain_query_string() {
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        let marker = "DOE-PHI-MARKER";
+        let mut envelope = empty_envelope();
+        envelope.target_details = Some(search_target(1, marker));
+        let mut options = HashMap::new();
+        options.insert(
+            "base_url".to_string(),
+            Value::String("http://127.0.0.1:1".to_string()),
+        );
+        let _ = JmixBackend {}.backend_outgoing_request(envelope, &options).await;
+
+        let text = log.contents();
+        assert!(
+            text.contains("JMIX backend targeting: GET http://127.0.0.1:1/api/jmix"),
+            "log: {text}"
+        );
+        assert!(!text.contains(marker), "search values leaked: {text}");
+        assert!(!text.contains("birthdate"), "query string leaked: {text}");
+    }
+
+    /// A backend that promises more body than it sends makes reading the
+    /// body fail after the status line has arrived. reqwest 0.12 leaves the
+    /// URL out of this error today, so this guards against it adding one.
+    #[tokio::test]
+    async fn body_read_error_does_not_contain_search_values() {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let port = listener.local_addr().unwrap().port();
+        tokio::spawn(async move {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            let mut buf = [0u8; 4096];
+            let _ = socket.read(&mut buf).await;
+            let _ = socket
+                .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\n\r\nshort")
+                .await;
+        });
+
+        let marker = "DOE-PHI-MARKER";
+        let err = JmixBackend {}
+            .make_jmix_request(&search_target(port, marker), &empty_envelope(), &HashMap::new())
+            .await
+            .err()
+            .expect("a truncated body must fail");
+
+        let text = format!("{} {:?}", err, err);
+        assert!(text.contains("Failed to read JMIX response body"), "error: {text}");
+        assert!(!text.contains(marker), "search values leaked: {text}");
+        assert!(!text.contains("birthdate"), "query string leaked: {text}");
     }
 }

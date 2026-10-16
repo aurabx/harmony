@@ -238,6 +238,45 @@ mod tests {
         assert!(!diff.requires_adapter_restart());
     }
 
+    /// The logger is installed once at startup, so a log_level change cannot
+    /// be applied live and must not be reported as applied.
+    #[test]
+    fn test_logging_change_requires_restart() {
+        let old_config = Config::default();
+        let mut new_config = Config::default();
+        new_config.logging.log_level = "debug".to_string();
+
+        let diff = compute_diff(&old_config, &new_config);
+
+        assert!(diff.has_changes());
+        assert!(!diff.requires_adapter_restart());
+        assert_eq!(diff.process_restart_required, vec!["logging".to_string()]);
+        assert!(diff.zero_downtime_changes.is_empty());
+    }
+
+    /// The storage backend is built once at startup, so a storage change
+    /// cannot be applied live and must not be reported as applied.
+    #[test]
+    fn test_storage_change_requires_restart() {
+        let old_config = Config::default();
+        let mut new_config = Config::default();
+        new_config.storage.backend = "something-else".to_string();
+
+        let diff = compute_diff(&old_config, &new_config);
+
+        assert!(diff.has_changes());
+        assert_eq!(diff.process_restart_required, vec!["storage".to_string()]);
+        assert!(diff.zero_downtime_changes.is_empty());
+    }
+
+    /// Diffs serialised before process_restart_required existed must still load.
+    #[test]
+    fn test_diff_without_process_restart_required_deserialises() {
+        let json = r#"{"zero_downtime_changes":[],"adapter_restarts_required":[],"networks_to_add":[],"networks_to_remove":[]}"#;
+        let diff: ConfigDiff = serde_json::from_str(json).expect("old diff shape must parse");
+        assert!(diff.process_restart_required.is_empty());
+    }
+
     #[test]
     fn test_middleware_change_only() {
         let old_config = Config::default();

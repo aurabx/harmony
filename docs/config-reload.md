@@ -71,7 +71,7 @@ These changes require restarting specific protocol adapters (brief interruption 
 
 These tables are read wholly or partly at startup:
 
-- `[logging]`: the log subscriber and log file are set up once.
+- `[logging]`: the log subscriber and log file are set up once. `RUST_LOG` is also read only at startup.
 - `[storage]`: the storage backend is created once.
 - `[provider]`: the provider resolver is updated on reload, but cloud polling keeps its old interval.
 - `[proxy]`: file paths are read at startup, and some fields are read live.

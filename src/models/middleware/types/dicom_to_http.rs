@@ -137,8 +137,9 @@ impl Middleware for DicomToHttpMiddleware {
         envelope.set_target_method("POST");
 
         debug!(
-            "dicom_to_http: transformed request - method={}, headers={:?}",
-            envelope.request_details.method, envelope.request_details.headers
+            "dicom_to_http: transformed request - method={}, header names={:?}",
+            envelope.request_details.method,
+            crate::logging::sorted_keys(&envelope.request_details.headers)
         );
 
         Ok(envelope)
@@ -182,6 +183,31 @@ mod tests {
             .original_data(Value::Null)
             .build()
             .expect("build envelope")
+    }
+
+    #[tokio::test]
+    async fn debug_log_shows_header_names_without_values() {
+        let marker = "SECRET-PHI-MARKER";
+        let mut env = envelope(Some("dimse"), Some(Command::new(Operation::Query)));
+        env.request_details
+            .headers
+            .insert("authorization".to_string(), format!("Bearer {marker}"));
+        env.request_details
+            .headers
+            .insert("x-patient-name".to_string(), marker.to_string());
+
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        DicomToHttpMiddleware::new().left(env).await.expect("left");
+
+        let out = log.contents();
+        assert!(
+            out.contains("authorization"),
+            "header names should be logged: {out}"
+        );
+        assert!(
+            !out.contains(marker),
+            "header values leaked into log: {out}"
+        );
     }
 
     #[tokio::test]
