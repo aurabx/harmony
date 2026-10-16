@@ -61,10 +61,13 @@ fn cfg() -> &'static str {
 async fn build_router() -> axum::Router<()> {
     let _ = std::fs::create_dir_all("../../tmp");
     let c = load_config_from_str(cfg()).expect("valid config");
-    harmony::router::build_network_router(Arc::new(c), "default").await
+    let c = Arc::new(c);
+    harmony::globals::set_config(c.clone());
+    harmony::router::build_network_router(c, "default").await
 }
 
 #[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial]
 async fn middleware_maps_studies_to_find() {
     // We are not standing up a DICOM server; just ensure the request falls through to backend layer initiation
     let app = build_router().await;

@@ -226,6 +226,7 @@ fn sign_token(secret: &str) -> String {
 async fn send_through_ingress(host: &str, authorization: Option<String>) -> (StatusCode, usize) {
     let (backend_url, hits) = start_counting_backend().await;
     let config = Arc::new(mesh_config(&backend_url));
+    harmony::globals::set_config(config.clone());
     let app = build_network_router(config, "default").await;
 
     let mut request = Request::builder()
@@ -245,6 +246,7 @@ async fn send_through_ingress(host: &str, authorization: Option<String>) -> (Sta
 }
 
 #[test]
+#[serial_test::serial]
 fn stream_pipeline_is_a_streaming_pipeline() {
     let config = mesh_config("http://127.0.0.1:1");
     let pipeline = config.pipelines.get("stream_pipeline").unwrap();
@@ -254,6 +256,7 @@ fn stream_pipeline_is_a_streaming_pipeline() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn plain_ingress_rejects_missing_token_before_backend() {
     let (status, hits) = send_through_ingress(PLAIN_HOST, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -261,6 +264,7 @@ async fn plain_ingress_rejects_missing_token_before_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn plain_ingress_rejects_wrong_secret_before_backend() {
     let token = sign_token("not-the-mesh-secret");
     let (status, hits) = send_through_ingress(PLAIN_HOST, Some(format!("Bearer {}", token))).await;
@@ -269,6 +273,7 @@ async fn plain_ingress_rejects_wrong_secret_before_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn plain_ingress_accepts_valid_token() {
     let token = sign_token(MESH_SECRET);
     let (status, hits) = send_through_ingress(PLAIN_HOST, Some(format!("Bearer {}", token))).await;
@@ -277,6 +282,7 @@ async fn plain_ingress_accepts_valid_token() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn streaming_ingress_rejects_missing_token_before_backend() {
     let (status, hits) = send_through_ingress(STREAM_HOST, None).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
@@ -284,6 +290,7 @@ async fn streaming_ingress_rejects_missing_token_before_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn streaming_ingress_rejects_wrong_secret_before_backend() {
     let token = sign_token("not-the-mesh-secret");
     let (status, hits) =
@@ -293,6 +300,7 @@ async fn streaming_ingress_rejects_wrong_secret_before_backend() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn streaming_ingress_accepts_valid_token() {
     let token = sign_token(MESH_SECRET);
     let (status, hits) =

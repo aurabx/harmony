@@ -18,6 +18,7 @@ struct WebhookStore {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_webhook_non_blocking_on_error() {
     // Use an unreachable endpoint to force webhook send failure
     let cfg_text = r#"
@@ -69,7 +70,9 @@ async fn test_webhook_non_blocking_on_error() {
     "#;
 
     let cfg = load_config_from_str(cfg_text).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // The request should succeed quickly even though webhook send fails in background
     let start = std::time::Instant::now();
@@ -153,6 +156,7 @@ async fn wait_for_posts(store: &WebhookStore, at_least: usize, timeout_ms: u64) 
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_webhook_left_posts_payload_with_redaction_and_auth() {
     let (hook_url, store, _handle) = build_webhook_receiver().await;
 
@@ -227,7 +231,9 @@ async fn test_webhook_left_posts_payload_with_redaction_and_auth() {
     "#, hook = hook_url);
 
     let cfg = load_config_from_str(&cfg_text).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let payload = json!({"hello": "world"});
 
@@ -278,6 +284,7 @@ async fn test_webhook_left_posts_payload_with_redaction_and_auth() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_webhook_both_posts_twice() {
     let (hook_url, store, _handle) = build_webhook_receiver().await;
 
@@ -330,7 +337,9 @@ async fn test_webhook_both_posts_twice() {
     "#, hook = hook_url);
 
     let cfg = load_config_from_str(&cfg_text).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let response = app
         .oneshot(
@@ -357,6 +366,7 @@ async fn test_webhook_both_posts_twice() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_webhook_with_global_sensitive_field_patterns() {
     let (hook_url, store, _handle) = build_webhook_receiver().await;
 
@@ -422,7 +432,9 @@ async fn test_webhook_with_global_sensitive_field_patterns() {
     assert_eq!(cfg.proxy.sensitive_field_patterns.len(), 3);
     assert!(cfg.proxy.sensitive_field_patterns.contains(&".*patient.*name.*".to_string()));
     
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Send request with headers that match sensitive patterns
     let response = app
@@ -482,6 +494,7 @@ async fn test_webhook_with_global_sensitive_field_patterns() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_webhook_combined_explicit_and_pattern_redaction() {
     let (hook_url, store, _handle) = build_webhook_receiver().await;
 
@@ -537,7 +550,9 @@ async fn test_webhook_combined_explicit_and_pattern_redaction() {
     "#, hook = hook_url);
 
     let cfg = load_config_from_str(&cfg_text).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let response = app
         .oneshot(

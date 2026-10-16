@@ -156,7 +156,9 @@ fn proxy_config(
 }
 
 async fn send(config: Config, headers: &[(&str, &str)]) -> StatusCode {
-    let app = harmony::router::build_network_router(Arc::new(config), "default").await;
+    let config = Arc::new(config);
+    harmony::globals::set_config(config.clone());
+    let app = harmony::router::build_network_router(config, "default").await;
     let mut request = Request::builder().uri("/proxy/resource").method("GET");
     for (name, value) in headers {
         request = request.header(*name, *value);
@@ -169,6 +171,7 @@ async fn send(config: Config, headers: &[(&str, &str)]) -> StatusCode {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn inbound_authorization_is_not_forwarded_by_default() {
     let upstream = start_recording_upstream().await;
     let config = load_config(&proxy_config("http", &upstream.base_url, "", "", ""));
@@ -184,6 +187,7 @@ async fn inbound_authorization_is_not_forwarded_by_default() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn target_auth_is_sent_exactly_once_and_client_auth_is_dropped() {
     let upstream = start_recording_upstream().await;
     let config = load_config(&proxy_config(
@@ -203,6 +207,7 @@ async fn target_auth_is_sent_exactly_once_and_client_auth_is_dropped() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn fhir_target_auth_is_sent_exactly_once_and_client_auth_is_dropped() {
     let upstream = start_recording_upstream().await;
     let config = load_config(&proxy_config(
@@ -222,6 +227,7 @@ async fn fhir_target_auth_is_sent_exactly_once_and_client_auth_is_dropped() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn forward_authorization_passes_client_auth_when_target_has_none() {
     let upstream = start_recording_upstream().await;
     let config = load_config(&proxy_config(
@@ -241,6 +247,7 @@ async fn forward_authorization_passes_client_auth_when_target_has_none() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn forward_authorization_with_target_auth_sends_only_target_auth() {
     let upstream = start_recording_upstream().await;
     let config = load_config(&proxy_config(
@@ -260,6 +267,7 @@ async fn forward_authorization_with_target_auth_sends_only_target_auth() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn host_and_hop_by_hop_headers_are_not_forwarded_but_ordinary_headers_are() {
     let upstream = start_recording_upstream().await;
     let config = load_config(&proxy_config("http", &upstream.base_url, "", "", ""));
@@ -367,11 +375,13 @@ async fn assert_mesh_egress_sends_only_mesh_jwt(backend_options: &str) {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn mesh_egress_carries_mesh_jwt_and_not_client_auth() {
     assert_mesh_egress_sends_only_mesh_jwt("").await;
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn mesh_egress_jwt_wins_over_forwarded_client_auth() {
     assert_mesh_egress_sends_only_mesh_jwt("forward_authorization = true").await;
 }
@@ -421,6 +431,7 @@ async fn stream_through_backend(
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn http_streaming_backend_obeys_the_same_rules() {
     let upstream = start_recording_upstream().await;
     let items = stream_through_backend(&upstream, HashMap::new()).await;
@@ -439,6 +450,7 @@ async fn http_streaming_backend_obeys_the_same_rules() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn http_streaming_backend_forwards_client_auth_when_enabled() {
     let upstream = start_recording_upstream().await;
     let options = HashMap::from([(

@@ -82,6 +82,7 @@ fn ensure_jmix_envelope(id: &str, store_root: &std::path::Path) -> PathBuf {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn jmix_manifest_and_archive_skip_backends() {
     // Reset global storage to ensure clean state
     harmony::globals::reset_storage();
@@ -151,7 +152,9 @@ async fn jmix_manifest_and_archive_skip_backends() {
     .to_string();
 
     let cfg: Config = load_config_from_str(&toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // 1) Manifest route should be served by JMIX with 200 OK and include id
     let manifest_resp = app

@@ -41,7 +41,7 @@ impl Middleware for DicomFlattenMiddleware {
                 envelope.normalized_snapshot = Some(data.clone());
             }
 
-            tracing::debug!("Flatten middleware (left) input: {}", serde_json::to_string_pretty(data).unwrap_or_default());
+            tracing::debug!("Flatten middleware (left) input: {}", crate::logging::json_shape(data));
 
             // Check for dataset field (C-STORE) or identifier field (C-FIND/etc)
             let dicom_data = data.get("dataset").or_else(|| data.get("identifier"));
@@ -85,7 +85,7 @@ impl Middleware for DicomFlattenMiddleware {
                 envelope.normalized_snapshot = Some(data.clone());
             }
 
-            tracing::debug!("Flatten middleware input: {}", serde_json::to_string_pretty(data).unwrap_or_default());
+            tracing::debug!("Flatten middleware (right) input: {}", crate::logging::json_shape(data));
 
             // Handle both direct DICOM JSON and wrapped response with matches array
             let flattened = if let Some(matches) = data.get("matches").and_then(|m| m.as_array()) {
@@ -333,6 +333,79 @@ pub fn unflatten_dicom_json(data: &Value) -> Result<Value, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    const PHI_MARKER: &str = "DOE^JANE-PHI-MARKER";
+
+    #[tokio::test]
+    async fn left_debug_log_does_not_contain_payload_values() {
+        use crate::models::envelope::envelope::RequestEnvelopeBuilder;
+
+        let body = json!({
+            "dataset": { "00100010": { "vr": "PN", "Value": [{ "Alphabetic": PHI_MARKER }] } }
+        });
+        let envelope = RequestEnvelopeBuilder::new()
+            .method("store")
+            .uri("dimse://scp/store")
+            .original_data(body.clone())
+            .normalized_data(Some(body))
+            .build()
+            .unwrap();
+
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        DicomFlattenMiddleware::new(DicomFlattenConfig {})
+            .left(envelope)
+            .await
+            .unwrap();
+
+        let out = log.contents();
+        assert!(
+            out.contains("dataset"),
+            "shape should still be logged: {out}"
+        );
+        assert!(!out.contains(PHI_MARKER), "payload leaked into log: {out}");
+    }
+
+    #[tokio::test]
+    async fn right_debug_log_does_not_contain_payload_values() {
+        use crate::models::envelope::envelope::{
+            RequestEnvelopeBuilder, ResponseDetails, ResponseEnvelope,
+        };
+
+        let request = RequestEnvelopeBuilder::new()
+            .method("find")
+            .uri("dimse://scp/find")
+            .original_data(json!({}))
+            .build()
+            .unwrap();
+        let body = json!({
+            "matches": [{ "00100010": { "vr": "PN", "Value": [{ "Alphabetic": PHI_MARKER }] } }]
+        });
+        let response = ResponseEnvelope {
+            request_details: request.request_details.clone(),
+            response_details: ResponseDetails {
+                status: 200,
+                headers: std::collections::HashMap::new(),
+                metadata: std::collections::HashMap::new(),
+            },
+            command: None,
+            original_data: body.clone(),
+            normalized_data: Some(body),
+            normalized_snapshot: None,
+        };
+
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        DicomFlattenMiddleware::new(DicomFlattenConfig {})
+            .right(response)
+            .await
+            .unwrap();
+
+        let out = log.contents();
+        assert!(
+            out.contains("matches"),
+            "shape should still be logged: {out}"
+        );
+        assert!(!out.contains(PHI_MARKER), "payload leaked into log: {out}");
+    }
 
     #[tokio::test]
     async fn test_left_writes_flattened_body_to_original_data() {

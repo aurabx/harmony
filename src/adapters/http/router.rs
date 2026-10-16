@@ -7,6 +7,7 @@ use crate::models::middleware::{
 };
 use crate::pipeline::{PipelineError, PipelineExecutor};
 use crate::router::route_table::{method_list, RouteLookup, RouteTable};
+use arc_swap::{ArcSwap, ArcSwapOption};
 use axum::body::Body;
 use axum::extract::Request;
 use axum::response::{IntoResponse, Response};
@@ -26,13 +27,19 @@ use std::sync::Arc;
 ///
 /// Mesh routing takes priority: if a request matches a mesh ingress URL,
 /// it is routed to the ingress's endpoint regardless of other route matches.
+///
+/// Each request runs against the live global config, so a zero-downtime
+/// reload reaches the next request. The caller must publish `config` with
+/// `globals::set_config` first; with no published config every request fails
+/// with 500. `config` builds the mesh registry, which stays fixed until the
+/// adapter restarts; a mesh change restarts every network (see
+/// `config::reload`).
 pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Router {
     // Build mesh registry for priority routing (with remote reference resolution)
     let resolver = crate::globals::get_provider_resolver();
     let mesh_registry = Arc::new(
         MeshRegistry::from_config_with_resolver(&config, resolver).await
     );
-    let mesh_config = config.clone();
 
     tracing::info!(
         "🔧 Building router for network '{}' with {} pipelines",
@@ -40,31 +47,11 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
         config.pipelines.len()
     );
 
-    // Config validation rejects these problems at load time. A config that
-    // skipped validation still gets a working router without the bad routes.
-    let (table, problems) = RouteTable::build(&config, network_name);
-    for problem in &problems {
-        tracing::error!(
-            "Route not registered on network '{}': {}",
-            network_name,
-            problem
-        );
-    }
-    for entry in table.entries() {
-        tracing::info!(
-            "✅ Registered route: {} [{}] -> endpoint '{}' (pipeline '{}')",
-            entry.pattern,
-            method_list(&entry.methods),
-            entry.owner.endpoint,
-            entry.owner.pipeline
-        );
-    }
-
-    let table = Arc::new(table);
+    let mesh_source = Arc::new(MeshSource::new(config.clone()));
+    let routes = Arc::new(LiveRouteTable::new(config, network_name));
     let dispatch = move |req: Request| {
-        let table = table.clone();
-        let config = config.clone();
-        async move { dispatch_request(req, table, config).await }
+        let routes = routes.clone();
+        async move { dispatch_request(req, routes).await }
     };
     let mut app = Router::new()
         .route("/", any(dispatch.clone()))
@@ -74,13 +61,12 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
     // If request matches a mesh ingress URL, it's handled here and normal routes are bypassed
     if !mesh_registry.is_empty() {
         let mesh_registry_layer = mesh_registry.clone();
-        let mesh_config_layer = mesh_config.clone();
 
         app = app.layer(axum::middleware::from_fn(move |req: Request, next: axum::middleware::Next| {
             let mesh_registry = mesh_registry_layer.clone();
-            let config = mesh_config_layer.clone();
+            let mesh_source = mesh_source.clone();
             async move {
-                mesh_routing_layer(req, next, config, mesh_registry).await
+                mesh_routing_layer(req, next, mesh_registry, mesh_source).await
             }
         }));
 
@@ -90,12 +76,179 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
     app
 }
 
+/// The config a request runs against: the one the last reload published.
+///
+/// `lib::run_with_reload` publishes the config before any adapter starts, so
+/// a missing config is a startup bug. The request fails with 500 rather than
+/// fall back to a config that may predate a reload.
+pub(crate) fn live_config() -> Result<Arc<Config>, StatusCode> {
+    crate::globals::get_config().ok_or_else(|| {
+        tracing::error!("Request rejected: no config has been published");
+        StatusCode::INTERNAL_SERVER_ERROR
+    })
+}
+
+/// The route table for one network, kept in step with the live config.
+///
+/// A zero-downtime reload can change endpoint paths and which pipelines run
+/// on a network, so the table cannot be fixed when the adapter starts. It is
+/// rebuilt the first time a request sees a newly published config. Between
+/// reloads the check is one pointer compare.
+struct LiveRouteTable {
+    network_name: String,
+    /// The config the table was built from, and the table.
+    current: ArcSwap<(Arc<Config>, Arc<RouteTable>)>,
+    /// Held while rebuilding, so requests that arrive together after a
+    /// reload build the table once.
+    rebuild: std::sync::Mutex<()>,
+}
+
+impl LiveRouteTable {
+    fn new(config: Arc<Config>, network_name: &str) -> Self {
+        let table = Arc::new(build_route_table(&config, network_name));
+        log_routes(&table, network_name, tracing::Level::INFO);
+        Self {
+            network_name: network_name.to_string(),
+            current: ArcSwap::from_pointee((config, table)),
+            rebuild: std::sync::Mutex::new(()),
+        }
+    }
+
+    /// The table for `config`, rebuilt and cached if `config` is not the one
+    /// the cached table came from.
+    ///
+    /// Only a table for the currently published config is cached. A request
+    /// that read the previous config just before a reload gets a table built
+    /// for it, but does not replace the newer cached one.
+    fn table_for(&self, config: &Arc<Config>) -> Arc<RouteTable> {
+        if let Some(table) = self.cached_for(config) {
+            return table;
+        }
+        // A poisoned lock only means another rebuild panicked; the cache
+        // itself is an ArcSwap and is never left half-written.
+        let _guard = self
+            .rebuild
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        if let Some(table) = self.cached_for(config) {
+            return table;
+        }
+        let table = Arc::new(build_route_table(config, &self.network_name));
+        let published = crate::globals::get_config();
+        if published.is_some_and(|p| Arc::ptr_eq(&p, config)) {
+            tracing::info!(
+                "🔄 Rebuilt routes for network '{}' from the reloaded config ({} routes)",
+                self.network_name,
+                table.entries().len()
+            );
+            log_routes(&table, &self.network_name, tracing::Level::DEBUG);
+            self.current
+                .store(Arc::new((config.clone(), table.clone())));
+        }
+        table
+    }
+
+    fn cached_for(&self, config: &Arc<Config>) -> Option<Arc<RouteTable>> {
+        let current = self.current.load();
+        Arc::ptr_eq(&current.0, config).then(|| current.1.clone())
+    }
+}
+
+/// Log each route in `table` at `level`.
+///
+/// Routes are logged at INFO when an adapter starts and at DEBUG when a
+/// reload rebuilds them, so a reload does not repeat every route at INFO.
+fn log_routes(table: &RouteTable, network_name: &str, level: tracing::Level) {
+    for entry in table.entries() {
+        let methods = method_list(&entry.methods);
+        if level == tracing::Level::INFO {
+            tracing::info!(
+                "✅ Registered route: {} [{}] -> endpoint '{}' (pipeline '{}') on network '{}'",
+                entry.pattern, methods, entry.owner.endpoint, entry.owner.pipeline, network_name
+            );
+        } else {
+            tracing::debug!(
+                "Registered route: {} [{}] -> endpoint '{}' (pipeline '{}') on network '{}'",
+                entry.pattern, methods, entry.owner.endpoint, entry.owner.pipeline, network_name
+            );
+        }
+    }
+}
+
+/// Build the route table for `network_name`, logging routes that could not
+/// be registered.
+fn build_route_table(config: &Config, network_name: &str) -> RouteTable {
+    // Config validation rejects these problems at load time. A config that
+    // skipped validation still gets a working router without the bad routes.
+    let (table, problems) = RouteTable::build(config, network_name);
+    for problem in &problems {
+        tracing::error!(
+            "Route not registered on network '{}': {}",
+            network_name,
+            problem
+        );
+    }
+    table
+}
+
+/// Whether the mesh tables in `live` match those the mesh registry was built
+/// from.
+///
+/// The registry is fixed when the adapter starts. A mesh change publishes the
+/// new config, then restarts each network in turn. Until this network
+/// restarts, its registry and the live config disagree.
+/// The config a network's mesh registry was built from, and whether a live
+/// config still agrees with it.
+///
+/// After a reload that leaves the mesh tables alone, the network does not
+/// restart, so the live config pointer differs from `built_from` for good.
+/// The last live config found to match is kept, so each mesh request after
+/// such a reload pays one pointer compare, not a compare of every table.
+struct MeshSource {
+    built_from: Arc<Config>,
+    last_match: ArcSwapOption<Config>,
+}
+
+impl MeshSource {
+    fn new(built_from: Arc<Config>) -> Self {
+        Self {
+            built_from,
+            last_match: ArcSwapOption::from(None),
+        }
+    }
+
+    fn matches(&self, live: &Arc<Config>) -> bool {
+        if let Some(last) = self.last_match.load().as_ref() {
+            if Arc::ptr_eq(last, live) {
+                return true;
+            }
+        }
+        let matched = mesh_tables_match(&self.built_from, live);
+        if matched {
+            self.last_match.store(Some(live.clone()));
+        }
+        matched
+    }
+}
+
+fn mesh_tables_match(built_from: &Arc<Config>, live: &Arc<Config>) -> bool {
+    Arc::ptr_eq(built_from, live)
+        || (built_from.mesh == live.mesh
+            && built_from.ingress == live.ingress
+            && built_from.egress == live.egress
+            && built_from.remote_ingress == live.remote_ingress)
+}
+
 /// Send one request to the endpoint the route table picks for it.
-async fn dispatch_request(
-    mut req: Request,
-    table: Arc<RouteTable>,
-    config: Arc<Config>,
-) -> Response<Body> {
+///
+/// The config is read once, so route lookup and the pipeline run see the
+/// same config even if a reload lands mid-request.
+async fn dispatch_request(mut req: Request, routes: Arc<LiveRouteTable>) -> Response<Body> {
+    let config = match live_config() {
+        Ok(config) => config,
+        Err(status) => return status.into_response(),
+    };
+    let table = routes.table_for(&config);
     let (endpoint_name, pipeline_name) = match table.lookup(req.method(), req.uri().path()) {
         RouteLookup::Found(entry) => (entry.owner.endpoint.clone(), entry.owner.pipeline.clone()),
         RouteLookup::MethodNotAllowed(allowed) => {
@@ -117,11 +270,15 @@ async fn dispatch_request(
 ///
 /// This runs BEFORE normal route matching. If the request matches a mesh ingress URL,
 /// it is handled here and the normal route chain is bypassed.
+///
+/// `mesh_source` is the config the registry was built from. A mesh request
+/// that arrives after a mesh change, before this network restarts, gets 503
+/// rather than run the new pipeline under the old ingress and mesh rules.
 async fn mesh_routing_layer(
     mut req: Request,
     next: axum::middleware::Next,
-    config: Arc<Config>,
     mesh_registry: Arc<MeshRegistry>,
+    mesh_source: Arc<MeshSource>,
 ) -> Response<Body> {
     use crate::models::mesh::config::IngressEgressMode;
 
@@ -158,6 +315,18 @@ async fn mesh_routing_layer(
             route_match.endpoint_name,
             route_match.context.mesh_name
         );
+
+        let config = match live_config() {
+            Ok(config) => config,
+            Err(status) => return status.into_response(),
+        };
+        if !mesh_source.matches(&config) {
+            tracing::warn!(
+                "Mesh route for ingress '{}' refused: mesh config changed and this network has not restarted yet",
+                route_match.context.ingress_name
+            );
+            return StatusCode::SERVICE_UNAVAILABLE.into_response();
+        }
 
         // Handle via mesh routing - bypasses normal routes
         return match handle_request_with_mesh(
@@ -533,6 +702,79 @@ pub(crate) fn map_pipeline_error_to_status(err: &PipelineError) -> StatusCode {
 mod tests {
     use super::*;
     use crate::models::middleware::AuthFailure;
+    use serial_test::serial;
+
+    #[test]
+    #[serial]
+    fn route_table_is_reused_until_a_new_config_is_published() {
+        let first = Arc::new(Config::default());
+        crate::globals::set_config(first.clone());
+        let routes = LiveRouteTable::new(first.clone(), "default");
+
+        let a = routes.table_for(&first);
+        let b = routes.table_for(&first);
+        assert!(Arc::ptr_eq(&a, &b), "same config must reuse the table");
+
+        let second = Arc::new(Config::default());
+        crate::globals::set_config(second.clone());
+        let c = routes.table_for(&second);
+        assert!(!Arc::ptr_eq(&a, &c), "a new config must rebuild the table");
+        assert!(Arc::ptr_eq(&c, &routes.table_for(&second)));
+    }
+
+    /// A request that read the previous config just before a reload must not
+    /// put its table back over the one for the published config.
+    #[test]
+    #[serial]
+    fn a_stale_config_does_not_replace_the_cached_table() {
+        let old = Arc::new(Config::default());
+        let new = Arc::new(Config::default());
+        crate::globals::set_config(new.clone());
+        let routes = LiveRouteTable::new(new.clone(), "default");
+        let cached = routes.table_for(&new);
+
+        let stale = routes.table_for(&old);
+        assert!(!Arc::ptr_eq(&stale, &cached));
+        assert!(
+            Arc::ptr_eq(&routes.table_for(&new), &cached),
+            "the published config's table must stay cached"
+        );
+    }
+
+    #[test]
+    fn mesh_tables_match_detects_an_ingress_change() {
+        let built_from = Arc::new(Config::default());
+        assert!(mesh_tables_match(&built_from, &built_from));
+
+        let same = Arc::new(Config::default());
+        assert!(mesh_tables_match(&built_from, &same));
+
+        let mut changed = Config::default();
+        changed.ingress.insert(
+            "api".to_string(),
+            crate::models::mesh::config::MeshIngress::default(),
+        );
+        assert!(!mesh_tables_match(&built_from, &Arc::new(changed)));
+    }
+
+    #[test]
+    fn mesh_source_remembers_the_last_matching_config() {
+        let source = MeshSource::new(Arc::new(Config::default()));
+        let live = Arc::new(Config::default());
+        assert!(source.matches(&live));
+        let last = source.last_match.load_full().expect("match is remembered");
+        assert!(Arc::ptr_eq(&last, &live));
+
+        let mut changed = Config::default();
+        changed.ingress.insert(
+            "api".to_string(),
+            crate::models::mesh::config::MeshIngress::default(),
+        );
+        let changed = Arc::new(changed);
+        assert!(!source.matches(&changed));
+        let last = source.last_match.load_full().expect("earlier match kept");
+        assert!(Arc::ptr_eq(&last, &live), "a mismatch must not be remembered");
+    }
     use crate::pipeline::PipelineError;
     use http::StatusCode;
 

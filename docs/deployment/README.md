@@ -61,7 +61,7 @@ See [Getting Started](../getting-started.md) for building from source.
 
 All platforms require these environment variables:
 
-- `RUST_LOG` - Logging level (default: `info`)
+- `RUST_LOG` - Logging level. Overrides `logging.log_level` in the config file, which defaults to `error`
 - `RUNBEAM_ENCRYPTION_KEY` - Encryption key for token storage (required in production)
 - `RUNBEAM_JWT_SECRET` - JWT secret for Runbeam Cloud integration (if enabled)
 

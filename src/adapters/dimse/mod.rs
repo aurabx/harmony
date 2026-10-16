@@ -250,6 +250,56 @@ fn collect_scp_endpoints(config: &Config, network_name: &str) -> Vec<ScpEndpoint
     scp_configs
 }
 
+/// How long the DIMSE adapter waits for its SCP tasks after shutdown before
+/// aborting them. Kept below the registry's adapter shutdown timeout so the
+/// adapter cleans up its own tasks rather than being aborted itself.
+const DIMSE_SCP_STOP_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
+/// Holds an SCP's listen address in the process-wide registry for as long as
+/// its task lives. Releasing it on drop means an aborted task frees the
+/// address too, so a restart does not skip the port as "already running".
+struct ScpRegistration(String);
+
+impl Drop for ScpRegistration {
+    fn drop(&mut self) {
+        DimseAdapter::unregister_scp(&self.0);
+    }
+}
+
+/// The SCP tasks one DIMSE adapter started. They are separate tokio tasks, so
+/// aborting the adapter task alone would leave them serving. Dropping this
+/// aborts any still running.
+struct ScpTasks(Vec<JoinHandle<()>>);
+
+impl ScpTasks {
+    /// Waits for every SCP task until DIMSE_SCP_STOP_TIMEOUT, then aborts the
+    /// rest and waits for them to finish dropping.
+    async fn stop(&mut self, network_name: &str) {
+        let deadline = tokio::time::Instant::now() + DIMSE_SCP_STOP_TIMEOUT;
+        for handle in &mut self.0 {
+            if tokio::time::timeout_at(deadline, &mut *handle).await.is_err() {
+                tracing::warn!(
+                    "DIMSE SCP for network '{}' did not stop within {:?}; aborting it",
+                    network_name,
+                    DIMSE_SCP_STOP_TIMEOUT
+                );
+                handle.abort();
+                // The JoinError here only reports the cancellation just requested.
+                let _ = handle.await;
+            }
+        }
+        self.0.clear();
+    }
+}
+
+impl Drop for ScpTasks {
+    fn drop(&mut self) {
+        for handle in &self.0 {
+            handle.abort();
+        }
+    }
+}
+
 impl DimseAdapter {
     /// Create a new DIMSE adapter for the given network
     pub fn new(network_name: impl Into<String>) -> Self {
@@ -577,7 +627,7 @@ impl ProtocolAdapter for DimseAdapter {
         // Spawn task to manage all SCP listeners for this network
         let shutdown_clone = shutdown.clone();
         let handle = tokio::spawn(async move {
-            let mut scp_handles = Vec::new();
+            let mut scp_handles = ScpTasks(Vec::new());
 
             for group in &groups {
                 let bind_addr = &group.bind_addr;
@@ -666,7 +716,13 @@ impl ProtocolAdapter for DimseAdapter {
                 };
 
                 match result {
-                    Ok(h) => scp_handles.push(h),
+                    Ok(h) => {
+                        // Tracked before the readiness wait, so the task is
+                        // aborted with the others if this one is aborted.
+                        scp_handles.0.push(h);
+                        // Best effort: try to connect to the listening port.
+                        Self::wait_for_scp_ready(*bind_addr, *port).await;
+                    }
                     Err(e) => {
                         tracing::error!(
                             "Failed to start DIMSE SCP on {}:{}: {}",
@@ -682,10 +738,7 @@ impl ProtocolAdapter for DimseAdapter {
             shutdown_clone.cancelled().await;
             tracing::info!("DIMSE adapter for network '{}' shutting down", network_name);
 
-            // Wait for all SCPs to complete
-            for handle in scp_handles {
-                let _ = handle.await;
-            }
+            scp_handles.stop(&network_name).await;
 
             tracing::info!("DIMSE adapter for network '{}' shut down", network_name);
         });
@@ -751,9 +804,12 @@ impl DimseAdapter {
         use tokio::process::Command;
 
         let storage_dir = dimse_config.storage_dir.clone();
-        let bind_addr = dimse_config.bind_addr;
 
+        // Built before spawning so the address is released even if the task
+        // is aborted before it first runs.
+        let registration = ScpRegistration(key);
         let handle = tokio::spawn(async move {
+            let _registration = registration;
             let _ = tokio::fs::create_dir_all(&storage_dir).await;
 
             // Try to start DCMTK storescp
@@ -792,12 +848,7 @@ impl DimseAdapter {
                     }
                 }
             }
-
-            Self::unregister_scp(&key);
         });
-
-        // Readiness loop (best-effort): try to connect to the listening port
-        Self::wait_for_scp_ready(bind_addr, port).await;
 
         Ok(handle)
     }
@@ -812,7 +863,11 @@ impl DimseAdapter {
         routes: Vec<(String, String, Vec<DimseOp>)>,
         shutdown: CancellationToken,
     ) -> anyhow::Result<JoinHandle<()>> {
+        // Built before spawning so the address is released even if the task
+        // is aborted before it first runs.
+        let registration = ScpRegistration(key);
         let handle = tokio::spawn(async move {
+            let _registration = registration;
             let provider = build_provider(routes);
             let scp = dimse::DimseScp::new(dimse_config, provider);
 
@@ -828,12 +883,7 @@ impl DimseAdapter {
             } else {
                 tracing::info!("DIMSE SCP '{}' stopped gracefully", local_aet);
             }
-
-            Self::unregister_scp(&key);
         });
-
-        // Readiness loop
-        Self::wait_for_scp_ready(bind_addr, port).await;
 
         Ok(handle)
     }
@@ -924,6 +974,62 @@ mod tests {
         // Cleanup
         DimseAdapter::unregister_scp(&key1);
         DimseAdapter::unregister_scp(&key2);
+    }
+
+    /// An SCP task that is aborted, as the registry does after its shutdown
+    /// timeout, must still release its address. Otherwise the restarted
+    /// adapter skips the port as "already running" and nothing serves it.
+    #[tokio::test]
+    async fn aborted_scp_task_releases_its_registration() {
+        let key = "127.0.0.1:59871".to_string();
+        assert!(DimseAdapter::register_scp(key.clone()));
+
+        let task = tokio::spawn({
+            let key = key.clone();
+            async move {
+                let _registration = ScpRegistration(key);
+                std::future::pending::<()>().await;
+            }
+        });
+        tokio::task::yield_now().await;
+
+        task.abort();
+        // The JoinError only reports the requested cancellation.
+        let _ = task.await;
+
+        assert!(
+            DimseAdapter::register_scp(key.clone()),
+            "aborted SCP task left its address registered"
+        );
+        DimseAdapter::unregister_scp(&key);
+    }
+
+    /// Dropping the adapter's SCP task list, as happens when the registry
+    /// aborts the adapter task, must abort the SCP tasks it started.
+    #[tokio::test]
+    async fn dropping_scp_tasks_aborts_them() {
+        let key = "127.0.0.1:59872".to_string();
+        assert!(DimseAdapter::register_scp(key.clone()));
+        let (dropped_tx, dropped_rx) = tokio::sync::oneshot::channel::<()>();
+
+        let tasks = ScpTasks(vec![tokio::spawn({
+            let key = key.clone();
+            async move {
+                let _registration = ScpRegistration(key);
+                let _signal_on_drop = dropped_tx;
+                std::future::pending::<()>().await;
+            }
+        })]);
+        tokio::task::yield_now().await;
+        drop(tasks);
+
+        // The sender is dropped when the aborted task's future is dropped.
+        tokio::time::timeout(std::time::Duration::from_secs(2), dropped_rx)
+            .await
+            .expect("SCP task kept running after its ScpTasks was dropped")
+            .unwrap_err();
+        assert!(DimseAdapter::register_scp(key.clone()));
+        DimseAdapter::unregister_scp(&key);
     }
 
     #[test]

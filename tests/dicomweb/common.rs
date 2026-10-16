@@ -95,7 +95,9 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 async fn build_router_with_config(toml: &str) -> Result<axum::Router<()>, ConfigError> {
     let _ = std::fs::create_dir_all("./tmp");
     let c = load_config_from_str(toml)?;
-    let router = harmony::router::build_network_router(Arc::new(c), "default").await;
+    let c = Arc::new(c);
+    harmony::globals::set_config(c.clone());
+    let router = harmony::router::build_network_router(c, "default").await;
     Ok(router)
 }
 

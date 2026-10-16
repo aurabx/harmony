@@ -18,7 +18,6 @@ use runbeam_sdk::{load_token, save_token};
 use std::path::Path;
 use std::sync::Arc;
 use tokio::sync::RwLock;
-use tracing_subscriber::prelude::*;
 
 /// Registry for custom extensions registered via HarmonyBuilder.
 ///
@@ -312,7 +311,7 @@ impl HarmonyBuilder {
         crate::globals::set_provider_resolver(resolver);
 
         // Initialize logging before creating Arc (needs config reference)
-        Self::initialize_logging_static(&self.config);
+        crate::logging::init_logging(&self.config);
 
         let config = Arc::new(self.config);
         crate::globals::set_config(config.clone());
@@ -405,32 +404,6 @@ impl HarmonyBuilder {
         }
 
         tracing::info!("Harmony shut down gracefully.");
-    }
-
-    fn initialize_logging_static(config: &Config) {
-        if config.logging.log_to_file {
-            let file_appender = tracing_subscriber::fmt::layer()
-                .with_file(true)
-                .with_line_number(true)
-                .with_writer(
-                    std::fs::File::create(&config.logging.log_file_path)
-                        .expect("Failed to create log file"),
-                );
-
-            let stdout_appender = tracing_subscriber::fmt::layer()
-                .with_file(true)
-                .with_line_number(true);
-
-            let _ = tracing_subscriber::registry()
-                .with(file_appender)
-                .with(stdout_appender)
-                .try_init();
-        } else {
-            let _ = tracing_subscriber::fmt()
-                .with_file(true)
-                .with_line_number(true)
-                .try_init();
-        }
     }
 
     fn start_config_watcher_static(

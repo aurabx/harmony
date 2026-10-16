@@ -1,6 +1,6 @@
 # Config Hot-Reload Strategy
 
-**Last Updated**: 2026-10-15
+**Last Updated**: 2026-10-16
 
 ## Overview
 
@@ -13,7 +13,7 @@ Harmony supports hot-reloading configuration changes without requiring a full ap
 
 ### Zero-Downtime Changes (No Adapter Restart)
 
-These changes are picked up immediately on the next request with no service interruption:
+These changes are picked up immediately on the next request with no service interruption. HTTP, HTTP/3 and DIMSE requests all read the live config. For HTTP and HTTP/3, route lookup and the pipeline run use one snapshot, read when the request arrives.
 
 - **Middleware configuration**
   - Transform specs
@@ -22,7 +22,7 @@ These changes are picked up immediately on the next request with no service inte
   
 - **Route definitions**
   - Groups, endpoints, backends
-  - Path patterns and matching rules
+  - Path patterns and matching rules. Each HTTP router rebuilds its route table the first time a request sees a new config.
   - Request/response transforms
   
 - **Backend configuration**
@@ -43,9 +43,14 @@ These changes require restarting specific protocol adapters (brief interruption 
   - Bind ports
   - Adding/removing networks
 
+- **Adapter set**
+  - A network starts only the adapters its pipelines need: HTTP and HTTP/3 for HTTP endpoints, DIMSE for `dicom_scp` endpoints
+  - Adding the first or removing the last pipeline of a protocol on a network restarts that network
+
 - **Mesh routing**
   - Any change to `[mesh]`, `[ingress]`, `[egress]` or `[remote_ingress]` restarts every network
   - Each HTTP router indexes mesh ingress URLs when it starts
+  - Networks restart one at a time. Until a network restarts, a request that matches one of its mesh ingress URLs gets 503, so it never runs under mixed old and new mesh rules
   
 - **Protocol-specific settings**
   - TLS certificates
@@ -66,7 +71,7 @@ These changes require restarting specific protocol adapters (brief interruption 
 
 These tables are read wholly or partly at startup:
 
-- `[logging]`: the log subscriber and log file are set up once.
+- `[logging]`: the log subscriber and log file are set up once. `RUST_LOG` is also read only at startup.
 - `[storage]`: the storage backend is created once.
 - `[provider]`: the provider resolver is updated on reload, but cloud polling keeps its old interval.
 - `[proxy]`: file paths are read at startup, and some fields are read live.
@@ -106,15 +111,14 @@ A reload that changes them still swaps in the new config, so anything that reads
 ### ArcSwap Pattern
 
 ```rust
-// Global config storage
-static CONFIG: ArcSwap<Config> = ArcSwap::from_pointee(...);
+// Global config storage (src/globals.rs)
+static CONFIG: Lazy<ArcSwapOption<Config>> = ...;
 
-// Readers (no locks, zero-copy)
-let config = CONFIG.load();
-let bind_addr = config.network["default"].http.bind_address;
+// Readers (no locks, no copy): hands out the published Arc
+let config: Option<Arc<Config>> = globals::get_config();
 
 // Writers (atomic swap)
-CONFIG.store(Arc::new(new_config));
+globals::set_config(Arc::new(new_config));
 ```
 
 ### Adapter Registry
@@ -330,7 +334,6 @@ async fn test_invalid_config_rejected() {
 - **In-flight requests**: Requests in progress during adapter restart may fail
 - **Connection draining**: No graceful connection draining (future enhancement)
 - **Config rollback**: No automatic rollback on partial failure (future enhancement)
-- **HTTP adapters keep their start-time config**: the HTTP router builds its route table and mesh registry when the adapter starts, and runs each request's pipeline against the config it captured then. Changes listed as zero-downtime reach DIMSE at once, but reach HTTP traffic only when that network's adapters restart. This is a known defect to be fixed.
 - **Audit trail**: No config change history tracking (future enhancement)
 
 ## Best Practices

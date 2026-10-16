@@ -1,4 +1,5 @@
 use super::config::Config;
+use crate::adapters::registry::AdapterRegistry;
 use serde::{Deserialize, Serialize};
 use std::collections::HashSet;
 
@@ -92,6 +93,15 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigDiff {
         // For now, treat any other network config change as requiring restart
         // TODO: Add dimse field checking when NetworkConfig has dimse
         if old_net != new_net {
+            diff.adapter_restarts_required.push((*network_name).clone());
+            continue;
+        }
+
+        // The adapters a network runs are chosen when it starts. Adding its
+        // first HTTP pipeline, or removing its last DIMSE one, needs a restart.
+        if AdapterRegistry::required_protocols(network_name, old).0
+            != AdapterRegistry::required_protocols(network_name, new).0
+        {
             diff.adapter_restarts_required.push((*network_name).clone());
             continue;
         }
@@ -226,6 +236,45 @@ mod tests {
 
         assert!(!diff.has_changes());
         assert!(!diff.requires_adapter_restart());
+    }
+
+    /// The logger is installed once at startup, so a log_level change cannot
+    /// be applied live and must not be reported as applied.
+    #[test]
+    fn test_logging_change_requires_restart() {
+        let old_config = Config::default();
+        let mut new_config = Config::default();
+        new_config.logging.log_level = "debug".to_string();
+
+        let diff = compute_diff(&old_config, &new_config);
+
+        assert!(diff.has_changes());
+        assert!(!diff.requires_adapter_restart());
+        assert_eq!(diff.process_restart_required, vec!["logging".to_string()]);
+        assert!(diff.zero_downtime_changes.is_empty());
+    }
+
+    /// The storage backend is built once at startup, so a storage change
+    /// cannot be applied live and must not be reported as applied.
+    #[test]
+    fn test_storage_change_requires_restart() {
+        let old_config = Config::default();
+        let mut new_config = Config::default();
+        new_config.storage.backend = "something-else".to_string();
+
+        let diff = compute_diff(&old_config, &new_config);
+
+        assert!(diff.has_changes());
+        assert_eq!(diff.process_restart_required, vec!["storage".to_string()]);
+        assert!(diff.zero_downtime_changes.is_empty());
+    }
+
+    /// Diffs serialised before process_restart_required existed must still load.
+    #[test]
+    fn test_diff_without_process_restart_required_deserialises() {
+        let json = r#"{"zero_downtime_changes":[],"adapter_restarts_required":[],"networks_to_add":[],"networks_to_remove":[]}"#;
+        let diff: ConfigDiff = serde_json::from_str(json).expect("old diff shape must parse");
+        assert!(diff.process_restart_required.is_empty());
     }
 
     #[test]
@@ -511,5 +560,24 @@ interface = "wg0"
         );
         assert!(diff.has_changes());
         assert!(!diff.requires_adapter_restart());
+    }
+    /// A network with only DIMSE pipelines runs no HTTP adapter. Its first
+    /// HTTP pipeline must restart it, or the new routes never answer.
+    #[test]
+    fn adding_the_first_http_pipeline_restarts_the_network() {
+        let mut old = dimse_config("", "", "/api");
+        old.pipelines.remove("api");
+        let new = dimse_config("", "", "/api");
+        assert!(restarts_default(&old, &new));
+    }
+
+    /// Removing the last HTTP pipeline must restart the network, so its HTTP
+    /// adapter stops.
+    #[test]
+    fn removing_the_last_http_pipeline_restarts_the_network() {
+        let old = dimse_config("", "", "/api");
+        let mut new = dimse_config("", "", "/api");
+        new.pipelines.remove("api");
+        assert!(restarts_default(&old, &new));
     }
 }

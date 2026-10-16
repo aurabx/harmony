@@ -207,7 +207,9 @@ impl StreamingBackend for HttpStreamingBackend {
             .unwrap_or_default();
         let url = format!("{}{}{}", base_url, path_prefix, path);
 
-        info!("Streaming from URL: {}", url);
+        // The request path can hold identifiers such as a patient ID, so
+        // only the configured part of the URL is logged.
+        debug!("Streaming from: {}{} (request path omitted)", base_url, path_prefix);
 
         // Build HTTP client
         let client = reqwest::Client::builder()
@@ -251,7 +253,9 @@ impl StreamingBackend for HttpStreamingBackend {
         let response = request
             .send()
             .await
-            .map_err(|e| Error::from(format!("HTTP request failed: {}", e)))?;
+            // reqwest appends the full URL, path included, to its error
+            // text, and the router logs that text at ERROR.
+            .map_err(|e| Error::from(format!("HTTP request failed: {}", e.without_url())))?;
 
         // Check status
         let status = response.status();
@@ -341,7 +345,7 @@ impl HttpStreamingBackend {
                     futures_util::stream::iter(envelopes)
                 }
                 Err(e) => {
-                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e)))])
+                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e.without_url())))])
                 }
             }
         });
@@ -373,7 +377,8 @@ impl HttpStreamingBackend {
 
         // Handle error events
         if event_type == "error" {
-            warn!("SSE error event: {}", data);
+            // Upstream error text can quote the failed record.
+            warn!("SSE error event ({} bytes)", data.len());
             return None;
         }
 
@@ -488,7 +493,7 @@ impl HttpStreamingBackend {
                     futures_util::stream::iter(envelopes)
                 }
                 Err(e) => {
-                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e)))])
+                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e.without_url())))])
                 }
             }
         });
@@ -505,7 +510,8 @@ impl HttpStreamingBackend {
     ) -> Option<ResponseEnvelope<Vec<u8>>> {
         // Check for error marker
         if let Some(error) = json.get("_error") {
-            warn!("JSON error: {}", error);
+            // Upstream error text can quote the failed record.
+            warn!("JSON item carried an _error marker ({})", json_type_name(error));
             return None;
         }
 
@@ -566,7 +572,7 @@ impl HttpStreamingBackend {
                     futures_util::stream::iter(envelopes)
                 }
                 Err(e) => {
-                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e)))])
+                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e.without_url())))])
                 }
             }
         });
@@ -674,6 +680,18 @@ impl HttpStreamingBackend {
     }
 }
 
+/// The JSON type of `value`, for logging an upstream value without its content.
+fn json_type_name(value: &serde_json::Value) -> &'static str {
+    match value {
+        serde_json::Value::Null => "null",
+        serde_json::Value::Bool(_) => "bool",
+        serde_json::Value::Number(_) => "number",
+        serde_json::Value::String(_) => "string",
+        serde_json::Value::Array(_) => "array",
+        serde_json::Value::Object(_) => "object",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -708,5 +726,120 @@ mod tests {
             HttpStreamingBackend::extract_boundary("application/json"),
             None
         );
+    }
+
+    /// The path can hold identifiers such as a patient ID, and reqwest
+    /// appends the full URL to its error text. The router logs that text at
+    /// ERROR, the default level.
+    #[tokio::test]
+    async fn send_error_does_not_contain_request_path() {
+        let marker = "DOE-PHI-MARKER";
+        let mut options = HashMap::new();
+        options.insert(
+            "base_url".to_string(),
+            Value::String("http://127.0.0.1:1".to_string()),
+        );
+        let mut envelope: RequestEnvelope<Vec<u8>> =
+            RequestEnvelope::new(Default::default(), vec![]);
+        envelope.request_details.method = "GET".to_string();
+        envelope
+            .request_details
+            .metadata
+            .insert("path".to_string(), format!("Patient/{}", marker));
+
+        let backend = HttpStreamingBackend {
+            base_url: None,
+            format: None,
+            chunk_timeout_secs: None,
+            max_chunk_size: None,
+        };
+        let err = backend
+            .backend_outgoing_stream(envelope, &options)
+            .await
+            .err()
+            .expect("port 1 must refuse the connection");
+
+        let text = format!("{} {:?}", err, err);
+        assert!(text.contains("HTTP request failed"), "error: {text}");
+        assert!(!text.contains(marker), "request path leaked: {text}");
+    }
+
+    fn streaming_backend() -> HttpStreamingBackend {
+        HttpStreamingBackend {
+            base_url: None,
+            format: None,
+            chunk_timeout_secs: None,
+            max_chunk_size: None,
+        }
+    }
+
+    /// Upstream error text can quote the record that failed, patient data
+    /// included.
+    #[test]
+    fn sse_error_event_log_does_not_contain_data() {
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        let marker = "DOE-PHI-MARKER";
+        let event = format!("event: error\ndata: no study for patient {}", marker);
+        let mut sequence = 0;
+        let out = HttpStreamingBackend::parse_sse_event(
+            &event,
+            &Default::default(),
+            &mut sequence,
+            &None,
+        );
+
+        assert!(out.is_none());
+        let text = log.contents();
+        assert!(text.contains("SSE error event ("), "log: {text}");
+        assert!(!text.contains(marker), "error data leaked: {text}");
+    }
+
+    #[test]
+    fn json_error_marker_log_does_not_contain_value() {
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        let marker = "DOE-PHI-MARKER";
+        let json = serde_json::json!({ "_error": format!("no study for patient {}", marker) });
+        let out =
+            HttpStreamingBackend::json_to_envelope(&json, &Default::default(), 1, &None);
+
+        assert!(out.is_none());
+        let text = log.contents();
+        assert!(
+            text.contains("JSON item carried an _error marker (string)"),
+            "log: {text}"
+        );
+        assert!(!text.contains(marker), "error value leaked: {text}");
+    }
+
+    /// The request path comes from the inbound request and can hold a
+    /// patient ID. The base URL and prefix come from config.
+    #[tokio::test]
+    async fn streaming_url_log_does_not_contain_request_path() {
+        let (log, _guard) = crate::logging::test_capture::capture_debug();
+        let marker = "DOE-PHI-MARKER";
+        let mut options = HashMap::new();
+        options.insert(
+            "base_url".to_string(),
+            Value::String("http://127.0.0.1:1".to_string()),
+        );
+        options.insert("path_prefix".to_string(), Value::String("/fhir".to_string()));
+        let mut envelope: RequestEnvelope<Vec<u8>> =
+            RequestEnvelope::new(Default::default(), vec![]);
+        envelope.request_details.method = "GET".to_string();
+        envelope
+            .request_details
+            .metadata
+            .insert("path".to_string(), format!("Patient/{}", marker));
+
+        let _ = streaming_backend()
+            .backend_outgoing_stream(envelope, &options)
+            .await;
+
+        let text = log.contents();
+        assert!(
+            text.contains("Streaming from: http://127.0.0.1:1/fhir"),
+            "log: {text}"
+        );
+        assert!(!text.contains(marker), "request path leaked: {text}");
     }
 }

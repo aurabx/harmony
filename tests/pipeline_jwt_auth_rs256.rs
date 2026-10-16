@@ -41,6 +41,7 @@ fn generate_rs256_keypair() -> (String, String) {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn jwt_rs256_allows_valid_signature() {
     // Write the public key to tmp so middleware can read it
     let (priv_pem, pub_pem) = generate_rs256_keypair();
@@ -96,7 +97,9 @@ async fn jwt_rs256_allows_valid_signature() {
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Sign a token with the matching private key using RS256
     #[derive(Serialize)]
@@ -139,6 +142,7 @@ async fn jwt_rs256_allows_valid_signature() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn jwt_rs256_rejects_wrong_alg() {
     // Use same RS256 configuration (public key present)
     let (_priv_pem, pub_pem) = generate_rs256_keypair();
@@ -194,7 +198,9 @@ async fn jwt_rs256_rejects_wrong_alg() {
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Create an HS256 token (wrong alg for RS256 mode)
     #[derive(Serialize)]

@@ -14,6 +14,7 @@ fn load_config_from_str(toml_str: &str) -> Config {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn fhir_endpoint_handles_get_request() {
     // Ensure ./tmp exists per project preference
     let _ = std::fs::create_dir_all("../../tmp");
@@ -57,7 +58,9 @@ async fn fhir_endpoint_handles_get_request() {
     "#;
 
     let cfg = load_config_from_str(toml);
-    let router: Router<()> = build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let router: Router<()> = build_network_router(cfg, "default").await;
 
     let req = Request::builder()
         .method(Method::GET)
@@ -79,6 +82,7 @@ async fn fhir_endpoint_handles_get_request() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn fhir_put_is_supported() {
     // Ensure ./tmp exists per project preference
     let _ = std::fs::create_dir_all("../../tmp");
@@ -122,7 +126,9 @@ async fn fhir_put_is_supported() {
     "#;
 
     let cfg = load_config_from_str(toml);
-    let router: Router<()> = build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let router: Router<()> = build_network_router(cfg, "default").await;
 
     let req = Request::builder()
         .method(Method::PUT)
@@ -144,6 +150,7 @@ async fn fhir_put_is_supported() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn fhir_delete_is_supported() {
     // Ensure ./tmp exists per project preference
     let _ = std::fs::create_dir_all("../../tmp");
@@ -187,7 +194,9 @@ async fn fhir_delete_is_supported() {
     "#;
 
     let cfg = load_config_from_str(toml);
-    let router: Router<()> = build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let router: Router<()> = build_network_router(cfg, "default").await;
 
     let req = Request::builder()
         .method(Method::DELETE)
@@ -209,6 +218,7 @@ async fn fhir_delete_is_supported() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn fhir_backend_is_invoked_in_pipeline() {
     // Ensure ./tmp exists per project preference
     let _ = std::fs::create_dir_all("../../tmp");
@@ -252,7 +262,9 @@ async fn fhir_backend_is_invoked_in_pipeline() {
     "#;
 
     let cfg = load_config_from_str(toml);
-    let router: Router<()> = build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let router: Router<()> = build_network_router(cfg, "default").await;
 
     let req = Request::builder()
         .method(Method::POST)

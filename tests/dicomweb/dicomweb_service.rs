@@ -47,10 +47,13 @@ async fn build_test_router() -> axum::Router<()> {
     let _ = std::fs::create_dir_all("../../tmp");
 
     let cfg = load_config_from_str(get_dicomweb_test_config()).expect("valid config");
-    harmony::router::build_network_router(Arc::new(cfg), "default").await
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    harmony::router::build_network_router(cfg, "default").await
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_qido_studies_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -73,6 +76,7 @@ async fn dicomweb_qido_studies_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_qido_series_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -95,6 +99,7 @@ async fn dicomweb_qido_series_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_qido_instances_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -117,6 +122,7 @@ async fn dicomweb_qido_instances_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_wado_study_metadata_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -139,6 +145,7 @@ async fn dicomweb_wado_study_metadata_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_wado_instance_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -161,6 +168,7 @@ async fn dicomweb_wado_instance_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_wado_frames_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -183,6 +191,7 @@ async fn dicomweb_wado_frames_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_wado_bulkdata_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -205,6 +214,7 @@ async fn dicomweb_wado_bulkdata_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_options_request_returns_cors_headers() {
     let app = build_test_router().await;
 
@@ -227,6 +237,7 @@ async fn dicomweb_options_request_returns_cors_headers() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_stow_studies_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -250,6 +261,7 @@ async fn dicomweb_stow_studies_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_stow_specific_study_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -272,6 +284,7 @@ async fn dicomweb_stow_specific_study_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_nonexistent_route_returns_404() {
     let app = build_test_router().await;
 
@@ -293,6 +306,7 @@ async fn dicomweb_nonexistent_route_returns_404() {
 // === New DICOMweb Part 18 routes ===
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_qido_top_level_series_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -313,6 +327,7 @@ async fn dicomweb_qido_top_level_series_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_qido_top_level_instances_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -333,6 +348,7 @@ async fn dicomweb_qido_top_level_instances_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_delete_study_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -352,6 +368,7 @@ async fn dicomweb_delete_study_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_delete_series_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -371,6 +388,7 @@ async fn dicomweb_delete_series_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_delete_instance_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -390,6 +408,7 @@ async fn dicomweb_delete_instance_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_capabilities_returns_json() {
     let app = build_test_router().await;
 
@@ -415,6 +434,7 @@ async fn dicomweb_capabilities_returns_json() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_rendered_study_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -435,6 +455,7 @@ async fn dicomweb_rendered_study_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_rendered_instance_returns_200_or_error() {
     let app = build_test_router().await;
 
@@ -455,6 +476,7 @@ async fn dicomweb_rendered_instance_returns_200_or_error() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn dicomweb_thumbnail_instance_returns_200_or_error() {
     let app = build_test_router().await;
 

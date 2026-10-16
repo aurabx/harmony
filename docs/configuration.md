@@ -526,6 +526,7 @@ The config file watcher monitors your configuration file for changes with a 200m
 3. **Apply Strategy**:
    - **Zero-downtime changes**: Atomic config swap (instant)
    - **Adapter restarts**: Selective restart of affected networks only
+   - **Process restart required**: New values are stored but not applied. A WARN names the sections
 4. **Logging**: Reload results logged with details
 
 ### Change Classification

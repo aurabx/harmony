@@ -140,10 +140,13 @@ async fn build_test_router(backend_base_url: &str) -> Router<()> {
     let _ = std::fs::create_dir_all("../../tmp");
     let config_str = get_http_backend_config(backend_base_url);
     let cfg = load_config_from_str(&config_str).expect("valid config");
-    harmony::router::build_network_router(Arc::new(cfg), "default").await
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    harmony::router::build_network_router(cfg, "default").await
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http_backend_get_request() {
     let (backend_url, _handle) = build_mock_upstream_server().await;
     let app = build_test_router(&backend_url).await;
@@ -171,6 +174,7 @@ async fn test_http_backend_get_request() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http_backend_post_request() {
     let (backend_url, _handle) = build_mock_upstream_server().await;
     let app = build_test_router(&backend_url).await;
@@ -204,6 +208,7 @@ async fn test_http_backend_post_request() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http_backend_put_request() {
     let (backend_url, _handle) = build_mock_upstream_server().await;
     let app = build_test_router(&backend_url).await;
@@ -238,6 +243,7 @@ async fn test_http_backend_put_request() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http_backend_delete_request() {
     let (backend_url, _handle) = build_mock_upstream_server().await;
     let app = build_test_router(&backend_url).await;
@@ -265,6 +271,7 @@ async fn test_http_backend_delete_request() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http_backend_forwards_headers() {
     let (backend_url, _handle) = build_mock_upstream_server().await;
     let app = build_test_router(&backend_url).await;
@@ -307,6 +314,7 @@ async fn test_http_backend_forwards_headers() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http_backend_query_params() {
     let (backend_url, _handle) = build_mock_upstream_server().await;
     let app = build_test_router(&backend_url).await;
@@ -347,6 +355,7 @@ async fn test_http_backend_query_params() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http_backend_status_codes() {
     let (backend_url, _handle) = build_mock_upstream_server().await;
     let app = build_test_router(&backend_url).await;
@@ -397,6 +406,7 @@ async fn test_http_backend_status_codes() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http_backend_empty_body() {
     let (backend_url, _handle) = build_mock_upstream_server().await;
     let app = build_test_router(&backend_url).await;
@@ -423,6 +433,7 @@ async fn test_http_backend_empty_body() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn test_http_backend_json_content_type() {
     let (backend_url, _handle) = build_mock_upstream_server().await;
     let app = build_test_router(&backend_url).await;

@@ -11,6 +11,7 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn incoming_non_auth_middleware_failure_returns_500() {
     // Config validation builds the middleware, so it needs a valid spec.
     // The spec is replaced with an unparseable one after validation, so the
@@ -82,7 +83,9 @@ async fn incoming_non_auth_middleware_failure_returns_500() {
 
     let cfg = load_config_from_str(&toml).expect("valid config");
     std::fs::write(temp_file.path(), broken_spec).expect("overwrite spec file");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     let response = app
         .oneshot(
@@ -102,6 +105,7 @@ async fn incoming_non_auth_middleware_failure_returns_500() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn jwt_auth_failure_still_returns_401() {
     let toml = r#"
         [proxy]
@@ -155,7 +159,9 @@ async fn jwt_auth_failure_still_returns_401() {
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Missing auth header - should still return 401
     let response = app
@@ -173,6 +179,7 @@ async fn jwt_auth_failure_still_returns_401() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn basic_auth_failure_still_returns_401() {
     let toml = r#"
         [proxy]
@@ -219,7 +226,9 @@ async fn basic_auth_failure_still_returns_401() {
     "#;
 
     let cfg = load_config_from_str(toml).expect("valid config");
-    let app = harmony::router::build_network_router(Arc::new(cfg), "default").await;
+    let cfg = Arc::new(cfg);
+    harmony::globals::set_config(cfg.clone());
+    let app = harmony::router::build_network_router(cfg, "default").await;
 
     // Missing auth header - should still return 401
     let response = app

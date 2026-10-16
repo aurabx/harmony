@@ -140,6 +140,8 @@ Harmony supports hot-reloading configuration changes without requiring a full ap
 - Middleware configuration (transforms, auth rules)
 - Route definitions (endpoints, backends, pipelines)
 - Backend URLs, timeouts
+
+**Process restart required** (reload stores the values and logs a WARN, but does not apply them):
 - Logging settings
 - Storage configuration
 

@@ -143,7 +143,9 @@ fn method_policy(methods: &str) -> String {
 async fn build_app(toml: &str) -> Router {
     let config: Config = toml::from_str(toml).expect("TOML parse error");
     config.validate().expect("valid config");
-    harmony::router::build_network_router(Arc::new(config), "default").await
+    let config = Arc::new(config);
+    harmony::globals::set_config(config.clone());
+    harmony::router::build_network_router(config, "default").await
 }
 
 async fn send(
@@ -168,6 +170,7 @@ async fn send(
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn patch_reaches_the_upstream_with_its_body() {
     let upstream = start_recording_upstream().await;
     let app = build_app(&proxy_config(&upstream.base_url, "", "")).await;
@@ -188,6 +191,7 @@ async fn patch_reaches_the_upstream_with_its_body() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn head_returns_upstream_headers_without_a_body() {
     let upstream = start_recording_upstream().await;
     let app = build_app(&proxy_config(&upstream.base_url, "", "")).await;
@@ -207,6 +211,7 @@ async fn head_returns_upstream_headers_without_a_body() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn options_reaches_the_pipeline_and_the_upstream() {
     let upstream = start_recording_upstream().await;
     let app = build_app(&proxy_config(&upstream.base_url, "", "")).await;
@@ -226,6 +231,7 @@ async fn options_reaches_the_pipeline_and_the_upstream() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn exact_prefix_path_accepts_patch() {
     let upstream = start_recording_upstream().await;
     let app = build_app(&proxy_config(&upstream.base_url, "", "")).await;
@@ -237,6 +243,7 @@ async fn exact_prefix_path_accepts_patch() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn trace_is_not_routed() {
     let upstream = start_recording_upstream().await;
     let app = build_app(&proxy_config(&upstream.base_url, "", "")).await;
@@ -248,6 +255,7 @@ async fn trace_is_not_routed() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn policy_method_rule_admits_patch_when_listed() {
     let upstream = start_recording_upstream().await;
     let toml = proxy_config(
@@ -266,6 +274,7 @@ async fn policy_method_rule_admits_patch_when_listed() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn policy_method_rule_denies_patch_with_405() {
     let upstream = start_recording_upstream().await;
     let toml = proxy_config(
@@ -286,6 +295,7 @@ async fn policy_method_rule_denies_patch_with_405() {
 }
 
 #[tokio::test]
+#[serial_test::serial]
 async fn head_drops_a_body_the_pipeline_produced() {
     // The echo backend answers with a body for every method, so only the
     // router can keep it out of a HEAD response.
@@ -340,6 +350,7 @@ async fn head_drops_a_body_the_pipeline_produced() {
 }
 
 #[test]
+#[serial_test::serial]
 fn generic_http_endpoints_route_every_standard_method() {
     let standard = [
         Method::GET,
