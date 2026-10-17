@@ -1277,4 +1277,59 @@ mod tests {
         );
         assert_eq!(merged_limit(&[&unset, &large]), default * 2);
     }
+
+    /// `Config::validate` now rejects an unbuildable policies middleware
+    /// before the DCMTK check runs, so this calls the check directly on an
+    /// unvalidated config to keep the fail-closed backstop covered.
+    #[test]
+    fn dcmtk_check_fails_closed_on_an_unreadable_policies_middleware() {
+        let toml = r#"
+            [proxy]
+            id = "test-proxy"
+
+            [network.default]
+            enable_wireguard = false
+            interface = "wg0"
+
+            [network.default.http]
+            bind_address = "127.0.0.1"
+            bind_port = 8080
+
+            [pipelines.store]
+            networks = ["default"]
+            endpoints = ["store_scp"]
+            middleware = ["broken"]
+
+            [endpoints.store_scp]
+            service = "dicom_scp"
+            [endpoints.store_scp.options]
+            local_aet = "STORE_SCP"
+            port = 11112
+            use_dcmtk_store = true
+
+            [middleware.broken]
+            type = "policies"
+            [middleware.broken.options]
+            policies = ["all_disabled"]
+
+            [policies.all_disabled]
+            id = "all_disabled"
+            enabled = false
+            rules = []
+        "#;
+        let config: Config = toml::from_str(toml).expect("TOML parse error");
+
+        let groups = all_listener_groups(&config);
+        let dcmtk = groups
+            .iter()
+            .find(|g| g.dcmtk_trigger().is_some())
+            .expect("store_scp should be served by DCMTK");
+
+        let reason = dcmtk_ip_rule_conflict(&config, dcmtk).expect("expected a conflict");
+        assert!(
+            reason.contains("has a policies middleware that cannot be checked"),
+            "unexpected reason: {}",
+            reason
+        );
+    }
 }

@@ -1,6 +1,6 @@
 # Configuration
 
-**Last Updated**: 2026-09-24
+**Last Updated**: 2026-10-16
 
 ## Environment Variable Substitution
 
@@ -245,6 +245,7 @@ Adapters are started automatically based on configuration:
 - If ingress/egress specify endpoint/backend overrides, those must exist in the pipeline
 - All referenced providers must be configured
 - Unknown middleware names cause validation failure
+- Every `[middleware.<name>]` instance must build from its options. Harmony resolves each instance at load and reload, the same way it does per request. A bad instance fails validation with `InvalidMiddleware`. Examples: a `policies` entry that is not a policy ID, an unknown policy or rule ID, a missing `spec_path` file, or an unreadable JWT public key.
 - Every `authentication` reference must name a key in `[authentications]`. See [Authentications](#authentications).
 
 ### Examples

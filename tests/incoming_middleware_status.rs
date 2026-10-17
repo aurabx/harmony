@@ -13,8 +13,11 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 #[tokio::test]
 #[serial_test::serial]
 async fn incoming_non_auth_middleware_failure_returns_500() {
-    // Create a temporary transform spec that will fail at runtime
-    let spec_content = r#"[
+    // Config validation builds the middleware, so it needs a valid spec.
+    // The spec is replaced with an unparseable one after validation, so the
+    // per-request middleware build fails with a non-auth error.
+    let valid_spec = r#"[{"operation": "shift", "spec": {"*": "&"}}]"#;
+    let broken_spec = r#"[
         {
             "operation": "shift",
             "spec": {
@@ -24,7 +27,7 @@ async fn incoming_non_auth_middleware_failure_returns_500() {
     ]"#;
 
     let temp_file = tempfile::NamedTempFile::new().expect("create temp file");
-    std::fs::write(temp_file.path(), spec_content).expect("write spec file");
+    std::fs::write(temp_file.path(), valid_spec).expect("write spec file");
 
     let toml = format!(
         r#"
@@ -67,7 +70,7 @@ async fn incoming_non_auth_middleware_failure_returns_500() {
         [middleware_types.transform]
         module = ""
 
-        # Transform middleware that will fail at runtime
+        # Transform middleware that will fail per request
         [middleware.failing_transform]
         type = "transform"
         [middleware.failing_transform.options]
@@ -79,12 +82,11 @@ async fn incoming_non_auth_middleware_failure_returns_500() {
     );
 
     let cfg = load_config_from_str(&toml).expect("valid config");
+    std::fs::write(temp_file.path(), broken_spec).expect("overwrite spec file");
     let cfg = Arc::new(cfg);
     harmony::globals::set_config(cfg.clone());
     let app = harmony::router::build_network_router(cfg, "default").await;
 
-    // Send a request that will trigger transform middleware failure
-    // The transform will try to access a nonexistent field and fail
     let response = app
         .oneshot(
             Request::builder()

@@ -239,10 +239,17 @@ async fn test_transform_middleware_error_handling() {
 
     let config: Config = toml::from_str(config_toml).unwrap();
 
-    // This should fail during validation because the spec file doesn't exist
-    let validation_result = config.validate();
-
-    // The config validation should pass, but middleware creation should fail at runtime
-    // This is expected behavior - config validation doesn't check file existence
-    assert!(validation_result.is_ok());
+    // Validation builds each middleware, so a missing spec file is rejected
+    // at load instead of failing every request.
+    match config.validate() {
+        Err(harmony::config::config::ConfigError::InvalidMiddleware { name, reason }) => {
+            assert_eq!(name, "transform_error");
+            assert!(
+                reason.contains("Failed to read JOLT spec file"),
+                "unexpected reason: {}",
+                reason
+            );
+        }
+        other => panic!("expected InvalidMiddleware, got {:?}", other),
+    }
 }

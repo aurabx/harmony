@@ -631,6 +631,7 @@ impl Config {
         self.validate_management()?;
         self.validate_services()?;
         self.validate_middleware_types()?;
+        self.validate_middleware()?;
         self.validate_pipelines()?;
         self.validate_endpoints()?;
         self.validate_routes()?;
@@ -995,12 +996,44 @@ impl Config {
         Ok(())
     }
 
-    #[allow(dead_code)]
+    /// Rejects middleware instances that cannot be built from their options.
+    ///
+    /// Middleware are built per request, so without this check a bad instance
+    /// passes load and reload and then fails every request.
     fn validate_middleware(&self) -> Result<(), ConfigError> {
-        for _endpoint in self.endpoints.values() {
-            // todo: Actually implement middleware validation
-            // let handler = endpoint.kind.resolve_handler(name)?;
-            // handler.validate()?; // Validate the resolved endpoint
+        use crate::models::middleware::middleware::{
+            validate_middleware_instance, validate_middleware_type_reference,
+        };
+
+        for (name, instance) in &self.middleware {
+            validate_middleware_instance(name, instance, self).map_err(|reason| {
+                ConfigError::InvalidMiddleware {
+                    name: name.clone(),
+                    reason,
+                }
+            })?;
+        }
+
+        // Pipeline names with no [middleware.<name>] block are built by type
+        // name with empty options; check those the same way.
+        let type_references: std::collections::BTreeSet<String> = self
+            .pipelines
+            .values()
+            .flat_map(|p| {
+                p.middleware
+                    .left_chain()
+                    .into_iter()
+                    .chain(p.middleware.right_chain())
+            })
+            .filter(|name| !self.middleware.contains_key(name))
+            .collect();
+        for name in &type_references {
+            validate_middleware_type_reference(name, self).map_err(|reason| {
+                ConfigError::InvalidMiddleware {
+                    name: name.clone(),
+                    reason,
+                }
+            })?;
         }
         Ok(())
     }

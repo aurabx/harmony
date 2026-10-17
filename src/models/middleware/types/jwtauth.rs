@@ -89,8 +89,17 @@ pub fn parse_config(
 }
 
 impl JwtAuthMiddleware {
+    /// Builds the middleware, panicking if the RS256 public key cannot be loaded.
+    ///
+    /// Prefer `try_new`. The middleware factory uses `try_new` so a bad key
+    /// fails config validation instead of crashing the process.
     pub fn new(config: JwtAuthConfig) -> Self {
-        // Try to load an RSA public key; if unavailable, fall back to a local secret for tests/dev.
+        Self::try_new(config).unwrap_or_else(|e| panic!("{}", e))
+    }
+
+    /// Builds the middleware, returning an error if the RS256 public key at
+    /// `public_key_path` cannot be read or is not a valid RSA PEM.
+    pub fn try_new(config: JwtAuthConfig) -> Result<Self, String> {
         // Choose algorithm based on config
         let (decoding_key, algorithm) = if config.use_hs256 {
             let secret = config
@@ -101,32 +110,26 @@ impl JwtAuthMiddleware {
             (DecodingKey::from_secret(&secret), Algorithm::HS256)
         } else {
             // Strict RS256 path: must load a valid RSA public key
-            match std::fs::read_to_string(&config.public_key_path) {
-                Ok(pem) => match DecodingKey::from_rsa_pem(pem.as_bytes()) {
-                    Ok(k) => (k, Algorithm::RS256),
-                    Err(e) => {
-                        panic!(
-                                "JWT: failed to parse RSA public key at '{}': {}. Set use_hs256=true with a secret for HS256.",
-                                config.public_key_path,
-                                e
-                            );
-                    }
-                },
-                Err(e) => {
-                    panic!(
-                        "JWT: failed to read RSA public key at '{}': {}. Set use_hs256=true with a secret for HS256.",
-                        config.public_key_path,
-                        e
-                    );
-                }
-            }
+            let pem = std::fs::read_to_string(&config.public_key_path).map_err(|e| {
+                format!(
+                    "JWT: failed to read RSA public key at '{}': {}. Set use_hs256=true with a secret for HS256.",
+                    config.public_key_path, e
+                )
+            })?;
+            let key = DecodingKey::from_rsa_pem(pem.as_bytes()).map_err(|e| {
+                format!(
+                    "JWT: failed to parse RSA public key at '{}': {}. Set use_hs256=true with a secret for HS256.",
+                    config.public_key_path, e
+                )
+            })?;
+            (key, Algorithm::RS256)
         };
 
-        Self {
+        Ok(Self {
             config,
             decoding_key: Arc::new(decoding_key), // Use Arc to avoid reloading
             algorithm,
-        }
+        })
     }
 
     /// Real token validation: verify signature and claims
