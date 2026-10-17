@@ -65,7 +65,7 @@ Behavior:
 - Validates `exp`, `nbf`, and `iat` with optional leeway
 - Validates `iss` and `aud` when configured
 - Any verification error returns HTTP 401 Unauthorized
-- Startup safety: if `use_hs256` is not explicitly set to true and no `public_key_path` is provided, the middleware will panic during initialization to avoid insecure defaults
+- Startup safety: config validation rejects the instance with `InvalidMiddleware` when the key material is unusable. This covers RS256 with a missing or invalid `public_key_path`, and HS256 with a missing or empty `hs256_secret`. There is no default secret.
 
 Config keys:
 - `public_key_path` (string, required for RS256): Path to RSA public key (PEM)

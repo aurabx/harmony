@@ -89,7 +89,7 @@ pub fn parse_config(
 }
 
 impl JwtAuthMiddleware {
-    /// Builds the middleware, panicking if the RS256 public key cannot be loaded.
+    /// Builds the middleware, panicking if the key material is missing or invalid.
     ///
     /// Prefer `try_new`. The middleware factory uses `try_new` so a bad key
     /// fails config validation instead of crashing the process.
@@ -97,17 +97,23 @@ impl JwtAuthMiddleware {
         Self::try_new(config).unwrap_or_else(|e| panic!("{}", e))
     }
 
-    /// Builds the middleware, returning an error if the RS256 public key at
-    /// `public_key_path` cannot be read or is not a valid RSA PEM.
+    /// Builds the middleware, returning an error if the key material is unusable.
+    ///
+    /// In HS256 mode `hs256_secret` must be present and non-blank. There is no
+    /// default secret: a well-known fallback would let anyone mint valid tokens.
+    /// In RS256 mode the public key at `public_key_path` must be readable and
+    /// a valid RSA PEM.
     pub fn try_new(config: JwtAuthConfig) -> Result<Self, String> {
         // Choose algorithm based on config
         let (decoding_key, algorithm) = if config.use_hs256 {
             let secret = config
                 .hs256_secret
-                .as_ref()
-                .map(|s| s.as_bytes().to_vec())
-                .unwrap_or_else(|| b"test-fallback-secret".to_vec());
-            (DecodingKey::from_secret(&secret), Algorithm::HS256)
+                .as_deref()
+                .filter(|s| !s.trim().is_empty())
+                .ok_or_else(|| {
+                    "JWT: use_hs256 = true requires a non-empty hs256_secret".to_string()
+                })?;
+            (DecodingKey::from_secret(secret.as_bytes()), Algorithm::HS256)
         } else {
             // Strict RS256 path: must load a valid RSA public key
             let pem = std::fs::read_to_string(&config.public_key_path).map_err(|e| {
@@ -369,18 +375,39 @@ mod tests {
     }
 
     #[test]
-    fn test_jwt_auth_middleware_new_hs256_fallback_secret() {
+    fn test_jwt_auth_middleware_try_new_hs256_rejects_missing_secret() {
         let config = JwtAuthConfig {
             public_key_path: "".to_string(),
             issuer: None,
             audience: None,
             leeway_secs: None,
             use_hs256: true,
-            hs256_secret: None, // Should use fallback secret
+            hs256_secret: None,
         };
 
-        let middleware = JwtAuthMiddleware::new(config);
-        assert_eq!(middleware.algorithm, Algorithm::HS256);
+        let err = JwtAuthMiddleware::try_new(config)
+            .err()
+            .expect("HS256 without a secret must be rejected");
+        assert!(err.contains("hs256_secret"), "unexpected error: {}", err);
+    }
+
+    #[test]
+    fn test_jwt_auth_middleware_try_new_hs256_rejects_blank_secret() {
+        for blank in ["", "   "] {
+            let config = JwtAuthConfig {
+                public_key_path: "".to_string(),
+                issuer: None,
+                audience: None,
+                leeway_secs: None,
+                use_hs256: true,
+                hs256_secret: Some(blank.to_string()),
+            };
+
+            let err = JwtAuthMiddleware::try_new(config)
+                .err()
+                .unwrap_or_else(|| panic!("HS256 with secret {:?} must be rejected", blank));
+            assert!(err.contains("hs256_secret"), "unexpected error: {}", err);
+        }
     }
 
     #[test]

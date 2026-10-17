@@ -299,6 +299,31 @@ fn test_jwt_auth_middleware_rejects_missing_key_without_panicking() {
 }
 
 #[test]
+fn test_jwt_auth_hs256_without_secret_is_rejected() {
+    let toml = config_with_gate_middleware(
+        r#"
+        [middleware.gate]
+        type = "jwt_auth"
+        [middleware.gate.options]
+        use_hs256 = true
+    "#,
+    );
+    let config: Config = toml::from_str(&toml).expect("TOML parse error");
+
+    match config.validate() {
+        Err(ConfigError::InvalidMiddleware { name, reason }) => {
+            assert_eq!(name, "gate");
+            assert!(
+                reason.contains("requires a non-empty hs256_secret"),
+                "unexpected reason: {}",
+                reason
+            );
+        }
+        other => panic!("expected InvalidMiddleware, got {:?}", other),
+    }
+}
+
+#[test]
 fn test_bare_policies_reference_in_pipeline_is_rejected() {
     // No [middleware.policies] block: the pipeline name is built as a type
     // with empty options, which the policies middleware cannot accept.
