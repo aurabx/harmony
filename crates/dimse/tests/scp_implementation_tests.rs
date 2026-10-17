@@ -139,9 +139,14 @@ async fn test_c_get_handler_processes_request() {
 
     assert!(wait_for_port(port, 2000).await, "SCP should be listening");
 
+    // getscu saves received datasets to its working directory by default,
+    // which would write into the crate root during `cargo test`.
+    let output_dir = tempfile::tempdir().expect("create output dir");
+
     // Run getscu - association may fail due to role selection limitations,
     // but we're testing that the handler doesn't crash
     let output = tokio::process::Command::new("getscu")
+        .arg("--output-directory").arg(output_dir.path())
         .arg("--aetitle").arg("TEST_SCU")
         .arg("--call").arg("GET_SCP")
         .arg("-S") // Study Root
@@ -217,8 +222,13 @@ async fn test_c_move_handler_processes_request() {
 
     assert!(wait_for_port(port, 2000).await, "SCP should be listening");
 
+    // movescu saves received datasets to its working directory by default,
+    // which would write into the crate root during `cargo test`.
+    let output_dir = tempfile::tempdir().expect("create output dir");
+
     // Run movescu with +P <scu_port> to listen for C-STORE
     let output = tokio::process::Command::new("movescu")
+        .arg("--output-directory").arg(output_dir.path())
         .arg("--aetitle").arg("TEST_SCU")
         .arg("--call").arg("MOVE_SCP")
         .arg("--move").arg("TEST_SCU")
