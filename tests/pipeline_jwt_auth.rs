@@ -61,7 +61,7 @@ async fn jwt_auth_allows_valid_bearer() {
         type = "jwt_auth"
         [middleware.jwt_auth_test.options]
         use_hs256 = true
-        hs256_secret = "test-fallback-secret"
+        hs256_secret = "pipeline-test-secret"
         issuer = "https://test-issuer/"
         audience = "harmony"
         leeway_secs = 60
@@ -73,7 +73,7 @@ async fn jwt_auth_allows_valid_bearer() {
     harmony::globals::set_config(cfg.clone());
     let app = harmony::router::build_network_router(cfg, "default").await;
 
-    // Generate HS256 JWT compatible with middleware fallback secret
+    // Generate an HS256 JWT signed with the configured hs256_secret
     #[derive(Serialize)]
     struct TestClaims {
         iss: String,
@@ -94,7 +94,7 @@ async fn jwt_auth_allows_valid_bearer() {
     let token = encode(
         &Header::new(Algorithm::HS256),
         &claims,
-        &EncodingKey::from_secret(b"test-fallback-secret"),
+        &EncodingKey::from_secret(b"pipeline-test-secret"),
     )
     .expect("encode jwt");
 
@@ -160,7 +160,7 @@ async fn jwt_auth_rejects_invalid_bearer() {
         type = "jwt_auth"
         [middleware.jwt_auth_test.options]
         use_hs256 = true
-        hs256_secret = "test-fallback-secret"
+        hs256_secret = "pipeline-test-secret"
         issuer = "https://test-issuer/"
         audience = "harmony"
         leeway_secs = 60
