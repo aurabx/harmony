@@ -67,21 +67,21 @@ jobs:
           case "${{ runner.os }}" in
             Windows)
               echo "Building for Windows..."
-              cargo build --release --target ${{ matrix.target }}
+              cargo build --release --locked --target ${{ matrix.target }}
               ;;
             macOS)
               echo "Building for macOS..."
-              cargo build --release --target ${{ matrix.target }}
+              cargo build --release --locked --target ${{ matrix.target }}
               ;;
             Linux)
               case "${{ matrix.target }}" in
                 aarch64-unknown-linux-gnu|armv7-unknown-linux-gnueabihf)
                   echo "Building for ARM target ${{ matrix.target }} with cross..."
-                  cross build --release --target ${{ matrix.target }}
+                  cross build --release --locked --target ${{ matrix.target }}
                   ;;
                 *)
                   echo "Building for Linux target ${{ matrix.target }}..."
-                  cargo build --release --target ${{ matrix.target }}
+                  cargo build --release --locked --target ${{ matrix.target }}
                   ;;
               esac
               ;;
