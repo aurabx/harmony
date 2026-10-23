@@ -34,6 +34,3 @@ services:
       # This will ALWAYS push config when the container starts, which is good for drift, but might
       # overwrite config on runbeam.
       # - RUNBEAM_PUSH_CONFIG_ON_STARTUP=true
-      
-      # Accept invalid SSL certificates (development only - DO NOT use in production)
-      # - RUNBEAM_ACCEPT_INVALID_CERTS=true
