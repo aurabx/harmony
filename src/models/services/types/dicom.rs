@@ -1394,7 +1394,11 @@ fn implicit_vr_sop_uids(data: &[u8]) -> (Option<String>, Option<String>) {
             break;
         }
         let start = pos + 8;
-        let Some(value) = data.get(start..start + length as usize) else {
+        // An end past `usize` is treated like a truncated element.
+        let Some(end) = start.checked_add(length as usize) else {
+            break;
+        };
+        let Some(value) = data.get(start..end) else {
             break;
         };
         if tag == SOP_CLASS_UID {
@@ -1402,16 +1406,21 @@ fn implicit_vr_sop_uids(data: &[u8]) -> (Option<String>, Option<String>) {
         } else if tag == SOP_INSTANCE_UID {
             instance_uid = uid_from_value(value);
         }
-        pos = start + length as usize;
+        pos = end;
     }
     (class_uid, instance_uid)
 }
+
+/// The longest value a UI element may hold, in bytes (PS3.5 Table 6.2-1).
+const MAX_UID_LEN: usize = 64;
 
 /// A UI value without its padding, or `None` if it is not a UID.
 fn uid_from_value(value: &[u8]) -> Option<String> {
     let text = std::str::from_utf8(value).ok()?;
     let uid = text.trim_end_matches(['\0', ' ']);
-    let is_uid = !uid.is_empty() && uid.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+    let is_uid = !uid.is_empty()
+        && uid.len() <= MAX_UID_LEN
+        && uid.bytes().all(|b| b.is_ascii_digit() || b == b'.');
     is_uid.then(|| uid.to_string())
 }
 
@@ -2069,6 +2078,26 @@ mod tests {
     }
 
     #[test]
+    fn test_uid_longer_than_64_bytes_is_rejected() {
+        let longest = format!("1.{}", "2".repeat(62));
+        assert_eq!(longest.len(), 64);
+        let too_long = format!("{}3", longest);
+
+        // Padding does not count towards the limit.
+        let padded = format!("{}\0", longest);
+        assert_eq!(uid_from_value(padded.as_bytes()), Some(longest.clone()));
+        assert_eq!(uid_from_value(too_long.as_bytes()), None);
+
+        let mut bare = implicit_element(0x0008, 0x0016, longest.as_bytes());
+        bare.extend(implicit_element(
+            0x0008,
+            0x0018,
+            format!("{} ", too_long).as_bytes(),
+        ));
+        assert_eq!(implicit_vr_sop_uids(&bare), (Some(longest), None));
+    }
+
+    #[test]
     fn test_implicit_vr_sop_uids_gives_up_safely() {
         // Truncated: the length runs past the end of the bytes.
         let mut truncated = implicit_element(0x0008, 0x0016, b"1.2.3");
@@ -2083,6 +2112,12 @@ mod tests {
         // A value that is not a UID.
         let not_uid = implicit_element(0x0008, 0x0018, b"Doe^John");
         assert_eq!(implicit_vr_sop_uids(&not_uid), (None, None));
+
+        // A length whose end is past `usize::MAX` on 32-bit targets, and past
+        // the data everywhere.
+        let mut huge = vec![0x08, 0x00, 0x16, 0x00, 0xFE, 0xFF, 0xFF, 0xFF];
+        huge.extend_from_slice(b"1.2.3");
+        assert_eq!(implicit_vr_sop_uids(&huge), (None, None));
 
         assert_eq!(implicit_vr_sop_uids(&[]), (None, None));
     }
