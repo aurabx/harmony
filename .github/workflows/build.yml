@@ -18,7 +18,33 @@ env:
   PKG_CONFIG_ALLOW_CROSS: 1
 
 jobs:
+  # ---------- 0. Dependency advisories ----------
+  # Fails the release before any binary is built when Cargo.lock holds a
+  # crate with a RustSec vulnerability advisory, for example after a
+  # merge restores an older lockfile.
+  # Ignored advisories need Cargo.toml or toolchain changes, tracked in
+  # Linear AURA-2546: quick-xml (RUSTSEC-2026-0194, -0195), rsa
+  # (RUSTSEC-2023-0071, dev-dependency, no fix), time (RUSTSEC-2026-0009,
+  # fix needs rustc 1.88) and zip (RUSTSEC-2026-0367, -0368, -0369).
+  # Remove each --ignore when its fix lands. Any other advisory fails.
+  audit:
+    name: cargo audit
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: cargo audit
+        run: cargo audit --ignore RUSTSEC-2026-0194 --ignore RUSTSEC-2026-0195 --ignore RUSTSEC-2023-0071 --ignore RUSTSEC-2026-0009 --ignore RUSTSEC-2026-0367 --ignore RUSTSEC-2026-0368 --ignore RUSTSEC-2026-0369
+
   build-binaries:
+    needs: [audit]
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
@@ -67,21 +93,21 @@ jobs:
           case "${{ runner.os }}" in
             Windows)
               echo "Building for Windows..."
-              cargo build --release --target ${{ matrix.target }}
+              cargo build --release --locked --target ${{ matrix.target }}
               ;;
             macOS)
               echo "Building for macOS..."
-              cargo build --release --target ${{ matrix.target }}
+              cargo build --release --locked --target ${{ matrix.target }}
               ;;
             Linux)
               case "${{ matrix.target }}" in
                 aarch64-unknown-linux-gnu|armv7-unknown-linux-gnueabihf)
                   echo "Building for ARM target ${{ matrix.target }} with cross..."
-                  cross build --release --target ${{ matrix.target }}
+                  cross build --release --locked --target ${{ matrix.target }}
                   ;;
                 *)
                   echo "Building for Linux target ${{ matrix.target }}..."
-                  cargo build --release --target ${{ matrix.target }}
+                  cargo build --release --locked --target ${{ matrix.target }}
                   ;;
               esac
               ;;
