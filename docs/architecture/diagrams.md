@@ -1,3 +1,11 @@
+---
+title: Architecture Diagrams
+description: Diagrams of the unified request flow, data flow, and orchestration flow.
+status: active
+updated: 2025-10-18
+type: Architecture
+---
+
 # Architecture Diagrams
 ### Unified Request Flow (All Protocols)
 ```

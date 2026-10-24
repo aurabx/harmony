@@ -2,7 +2,7 @@
 
 ## Overview
 - Harmony Proxy is a Rust workspace providing a configurable data mesh proxy/gateway for heterogeneous systems, with first-class healthcare protocols (FHIR, JMIX, DICOM/DICOMweb). It is part of the Runbeam ecosystem.
-- Key concepts: endpoints, middleware, services/backends, pipelines, and storage. See [docs/README.md](docs/README.md) for full architecture.
+- Key concepts: endpoints, middleware, services/backends, pipelines, and storage. See [docs/index.md](docs/index.md) for full architecture.
 
 ## Prerequisites
 - Rust (stable) via rustup
@@ -30,7 +30,7 @@
 - Config is loaded from the provided TOML file and can merge additional files from proxy.pipelines_path and proxy.transforms_path relative to the base config directory.
 - Major sections: proxy, network, pipelines, endpoints, backends, middleware/middleware_types, services, targets, storage, transforms.
 - Validation enforces: proxy ID and log level; per-network interface/HTTP constraints; pipeline endpoints exist; middleware_types are known or specified via module; targets have non-empty URLs; storage backend options are valid.
-- See: src/config/config.rs and [docs/configuration.md](docs/configuration.md).
+- See: src/config/config.rs and [docs/configuration/configuration-file.md](docs/configuration/configuration-file.md).
 
 ## Pipelines and middleware
 - Pipelines bind networks to endpoints and an ordered set of middleware/services.
@@ -44,7 +44,7 @@
 - Filesystem storage defaults to a project-local ./tmp directory. Favor ./tmp for all temporary files. The path may be configurable via storage options.
 
 ## Testing notes
-- Strategy: unit/integration tests should be fast and deterministic. See [docs/testing.md](docs/testing.md).
+- Strategy: unit/integration tests should be fast and deterministic. See [docs/guides/testing.md](docs/guides/testing.md).
 - DIMSE integration: DCMTK processes may be spawned; artifacts are written under ./tmp with per-test UUIDs. Enable verbose DIMSE output with `HARMONY_TEST_VERBOSE_DCMTK=1`. Additional debugging: `HARMONY_TEST_DEBUG=1`.
 - Sample data: samples/ and dev/samples/ contain example inputs.
 
@@ -53,7 +53,7 @@
 - Credentials and secrets: do not commit. Load via environment variables or secret managers. Prefer least-privilege file permissions.
 - JWT: in production, require RS256 with strict algorithm checks and claim validation.
 - Temporary files: prefer ./tmp within the working directory.
-- See [docs/security.md](docs/security.md) for more detail.
+- See [docs/security/overview.md](docs/security/overview.md) for more detail.
 
 ## Commit and PR hygiene
 - Use Conventional Commits for messages (e.g., feat:, fix:, docs:, refactor:, test:, build:, ci:, chore:, perf:, style:, revert:). Keep PRs focused; avoid mixing unrelated changes.
@@ -62,10 +62,10 @@
 
 ## Quick links
 - README: [README.md](README.md)
-- Docs index: [docs/README.md](docs/README.md)
-- Getting started: [docs/getting-started.md](docs/getting-started.md)
-- Configuration: [docs/configuration.md](docs/configuration.md)
-- Middleware: [docs/middleware.md](docs/middleware.md)
-- Security: [docs/security.md](docs/security.md)
-- Testing: [docs/testing.md](docs/testing.md)
-- Router: [docs/router.md](docs/router.md)
+- Docs index: [docs/index.md](docs/index.md)
+- Getting started: [docs/guides/getting-started.md](docs/guides/getting-started.md)
+- Configuration: [docs/configuration/configuration-file.md](docs/configuration/configuration-file.md)
+- Middleware: [docs/configuration/middleware.md](docs/configuration/middleware.md)
+- Security: [docs/security/overview.md](docs/security/overview.md)
+- Testing: [docs/guides/testing.md](docs/guides/testing.md)
+- Router: [docs/architecture/router.md](docs/architecture/router.md)

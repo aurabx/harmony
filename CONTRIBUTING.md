@@ -10,7 +10,7 @@ Thank you for your interest in contributing! This document explains how to propo
 
 ## Getting started
 - Read [DEVELOPER.md](DEVELOPER.md) for local setup, repository layout, commands, and testing guidance.
-- Review the docs index at [docs/README.md](docs/README.md) for architecture, configuration, middleware, and testing references.
+- Review the docs index at [docs/index.md](docs/index.md) for architecture, configuration, middleware, and testing references.
 
 ## Workflow
 - Trunk-based development: use feature branches and open pull requests against main.
@@ -53,7 +53,7 @@ Thank you for your interest in contributing! This document explains how to propo
 - JWT in production should use RS256 with strict algorithm enforcement and claim validation (exp, nbf, iat, iss, aud).
 - Encryption: where used, AES-256-GCM with ephemeral public key, IV, and authentication tag encoded in base64.
 - Temporary files: prefer ./tmp within the working directory.
-- See [docs/security.md](docs/security.md) for additional guidance.
+- See [docs/security/overview.md](docs/security/overview.md) for additional guidance.
 
 ## Licensing of contributions
 - By contributing, you agree your contributions are licensed under the Apache License, Version 2.0, and acknowledge the project’s commercialization restriction described in [README.md](README.md) (hosted resale/embedding requires a commercial licence from Aurabox Pty Ltd).

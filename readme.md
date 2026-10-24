@@ -307,23 +307,23 @@ Core building blocks:
 - Storage: project-local filesystem path (./tmp by default)
 - Hot-reload: automatic config updates with zero-downtime for most changes
 
-See [docs/configuration.md](docs/configuration.md), [docs/endpoints.md](docs/endpoints.md), [docs/middleware.md](docs/middleware.md), and [docs/backends.md](docs/backends.md) for details.
+See [docs/configuration/configuration-file.md](docs/configuration/configuration-file.md), [docs/configuration/endpoints.md](docs/configuration/endpoints.md), [docs/configuration/middleware.md](docs/configuration/middleware.md), and [docs/configuration/backends.md](docs/configuration/backends.md) for details.
 
 ## Documentation
-- Docs index: [docs/README.md](docs/README.md)
-- Getting started: [docs/getting-started.md](docs/getting-started.md)
-- Configuration: [docs/configuration.md](docs/configuration.md)
-- Content types: [docs/content-types.md](docs/content-types.md) (JSON, XML, CSV, multipart, binary)
-- Endpoints: [docs/endpoints.md](docs/endpoints.md)
-- Middleware: [docs/middleware.md](docs/middleware.md)
-- Backends: [docs/backends.md](docs/backends.md)
-- Router: [docs/router.md](docs/router.md)
-- Envelope model: [docs/envelope.md](docs/envelope.md)
-- Management API: [docs/management-api.md](docs/management-api.md) (includes Runbeam Cloud authorization)
-- DIMSE integration: [docs/dimse-integration.md](docs/dimse-integration.md)
-- Testing: [docs/testing.md](docs/testing.md)
-- Security: [docs/security.md](docs/security.md)
-- System description: [docs/system-description.md](docs/system-description.md)
+- Docs index: [docs/index.md](docs/index.md)
+- Getting started: [docs/guides/getting-started.md](docs/guides/getting-started.md)
+- Configuration: [docs/configuration/configuration-file.md](docs/configuration/configuration-file.md)
+- Content types: [docs/configuration/content-types.md](docs/configuration/content-types.md) (JSON, XML, CSV, multipart, binary)
+- Endpoints: [docs/configuration/endpoints.md](docs/configuration/endpoints.md)
+- Middleware: [docs/configuration/middleware.md](docs/configuration/middleware.md)
+- Backends: [docs/configuration/backends.md](docs/configuration/backends.md)
+- Router: [docs/architecture/router.md](docs/architecture/router.md)
+- Envelope model: [docs/architecture/envelope.md](docs/architecture/envelope.md)
+- Management API: [docs/api/management-api.md](docs/api/management-api.md) (includes Runbeam Cloud authorization)
+- DIMSE integration: [docs/integrations/dicom-dimse.md](docs/integrations/dicom-dimse.md)
+- Testing: [docs/guides/testing.md](docs/guides/testing.md)
+- Security: [docs/security/overview.md](docs/security/overview.md)
+- System description: [docs/architecture/overview.md](docs/architecture/overview.md)
 
 ## System requirements
 - Rust (stable)
@@ -344,7 +344,7 @@ See [docs/configuration.md](docs/configuration.md), [docs/endpoints.md](docs/end
 - `RUNBEAM_JWT_SECRET`: Shared secret for Runbeam Cloud JWT validation
 - `RUST_LOG`: Logging verbosity control
 
-See [Security Documentation](docs/security.md#environment-variables) for complete environment variable reference, generation commands (Linux/macOS), secret management integration (Vault, AWS, Azure), and production deployment examples.
+See [Security Documentation](docs/security/overview.md#environment-variables) for complete environment variable reference, generation commands (Linux/macOS), secret management integration (Vault, AWS, Azure), and production deployment examples.
 
 **Encryption Key Management:**
 
@@ -409,7 +409,7 @@ export RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-...
 
 Harmony will use `RUNBEAM_MACHINE_TOKEN` on startup and optionally persist it to storage if it needs to be reused. Priority: environment variable > stored token.
 
-See [Management API Documentation](docs/management-api.md#post-base_pathauthorize) for API details and [Security Documentation](docs/security.md) for key generation best practices.
+See [Management API Documentation](docs/api/management-api.md#post-base_pathauthorize) for API details and [Security Documentation](docs/security/overview.md) for key generation best practices.
 
 ## Contributing
 We welcome issues and pull requests! Please read [CONTRIBUTING.md](CONTRIBUTING.md) and [DEVELOPER.md](DEVELOPER.md) for workflow and development standards. Our community guidelines are defined in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

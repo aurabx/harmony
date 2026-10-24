@@ -231,7 +231,7 @@ curl -X POST http://localhost:8080/dimse-streaming \
 2. Wire DIMSE adapter to detect streaming backends
 3. Create integration tests with Orthanc PACS
 4. Performance benchmarks (memory profiling, latency analysis)
-5. Backpressure and retry logic (see docs/streaming.md for TODOs)
+5. Backpressure and retry logic (see docs/architecture/dicom-streaming.md for TODOs)
 
 ## Performance Considerations
 
@@ -274,8 +274,8 @@ See the complete bidirectional streaming configuration:
 
 ## See Also
 
-- [docs/streaming.md](../../docs/streaming.md) - **Complete streaming architecture guide**
-- [docs/backends.md](../../docs/backends.md) - Backend documentation
-- [docs/middleware.md](../../docs/middleware.md) - Middleware guide
-- [docs/envelope.md](../../docs/envelope.md) - Envelope specification
+- [docs/architecture/dicom-streaming.md](../../docs/architecture/dicom-streaming.md) - **Complete streaming architecture guide**
+- [docs/configuration/backends.md](../../docs/configuration/backends.md) - Backend documentation
+- [docs/configuration/middleware.md](../../docs/configuration/middleware.md) - Middleware guide
+- [docs/architecture/envelope.md](../../docs/architecture/envelope.md) - Envelope specification
 - [src/models/services/streaming.rs](../../src/models/services/streaming.rs) - Streaming trait implementation
