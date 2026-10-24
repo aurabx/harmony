@@ -83,7 +83,7 @@ htest --examples-dir . run dicom-scp
 htest --examples-dir . run streaming-dicom
 ```
 
-The workspace `docs/testing.md` describes htest and harmony-runner.
+The workspace `docs/guides/testing.md` describes htest and harmony-runner.
 
 ## Quick Test Summary
 
@@ -201,7 +201,7 @@ jobs:
 
 ### Tests That Need Harmony
 
-Run these through htest in harmony-examples. See the workspace `docs/testing.md`.
+Run these through htest in harmony-examples. See the workspace `docs/guides/testing.md`.
 
 ## Performance Testing
 
@@ -212,7 +212,7 @@ For performance benchmarks (memory, latency, throughput):
 # cargo test --test streaming_performance -- --ignored
 ```
 
-Expected results (from docs/streaming.md):
+Expected results (from docs/architecture/dicom-streaming.md):
 - Memory: 12MB peak (6 instances in flight) vs 1.2GB buffered
 - Latency: 80ms until first instance vs 28s buffered
 - Throughput: 120 instances/sec vs 40 instances/sec buffered
@@ -228,8 +228,8 @@ When adding new streaming features:
 
 ## References
 
-- [Streaming Architecture](../docs/streaming.md) - Complete architecture guide
-- [Example Configuration](../examples/dicom-streaming/) - Sample configs
-- [DICOM Backend Docs](../docs/backends.md) - Backend documentation
+- [Streaming Architecture](../docs/architecture/dicom-streaming.md) - Complete architecture guide
+- [Example Configuration](../examples/dicom-streaming) - Sample configs
+- [DICOM Backend Docs](../docs/configuration/backends.md) - Backend documentation
 - [dcmtk Documentation](https://dicom.offis.de/dcmtk.php.en) - DICOM toolkit
 - [Orthanc Documentation](https://www.orthanc-server.com/static.php?page=documentation) - PACS server

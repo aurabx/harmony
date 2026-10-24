@@ -1292,7 +1292,7 @@ pub(crate) fn reject_dimse_op_metadata(
     let location = if in_target { "target_details" } else { "request_details" };
     Err(Error::from(format!(
         "{}: {}.metadata.dimse_op is no longer supported. \
-         Set the operation with `command` instead (see docs/commands.md).",
+         Set the operation with `command` instead (see docs/architecture/commands.md).",
         service, location
     )))
 }
