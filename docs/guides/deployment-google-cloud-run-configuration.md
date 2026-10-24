@@ -104,11 +104,11 @@ gcloud run deploy harmony-proxy \
 
 ### Encryption Key Setup
 
-Harmony requires an encryption key for secure token storage. Generate and store it:
+Set an encryption key for token storage. The key alone does not keep the token. Cloud Run instances lose their filesystem on restart, including `~/.runbeam`. To skip re-authorizing each new instance, also supply the token through `RUNBEAM_MACHINE_TOKEN`. Generate and store the key:
 
 ```bash
 # Generate key and store in Secret Manager
-age-keygen | base64 | tr -d '\n' | gcloud secrets create harmony-encryption-key --data-file=-
+age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-' | tr -d '\n' | gcloud secrets create harmony-encryption-key --data-file=-
 
 # Deploy with secret
 gcloud run deploy harmony-proxy \
@@ -117,17 +117,13 @@ gcloud run deploy harmony-proxy \
 
 ### Runbeam Cloud Integration
 
-For Runbeam Cloud integration, add the JWT secret:
+Runbeam Cloud integration needs no extra secret. Harmony validates the `/authorize` JWT against the issuer's JWKS endpoint, so the service needs outbound HTTPS access.
 
 ```bash
-# Store JWT secret
-echo -n "your-jwt-secret" | gcloud secrets create harmony-jwt-secret --data-file=-
-
 # Deploy with Runbeam Cloud support
 gcloud run deploy harmony-proxy \
   --set-env-vars "RUST_LOG=harmony=info" \
-  --set-secrets "RUNBEAM_ENCRYPTION_KEY=harmony-encryption-key:latest" \
-  --set-secrets "RUNBEAM_JWT_SECRET=harmony-jwt-secret:latest"
+  --set-secrets "RUNBEAM_ENCRYPTION_KEY=harmony-encryption-key:latest"
 ```
 
 Update your configuration to enable Runbeam integration:
@@ -139,17 +135,9 @@ cloud_api_base_url = "https://api.runbeam.cloud"
 poll_interval_secs = 30
 ```
 
-### All Available Environment Variables
+### Other Environment Variables
 
-| Variable | Purpose | Required | Example |
-|----------|---------|----------|---------|
-| `RUST_LOG` | Logging verbosity | No | `harmony=info` |
-| `RUNBEAM_ENCRYPTION_KEY` | Token encryption key | Yes (production) | Base64-encoded age key |
-| `RUNBEAM_JWT_SECRET` | JWT validation secret | With Runbeam Cloud | Your secret key |
-| `RUNBEAM_MACHINE_TOKEN` | Pre-provisioned token | Headless deployments | JSON token |
-| `RUNBEAM_DISABLE_KEYRING` | Force filesystem storage | Testing only | `1` |
-
-See [Security Documentation](../security/environment-variables.md#environment-variables) for complete details.
+For every variable Harmony reads, see [Environment Variables](../configuration/environment.md). For secret handling, see [Managing Secrets](../security/secrets.md).
 
 ## Cloud Run Specific Configuration
 

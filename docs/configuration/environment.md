@@ -1,123 +1,80 @@
 ---
 title: Environment Variables
-description: Environment variables that Harmony reads at startup.
+description: Every environment variable Harmony reads, with type, default, and precedence rules.
 status: active
 updated: 2026-10-24
 type: Configuration
 related:
   - configuration/configuration-file.md
+  - configuration/environment-substitution.md
+  - security/secrets.md
 ---
 
 # Environment Variables
 
-Environment variables that Harmony reads at startup. This page is part of [Configuration](configuration-file.md).
+Harmony reads the environment variables below. This page is the single reference for them. This page is part of [Configuration](configuration-file.md).
 
-## Environment Variables
+For how to generate, store, and rotate the secret values, see [Managing Secrets](../security/secrets.md).
 
-Harmony supports several environment variables that affect runtime behavior. Most of these are **runtime settings** rather than configuration overrides - they don't replace TOML configuration but provide additional context for security, logging, and storage.
+## Reference
 
-### Configuration-Affecting Variables
+| Variable | Type | Default | Required | Description |
+|----------|------|---------|----------|-------------|
+| `RUST_LOG` | Tracing filter directive, such as `harmony=debug,info` | Unset | No | Overrides `logging.log_level` when set to a non-blank value. If the value is not a valid filter, Harmony prints a warning to stderr and uses `logging.log_level`. `logging.log_level` defaults to `error`. |
+| `RUNBEAM_MACHINE_TOKEN` | JSON machine token | Unset | No | Pre-provisioned machine token for headless deployments. Read at startup only when cloud integration is enabled. Harmony uses it before any stored token and saves it to token storage. If the JSON does not parse, Harmony logs a warning and uses the stored token. |
+| `RUNBEAM_PUSH_CONFIG_ON_STARTUP` | Boolean: `true` (any case) or `1` | `false` | No | When cloud polling starts, push the local configuration to Runbeam Cloud. Any other value counts as false. |
+| `RUNBEAM_CLOUD_API_BASE_URL` | URL | Unset | No | Runbeam Cloud API base URL used by `POST /{base_path}/update` and the mesh authentication middleware. Takes priority over the stored CLI setting and `runbeam.cloud_api_base_url`. `POST /{base_path}/token` also sets it for the running process, but only when the request includes `api_base_url` and saving that value to `~/.runbeam/<proxy_id>/config.json` succeeds. |
+| `RUNBEAM_ENCRYPTION_KEY` | age X25519 identity: raw `AGE-SECRET-KEY-1...` or base64 of that string | Unset | No (recommended in containers) | Key that encrypts the stored machine token. When unset, the SDK generates a key at `~/.runbeam/<proxy_id>/encryption.key`. The `POST /{base_path}/token` endpoint sets it for the running process when the request includes `encryption_key`. |
+| `RUNBEAM_ACCEPT_INVALID_CERTS` | Boolean: exactly `true` or `false` | `false` | No | Disables TLS certificate checks on Runbeam Cloud API calls. Development only. Values such as `1` or `TRUE` do not enable it. |
 
-#### RUNBEAM_ENCRYPTION_KEY
+Any other variable is read only if your configuration file references it. See the next two sections.
 
-**Purpose**: Provides encryption key for secure machine token storage (encrypted filesystem).
+## Variables in the Configuration File
 
-**Interaction with Configuration**:
-- Does not override TOML configuration
-- Affects how machine tokens are stored (see Management API authorization)
-- Recommended for persistent token storage across restarts
-- Typical in container environments
+You can reference any environment variable in a TOML value with `$VAR_NAME`. Write `$$` for a literal `$`. If a referenced variable is not set, Harmony replaces it with an empty string and logs a warning. See [Environment Variable Substitution](environment-substitution.md).
 
-**When to Set**:
-- Production container deployments (recommended)
-- Headless/CI environments
-- When persistent token storage is needed
+## Required Variables
 
-**See**: [Security Documentation](../security/environment-variables.md#runbeam_encryption_key) for generation examples and best practices.
+List variable names in `proxy.required_env_vars` to make them mandatory. If any listed variable is not set, Harmony refuses to start and names the missing variable.
 
-#### RUNBEAM_JWT_SECRET
-
-**Purpose**: Shared secret for validating JWT tokens from Runbeam Cloud during gateway authorization.
-
-**Interaction with Configuration**:
-- Does not override TOML configuration
-- Used by Management API `/authorize` endpoint
-- Falls back to development default if not set (logs warning)
-
-**When to Set**:
-- Required for production Runbeam Cloud integration
-- Must match secret configured in Runbeam Cloud
-
-**See**: [Security Documentation](../security/environment-variables.md#runbeam_jwt_secret) for generation and rotation procedures.
-
-#### RUST_LOG
-
-**Purpose**: Controls logging verbosity via tracing filter directives.
-
-**Interaction with Configuration**:
-- **Overrides** `logging.log_level` setting in TOML configuration
-- Environment variable takes precedence when both are set
-- More flexible than TOML (supports per-module filtering)
-
-**Common Values**:
-```bash
-# Override log level for all Harmony modules
-export RUST_LOG=harmony=debug
-
-# Per-module filtering (overrides TOML log_level)
-export RUST_LOG=harmony::router=trace,harmony::middleware=debug,harmony=info
-
-# Global debug (very verbose)
-export RUST_LOG=debug
+```toml
+[proxy]
+id = "harmony-proxy"
+required_env_vars = ["API_KEY", "DATABASE_PASSWORD"]
 ```
 
-**Precedence**: `RUST_LOG` environment variable > `logging.log_level` in TOML.
+See [Environment Variable Substitution](environment-substitution.md) for more examples.
 
+## Precedence
 
-### Environment Variable Precedence Rules
+- **TOML only.** Networks, pipelines, endpoints, backends, middleware, services, and storage come from the configuration file. No environment variable overrides them, except through `$VAR` substitution.
+- **Logging.** A valid, non-blank `RUST_LOG` wins over `logging.log_level`. Otherwise `logging.log_level` applies.
+- **Runbeam Cloud API base URL**, for `POST /{base_path}/update` and mesh authentication:
+  1. `RUNBEAM_CLOUD_API_BASE_URL`
+  2. `api_base_url` in `~/.runbeam/<proxy_id>/config.json`, saved by the CLI through `POST /{base_path}/token`
+  3. `runbeam.cloud_api_base_url` in the TOML file
+  4. `https://api.runbeam.cloud`
 
-**Settings with Environment Variable Override**:
-- **Logging**: `RUST_LOG` environment variable **overrides** `logging.log_level` in TOML
+  Startup cloud polling and `/authorize` do not use this order. They use the `api` value of the primary provider, which defaults to `https://api.runbeam.cloud`. See [Providers](providers.md).
+- **Machine token at startup**, when cloud integration is enabled:
+  1. `RUNBEAM_MACHINE_TOKEN`, if it parses
+  2. The stored token at `~/.runbeam/<proxy_id>/runbeam/auth.json`
+  3. No token. Harmony waits for a call to `/authorize`.
+- **Encryption key.** See [Encryption Key Management](../security/encryption-key-management.md).
 
-**Settings Without Override** (environment variables are supplemental):
-- **Network configuration**: TOML only (bind addresses, ports, WireGuard settings)
-- **Pipeline definitions**: TOML only (endpoints, backends, middleware chains)
-- **Service configuration**: TOML only (service types, options)
-- **Storage backend**: TOML only (filesystem path, backend type)
-- **Token encryption**: `RUNBEAM_ENCRYPTION_KEY` supplements TOML (provides encryption key)
-- **JWT validation**: `RUNBEAM_JWT_SECRET` supplements TOML (provides validation secret)
+## Examples
 
-### Best Practices
+Local development:
 
-**Development**:
 ```bash
-# Override log level for detailed debugging
 export RUST_LOG=harmony=debug,info
-
-# Use TOML for all other configuration
-cargo run -- --config examples/basic-echo/config.toml
+cargo run -- --config path/to/config.toml
 ```
 
-**Production Containers**:
-```bash
-# Set security-sensitive values via environment
-export RUNBEAM_ENCRYPTION_KEY=$(cat /run/secrets/encryption-key)
-export RUNBEAM_JWT_SECRET=$(cat /run/secrets/jwt-secret)
-export RUST_LOG=harmony=info
+Production container:
 
-# Use TOML for application configuration
+```bash
+export RUNBEAM_ENCRYPTION_KEY=$(cat /run/secrets/encryption-key)
+export RUST_LOG=harmony=info
 ./harmony --config /etc/harmony/config.toml
 ```
-
-**Why This Design?**
-- **Security**: Secrets in environment variables (not committed to version control)
-- **Configuration**: Application structure in TOML (version controlled, hot-reloadable)
-- **Flexibility**: Log levels easily adjustable without config file changes
-- **12-Factor App**: Environment-specific config via environment, app config via files
-
----
-
-Notes
-- Prefer ./tmp for temporary files rather than /tmp
-- For realistic JWT auth configuration, see docs/configuration/middleware.md
-- For comprehensive environment variable documentation, see [Security Documentation](../security/environment-variables.md#environment-variables)

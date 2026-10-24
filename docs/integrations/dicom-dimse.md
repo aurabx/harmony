@@ -89,7 +89,7 @@ use_tls = false
 - `C-STORE`: Send one instance to the remote node per request
 
 `dicom` is the legacy name of the `dicom_scu` service. See
-[backends.md](../configuration/backends-dicom-storage.md#dicom-scu-service-class-user) for the options and the
+[DICOM, Storage, and Echo Backends](../configuration/backends-dicom-storage.md#dicom-scu-service-class-user) for the options and the
 C-STORE request body.
 
 ### Endpoint Usage (SCP - Service Class Provider)

@@ -69,7 +69,7 @@ EOF
 gcloud secrets create harmony-config --data-file=config.toml
 
 # Generate and store encryption key
-age-keygen | base64 | tr -d '\n' | gcloud secrets create harmony-encryption-key --data-file=-
+age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-' | tr -d '\n' | gcloud secrets create harmony-encryption-key --data-file=-
 
 # Deploy
 gcloud run deploy harmony-proxy \

@@ -63,8 +63,8 @@ The recommended configuration binds the Management API to the management network
 The `/authorize` endpoint requires JWT authentication:
 
 - **JWT Token Required**: Must provide valid JWT from Runbeam Cloud in `Authorization: Bearer <token>` header
-- **Token Validation**: Uses HS256 algorithm with shared secret (configured via `RUNBEAM_JWT_SECRET` environment variable)
-- **Token Claims**: Extracts Runbeam API base URL from `iss` (issuer) claim
+- **Token Validation**: Accepts RS256 only. Harmony fetches the signing key from the JWKS endpoint at the base URL of the token's `iss` claim, using the `kid` header. It caches keys for `proxy.jwks_cache_duration_hours`. No shared secret is configured. Harmony passes no trusted issuer list, so the SDK accepts a token from any issuer whose JWKS it can fetch. It logs a security warning when it does this.
+- **Token Exchange**: Calls the Runbeam Cloud API at the primary provider's `api` URL
 - **Machine Token**: Exchanges user JWT for 30-day machine-scoped token stored locally
 
 ### Other Management Endpoints

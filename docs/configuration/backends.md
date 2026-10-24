@@ -10,7 +10,7 @@ type: Configuration
 
 Backends enable the pipeline to communicate with external systems (targets). Backends operate within the unified `PipelineExecutor` and handle the "backend invocation" step of the pipeline.
 
-> **Custom Backends**: To create your own backend service types, see [extensions.md](../architecture/extensions-types.md#service-factories).
+> **Custom Backends**: To create your own backend service types, see [Extension Types](../architecture/extensions-types.md#service-factories).
 
 ## Architecture
 
@@ -175,5 +175,5 @@ service = "mock_dicom"
 - [router.md](../architecture/router.md) - Pipeline execution flow
 - [endpoints.md](endpoints.md) - Protocol entry points
 - [adapters.md](../architecture/adapters.md) - Protocol adapter architecture
-- [dimse-integration.md](../integrations/dicom-dimse.md) - DICOM DIMSE details
+- [DIMSE Integration](../integrations/dicom-dimse.md) - DICOM DIMSE details
 

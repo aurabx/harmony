@@ -10,7 +10,7 @@ type: Configuration
 
 Middleware extends the request/response pipeline to authenticate, enrich, or transform the `RequestEnvelope` and `ResponseEnvelope` as they flow through the `PipelineExecutor`.
 
-> **Custom Middleware**: To create your own middleware types, see [extensions.md](../architecture/extensions-types.md#middleware-factories).
+> **Custom Middleware**: To create your own middleware types, see [Extension Types](../architecture/extensions-types.md#middleware-factories).
 
 ## Architecture
 
@@ -217,50 +217,43 @@ Reference for the log dump, webhook, and passthru middleware. See [Utility Middl
 
 ## Policies
 
-The policies middleware provides comprehensive policy-based access control, rate limiting, and request filtering through a flexible rule system. It supports 13 different rule types including IP filtering, path matching, geographic restrictions, rate limiting, time-based access, HTTP method filtering, User-Agent matching, Content-Type filtering, and query parameter validation.
+The policies middleware admits or rejects requests using rules grouped into policies. It has 13 rule types, including IP allow and deny lists, rate limiting, path, HTTP method, User-Agent, Content-Type, and time-based rules. By default, header, query parameter, and geographic rules do not see HTTP request data.
 
 **For complete documentation on policies and rules, see [policies-middleware.md](policies-middleware.md)**.
 
 ### Quick Example
 
+The middleware lists policy ids. Policies and rules are top-level `[policies.<id>]` and `[rules.<id>]` tables.
+
 ```toml
 [middleware.api_security]
 type = "policies"
+[middleware.api_security.options]
+policies = ["api_access_control"]
 
-[[middleware.api_security.options.policies]]
+[policies.api_access_control]
 id = "api_access_control"
 name = "API Access Control"
-enabled = true
+rules = ["get_post_only", "block_bots"]
 
-# Allow only GET and POST methods
-[[middleware.api_security.options.policies.rules]]
+# Allow only GET and POST. Other methods get 405.
+[rules.get_post_only]
+id = "get_post_only"
 type = "method"
 weight = 100
-enabled = true
-[middleware.api_security.options.policies.rules.options]
+[rules.get_post_only.options]
 mode = "allow"
 methods = ["GET", "POST"]
 
-# Block bots and crawlers
-[[middleware.api_security.options.policies.rules]]
+# Block bots and crawlers with 403
+[rules.block_bots]
+id = "block_bots"
 type = "user_agent"
 weight = 90
-enabled = true
-[middleware.api_security.options.policies.rules.options]
+[rules.block_bots.options]
 mode = "deny"
 patterns = [
     { label = "Bots", pattern = "/bot|crawler|spider/i" }
-]
-
-# Require API key parameter
-[[middleware.api_security.options.policies.rules]]
-type = "query_parameter"
-weight = 95
-enabled = true
-[middleware.api_security.options.policies.rules.options]
-mode = "allow"
-parameters = [
-    { name = "api_key", match_type = "exists" }
 ]
 ```
 
@@ -277,5 +270,5 @@ parameters = [
 - Query Parameter - Parameter validation
 - Allow All / Deny All - Control rules
 
-See [policies-middleware.md](policies-middleware.md) for detailed documentation on all rule types, evaluation logic, configuration examples, and troubleshooting.
+See [policies-middleware.md](policies-middleware.md) for detailed documentation on all rule types, evaluation logic, configuration examples, known issues, and troubleshooting.
 

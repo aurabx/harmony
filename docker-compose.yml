@@ -10,10 +10,10 @@ services:
       - ./examples:/examples:ro
     # Environment variables for runtime configuration
     # For production deployments:
-    #   1. Generate encryption key: age-keygen | base64 | tr -d '\n'
+    #   1. Generate encryption key: age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-'
     #   2. Store secrets in .env file (DO NOT commit to version control)
     #   3. Or use Docker secrets: docker secret create harmony_encryption_key <key-file>
-    # See docs/security/overview.md for detailed setup instructions
+    # See docs/security/secrets.md for detailed setup instructions
     environment:
       # Logging verbosity (info, debug, trace)
       - RUST_LOG=harmony=info
@@ -21,7 +21,7 @@ services:
       # Encryption key for secure token storage (recommended for production)
       # Ensures machine tokens persist across container restarts
       # Without this, tokens are lost on container restart (acceptable for development)
-      # Generate: age-keygen | base64 | tr -d '\n' (macOS) or base64 -w 0 (Linux)
+      # Generate: age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-'
       # - RUNBEAM_ENCRYPTION_KEY=${RUNBEAM_ENCRYPTION_KEY}
       
       # Machine token for pre-provisioned deployments

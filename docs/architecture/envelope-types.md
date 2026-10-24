@@ -161,6 +161,7 @@ pub struct ProtocolCtx {
     pub payload: Vec<u8>,            // Raw protocol payload
     pub meta: HashMap<String, String>,
     pub attrs: serde_json::Value,    // Protocol-specific attributes
+    pub command: Option<Command>,    // Typed operation, set by protocol adapters
 }
 ```
 

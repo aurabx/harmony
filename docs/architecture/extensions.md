@@ -168,4 +168,4 @@ How to implement custom services and middleware as extensions. See [Implementing
 - [endpoints.md](../configuration/endpoints.md) - Endpoint configuration
 - [backends.md](../configuration/backends.md) - Backend configuration
 - [adapters.md](adapters.md) - Protocol adapter implementation guide
-- [configuration.md](../configuration/configuration-file.md) - General configuration reference
+- [Configuration](../configuration/configuration-file.md) - General configuration reference
