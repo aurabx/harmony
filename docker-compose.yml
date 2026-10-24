@@ -19,8 +19,9 @@ services:
       - RUST_LOG=harmony=info
       
       # Encryption key for secure token storage (recommended for production)
-      # Ensures machine tokens persist across container restarts
-      # Without this, tokens are lost on container restart (acceptable for development)
+      # Tokens persist across container restarts only with this key AND a
+      # persistent volume at /root/.runbeam. Without either, tokens are lost
+      # when the container is recreated (acceptable for development).
       # Generate: age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-'
       # - RUNBEAM_ENCRYPTION_KEY=${RUNBEAM_ENCRYPTION_KEY}
       
