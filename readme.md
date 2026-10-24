@@ -344,7 +344,7 @@ See [docs/configuration/configuration-file.md](docs/configuration/configuration-
 - `RUNBEAM_JWT_SECRET`: Shared secret for Runbeam Cloud JWT validation
 - `RUST_LOG`: Logging verbosity control
 
-See [Security Documentation](docs/security/overview.md#environment-variables) for complete environment variable reference, generation commands (Linux/macOS), secret management integration (Vault, AWS, Azure), and production deployment examples.
+See [Security Documentation](docs/security/environment-variables.md#environment-variables) for complete environment variable reference, generation commands (Linux/macOS), secret management integration (Vault, AWS, Azure), and production deployment examples.
 
 **Encryption Key Management:**
 
@@ -409,7 +409,7 @@ export RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-...
 
 Harmony will use `RUNBEAM_MACHINE_TOKEN` on startup and optionally persist it to storage if it needs to be reused. Priority: environment variable > stored token.
 
-See [Management API Documentation](docs/api/management-api.md#post-base_pathauthorize) for API details and [Security Documentation](docs/security/overview.md) for key generation best practices.
+See [Management API Documentation](docs/api/management-api-endpoints.md#post-base_pathauthorize) for API details and [Security Documentation](docs/security/overview.md) for key generation best practices.
 
 ## Contributing
 We welcome issues and pull requests! Please read [CONTRIBUTING.md](CONTRIBUTING.md) and [DEVELOPER.md](DEVELOPER.md) for workflow and development standards. Our community guidelines are defined in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

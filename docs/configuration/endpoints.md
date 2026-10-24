@@ -10,7 +10,7 @@ type: Configuration
 
 Endpoints define protocol entry points into the Harmony pipeline. Each endpoint is associated with a **Service** that handles protocol-specific data conversion to/from the internal `Envelope` format.
 
-> **Custom Services**: To create your own service types for endpoints, see [extensions.md](../architecture/extensions.md#service-factories).
+> **Custom Services**: To create your own service types for endpoints, see [extensions.md](../architecture/extensions-types.md#service-factories).
 
 ## Architecture
 
@@ -285,7 +285,7 @@ under its legacy name `dicom`) or `dicom_scu_streaming`, or when it is `http_str
 `dicom_to_http` middleware: `part10_b64`, the Part 10 file in base64, and
 `transfer_syntax_uid`. The two DICOM backends send the instance from
 `part10_b64` to the PACS. They never open the path in `file`. See
-[backends.md](backends.md#dicom-scu-service-class-user) and
-[streaming.md](../architecture/dicom-streaming.md#c-store-requests).
+[backends.md](backends-dicom-storage.md#dicom-scu-service-class-user) and
+[streaming.md](../architecture/dicom-streaming-services.md#c-store-requests).
 
 This allows you to use middleware to process the file (e.g., extract metadata, forward to another system, or trigger a notification) after it has been safely stored.

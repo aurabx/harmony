@@ -277,7 +277,7 @@ network = "default"
 poll_interval_secs = 30  # Optional: override default polling interval
 ```
 
-See [configuration.md](../configuration/configuration-file.md#cloud-configuration-polling) for authorization and setup details.
+See [configuration.md](../integrations/runbeam-cloud.md#cloud-configuration-polling) for authorization and setup details.
 
 ## Error Handling
 

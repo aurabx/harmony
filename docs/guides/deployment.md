@@ -73,7 +73,7 @@ All platforms require these environment variables:
 - `RUNBEAM_ENCRYPTION_KEY` - Encryption key for token storage (required in production)
 - `RUNBEAM_JWT_SECRET` - JWT secret for Runbeam Cloud integration (if enabled)
 
-See [Security Documentation](../security/overview.md#environment-variables) for details.
+See [Security Documentation](../security/environment-variables.md#environment-variables) for details.
 
 ### Configuration File
 

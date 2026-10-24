@@ -145,11 +145,11 @@ cargo run --release -- --config /etc/harmony/config.toml
 ```
 
 **Notes**:
-- **RUNBEAM_ENCRYPTION_KEY**: In containers, this ensures tokens survive restarts. Without it, tokens are lost when container restarts. See [Security Documentation](../security/overview.md#runbeam_encryption_key) for platform-specific generation commands.
+- **RUNBEAM_ENCRYPTION_KEY**: In containers, this ensures tokens survive restarts. Without it, tokens are lost when container restarts. See [Security Documentation](../security/environment-variables.md#runbeam_encryption_key) for platform-specific generation commands.
 - **RUNBEAM_JWT_SECRET**: Required for Runbeam Cloud integration. Falls back to insecure development default with warning.
 - **RUST_LOG**: Controls tracing output. Use `debug` for development, `info` for production.
 
-For comprehensive environment variable documentation, security best practices, and production deployment examples, see [Security Documentation](../security/overview.md#environment-variables).
+For comprehensive environment variable documentation, security best practices, and production deployment examples, see [Security Documentation](../security/environment-variables.md#environment-variables).
 
 Next steps
 - Read [adapters.md](../architecture/adapters.md) to understand protocol adapters (HTTP, DIMSE, and how to add new protocols)
