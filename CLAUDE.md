@@ -56,28 +56,26 @@ cargo clippy --all-targets -- -D warnings
 
 ## Documentation Index
 
-### Project Guidelines and Rules
-- [.aiassistant/rules/ai.md](.aiassistant/rules/ai.md) - AI assistant context loading rules
-- [.junie/guidelines.md](.junie/guidelines.md) - **Essential reading**: Build system, test strategy, validator behavior, development conventions, and known pitfalls
+All project documentation is in `docs/`. Start at [docs/index.md](docs/index.md). It follows the Common Docs layout: one folder per section, each with its own `index.md`.
 
-### Documentation
-- [docs/getting-started.md](docs/getting-started.md) - Build, run, and local conventions
-- [docs/configuration.md](docs/configuration.md) - Top-level and pipeline configuration
-- [docs/content-types.md](docs/content-types.md) - **Multi-content-type support**: JSON, XML, CSV, form data, multipart, binary
-- [docs/middleware.md](docs/middleware.md) - Authentication (JWT, Basic) and transforms
-- [docs/testing.md](docs/testing.md) - Testing strategy and commands
-- [docs/security.md](docs/security.md) - Security guidance and best practices
-- [docs/system-description.md](docs/system-description.md) - High-level system overview and Runbeam architecture
-- [docs/router.md](docs/router.md) - Pipeline architecture and request flow (Protocol Adapter → PipelineExecutor → Protocol Adapter)
-- [docs/adapters.md](docs/adapters.md) - Protocol adapter guide (HTTP, DIMSE, future protocols)
-- [docs/envelope.md](docs/envelope.md) - Core Envelope struct for data exchange
-- [docs/endpoints.md](docs/endpoints.md) - Endpoint types (HTTP, FHIR, JMIX, DICOMweb)
-- [docs/backends.md](docs/backends.md) - Backend types and target communication
-- [docs/migration/dsl-v1.9.md](docs/migration/dsl-v1.9.md) - Migration guide for DSL v1.9 (Connection normalization)
-- [docs/management-api.md](docs/management-api.md) - Management API for monitoring and administration
+### Key documents
+- [docs/guides/getting-started.md](docs/guides/getting-started.md) - Build, run, and local conventions
+- [docs/guides/testing.md](docs/guides/testing.md) - Testing strategy and commands
+- [docs/configuration/configuration-file.md](docs/configuration/configuration-file.md) - Top-level and pipeline configuration
+- [docs/configuration/content-types.md](docs/configuration/content-types.md) - **Multi-content-type support**: JSON, XML, CSV, form data, multipart, binary
+- [docs/configuration/endpoints.md](docs/configuration/endpoints.md) - Endpoint types (HTTP, FHIR, JMIX, DICOMweb)
+- [docs/configuration/backends.md](docs/configuration/backends.md) - Backend types and target communication
+- [docs/configuration/middleware.md](docs/configuration/middleware.md) - Authentication (JWT, Basic) and transforms
+- [docs/security/overview.md](docs/security/overview.md) - Security guidance and best practices
+- [docs/architecture/overview.md](docs/architecture/overview.md) - High-level system overview and Runbeam architecture
+- [docs/architecture/router.md](docs/architecture/router.md) - Pipeline architecture and request flow (Protocol Adapter → PipelineExecutor → Protocol Adapter)
+- [docs/architecture/adapters.md](docs/architecture/adapters.md) - Protocol adapter guide (HTTP, DIMSE, future protocols)
+- [docs/architecture/envelope.md](docs/architecture/envelope.md) - Core Envelope struct for data exchange
+- [docs/api/management-api.md](docs/api/management-api.md) - Management API for monitoring and administration
 
 ### Other
 - [readme.md](readme.md) - Project overview and links
+- [.aiassistant/rules/ai.md](.aiassistant/rules/ai.md) - AI assistant context loading rules
 
 ## Quick Start Development
 
@@ -87,7 +85,7 @@ cargo clippy --all-targets -- -D warnings
    cargo run -- --config <path/to/config.toml>
    ```
 
-2. **Configuration Requirements** (from .junie/guidelines.md):
+2. **Configuration Requirements**:
    - At least one group must be defined with valid network references
    - Groups must reference existing endpoints/backends/middleware
    - Unknown middleware names cause immediate validation failure
@@ -199,7 +197,7 @@ Tests cover:
 - Network add/remove
 - Adapter registry lifecycle
 
-See [docs/config-reload.md](docs/config-reload.md) for full architecture details.
+See [docs/architecture/config-reload.md](docs/architecture/config-reload.md) for full architecture details.
 
 ## Configuration Validation
 
@@ -283,7 +281,7 @@ rules = [
 - Parameters: `/users/{id}`
 - Multiple segments: `/api/{version}/users/{id}`
 
-See docs/middleware.md for complete documentation.
+See docs/configuration/middleware.md for complete documentation.
 
 **Important Notes:**
 - Rule order matters - more specific patterns should come before broader patterns
