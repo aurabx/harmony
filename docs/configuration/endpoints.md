@@ -2,7 +2,7 @@
 title: Endpoints
 description: Endpoint types (HTTP, FHIR, JMIX, DICOMweb, DIMSE) and their connection settings.
 status: active
-updated: 2026-09-24
+updated: 2026-10-25
 type: Configuration
 ---
 
@@ -162,13 +162,14 @@ For development testing guidance, refer to the project's development documentati
 
 ### DICOMweb
 
-Provides DICOMweb QIDO-RS (Query) and WADO-RS (Retrieve) endpoints.
+Provides DICOMweb QIDO-RS (Query), WADO-RS (Retrieve) and STOW-RS (Store) endpoints.
 
 **Service behavior**:
-- Accepts DICOMweb requests and converts them into `RequestEnvelope`
-- Supports QIDO-RS queries and WADO-RS retrieval operations
-- Sets a `Command` based on DICOMweb route classification: QIDO-RS→Query, WADO-RS→Retrieve, STOW-RS→Store. See [commands.md](../architecture/commands.md).
-- Currently returns 501 Not Implemented for all endpoints (skeleton implementation)
+- Accepts DICOMweb requests and converts them into `RequestEnvelope`.
+- Sets a `Command` on each request from its method and route: QIDO-RS→Query, WADO-RS→Retrieve, STOW-RS→Store, DELETE→Delete. See [commands.md](../architecture/commands.md). The backend and middleware then carry out the operation.
+- Answers `GET {path_prefix}/capabilities` itself, without calling a backend.
+- Splits a `multipart/related` STOW-RS body into its `application/dicom` parts. A body it cannot parse gets 400 Bad Request.
+- Returns 501 Not Implemented for a request on a registered route that it cannot classify. A path outside the routes below gets 404 from the router.
 
 **Configuration**:
 ```toml
@@ -178,16 +179,21 @@ service = "dicomweb"
 path_prefix = "/dicomweb"
 ```
 
-**Supported routes**:
+**Supported routes**. The paths below use the example prefix `/dicomweb`. Replace it with your `path_prefix`.
 - `GET /dicomweb/studies` - Query for studies (QIDO-RS)
+- `GET /dicomweb/series` and `GET /dicomweb/instances` - Query across all studies (QIDO-RS)
 - `GET /dicomweb/studies/{study_uid}/series` - Query for series (QIDO-RS)
 - `GET /dicomweb/studies/{study_uid}/series/{series_uid}/instances` - Query for instances (QIDO-RS)
+- `GET /dicomweb/studies/{study_uid}`, `.../series/{series_uid}` and `.../instances/{instance_uid}` - Retrieve a study, series or instance (WADO-RS)
 - `GET /dicomweb/studies/{study_uid}/metadata` - Retrieve study metadata (WADO-RS)
 - `GET /dicomweb/studies/{study_uid}/series/{series_uid}/metadata` - Retrieve series metadata (WADO-RS)
 - `GET /dicomweb/studies/{study_uid}/series/{series_uid}/instances/{instance_uid}/metadata` - Retrieve instance metadata (WADO-RS)
-- `GET /dicomweb/studies/{study_uid}/series/{series_uid}/instances/{instance_uid}` - Retrieve instance (WADO-RS)
 - `GET /dicomweb/studies/{study_uid}/series/{series_uid}/instances/{instance_uid}/frames/{frame_numbers}` - Retrieve frames (WADO-RS)
+- `GET .../rendered` and `GET .../thumbnail` at study, series and instance level - Rendered images and thumbnails (WADO-RS)
 - `GET /dicomweb/bulkdata/{bulk_data_uri}` - Bulk data retrieval (WADO-RS)
+- `POST /dicomweb/studies` and `POST /dicomweb/studies/{study_uid}` - Store instances (STOW-RS)
+- `DELETE /dicomweb/studies/{study_uid}`, `.../series/{series_uid}` and `.../instances/{instance_uid}` - Delete
+- `GET /dicomweb/capabilities` - The services this endpoint offers
 
 **Example**: DICOMweb PACS interface
 ```toml
@@ -196,6 +202,40 @@ service = "dicomweb"
 [endpoints.dicomweb_pacs.options]
 path_prefix = "/pacs"
 ```
+
+#### STOW-RS response
+
+STOW-RS uses `POST {path_prefix}/studies` and `POST {path_prefix}/studies/{study_uid}`. When the backend is `dicom_scu`, Harmony sends one C-STORE per instance. It then answers with the Store Instances Response from PS3.18 Section 10.5.3.
+
+The pipeline must include the `dicomweb_bridge` middleware. It builds this response from the backend's results. Without it, the client gets the backend's internal JSON instead.
+
+The response has the media type `application/dicom+json`. The status code reports the outcome:
+
+| Status | Meaning |
+|--------|---------|
+| 200 OK | Every instance was stored. |
+| 202 Accepted | Some instances were stored and some failed. |
+| 409 Conflict | No instance was stored. |
+
+The body is a DICOM JSON data set with these attributes:
+
+- Referenced SOP Sequence (0008,1199) lists each stored instance. Each item holds the SOP Class UID (0008,1150) and SOP Instance UID (0008,1155).
+- Failed SOP Sequence (0008,1198) lists each failed instance whose SOP Class UID and SOP Instance UID are both known. Each item holds both UIDs and a Failure Reason (0008,1197).
+- Other Failures Sequence (0008,119A) holds a Failure Reason for each failure that cannot be tied to a known instance.
+- Retrieve URL (0008,1190) is always present and always empty, at the top level and in each Referenced SOP item. Harmony cannot reliably know the public URL a client used, for example behind a reverse proxy.
+
+Harmony uses two Failure Reasons:
+
+| Failure Reason | When | Where it is listed |
+|----------------|------|--------------------|
+| 0x0110 (272), Processing failure | Harmony sent the instance and the PACS did not take it, or the connection failed. | Failed SOP Sequence. It goes in the Other Failures Sequence when either UID is unknown. That happens only for a single-body store of bare data set bytes whose UIDs Harmony could not read. |
+| 0xC000 (49152), Cannot understand | Harmony could not read the part, so it never sent it. | Other Failures Sequence. A request with no instances at all also gets one such item and 409. |
+
+Each part of a multipart STOW-RS request must be a DICOM Part 10 file with a SOP Class UID and a SOP Instance UID. Harmony does not send any other part to the PACS and lists it with 0xC000.
+
+A STOW-RS request that is not `multipart/related` is stored as one instance. Its body may be a Part 10 file, or bare data set bytes that the SCU reads as Implicit VR Little Endian. The response has the same form, with one instance. An instance that was stored but whose UIDs Harmony could not read counts as stored for the status code. It is left out of the Referenced SOP Sequence, because an item there must carry both UIDs.
+
+When the backend is a DICOMweb HTTP server, Harmony returns that server's response unchanged.
 
 ### DICOM SCP (Service Class Provider)
 

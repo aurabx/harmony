@@ -11,6 +11,9 @@ use std::collections::HashMap;
 
 use super::dicom_store_body::{part10_from_store_body, StoreBodyError};
 use crate::globals::get_storage;
+use crate::models::middleware::types::dicomweb_to_dicom::{
+    StowPartResult, STOW_FAILURE_CANNOT_UNDERSTAND, STOW_FAILURE_PROCESSING,
+};
 use crate::router::route_config::RouteConfig;
 use crate::utils::Error;
 use dicom_json_tool as djt;
@@ -1051,126 +1054,23 @@ impl DicomScuBackend {
                 //   1. `normalized_data.dicom_store_parts` — array of base64-encoded
                 //      DICOM part payloads, populated by the DICOMweb STOW-RS bridge
                 //      (see `DicomwebEndpoint::endpoint_incoming_request`). Each part
-                //      results in one C-STORE. Results are aggregated.
+                //      results in one C-STORE. See `store_stow_parts`.
                 //   2. `envelope.original_data` — one instance. See
                 //      `store_dataset_from_body` for the accepted body forms.
 
-                // 1. Multipart-extracted parts path.
+                // Borrowed, not cloned: the parts hold every instance as base64.
                 let stow_parts = envelope
                     .normalized_data
                     .as_ref()
                     .and_then(|nd| nd.get("dicom_store_parts"))
-                    .and_then(|v| v.as_array())
-                    .cloned();
+                    .and_then(|v| v.as_array());
 
-                if let Some(parts) = stow_parts {
-                    let total = parts.len();
-                    let mut succeeded: usize = 0;
-                    let mut failed: usize = 0;
-                    let mut errors: Vec<serde_json::Value> = Vec::new();
-                    let mut instance_uids: Vec<String> = Vec::new();
-
-                    for (idx, part_val) in parts.iter().enumerate() {
-                        let b64 = match part_val.as_str() {
-                            Some(s) => s,
-                            None => {
-                                failed += 1;
-                                errors.push(serde_json::json!({
-                                    "index": idx,
-                                    "error": "part is not a base64 string"
-                                }));
-                                continue;
-                            }
-                        };
-                        let bytes = match base64::engine::general_purpose::STANDARD.decode(b64) {
-                            Ok(b) => b,
-                            Err(e) => {
-                                failed += 1;
-                                errors.push(serde_json::json!({
-                                    "index": idx,
-                                    "error": format!("base64 decode failed: {}", e)
-                                }));
-                                continue;
-                            }
-                        };
-
-                        let is_part10 = bytes.len() > 132 && &bytes[128..132] == b"DICM";
-                        let (dataset, parsed_obj) = if is_part10 {
-                            match dicom_object::from_reader(std::io::Cursor::new(&bytes)) {
-                                Ok(file_obj) => {
-                                    let transfer_syntax =
-                                        file_obj.meta().transfer_syntax().to_string();
-                                    let inner = file_obj.into_inner();
-                                    let mut dataset = DatasetStream::from_object(inner.clone());
-                                    dataset.metadata_mut().transfer_syntax = Some(transfer_syntax);
-                                    (dataset, Some(inner))
-                                }
-                                Err(e) => {
-                                    failed += 1;
-                                    errors.push(serde_json::json!({
-                                        "index": idx,
-                                        "error": format!("Part 10 parse failed: {}", e)
-                                    }));
-                                    continue;
-                                }
-                            }
-                        } else {
-                            (
-                                DatasetStream::from_bytes(bytes::Bytes::from(bytes.clone())),
-                                None,
-                            )
-                        };
-
-                        match scu.store(&remote_node, dataset).await {
-                            Ok(true) => {
-                                succeeded += 1;
-                                if let Some(obj) = parsed_obj {
-                                    if let Ok(el) = obj.element_by_name("SOPInstanceUID") {
-                                        if let Ok(uid) = el.to_str() {
-                                            instance_uids.push(uid.to_string());
-                                        }
-                                    }
-                                }
-                            }
-                            Ok(false) => {
-                                failed += 1;
-                                errors.push(serde_json::json!({
-                                    "index": idx,
-                                    "error": "C-STORE returned false"
-                                }));
-                            }
-                            Err(e) => {
-                                failed += 1;
-                                errors.push(serde_json::json!({
-                                    "index": idx,
-                                    "error": e.to_string()
-                                }));
-                            }
-                        }
+                match stow_parts {
+                    Some(parts) => Self::store_stow_parts(&scu, &remote_node, parts).await,
+                    None => {
+                        Self::store_single_body(&scu, &remote_node, &envelope.original_data).await
                     }
-
-                    let mut response = serde_json::json!({
-                        "operation": "store",
-                        "success": failed == 0 && succeeded > 0,
-                        "total_parts": total,
-                        "succeeded": succeeded,
-                        "failed": failed,
-                        "remote_aet": remote_node.ae_title,
-                        "host": remote_node.host,
-                        "port": remote_node.port,
-                    });
-                    if !instance_uids.is_empty() {
-                        response["sop_instance_uids"] = serde_json::json!(instance_uids);
-                    }
-                    if !errors.is_empty() {
-                        response["errors"] = serde_json::Value::Array(errors);
-                    }
-                    envelope.normalized_data = Some(response.clone());
-                    return Ok(envelope.clone());
                 }
-
-                // 2. Single-body path.
-                Self::store_single_body(&scu, &remote_node, &envelope.original_data).await
             }
             _ => {
                 // This should never be reached due to validation above, but handle it gracefully
@@ -1186,10 +1086,100 @@ impl DicomScuBackend {
         Ok(envelope.clone())
     }
 
+    /// Send each STOW-RS part to `remote_node`, one C-STORE per part.
+    ///
+    /// `parts` is `normalized_data.dicom_store_parts`: base64 strings, one per
+    /// `application/dicom` part. Each part is decoded only when it is sent.
+    /// Returns the backend's JSON response. Its `results` array holds one
+    /// `StowPartResult` per part, in order. The `dicomweb_to_dicom` middleware
+    /// turns that array into the PS3.18 Store Instances Response.
+    async fn store_stow_parts(
+        scu: &DimseScu,
+        remote_node: &RemoteNode,
+        parts: &[serde_json::Value],
+    ) -> serde_json::Value {
+        let mut results: Vec<StowPartResult> = Vec::with_capacity(parts.len());
+        for (index, part) in parts.iter().enumerate() {
+            results.push(Self::store_stow_part(scu, remote_node, index, part).await);
+        }
+
+        let succeeded = results.iter().filter(|r| r.success).count();
+        let failed = results.len() - succeeded;
+        let errors: Vec<serde_json::Value> = results
+            .iter()
+            .filter_map(|r| {
+                r.error
+                    .as_ref()
+                    .map(|e| serde_json::json!({"index": r.index, "error": e}))
+            })
+            .collect();
+        let instance_uids: Vec<&str> = results
+            .iter()
+            .filter(|r| r.success)
+            .filter_map(|r| r.sop_instance_uid.as_deref())
+            .collect();
+
+        let mut response = serde_json::json!({
+            "operation": "store",
+            "success": failed == 0 && succeeded > 0,
+            "total_parts": parts.len(),
+            "succeeded": succeeded,
+            "failed": failed,
+            "remote_aet": remote_node.ae_title,
+            "host": remote_node.host,
+            "port": remote_node.port,
+        });
+        if !instance_uids.is_empty() {
+            response["sop_instance_uids"] = serde_json::json!(instance_uids);
+        }
+        if !errors.is_empty() {
+            response["errors"] = serde_json::Value::Array(errors);
+        }
+        response["results"] = results.iter().map(StowPartResult::to_json).collect();
+        response
+    }
+
+    /// Send one STOW-RS part to `remote_node` and return its result.
+    ///
+    /// A part that `decode_stow_part` rejects is not sent. It fails with
+    /// Failure Reason 0xC000. A part the remote node does not take fails with
+    /// 0x0110.
+    async fn store_stow_part(
+        scu: &DimseScu,
+        remote_node: &RemoteNode,
+        index: usize,
+        part: &serde_json::Value,
+    ) -> StowPartResult {
+        let instance = match decode_stow_part(part) {
+            Ok(instance) => instance,
+            Err(reason) => {
+                return stow_part_result(
+                    index,
+                    None,
+                    None,
+                    Some((STOW_FAILURE_CANNOT_UNDERSTAND, reason)),
+                );
+            }
+        };
+        let failure = match scu.store(remote_node, instance.dataset).await {
+            Ok(true) => None,
+            Ok(false) => Some("C-STORE returned false".to_string()),
+            Err(e) => Some(e.to_string()),
+        };
+        stow_part_result(
+            index,
+            Some(instance.sop_class_uid),
+            Some(instance.sop_instance_uid),
+            failure.map(|reason| (STOW_FAILURE_PROCESSING, reason)),
+        )
+    }
+
     /// Send the one instance in a store request body to `remote_node`.
     ///
     /// Returns the backend's JSON response. `success` is true only when the
-    /// remote node took the instance.
+    /// remote node took the instance. `results` holds one `StowPartResult`, so
+    /// a DICOMweb client gets a PS3.18 response for a single-body STOW-RS
+    /// request too.
     async fn store_single_body(
         scu: &DimseScu,
         remote_node: &RemoteNode,
@@ -1198,24 +1188,44 @@ impl DicomScuBackend {
         let dataset = match Self::store_dataset_from_body(body) {
             Ok(dataset) => dataset,
             Err(reason) => {
+                let result = stow_part_result(
+                    0,
+                    None,
+                    None,
+                    Some((STOW_FAILURE_CANNOT_UNDERSTAND, reason.clone())),
+                );
                 return serde_json::json!({
                     "operation": "store",
                     "success": false,
-                    "error": reason
+                    "error": reason,
+                    "results": [result.to_json()]
                 });
             }
         };
-        let sop_class_uid = dataset.metadata().sop_class_uid.clone();
-        let sop_instance_uid = dataset.metadata().sop_instance_uid.clone();
+        let (sop_class_uid, sop_instance_uid) = sop_uids_of(&dataset);
 
-        match scu.store(remote_node, dataset).await {
+        let outcome = scu.store(remote_node, dataset).await;
+        let failure = match &outcome {
+            Ok(true) => None,
+            Ok(false) => Some("C-STORE returned false".to_string()),
+            Err(e) => Some(e.to_string()),
+        };
+        let result = stow_part_result(
+            0,
+            sop_class_uid.clone(),
+            sop_instance_uid.clone(),
+            failure.map(|reason| (STOW_FAILURE_PROCESSING, reason)),
+        );
+
+        match outcome {
             Ok(success) => {
                 let mut response = serde_json::json!({
                     "operation": "store",
                     "success": success,
                     "remote_aet": remote_node.ae_title,
                     "host": remote_node.host,
-                    "port": remote_node.port
+                    "port": remote_node.port,
+                    "results": [result.to_json()]
                 });
                 if let Some(uid) = sop_class_uid {
                     response["sop_class_uid"] = serde_json::json!(uid);
@@ -1228,7 +1238,8 @@ impl DicomScuBackend {
             Err(e) => serde_json::json!({
                 "operation": "store",
                 "success": false,
-                "error": e.to_string()
+                "error": e.to_string(),
+                "results": [result.to_json()]
             }),
         }
     }
@@ -1269,6 +1280,148 @@ impl DicomScuBackend {
         dataset.metadata_mut().transfer_syntax = Some(transfer_syntax);
         Ok(dataset)
     }
+}
+
+/// A STOW-RS part that is ready for C-STORE.
+struct StowInstance {
+    dataset: DatasetStream,
+    sop_class_uid: String,
+    sop_instance_uid: String,
+}
+
+/// Decode one `dicom_store_parts` entry into an instance to send.
+///
+/// Only a base64 DICOM Part 10 file that carries a SOP Class UID and a SOP
+/// Instance UID is accepted. PS3.18 sends STOW-RS instances as Part 10 files.
+/// The UIDs are read before sending so the response can name the instance
+/// whether or not the store succeeds. The error says why the part was refused.
+fn decode_stow_part(part: &Value) -> Result<StowInstance, String> {
+    let b64 = part
+        .as_str()
+        .ok_or_else(|| "part is not a base64 string".to_string())?;
+    let bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .map_err(|e| format!("base64 decode failed: {}", e))?;
+    if !(bytes.len() > 132 && &bytes[128..132] == b"DICM") {
+        return Err("part is not a DICOM Part 10 file".to_string());
+    }
+    let file = dicom_object::from_reader(std::io::Cursor::new(&bytes))
+        .map_err(|e| format!("Part 10 parse failed: {}", e))?;
+    // The SCU proposes this transfer syntax to the PACS. Encapsulated pixel
+    // data can only be sent in the transfer syntax it was encoded in.
+    let transfer_syntax = file.meta().transfer_syntax().to_string();
+    let mut dataset = DatasetStream::from_object(file.into_inner());
+    dataset.metadata_mut().transfer_syntax = Some(transfer_syntax);
+
+    let non_empty = |uid: &Option<String>| uid.clone().filter(|u| !u.trim().is_empty());
+    let sop_class_uid = non_empty(&dataset.metadata().sop_class_uid)
+        .ok_or_else(|| "part has no SOP Class UID (0008,0016)".to_string())?;
+    let sop_instance_uid = non_empty(&dataset.metadata().sop_instance_uid)
+        .ok_or_else(|| "part has no SOP Instance UID (0008,0018)".to_string())?;
+    Ok(StowInstance {
+        dataset,
+        sop_class_uid,
+        sop_instance_uid,
+    })
+}
+
+/// Build the `StowPartResult` for one instance.
+///
+/// `failure` is the PS3.18 Failure Reason and a message. `None` means the
+/// remote node took the instance. UIDs that are not known are `None`.
+fn stow_part_result(
+    index: usize,
+    sop_class_uid: Option<String>,
+    sop_instance_uid: Option<String>,
+    failure: Option<(u16, String)>,
+) -> StowPartResult {
+    let (failure_reason, error) = match failure {
+        Some((reason, message)) => (Some(reason), Some(message)),
+        None => (None, None),
+    };
+    StowPartResult {
+        index,
+        success: failure_reason.is_none(),
+        sop_class_uid,
+        sop_instance_uid,
+        failure_reason,
+        error,
+    }
+}
+
+/// The SOP Class UID and SOP Instance UID of an instance about to be sent.
+///
+/// A Part 10 instance carries them in its metadata. Bare data set bytes do
+/// not, so they are read the way the SCU reads those bytes: as Implicit VR
+/// Little Endian. The SCU refuses to send an instance without both UIDs, so a
+/// successful store means both are readable there.
+fn sop_uids_of(dataset: &DatasetStream) -> (Option<String>, Option<String>) {
+    let metadata = dataset.metadata();
+    let (class_uid, instance_uid) = match dataset {
+        DatasetStream::Memory { data, .. }
+            if metadata.sop_class_uid.is_none() || metadata.sop_instance_uid.is_none() =>
+        {
+            implicit_vr_sop_uids(data)
+        }
+        _ => (None, None),
+    };
+    (
+        metadata.sop_class_uid.clone().or(class_uid),
+        metadata.sop_instance_uid.clone().or(instance_uid),
+    )
+}
+
+/// Best-effort read of SOP Class UID (0008,0016) and SOP Instance UID
+/// (0008,0018) from bare Implicit VR Little Endian data set bytes.
+///
+/// Elements are in tag order, so the walk stops after (0008,0018). It also
+/// stops at an undefined length, a truncated element, or a value that is not
+/// a UID. A UID it cannot read is `None`. This only feeds the STOW-RS response
+/// and never decides whether an instance is sent.
+fn implicit_vr_sop_uids(data: &[u8]) -> (Option<String>, Option<String>) {
+    const SOP_CLASS_UID: (u16, u16) = (0x0008, 0x0016);
+    const SOP_INSTANCE_UID: (u16, u16) = (0x0008, 0x0018);
+    let mut class_uid = None;
+    let mut instance_uid = None;
+    let mut pos: usize = 0;
+    while let Some(header) = data.get(pos..pos + 8) {
+        let tag = (
+            u16::from_le_bytes([header[0], header[1]]),
+            u16::from_le_bytes([header[2], header[3]]),
+        );
+        let length = u32::from_le_bytes([header[4], header[5], header[6], header[7]]);
+        if tag > SOP_INSTANCE_UID || length == u32::MAX {
+            break;
+        }
+        let start = pos + 8;
+        // An end past `usize` is treated like a truncated element.
+        let Some(end) = start.checked_add(length as usize) else {
+            break;
+        };
+        let Some(value) = data.get(start..end) else {
+            break;
+        };
+        if tag == SOP_CLASS_UID {
+            class_uid = uid_from_value(value);
+        } else if tag == SOP_INSTANCE_UID {
+            instance_uid = uid_from_value(value);
+        }
+        pos = end;
+    }
+    (class_uid, instance_uid)
+}
+
+/// The longest value a UI element may hold, in bytes (PS3.5 Table 6.2-1).
+const MAX_UID_LEN: usize = 64;
+
+/// A UI value without its padding, or `None` if it is not a UID.
+fn uid_from_value(value: &[u8]) -> Option<String> {
+    let text = std::str::from_utf8(value).ok()?;
+    let uid = text.trim_end_matches(['\0', ' ']);
+    let is_uid = !uid.is_empty()
+        && uid.len() <= MAX_UID_LEN
+        && uid.bytes().all(|b| b.is_ascii_digit() || b == b'.');
+    is_uid.then(|| uid.to_string())
 }
 
 /// Errors when the envelope still carries the removed `dimse_op` metadata key,
@@ -1790,6 +1943,18 @@ mod tests {
 
         let result = response.normalized_data.expect("store result");
         assert_eq!(result["success"], true, "store result: {}", result);
+        // The DICOMweb bridge builds the PS3.18 response from these entries.
+        assert_eq!(
+            result["results"],
+            serde_json::json!([{
+                "index": 0,
+                "success": true,
+                "sop_class_uid": uids::SECONDARY_CAPTURE_IMAGE_STORAGE,
+                "sop_instance_uid": "1.2.826.0.1.3680043.9.7133.2470.8"
+            }]),
+            "store result: {}",
+            result
+        );
 
         let received = received.lock().unwrap();
         assert_eq!(received.len(), 1, "the PACS should hold exactly one instance");
@@ -1805,6 +1970,203 @@ mod tests {
             }
             other => panic!("PixelData is no longer encapsulated: {:?}", other),
         }
+    }
+
+    #[tokio::test]
+    async fn test_stow_part_that_is_not_part10_is_never_sent() {
+        let (port, received, _storage_dir) = start_recording_pacs().await;
+        let backend = DicomScuBackend {
+            local_aet: Some("STOW_SCU".to_string()),
+            aet: Some("STOW_PACS".to_string()),
+            host: Some("127.0.0.1".to_string()),
+            port: Some(port),
+            use_tls: None,
+        };
+        // (0008,0016) SOP Class UID as bare Implicit VR Little Endian bytes.
+        let bare = [0x08, 0x00, 0x16, 0x00, 0x02, 0x00, 0x00, 0x00, b'1', 0x00];
+        let mut env = make_envelope("/store");
+        env.normalized_data = Some(serde_json::json!({
+            "dicom_store_parts": [b64(&bare)]
+        }));
+
+        let response = backend
+            .handle_backend_request(&mut env, &opts())
+            .await
+            .expect("the backend answers a store");
+
+        let result = response.normalized_data.expect("store result");
+        assert_eq!(result["success"], false, "store result: {}", result);
+        let entry = &result["results"][0];
+        assert_eq!(entry["success"], false, "entry: {}", entry);
+        assert_eq!(entry["failure_reason"], 49152, "entry: {}", entry);
+        assert!(entry.get("sop_class_uid").is_none(), "entry: {}", entry);
+        assert!(entry.get("sop_instance_uid").is_none(), "entry: {}", entry);
+        assert!(
+            received.lock().unwrap().is_empty(),
+            "a part that is not a Part 10 file must not reach the PACS"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_stow_part_the_pacs_does_not_take_keeps_its_uids() {
+        // Nothing listens on this port, so the C-STORE cannot connect.
+        let port = std::net::TcpListener::bind("127.0.0.1:0")
+            .expect("bind a free port")
+            .local_addr()
+            .expect("local address")
+            .port();
+        let backend = DicomScuBackend {
+            local_aet: Some("STOW_SCU".to_string()),
+            aet: Some("STOW_PACS".to_string()),
+            host: Some("127.0.0.1".to_string()),
+            port: Some(port),
+            use_tls: None,
+        };
+        let mut env = make_envelope("/store");
+        env.normalized_data = Some(serde_json::json!({
+            "dicom_store_parts": [b64(&sample_part10())]
+        }));
+
+        let response = backend
+            .handle_backend_request(&mut env, &opts())
+            .await
+            .expect("the backend answers a store");
+
+        let result = response.normalized_data.expect("store result");
+        let entry = &result["results"][0];
+        assert_eq!(entry["success"], false, "entry: {}", entry);
+        assert_eq!(entry["failure_reason"], 272, "entry: {}", entry);
+        assert_eq!(
+            entry["sop_instance_uid"],
+            sample_sop_instance_uid(),
+            "entry: {}",
+            entry
+        );
+        assert!(entry["sop_class_uid"].is_string(), "entry: {}", entry);
+        assert!(entry["error"].is_string(), "entry: {}", entry);
+    }
+
+    /// One Implicit VR Little Endian element.
+    fn implicit_element(group: u16, element: u16, value: &[u8]) -> Vec<u8> {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(&group.to_le_bytes());
+        bytes.extend_from_slice(&element.to_le_bytes());
+        bytes.extend_from_slice(&(value.len() as u32).to_le_bytes());
+        bytes.extend_from_slice(value);
+        bytes
+    }
+
+    #[test]
+    fn test_sop_uids_of_reads_bare_data_set_bytes() {
+        let mut bare = implicit_element(0x0008, 0x0005, b"ISO_IR 100");
+        bare.extend(implicit_element(
+            0x0008,
+            0x0016,
+            b"1.2.840.10008.5.1.4.1.1.7\0",
+        ));
+        bare.extend(implicit_element(0x0008, 0x0018, b"1.2.3.4 "));
+        bare.extend(implicit_element(0x0010, 0x0010, b"Doe^John"));
+        let dataset = DicomScuBackend::store_dataset_from_body(&bare).expect("data set");
+
+        assert_eq!(
+            sop_uids_of(&dataset),
+            (
+                Some("1.2.840.10008.5.1.4.1.1.7".to_string()),
+                Some("1.2.3.4".to_string())
+            )
+        );
+    }
+
+    #[test]
+    fn test_uid_longer_than_64_bytes_is_rejected() {
+        let longest = format!("1.{}", "2".repeat(62));
+        assert_eq!(longest.len(), 64);
+        let too_long = format!("{}3", longest);
+
+        // Padding does not count towards the limit.
+        let padded = format!("{}\0", longest);
+        assert_eq!(uid_from_value(padded.as_bytes()), Some(longest.clone()));
+        assert_eq!(uid_from_value(too_long.as_bytes()), None);
+
+        let mut bare = implicit_element(0x0008, 0x0016, longest.as_bytes());
+        bare.extend(implicit_element(
+            0x0008,
+            0x0018,
+            format!("{} ", too_long).as_bytes(),
+        ));
+        assert_eq!(implicit_vr_sop_uids(&bare), (Some(longest), None));
+    }
+
+    #[test]
+    fn test_implicit_vr_sop_uids_gives_up_safely() {
+        // Truncated: the length runs past the end of the bytes.
+        let mut truncated = implicit_element(0x0008, 0x0016, b"1.2.3");
+        truncated.truncate(truncated.len() - 2);
+        assert_eq!(implicit_vr_sop_uids(&truncated), (None, None));
+
+        // Undefined length before the UIDs.
+        let mut undefined = vec![0x08, 0x00, 0x06, 0x00, 0xFF, 0xFF, 0xFF, 0xFF];
+        undefined.extend(implicit_element(0x0008, 0x0016, b"1.2.3"));
+        assert_eq!(implicit_vr_sop_uids(&undefined), (None, None));
+
+        // A value that is not a UID.
+        let not_uid = implicit_element(0x0008, 0x0018, b"Doe^John");
+        assert_eq!(implicit_vr_sop_uids(&not_uid), (None, None));
+
+        // A length whose end is past `usize::MAX` on 32-bit targets, and past
+        // the data everywhere.
+        let mut huge = vec![0x08, 0x00, 0x16, 0x00, 0xFE, 0xFF, 0xFF, 0xFF];
+        huge.extend_from_slice(b"1.2.3");
+        assert_eq!(implicit_vr_sop_uids(&huge), (None, None));
+
+        assert_eq!(implicit_vr_sop_uids(&[]), (None, None));
+    }
+
+    #[test]
+    fn test_decode_stow_part_rejects_unusable_parts() {
+        let mut no_uids = Vec::new();
+        dicom_object::InMemDicomObject::new_empty()
+            .with_meta(
+                dicom_object::meta::FileMetaTableBuilder::new()
+                    .transfer_syntax("1.2.840.10008.1.2.1")
+                    .media_storage_sop_class_uid("1.2.840.10008.5.1.4.1.1.7")
+                    .media_storage_sop_instance_uid("1.2.3.4"),
+            )
+            .expect("file meta group")
+            .write_all(&mut no_uids)
+            .expect("encode the Part 10 file");
+
+        let rejected = [
+            (serde_json::json!(7), "not a base64 string"),
+            (serde_json::json!("not base64!"), "base64 decode failed"),
+            (
+                serde_json::json!(b64(b"bare bytes")),
+                "not a DICOM Part 10 file",
+            ),
+            (serde_json::json!(b64(&no_uids)), "no SOP Class UID"),
+        ];
+        for (part, expected) in rejected {
+            match decode_stow_part(&part) {
+                Ok(_) => panic!("{} should be rejected", part),
+                Err(reason) => {
+                    assert!(
+                        reason.contains(expected),
+                        "expected {:?} in: {}",
+                        expected,
+                        reason
+                    )
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_decode_stow_part_reads_both_uids() {
+        let instance = decode_stow_part(&serde_json::json!(b64(&sample_part10())))
+            .expect("sample instance is accepted");
+
+        assert_eq!(instance.sop_instance_uid, sample_sop_instance_uid());
+        assert!(!instance.sop_class_uid.is_empty());
     }
 
     #[test]

@@ -412,6 +412,167 @@ pub(crate) async fn extract_multipart_dicom_parts(
     Ok(parts)
 }
 
+/// PS3.18 Failure Reason 0x0110, Processing failure. The remote node did not
+/// take the instance.
+pub(crate) const STOW_FAILURE_PROCESSING: u16 = 0x0110;
+
+/// PS3.18 Failure Reason 0xC000, Cannot understand. The instance was never
+/// sent because it could not be read.
+pub(crate) const STOW_FAILURE_CANNOT_UNDERSTAND: u16 = 0xC000;
+
+/// The outcome of storing one instance.
+///
+/// The `dicom_scu` backend returns one per instance in the `results` array of
+/// its store response. `build_stow_response` turns them into the PS3.18 Store
+/// Instances Response. Both sides use this type so the contract lives in one
+/// place.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct StowPartResult {
+    /// Position of the instance in the request, from 0.
+    pub index: usize,
+    /// True when the remote node took the instance.
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sop_class_uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sop_instance_uid: Option<String>,
+    /// PS3.18 Failure Reason. Set only when `success` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<u16>,
+    /// Why the instance was not stored. Set only when `success` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl StowPartResult {
+    /// The JSON form carried in the backend response.
+    pub(crate) fn to_json(&self) -> Value {
+        // Serialising can only fail for maps with non-string keys or a custom
+        // `Serialize` that errors. This struct has neither.
+        serde_json::to_value(self).expect("StowPartResult always serialises to JSON")
+    }
+}
+
+/// Build the PS3.18 STOW-RS Store Instances Response from a store's results.
+///
+/// `results` is the `results` array of a `dicom_scu` store response, one
+/// `StowPartResult` per instance. Returns the HTTP status and the response
+/// data set in the DICOM JSON model (PS3.18 Annex F.2):
+/// - 200 when every instance was stored, 202 when some were, 409 when none were.
+/// - Referenced SOP Sequence (0008,1199) lists the stored instances.
+/// - Failed SOP Sequence (0008,1198) lists failed instances whose SOP Class
+///   UID and SOP Instance UID are both known.
+/// - Other Failures Sequence (0008,119A) holds the Failure Reason of every
+///   other failure.
+///
+/// An empty `results` array stored nothing, so it gives 409 with one Other
+/// Failures item of 0xC000. An entry that does not parse is counted as a
+/// failure with Failure Reason 0x0110.
+pub(crate) fn build_stow_response(results: &[Value]) -> (u16, Value) {
+    let mut stored: usize = 0;
+    let mut referenced: Vec<Value> = Vec::new();
+    let mut failed: Vec<Value> = Vec::new();
+    let mut other: Vec<Value> = Vec::new();
+
+    for (position, raw) in results.iter().enumerate() {
+        let entry = match serde_json::from_value::<StowPartResult>(raw.clone()) {
+            Ok(entry) => entry,
+            Err(e) => {
+                // The entry may hold UIDs and backend error text. Log neither.
+                tracing::error!(
+                    "STOW-RS: unreadable store result at position {}: {}",
+                    position,
+                    e
+                );
+                other.push(stow_other_failure_item(STOW_FAILURE_PROCESSING));
+                continue;
+            }
+        };
+        let class_uid = entry.sop_class_uid.filter(|u| !u.is_empty());
+        let instance_uid = entry.sop_instance_uid.filter(|u| !u.is_empty());
+        if entry.success {
+            stored += 1;
+            match (class_uid, instance_uid) {
+                (Some(class_uid), Some(instance_uid)) => {
+                    referenced.push(stow_referenced_item(class_uid, instance_uid))
+                }
+                // Both UIDs are Type 1 in a Referenced SOP item, so an item
+                // without them would be invalid. Listing the instance as a
+                // failure would be false: the PACS has it. The instance still
+                // counts as stored for the status code, and is left out of the
+                // sequence. The SCU cannot send an instance without both UIDs,
+                // so this only happens when Harmony could not read them back.
+                (_, _) => tracing::warn!(
+                    "STOW-RS: instance {} was stored but its SOP UIDs are unknown; \
+                     it is not listed in the Referenced SOP Sequence",
+                    entry.index
+                ),
+            }
+            continue;
+        }
+        let reason = entry.failure_reason.unwrap_or(STOW_FAILURE_PROCESSING);
+        match (class_uid, instance_uid) {
+            (Some(class_uid), Some(instance_uid)) => {
+                failed.push(stow_failed_item(class_uid, instance_uid, reason))
+            }
+            _ => other.push(stow_other_failure_item(reason)),
+        }
+    }
+    if results.is_empty() {
+        other.push(stow_other_failure_item(STOW_FAILURE_CANNOT_UNDERSTAND));
+    }
+
+    let any_failed = !failed.is_empty() || !other.is_empty();
+    let status = match (stored == 0, any_failed) {
+        (false, false) => 200,
+        (false, true) => 202,
+        (true, _) => 409,
+    };
+
+    let mut dataset = serde_json::Map::new();
+    dataset.insert("00081190".to_string(), stow_empty_retrieve_url());
+    if !referenced.is_empty() {
+        dataset.insert(
+            "00081199".to_string(),
+            json!({"vr": "SQ", "Value": referenced}),
+        );
+    }
+    if !failed.is_empty() {
+        dataset.insert("00081198".to_string(), json!({"vr": "SQ", "Value": failed}));
+    }
+    if !other.is_empty() {
+        dataset.insert("0008119A".to_string(), json!({"vr": "SQ", "Value": other}));
+    }
+    (status, Value::Object(dataset))
+}
+
+/// Retrieve URL (0008,1190) is Type 2 and is always sent empty. Harmony cannot
+/// reliably know the public scheme, host and path prefix a client used, for
+/// example behind a reverse proxy. Absolute URLs are a follow-up.
+fn stow_empty_retrieve_url() -> Value {
+    json!({"vr": "UR"})
+}
+
+fn stow_referenced_item(class_uid: String, instance_uid: String) -> Value {
+    json!({
+        "00081150": {"vr": "UI", "Value": [class_uid]},
+        "00081155": {"vr": "UI", "Value": [instance_uid]},
+        "00081190": stow_empty_retrieve_url(),
+    })
+}
+
+fn stow_failed_item(class_uid: String, instance_uid: String, reason: u16) -> Value {
+    json!({
+        "00081150": {"vr": "UI", "Value": [class_uid]},
+        "00081155": {"vr": "UI", "Value": [instance_uid]},
+        "00081197": {"vr": "US", "Value": [reason]},
+    })
+}
+
+fn stow_other_failure_item(reason: u16) -> Value {
+    json!({"00081197": {"vr": "US", "Value": [reason]}})
+}
+
 #[async_trait::async_trait]
 impl Middleware for DICOMwebToDICOMMiddleware {
     async fn left(
@@ -962,6 +1123,26 @@ impl Middleware for DICOMwebToDICOMMiddleware {
 
             Self::set_dicomweb_data(&mut envelope, "qido_json", json, Some(metadata));
             return Ok(envelope);
+        }
+
+        // STOW-RS through a DIMSE backend -> PS3.18 Store Instances Response.
+        // A DICOMweb HTTP backend answers in DICOMweb already and has no
+        // `results` array, so its response passes through untouched.
+        if resolved_op == Some(Operation::Store)
+            && nd.get("operation").and_then(|v| v.as_str()) == Some("store")
+        {
+            if let Some(results) = nd.get("results").and_then(|v| v.as_array()) {
+                let (status, dataset) = build_stow_response(results);
+                tracing::debug!(
+                    status = status,
+                    parts = results.len(),
+                    "dicomweb_bridge.right: STOW-RS response shaped"
+                );
+                let mut metadata = serde_json::Map::new();
+                metadata.insert("status".to_string(), Value::from(status));
+                Self::set_dicomweb_data(&mut envelope, "stow_json", dataset, Some(metadata));
+                return Ok(envelope);
+            }
         }
 
         // WADO metadata -> DICOMweb JSON data
@@ -2336,5 +2517,311 @@ mod tests {
 
         assert_eq!(parts.len(), 1, "only the application/dicom part is kept");
         assert_eq!(parts[0].as_slice(), dicom_bytes);
+    }
+
+    // ==================== STOW-RS response tests ====================
+
+    const CT_IMAGE_STORAGE: &str = "1.2.840.10008.5.1.4.1.1.2";
+
+    fn stored(instance_uid: &str) -> Value {
+        serde_json::json!({
+            "index": 0,
+            "success": true,
+            "sop_class_uid": CT_IMAGE_STORAGE,
+            "sop_instance_uid": instance_uid
+        })
+    }
+
+    fn not_stored(instance_uid: &str) -> Value {
+        serde_json::json!({
+            "index": 1,
+            "success": false,
+            "sop_class_uid": CT_IMAGE_STORAGE,
+            "sop_instance_uid": instance_uid,
+            "failure_reason": 0x0110,
+            "error": "C-STORE failed"
+        })
+    }
+
+    fn unreadable() -> Value {
+        serde_json::json!({
+            "index": 2,
+            "success": false,
+            "failure_reason": 0xC000,
+            "error": "part is not a DICOM Part 10 file"
+        })
+    }
+
+    /// The items of the sequence `tag`, after checking its VR.
+    fn sequence_items<'a>(dataset: &'a Value, tag: &str) -> &'a Vec<Value> {
+        assert_eq!(dataset[tag]["vr"], "SQ", "{} in {}", tag, dataset);
+        dataset[tag]["Value"]
+            .as_array()
+            .unwrap_or_else(|| panic!("{} has no items in {}", tag, dataset))
+    }
+
+    fn assert_empty_retrieve_url(item: &Value) {
+        assert_eq!(
+            item["00081190"],
+            serde_json::json!({"vr": "UR"}),
+            "in {}",
+            item
+        );
+    }
+
+    #[test]
+    fn test_stow_response_all_stored_is_200() {
+        let (status, dataset) = build_stow_response(&[stored("1.2.3.1"), stored("1.2.3.2")]);
+
+        assert_eq!(status, 200);
+        assert_empty_retrieve_url(&dataset);
+        let items = sequence_items(&dataset, "00081199");
+        assert_eq!(items.len(), 2);
+        assert_eq!(
+            items[0]["00081150"],
+            serde_json::json!({"vr": "UI", "Value": [CT_IMAGE_STORAGE]})
+        );
+        assert_eq!(
+            items[0]["00081155"],
+            serde_json::json!({"vr": "UI", "Value": ["1.2.3.1"]})
+        );
+        assert_empty_retrieve_url(&items[0]);
+        assert!(
+            dataset.get("00081198").is_none(),
+            "no Failed SOP Sequence: {}",
+            dataset
+        );
+        assert!(
+            dataset.get("0008119A").is_none(),
+            "no Other Failures: {}",
+            dataset
+        );
+    }
+
+    #[test]
+    fn test_stow_response_some_stored_is_202() {
+        let (status, dataset) = build_stow_response(&[stored("1.2.3.1"), not_stored("1.2.3.2")]);
+
+        assert_eq!(status, 202);
+        assert_eq!(sequence_items(&dataset, "00081199").len(), 1);
+        let failed = sequence_items(&dataset, "00081198");
+        assert_eq!(failed.len(), 1);
+        assert_eq!(
+            failed[0]["00081155"],
+            serde_json::json!({"vr": "UI", "Value": ["1.2.3.2"]})
+        );
+        assert!(
+            dataset.get("0008119A").is_none(),
+            "no Other Failures: {}",
+            dataset
+        );
+    }
+
+    #[test]
+    fn test_stow_response_none_stored_is_409() {
+        let (status, dataset) = build_stow_response(&[not_stored("1.2.3.2")]);
+
+        assert_eq!(status, 409);
+        let failed = sequence_items(&dataset, "00081198");
+        assert_eq!(
+            failed[0]["00081150"],
+            serde_json::json!({"vr": "UI", "Value": [CT_IMAGE_STORAGE]})
+        );
+        // US values are JSON numbers. 0x0110 is 272.
+        assert_eq!(
+            failed[0]["00081197"],
+            serde_json::json!({"vr": "US", "Value": [272]})
+        );
+        assert!(failed[0].get("00081190").is_none(), "{}", failed[0]);
+        assert!(
+            dataset.get("00081199").is_none(),
+            "no Referenced SOP: {}",
+            dataset
+        );
+        assert!(
+            dataset.get("0008119A").is_none(),
+            "no Other Failures: {}",
+            dataset
+        );
+        assert_empty_retrieve_url(&dataset);
+    }
+
+    #[test]
+    fn test_stow_response_unreadable_part_is_an_other_failure() {
+        let (status, dataset) = build_stow_response(&[stored("1.2.3.1"), unreadable()]);
+
+        assert_eq!(status, 202);
+        let other = sequence_items(&dataset, "0008119A");
+        // 0xC000 is 49152.
+        assert_eq!(
+            other,
+            &vec![serde_json::json!({"00081197": {"vr": "US", "Value": [49152]}})]
+        );
+        assert!(
+            dataset.get("00081198").is_none(),
+            "no Failed SOP: {}",
+            dataset
+        );
+    }
+
+    #[test]
+    fn test_stow_response_without_results_is_409() {
+        let (status, dataset) = build_stow_response(&[]);
+
+        assert_eq!(status, 409);
+        assert_eq!(
+            sequence_items(&dataset, "0008119A"),
+            &vec![serde_json::json!({"00081197": {"vr": "US", "Value": [49152]}})]
+        );
+        assert!(
+            dataset.get("00081199").is_none(),
+            "no Referenced SOP: {}",
+            dataset
+        );
+        assert!(
+            dataset.get("00081198").is_none(),
+            "no Failed SOP: {}",
+            dataset
+        );
+    }
+
+    #[test]
+    fn test_stow_response_unparseable_result_is_a_processing_failure() {
+        let (status, dataset) = build_stow_response(&[serde_json::json!({"index": 0})]);
+
+        assert_eq!(status, 409);
+        assert_eq!(
+            sequence_items(&dataset, "0008119A"),
+            &vec![serde_json::json!({"00081197": {"vr": "US", "Value": [272]}})]
+        );
+    }
+
+    #[test]
+    fn test_stow_response_stored_without_uids_counts_but_is_not_referenced() {
+        let no_uids = serde_json::json!({"index": 1, "success": true});
+
+        let (status, dataset) = build_stow_response(&[stored("1.2.3.1"), no_uids.clone()]);
+
+        // Stored, so 200 and not a failure. Only the identifiable one is listed.
+        assert_eq!(status, 200);
+        let items = sequence_items(&dataset, "00081199");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["00081155"],
+            serde_json::json!({"vr": "UI", "Value": ["1.2.3.1"]})
+        );
+        assert!(
+            dataset.get("00081198").is_none(),
+            "no Failed SOP: {}",
+            dataset
+        );
+        assert!(
+            dataset.get("0008119A").is_none(),
+            "no Other Failures: {}",
+            dataset
+        );
+
+        let (status, dataset) = build_stow_response(&[no_uids]);
+        assert_eq!(status, 200);
+        assert!(
+            dataset.get("00081199").is_none(),
+            "no invalid item: {}",
+            dataset
+        );
+    }
+
+    #[test]
+    fn test_stow_part_result_round_trips_through_json() {
+        let result = StowPartResult {
+            index: 3,
+            success: false,
+            sop_class_uid: Some(CT_IMAGE_STORAGE.to_string()),
+            sop_instance_uid: None,
+            failure_reason: Some(STOW_FAILURE_PROCESSING),
+            error: Some("refused".to_string()),
+        };
+
+        let json = result.to_json();
+
+        assert!(
+            json.get("sop_instance_uid").is_none(),
+            "None is left out: {}",
+            json
+        );
+        assert_eq!(json["failure_reason"], 272);
+        assert_eq!(
+            serde_json::from_value::<StowPartResult>(json).unwrap(),
+            result
+        );
+    }
+
+    fn store_response_envelope(normalized_data: Value) -> ResponseEnvelope<Value> {
+        use crate::models::envelope::command::{Command, Operation};
+        let mut metadata = HashMap::new();
+        metadata.insert("path".to_string(), "studies".to_string());
+        metadata.insert("full_path".to_string(), "/dicomweb/studies".to_string());
+        ResponseEnvelope {
+            request_details: RequestDetails {
+                method: "POST".to_string(),
+                uri: "/dicomweb/studies".to_string(),
+                headers: HashMap::new(),
+                cookies: HashMap::new(),
+                query_params: HashMap::new(),
+                cache_status: None,
+                content_metadata: None,
+                metadata,
+            },
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
+            command: Some(Command::new(Operation::Store)),
+            original_data: serde_json::json!({}),
+            normalized_data: Some(normalized_data),
+            normalized_snapshot: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_right_store_builds_stow_response() {
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let envelope = store_response_envelope(serde_json::json!({
+            "operation": "store",
+            "success": false,
+            "results": [stored("1.2.3.1"), not_stored("1.2.3.2")]
+        }));
+
+        let nd = bridge
+            .right(envelope)
+            .await
+            .unwrap()
+            .normalized_data
+            .unwrap();
+
+        assert_eq!(nd["dicomweb_response_type"], "stow_json");
+        assert_eq!(nd["dicomweb_metadata"]["status"], 202);
+        assert_eq!(sequence_items(&nd["dicomweb_data"], "00081199").len(), 1);
+        assert_eq!(sequence_items(&nd["dicomweb_data"], "00081198").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn test_right_store_from_dicomweb_backend_passes_through() {
+        // A DICOMweb HTTP backend already answers with a PS3.18 response.
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let upstream = serde_json::json!({
+            "00081190": {"vr": "UR", "Value": ["https://pacs.example/studies/1.2.3"]},
+            "00081199": {"vr": "SQ", "Value": []}
+        });
+        let envelope = store_response_envelope(upstream.clone());
+
+        let nd = bridge
+            .right(envelope)
+            .await
+            .unwrap()
+            .normalized_data
+            .unwrap();
+
+        assert_eq!(nd, upstream);
     }
 }
