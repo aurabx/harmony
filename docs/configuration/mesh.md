@@ -360,7 +360,7 @@ Mesh configuration changes are detected and applied automatically:
 - **Ingress/egress endpoints** (type, URLs, backend override): Zero-downtime update
 - **JWT secrets**: Picked up on next request (zero-downtime)
 
-See [Hot Configuration Reload](../architecture/config-reload.md) for detailed reload behavior.
+See [Hot Configuration Reload](hot-reload.md) for detailed reload behavior.
 
 ## See Also
 

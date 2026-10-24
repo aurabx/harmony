@@ -2,358 +2,194 @@
 title: Config Hot-Reload Strategy
 description: How Harmony classifies configuration changes and applies them without a full restart.
 status: active
-updated: 2026-10-16
+updated: 2026-10-24
 type: Architecture
+related:
+  - configuration/hot-reload.md
+  - integrations/runbeam-cloud.md
 ---
 
 # Config Hot-Reload Strategy
 
 ## Overview
 
-Harmony supports hot-reloading configuration changes without requiring a full application restart. The reload strategy uses two approaches depending on the type of change:
+This page describes how reload works inside Harmony. For what users see, the table of reload behaviour per config table, limitations and best practices, see [Hot Configuration Reload](../configuration/hot-reload.md).
 
-1. **Zero-downtime reload**: Configuration swapped atomically using `ArcSwap`
-2. **Adapter restart**: Selective restart of affected protocol adapters
+Reload has three parts:
 
-## Change Classification
+- `ConfigWatcher` in `src/config/watcher.rs` watches files and runs each reload.
+- `compute_diff` in `src/config/reload.rs` compares the old and new `Config` and returns a `ConfigDiff`.
+- `apply_reload` in `src/config/watcher.rs` publishes the new config, then stops, restarts and starts networks through `AdapterRegistry`.
 
-### Zero-Downtime Changes (No Adapter Restart)
-
-These changes are picked up immediately on the next request with no service interruption. HTTP, HTTP/3 and DIMSE requests all read the live config. For HTTP and HTTP/3, route lookup and the pipeline run use one snapshot, read when the request arrives.
-
-- **Middleware configuration**
-  - Transform specs
-  - Auth rules and policies, including the top-level `[policies]` and `[rules]` tables
-  - Custom middleware options
-  
-- **Route definitions**
-  - Groups, endpoints, backends
-  - Path patterns and matching rules. Each HTTP router rebuilds its route table the first time a request sees a new config.
-  - Request/response transforms
-  
-- **Backend configuration**
-  - Target URLs
-  - Timeouts and retry policies
-  - Connection pool settings
-  
-- **Other tables read when used**
-  - `[authentications]`, `[targets]`, `[peers]` and `[management]`
-  - Targets, peers and management are merged into backends, endpoints and pipelines at load, so their effect also shows there
-
-### Adapter Restart Required
-
-These changes require restarting specific protocol adapters (brief interruption for affected networks only):
-
-- **Network topology**
-  - Bind addresses
-  - Bind ports
-  - Adding/removing networks
-
-- **Adapter set**
-  - A network starts only the adapters its pipelines need: HTTP and HTTP/3 for HTTP endpoints, DIMSE for `dicom_scp` endpoints
-  - Adding the first or removing the last pipeline of a protocol on a network restarts that network
-
-- **Mesh routing**
-  - Any change to `[mesh]`, `[ingress]`, `[egress]` or `[remote_ingress]` restarts every network
-  - Each HTTP router indexes mesh ingress URLs when it starts
-  - Networks restart one at a time. Until a network restarts, a request that matches one of its mesh ingress URLs gets 503, so it never runs under mixed old and new mesh rules
-  
-- **Protocol-specific settings**
-  - TLS certificates
-  - Connection pool sizes
-  - Protocol handler options
-
-- **WireGuard configuration**
-  - Interface names
-  - Peer settings
-
-- **DIMSE listeners**
-  - Any change to the `dicom_scp` endpoints or persistent-SCP backends a network serves, or to their options (port, bind address, AE title, enabled operations, `use_dcmtk_store`, `persistent_store_scp`)
-  - Adding the first or removing the last `dicom_scp` endpoint on a network
-  - This includes every option of a legacy `dicom_scu` backend with `persistent_store_scp` on a network that has a `dicom_scp` endpoint, even `host` or `aet`. Such a change restarts every adapter on that network.
-  - The listener reads these options only when it starts. Within a network, the restart stops the old listener, including a DCMTK `storescp` process, before the new one binds the port. Networks restart in no fixed order, so a port moving from one network to another may fail to bind until the other network has restarted.
-
-### Process Restart Required
-
-These tables are read wholly or partly at startup:
-
-- `[logging]`: the log subscriber and log file are set up once. `RUST_LOG` is also read only at startup.
-- `[storage]`: the storage backend is created once.
-- `[provider]`: the provider resolver is updated on reload, but cloud polling keeps its old interval.
-- `[proxy]`: file paths are read at startup, and some fields are read live.
-- `[runbeam]`: cloud polling starts at startup, and some fields are read live.
-- `[services]` and `[middleware_types]`: these fill registries that can be set only once.
-- `[extensions]`: plugins read these when they start.
-
-A reload that changes them still swaps in the new config, so anything that reads the live config sees the new values. The watcher logs a warning naming the tables. Restart the process for full effect.
-
-`compute_diff` lists every `Config` field by name. Adding a field fails to compile until it is put in one of these groups.
-
-## Implementation Architecture
-
-### Components
+## Reload Flow
 
 ```
-┌─────────────────────┐
-│   File Watcher      │ (notify crate, debounced)
-│   (config.toml)     │
-└──────────┬──────────┘
-           │ detects change
-           ▼
-┌─────────────────────┐
-│ Config Validator    │
-│ + Diff Calculator   │
-└──────────┬──────────┘
-           │
-           ├─ validation fails ──► Log error, keep old config
-           │
-           ├─ zero-downtime ─────► ArcSwap::store(new_config)
-           │
-           └─ adapter restart ───► Cancel specific adapters
-                                   ▼
-                              Spawn new adapters
+┌──────────────────────────┐
+│ notify watcher           │ main config file (non-recursive)
+│                          │ pipelines dir (recursive, if it exists at startup)
+└────────────┬─────────────┘
+             │ modify event
+             ▼
+   sleep 200ms; skip if last successful reload < 1s ago
+             │
+             ▼
+┌──────────────────────────┐
+│ Config::load             │──── fails ───► log error, keep old config
+└────────────┬─────────────┘
+             │
+             ▼
+   update provider resolver
+             │
+             ▼
+┌──────────────────────────┐
+│ compute_diff(old, new)   │──── no changes, no failed networks ───► done
+└────────────┬─────────────┘
+             │ WARN if process_restart_required is not empty
+             ▼
+┌──────────────────────────┐
+│ apply_reload             │
+│ 1. globals::set_config   │
+│ 2. stop removed networks │
+│ 3. restart networks      │
+│ 4. start added networks  │
+└──────────────────────────┘
 ```
 
-### ArcSwap Pattern
+`src/lib.rs` creates the watcher in `run_with_reload`. It resolves the pipelines directory from `proxy.pipelines_path`, relative to the config file. It passes the directory to the watcher only if it exists at startup. The transforms and mesh directories are not watched.
 
-```rust
-// Global config storage (src/globals.rs)
-static CONFIG: Lazy<ArcSwapOption<Config>> = ...;
+### Event handling
 
-// Readers (no locks, no copy): hands out the published Arc
-let config: Option<Arc<Config>> = globals::get_config();
+The `notify` callback sends a message on a channel for each modify event. The loop takes one message, sleeps 200ms, then checks the time since the last successful reload. If that is under one second, it drops the message and takes the next one. Messages are not merged or queued for later. A failed reload does not reset the timer, so the next change after a failure always reloads.
 
-// Writers (atomic swap)
-globals::set_config(Arc::new(new_config));
-```
+### Config publication
 
-### Adapter Registry
+The live config is an `ArcSwapOption<Config>` in `src/globals.rs`. Readers call `globals::get_config()` and get an `Arc<Config>` without a lock. The writer calls `globals::set_config()`. HTTP, HTTP/3 and DIMSE requests read the live config. For HTTP and HTTP/3, route lookup and the pipeline run use one snapshot, read when the request arrives. Each HTTP router rebuilds its route table the first time a request sees a new config.
 
-```rust
-struct AdapterRegistry {
-    adapters: HashMap<String, AdapterHandle>,  // network_name -> handle
-}
+## compute_diff
 
-// Selective restart
-registry.restart_network("default", new_config).await;
-```
+`ConfigDiff` has five lists. Each entry is a network name or a top-level table name, such as `"middleware"`. Entries are never field paths.
 
-## Reload Triggers
+| Field | Contents |
+|-------|----------|
+| `zero_downtime_changes` | Changed tables that the swap applies |
+| `adapter_restarts_required` | Kept networks to restart |
+| `networks_to_add` | Networks only in the new config |
+| `networks_to_remove` | Networks only in the old config |
+| `process_restart_required` | Changed tables read wholly or partly at startup |
 
-### Automatic (File Watcher)
+### Per-network checks
 
-- Watches `config.toml` for modifications
-- 200ms debounce to handle editor save patterns
-- Validates → Diffs → Applies changes automatically
+For each network in both configs, `compute_diff` adds the network to `adapter_restarts_required` if any of these differ:
 
-### Manual (Management API)
+1. `tcp_config` bind address or port. A missing `tcp_config` counts as the default.
+2. `enable_wireguard` or `interface`.
+3. Any other `NetworkConfig` field, such as `http3`.
+4. The adapter set from `AdapterRegistry::required_protocols`. A network starts only the adapters its pipelines need: HTTP and HTTP/3 for HTTP endpoints, DIMSE for `dicom_scp` endpoints. Adding the first or removing the last pipeline of a protocol changes the set.
+5. The DIMSE listener signature from `adapters::dimse::listener_signature`.
+
+### Table classification
+
+`classify_tables` destructures `Config` without `..`. Adding a field to `Config` fails to compile until the field is placed in a group. A table left out of every group would make a reload that changes only that table look like no change, and the watcher would drop it.
+
+| Group | Tables | Reason |
+|-------|--------|--------|
+| Zero downtime | `middleware`, `policies`, `rules`, `pipelines`, `endpoints`, `backends`, `authentications` | Read when used, so the swap applies them |
+| Zero downtime | `targets`, `peers`, `management` | Merged into backends, endpoints and pipelines at load, so their effect also shows in those tables |
+| Restart every kept network | `mesh`, `ingress`, `egress`, `remote_ingress` | Each HTTP router indexes mesh ingress URLs when it starts |
+| Process restart | `logging`, `storage`, `provider`, `proxy`, `runbeam`, `services`, `middleware_types`, `extensions` | Read wholly or partly at startup |
+| Ignored | `network` | Compared per network |
+| Ignored | `transforms`, `resolved_transforms_path`, `resolved_mesh_path`, `unresolved_backends`, `endpoint_sources` | Derived from other fields, or not configuration |
+
+Process restart detail:
+
+- `logging`: the log subscriber and log file are set up once. `RUST_LOG` is also read only at startup.
+- `storage`: the storage backend is created once.
+- `provider`: the watcher calls `update_providers` on the provider resolver on every reload. Cloud polling keeps the interval it started with.
+- `proxy`: the watched pipelines directory is fixed at startup. Some fields are read live.
+- `runbeam`: cloud polling starts at startup. Some fields are read live.
+- `services` and `middleware_types`: these fill registries that can be set only once.
+- `extensions`: plugins read these when they start.
+
+The new values are still swapped in. Anything that reads the live config sees them. The watcher logs one WARN naming the tables.
+
+## apply_reload
+
+`apply_reload` takes a `NetworkControl` trait object. `AdapterRegistry` implements it. Tests use a recorder.
+
+### Swap before restart
+
+`apply_reload` calls `globals::set_config` before it touches any network. A restarted adapter, and anything that reads the global config such as the DIMSE peer check, then never runs under the old config.
+
+It then works in this order:
+
+1. Stop each network in `networks_to_remove`.
+2. Restart each network in `adapter_restarts_required`, then each retried network.
+3. Start each network in `networks_to_add`.
+
+It attempts every network even after one fails. If any fail, it returns one error that names each failure. The new config stays published, because it passed validation before this point.
+
+### Retry set
+
+`ConfigWatcher` holds `failed_networks`, a `Mutex<HashSet<String>>`. A network that fails to restart or start goes into the set. On the next reload, `apply_reload` restarts every network in the set that is still configured and not already in the diff. It then refills the set with that reload's failures. A removed network drops out of the set.
+
+The watcher runs `apply_reload` even when the diff is empty if the set is not empty. That is how saving an unchanged file retries a failed network.
+
+### Network restarts
+
+`AdapterRegistry::restart_network` calls `stop_network` then `start_network`. It restarts every adapter on the network, not one adapter. `stop_network` cancels each adapter's shutdown token, waits up to `ADAPTER_SHUTDOWN_TIMEOUT` (10 seconds), then aborts the task. It awaits the aborted task too, so the listener closes before the restart binds the port. Connection tasks an adapter spawned are not children of its task (AURA-2515).
+
+### DIMSE listeners
+
+The DIMSE listener reads endpoint and backend options only when it starts. `listener_signature` captures the `dicom_scp` endpoints and persistent-SCP backends a network serves, with their port, bind address, AE title, enabled operations, `use_dcmtk_store` and `persistent_store_scp`. Any change restarts the network.
+
+This includes every option of a legacy `dicom_scu` backend with `persistent_store_scp` on a network that has a `dicom_scp` endpoint, even `host` or `aet`.
+
+Within a network, the restart stops the old listener, including a DCMTK `storescp` process, before the new one binds the port. Networks restart in no fixed order. A port moving from one network to another may fail to bind until the other network has restarted. The retry set covers that case on the next reload.
+
+### Mesh changes
+
+A change to `mesh`, `ingress`, `egress` or `remote_ingress` adds every kept network to `adapter_restarts_required`, sorted by name. Networks restart one at a time. Until a network restarts, a request that matches one of its mesh ingress URLs gets 503. It never runs under mixed old and new mesh rules.
+
+## Cloud Poller Handoff
+
+The cloud poller in `src/management/cloud_poller.rs` does not reload. It writes files, and the file watcher reloads them. There is no other reload path.
+
+For each pending change, oldest first, the poller:
+
+1. Fetches the change and acknowledges it to Runbeam Cloud.
+2. Downloads any transforms the change references into `proxy.transforms_path`. If that fails, it reports the change as failed and skips it.
+3. Calls `write_cloud_config`, which writes the TOML by resource type:
+   - `gateway`, and any unknown type: the main config file path.
+   - `pipeline`: `<pipelines_path>/<name>.toml`.
+   - `transform`: `<transforms_path>/<name>.json`.
+   - `mesh`: `<mesh_path>/<name>.toml`.
+4. Writes a backup copy to `./tmp/cloud_configs/<type>_<change_id>.<ext>`.
+5. Reports the change as applied to Runbeam Cloud.
+
+The poller reports "applied" once the file is written. That is before any reload runs. If the reload then fails validation, or a network fails to restart, the failure appears only in the gateway log. Runbeam Cloud is never told.
+
+A pipeline change goes through a full reload, the same as any other save. There is no per-pipeline reload. Transform and mesh files land in unwatched directories, so they take effect on the next reload of a watched file.
+
+The poll interval comes from the primary provider's `poll_interval_secs`, read once at startup in `src/lib.rs`. It defaults to 30 seconds. `[management]` has no poll interval.
+
+## Test Coverage
+
+- `src/config/reload.rs` unit tests: `compute_diff` for each table group, network port and add or remove changes, adapter set changes, and DIMSE listener changes.
+- `src/config/watcher.rs` unit tests: the 200ms debounce, swap before restart, every network attempted after a failure, and the retry set.
+- `tests/config_reload_integration.rs`: diff classification, invalid config rejection, adapter registry start, stop and restart, network add and remove, the config swap, file change detection, and the cloud poller writing a file that the watcher applies.
+- `tests/e2e_run_with_reload.rs`: `run_with_reload` end to end, including adapter restart, invalid config rejection, and live policy and endpoint path changes on HTTP requests.
+
+Run them with:
 
 ```bash
-# Trigger reload
-curl -X POST http://localhost:9090/api/reload
-
-# Check config status
-curl http://localhost:9090/api/config/status
+cargo test --test config_reload_integration
+cargo test --test e2e_run_with_reload
 ```
-
-Response:
-```json
-{
-  "status": "reloaded",
-  "diff": {
-    "zero_downtime_changes": ["middleware.transform.spec_path"],
-    "adapter_restarts_required": []
-  },
-  "restarted_networks": [],
-  "last_reload": "2025-10-31T01:15:00Z"
-}
-```
-
-### Cloud Polling (Automatic)
-
-When running in managed mode with cloud polling enabled, configuration changes from Runbeam Cloud automatically trigger hot reloads.
-
-#### How It Works
-
-1. **Poller fetches pending changes** from Cloud API (every 30 seconds by default)
-2. **Changes processed in chronological order** (oldest first) to maintain state consistency
-3. **Each change written to filesystem**:
-   - Gateway changes → main `harmony-config.toml` (or configured path)
-   - Pipeline changes → `pipelines/{pipeline_id}.toml`
-4. **File watcher detects change** and triggers hot reload mechanism
-5. **Hot reload validates and applies** the new configuration (zero-downtime or adapter restart)
-6. **Status reported back to Cloud** (applied/failed with error details)
-
-#### Change Application Flow
-
-```
-┌──────────────────┐
-│  Runbeam Cloud   │
-│   API Endpoint   │
-└────────┬─────────┘
-         │ poll (30s)
-         ▼
-┌──────────────────┐
-│  Cloud Poller    │
-│  (background)    │
-└────────┬─────────┘
-         │ fetch changes
-         ▼
-┌──────────────────┐
-│  Acknowledge     │ ◄─── Change ID, status="acknowledged"
-│  to Cloud        │
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│  Write TOML to   │ ◄─── Gateway: ./tmp/cloud_config_{id}.toml
-│  Filesystem      │      Pipeline: pipelines/{pipeline_id}.toml
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│  File Watcher    │ ◄─── Detects file modification
-│  Triggers        │
-└────────┬─────────┘
-         │
-         ▼
-┌──────────────────┐
-│  Hot Reload      │ ◄─── Zero-downtime or adapter restart
-│  Mechanism       │
-└────────┬─────────┘
-         │
-         ├─ success ────► Report applied_at to Cloud
-         │
-         └─ failure ────► Report failed_at + error details to Cloud
-```
-
-#### Change Types
-
-- **Gateway changes**: Full config reload with diff computation
-  - Affects top-level config (networks, storage, logging)
-  - Written to main config file path
-  - May trigger adapter restarts if network topology changes
-  
-- **Pipeline changes**: Selective reload of affected pipeline
-  - Affects endpoints, middleware, backends for specific pipeline
-  - Written to `pipelines/{pipeline_id}.toml`
-  - Typically zero-downtime unless network bindings change
-
-#### Monitoring
-
-Watch for cloud polling events in logs:
-
-```
-INFO 🌥️  Starting cloud config polling (interval: 30s)
-INFO Processing change: id=01k8vdq9..., type=gateway, status=queued, gateway_id=01k8ek6..., created_at=2025-10-30T20:42:36Z
-INFO Wrote cloud config to ./tmp/cloud_config_01k8vdq9....toml
-INFO ✓ Successfully applied config change 01k8vdq9...
-```
-
-For failed changes:
-
-```
-ERROR ✗ Failed to apply config change 01k8vdq9...: Configuration validation failed
-```
-
-#### Error Recovery
-
-If a change fails to apply:
-- **Error logged** with full details (validation errors, file I/O errors, etc.)
-- **Error reported to Cloud** with `error_message` and `error_details` fields
-- **Previous valid configuration remains active** - no service disruption
-- **Proxy continues processing remaining changes** in the queue
-- **Failed change can be retried** from Cloud dashboard after fixing
-
-#### Configuration
-
-Cloud polling is enabled automatically when the gateway is authorized:
-
-```toml
-[management]
-enabled = true
-base_path = "/admin"
-network = "default"
-poll_interval_secs = 30  # Optional: override default polling interval
-```
-
-See [configuration.md](../integrations/runbeam-cloud.md#cloud-configuration-polling) for authorization and setup details.
-
-## Error Handling
-
-### Invalid Config
-
-- Validation errors logged with details
-- Old configuration retained
-- Application continues running
-- API returns validation errors
-
-### Partial Reload Failure
-
-- The new config is swapped in before any adapter is stopped, restarted or started. Restarted adapters and the DIMSE peer check never run under the old config.
-- Every network in the diff is attempted, even after one fails.
-- The reload returns an error naming each network that failed. The new config stays active, because it was validated before this point.
-- A network whose restart failed may be left stopped. The watcher remembers it and restarts it on the next reload, even if that reload changes nothing. To retry after fixing an outside cause, such as a port in use, save the config file again.
-
-## Testing Strategy
-
-### Zero-Downtime Reload Test
-
-```rust
-#[tokio::test]
-async fn test_middleware_config_reload() {
-    // 1. Start with initial config
-    // 2. Send concurrent requests
-    // 3. Swap config (change transform spec)
-    // 4. Verify all requests succeed
-    // 5. Verify new requests use new config
-}
-```
-
-### Adapter Restart Test
-
-```rust
-#[tokio::test]
-async fn test_network_change_reload() {
-    // 1. Start with network on port 8080
-    // 2. Change port to 8081
-    // 3. Verify old adapter shuts down
-    // 4. Verify new adapter starts on 8081
-    // 5. Verify other networks unaffected
-}
-```
-
-### Invalid Config Test
-
-```rust
-#[tokio::test]
-async fn test_invalid_config_rejected() {
-    // 1. Start with valid config
-    // 2. Attempt reload with invalid config
-    // 3. Verify old config still active
-    // 4. Verify application continues running
-}
-```
-
-## Limitations
-
-- **In-flight requests**: Requests in progress during adapter restart may fail
-- **Connection draining**: No graceful connection draining (future enhancement)
-- **Config rollback**: No automatic rollback on partial failure (future enhancement)
-- **Audit trail**: No config change history tracking (future enhancement)
-
-## Best Practices
-
-1. **Test config changes**: Validate config locally before deploying
-2. **Use management API**: For controlled deployments, trigger reload via API
-3. **Monitor logs**: Watch for reload events and validation errors
-4. **Staged rollout**: Change non-critical settings first, then network topology
-5. **Backup configs**: Keep previous config versions for quick rollback
 
 ## Future Enhancements
 
-- Connection draining during adapter restart
-- Config change audit log
-- Automatic rollback on validation failure
-- Config versioning and diff history
-- Reload dry-run mode
+- Report reload results to Runbeam Cloud after the reload runs.
+- Watch the transforms and mesh directories.
+- Connection draining during network restart.
+- A config change audit log.
+- A reload dry-run mode.

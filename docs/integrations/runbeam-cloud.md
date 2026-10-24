@@ -33,13 +33,13 @@ poll_interval_secs = 30  # Optional, defaults to 30 (valid range: 5-3600)
 |-------|------|---------|-------------|
 | enabled | bool | false | Enable Runbeam Cloud integration |
 | cloud_api_base_url | string | "https://api.runbeam.cloud" | Runbeam Cloud API endpoint |
-| poll_interval_secs | u64 | 30 | Cloud polling interval (5-3600 seconds) |
+| poll_interval_secs | u64 | 30 | Cloud polling interval (5-3600 seconds). Used only when `enabled = true`, the primary provider is `runbeam`, and no `[provider.runbeam]` table exists. A `[provider.runbeam]` table overrides it. |
 
-**Important**: When `enabled = false` (default):
-- No token loading from environment or storage
-- No cloud polling at startup
-- `/admin/authorize` endpoint returns 403 Forbidden
-- Gateway runs in standalone mode without cloud connectivity
+**Important**: `enabled` does not control everything on its own.
+
+- Harmony loads tokens and starts cloud polling when `enabled = true`. It also does so when the primary provider (`proxy.primary_provider`, default `runbeam`) is a `[provider.<name>]` table with an `api` URL and a non-zero `poll_interval_secs`.
+- When neither is true, Harmony loads no token, does not poll, and runs in standalone mode.
+- The `/admin/authorize` endpoint checks only `enabled`. With `enabled = false` it returns 403 Forbidden, even when a provider table turns polling on.
 
 ### Cloud Configuration Polling
 
@@ -47,7 +47,7 @@ Harmony Proxy can automatically poll Runbeam Cloud for configuration changes whe
 
 ### Overview
 
-When authorized with a gateway token, Harmony automatically polls the Runbeam Cloud API for pending configuration changes at regular intervals (default: 30 seconds). Changes are downloaded, validated, applied to the local filesystem, and reported back to the Cloud.
+When authorized with a gateway token, Harmony automatically polls the Runbeam Cloud API for pending configuration changes at regular intervals (default: 30 seconds). Harmony downloads each change, writes it to the local filesystem, and reports it back to the Cloud. The file watcher then validates and applies it. See [Integration with Hot Reload](#integration-with-hot-reload).
 
 ### Change Processing
 
@@ -57,26 +57,30 @@ Changes are retrieved from the `/api/harmony/config-changes` endpoint and proces
 
 1. **Queued**: Change is created on Runbeam Cloud and waiting to be fetched by the gateway
 2. **Acknowledged**: Gateway has successfully fetched the change details and acknowledged receipt
-3. **Applied**: Change successfully validated and applied to gateway configuration
-4. **Failed**: Change application failed - error message and details reported back to Cloud
+3. **Applied**: Harmony wrote the change to disk. Harmony reports this before the reload runs, so it does not mean the reload succeeded.
+4. **Failed**: Harmony could not download the change's transforms or write the file. Harmony reports the error to Cloud. Reload failures are not reported.
 
 ### Change Types
 
-- **gateway**: Gateway-level configuration (main config file at `/etc/harmony/harmony-config.toml`)
-- **pipeline**: Pipeline-specific configuration (individual pipeline files in `pipelines/` directory)
+- **gateway**: Gateway-level configuration. Written to the active config file, the path passed with `--config`. An unknown type is also written there.
+- **pipeline**: Pipeline configuration. Written to `<pipelines_path>/<name>.toml`.
+- **transform**: A JOLT specification. Written to `<transforms_path>/<name>.json`.
+- **mesh**: Mesh configuration. Written to `<mesh_path>/<name>.toml`.
+
+These paths are relative to the config file's directory.
 
 ### How It Works
 
-1. Gateway polls Cloud API every 30 seconds (configurable via `--poll-interval` flag)
+1. Gateway polls Cloud API every 30 seconds by default. The interval comes from the primary provider's `poll_interval_secs`, read at startup. Without a `[provider.runbeam]` table, that value comes from `[runbeam].poll_interval_secs`, but only when `[runbeam].enabled = true`. See [Providers](../configuration/providers.md).
 2. API returns list of pending changes for this gateway
 3. Changes processed sequentially in chronological order (oldest first)
 4. For each change:
    - Fetch full change details (including TOML content)
    - Acknowledge receipt to Cloud
    - **Extract and download transforms** (if configuration references transform middleware)
-   - Write TOML config to appropriate file location
-   - File watcher detects change and triggers hot reload
-   - Report success/failure back to Cloud
+   - Write TOML config to the right file location, and a backup copy to `./tmp/cloud_configs/`
+   - Report the change as applied to Cloud
+   - The file watcher detects the change and runs a hot reload
 
 ### Automatic Transform Download
 
@@ -116,7 +120,7 @@ Cloud polling starts automatically when the gateway is authorized:
 curl -X POST http://localhost:9090/admin/authorize \
   -H "Authorization: Bearer <jwt_token>" \
   -H "Content-Type: application/json" \
-  -d '{"gateway_code":"your-gateway-code"}'
+  -d '{"gateway_id":"your-gateway-id"}'
 
 # Cloud polling starts automatically after successful authorization
 ```
@@ -133,7 +137,7 @@ poll_interval_secs = 30  # Optional: polling interval (default: 30, range: 5-360
 # Management API configuration
 [management]
 enabled = true
-base_path = "/admin"
+base_path = "admin"  # no leading slash; "/admin" produces routes like //admin/info
 network = "default"
 ```
 
@@ -144,25 +148,27 @@ Watch for cloud polling events in logs:
 ```
 INFO 🌥️  Starting cloud config polling (interval: 30s)
 INFO Processing change: id=01k8vdq9..., type=gateway, status=queued, gateway_id=01k8ek6...
-INFO ✓ Successfully applied config change 01k8vdq9...
+INFO ✓ Wrote config change 01k8vdq9... to /etc/harmony/harmony-config.toml (file watcher will apply)
 ```
 
-Errors are also logged:
+The reload result appears in the file watcher's log lines. See [Hot Configuration Reload](../configuration/hot-reload.md#errors).
+
+Write errors are also logged:
 
 ```
-ERROR ✗ Failed to apply config change 01k8vdq9...: Invalid TOML syntax
+ERROR ✗ Failed to write config change 01k8vdq9...: Failed to write config file: <reason>
 ```
 
 ### Error Handling
 
 **Validation Failures**:
-- Invalid TOML configurations are rejected before file system operations
-- Error message and details reported back to Cloud
-- Previous valid configuration remains active
+- The poller does not validate a change before it writes the file
+- The file watcher validates it on reload. If it is invalid, the previous valid configuration remains active
+- The validation error appears in the gateway log only. Cloud still shows the change as applied
 - Gateway continues processing remaining changes
 
 **Network Failures**:
-- Transient network errors trigger exponential backoff (2s, 4s, 8s, ...up to 5 minutes)
+- After the first error, Harmony waits only the normal poll interval. From the second error in a row, it also backs off for 2^n seconds, where n is the error count: 4s, 8s, 16s, and so on. The backoff runs before the normal poll interval wait. The exponent stops at 8, so the longest backoff is 256s
 - Gateway continues polling when connectivity restored
 - Successful poll resets error counter
 
@@ -173,14 +179,13 @@ ERROR ✗ Failed to apply config change 01k8vdq9...: Invalid TOML syntax
 
 ### Integration with Hot Reload
 
-Cloud-sourced configuration changes trigger the same hot-reload mechanism as file-based changes:
+The poller does not reload the config itself. It writes files, and the file watcher reloads them, the same as a manual edit:
 
-- **Gateway changes**: Full config reload with diff computation
-- **Pipeline changes**: Selective reload of affected pipelines
-- **Zero-downtime changes**: Applied immediately without service interruption
-- **Adapter restarts**: Only affected networks restarted
+- **Gateway changes**: written to the main config file. The watcher reloads it.
+- **Pipeline changes**: written to `pipelines/<name>.toml`. The watcher runs a full reload, but only if the pipelines directory existed when Harmony started. Otherwise the change applies on the next reload of the main config file. There is no per-pipeline reload.
+- **Transform and mesh changes**: written to the transforms and mesh directories. The watcher does not watch these, so they apply on the next reload of a watched file.
 
-See [Hot Configuration Reload](../configuration/hot-reload.md#hot-configuration-reload-1) for reload behavior details.
+See [Hot Configuration Reload](../configuration/hot-reload.md) for reload behavior details.
 
 ### Security Considerations
 
@@ -189,13 +194,13 @@ See [Hot Configuration Reload](../configuration/hot-reload.md#hot-configuration-
 - **HTTPS required**: All Cloud API communication uses TLS
 - **Configuration integrity**: TOML validated before applying to prevent malformed configs
 
-See [security.md](../security/overview.md) for comprehensive security guidance.
+See [Security](../security/overview.md) for comprehensive security guidance.
 
 ### Troubleshooting
 
 **Polling not starting?**
 - Verify gateway is authorized: check for `🌥️ Starting cloud config polling` in logs
-- Check token storage: look for token file in `~/.runbeam/<proxy_id>/auth.json`
+- Check token storage: look for the encrypted token file at `~/.runbeam/<proxy_id>/runbeam/auth.json`
 - Verify management API is enabled in config
 
 **Changes not applying?**
@@ -213,4 +218,4 @@ See [security.md](../security/overview.md) for comprehensive security guidance.
 - Verify network connectivity to Cloud API
 - Check for token validation failures
 
-For more details on cloud polling architecture, see [docs/architecture/config-reload.md](../architecture/config-reload.md#cloud-polling-automatic).
+For more details on cloud polling architecture, see [docs/architecture/config-reload.md](../architecture/config-reload.md#cloud-poller-handoff).

@@ -1,6 +1,6 @@
 ---
 title: Production Deployment Security
-description: Example secure production deployments for Docker, Kubernetes, and AWS ECS, with secret rotation procedures.
+description: Example secure production deployments for Docker, Kubernetes, and AWS ECS, with an encryption key rotation procedure.
 status: active
 updated: 2026-10-24
 type: Security
@@ -10,17 +10,18 @@ related:
 
 # Production Deployment Security
 
-Example secure production deployments for Docker, Kubernetes, and AWS ECS, with secret rotation procedures. This page is part of [Security](overview.md).
+Example secure production deployments for Docker, Kubernetes, and AWS ECS, with an encryption key rotation procedure. This page is part of [Security](overview.md).
 
 ## Production Deployment Examples
+
+Harmony stores the machine token under `~/.runbeam`. Each example sets `RUNBEAM_ENCRYPTION_KEY` and mounts a persistent volume there. Both are needed for the token to survive a restart. The published image sets no `USER`, so the path is `/root/.runbeam`. The ECS example has no volume, so supply `RUNBEAM_MACHINE_TOKEN` or authorize again after each new task starts.
 
 ### Docker Compose with Environment File
 
 Create `.env` file (DO NOT commit):
 ```bash
 # .env
-RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-1...<base64-encoded>
-RUNBEAM_JWT_SECRET=your-jwt-secret-here
+RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-1...
 RUST_LOG=harmony=info
 ```
 
@@ -33,7 +34,11 @@ services:
       - .env
     volumes:
       - ./config:/etc/harmony:ro
-      - harmony-data:/data/harmony
+      # Token and key storage. The image runs as root, so HOME is /root.
+      - harmony-runbeam:/root/.runbeam
+
+volumes:
+  harmony-runbeam:
 ```
 
 ### Docker with Secrets File
@@ -41,15 +46,14 @@ services:
 ```bash
 # Generate and save secrets (outside version control)
 mkdir -p .secrets
-age-keygen | base64 | tr -d '\n' > .secrets/encryption.key
-openssl rand -base64 32 > .secrets/jwt-secret.txt
+age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-' > .secrets/encryption.key
 
 # Run container with secrets
 docker run -d \
   -e RUNBEAM_ENCRYPTION_KEY=$(cat .secrets/encryption.key) \
-  -e RUNBEAM_JWT_SECRET=$(cat .secrets/jwt-secret.txt) \
   -e RUST_LOG=harmony=info \
   -v $(pwd)/config:/etc/harmony:ro \
+  -v harmony-runbeam:/root/.runbeam \
   -p 8080:8080 -p 9090:9090 \
   harmony:latest
 ```
@@ -64,10 +68,8 @@ metadata:
   namespace: production
 type: Opaque
 data:
-  # Base64-encode your already-base64-encoded age key
-  encryption-key: QUFH... 
-  # Base64-encode your JWT secret
-  jwt-secret: eW91ci1zZWNyZXQ=
+  # Base64 of the AGE-SECRET-KEY-1... line (Kubernetes encodes all data values)
+  encryption-key: QUdFLVNFQ1JFVC1LRVktMS4uLg==
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -75,8 +77,15 @@ metadata:
   name: harmony
   namespace: production
 spec:
-  replicas: 3
+  # One replica: the token volume below is a single ReadWriteOnce claim.
+  replicas: 1
+  selector:
+    matchLabels:
+      app: harmony
   template:
+    metadata:
+      labels:
+        app: harmony
     spec:
       containers:
       - name: harmony
@@ -87,38 +96,32 @@ spec:
             secretKeyRef:
               name: harmony-secrets
               key: encryption-key
-        - name: RUNBEAM_JWT_SECRET
-          valueFrom:
-            secretKeyRef:
-              name: harmony-secrets
-              key: jwt-secret
         - name: RUST_LOG
           value: "harmony=info"
         volumeMounts:
         - name: config
           mountPath: /etc/harmony
           readOnly: true
-        - name: data
-          mountPath: /data/harmony
+        # Token and key storage. The image runs as root, so HOME is /root.
+        - name: runbeam-data
+          mountPath: /root/.runbeam
       volumes:
       - name: config
         configMap:
           name: harmony-config
-      - name: data
+      - name: runbeam-data
         persistentVolumeClaim:
-          claimName: harmony-data
+          claimName: harmony-runbeam
 ```
 
 **Generate Kubernetes secret**:
 ```bash
-# Generate keys
-ENCRYPTION_KEY=$(age-keygen | base64 | tr -d '\n')
-JWT_SECRET=$(openssl rand -base64 32)
+# Generate the key
+ENCRYPTION_KEY=$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-')
 
-# Create secret (double base64 encoding for Kubernetes)
+# Create the secret (kubectl base64-encodes literal values itself)
 kubectl create secret generic harmony-secrets \
-  --from-literal=encryption-key=$(echo -n "$ENCRYPTION_KEY" | base64) \
-  --from-literal=jwt-secret=$(echo -n "$JWT_SECRET" | base64) \
+  --from-literal=encryption-key="$ENCRYPTION_KEY" \
   --namespace production
 ```
 
@@ -130,13 +133,7 @@ kubectl create secret generic harmony-secrets \
 aws secretsmanager create-secret \
   --name harmony/production/encryption-key \
   --description "Harmony token encryption key" \
-  --secret-string "$(age-keygen | base64 -w 0)"
-
-# Store JWT secret
-aws secretsmanager create-secret \
-  --name harmony/production/jwt-secret \
-  --description "Harmony JWT validation secret" \
-  --secret-string "$(openssl rand -base64 32)"
+  --secret-string "$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-')"
 ```
 
 **ECS Task Definition**:
@@ -153,10 +150,6 @@ aws secretsmanager create-secret \
         {
           "name": "RUNBEAM_ENCRYPTION_KEY",
           "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:harmony/production/encryption-key::"
-        },
-        {
-          "name": "RUNBEAM_JWT_SECRET",
-          "valueFrom": "arn:aws:secretsmanager:REGION:ACCOUNT:secret:harmony/production/jwt-secret::"
         }
       ],
       "environment": [
@@ -200,21 +193,17 @@ aws secretsmanager create-secret \
 
 ### Secret Rotation Procedures
 
-**Zero-Downtime Encryption Key Rotation**:
-1. Generate new key: `NEW_KEY=$(age-keygen | base64 | tr -d '\n')`
-2. Update secret in secret manager
-3. Rolling restart of containers (old tokens still work temporarily)
-4. Re-authorize gateway: `runbeam harmony:authorize`
-5. New tokens encrypted with new key
-6. Old tokens remain accessible until expiry (30 days)
+**Encryption Key Rotation**:
 
-**JWT Secret Rotation** (requires coordination):
-1. Coordinate maintenance window with Runbeam Cloud team
-2. Update secret in Runbeam Cloud first
-3. Update RUNBEAM_JWT_SECRET in all Harmony deployments
-4. Restart Harmony instances
-5. Test authorization flow: `curl -X POST http://localhost:9090/admin/authorize`
-6. Monitor logs for JWT validation errors
+A new key cannot decrypt a token saved with the old key. Plan for a short loss of cloud connectivity on each instance until it is re-authorized.
+
+1. Generate a new key: `NEW_KEY=$(age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-')`
+2. Update the secret in your secret manager.
+3. Restart the containers so they read the new key.
+4. Re-authorize each gateway: `runbeam harmony:authorize`
+5. Check the logs for a successful token save and for cloud polling starting.
+
+See [Managing Secrets](secrets.md) for key generation and secret manager commands.
 
 Key management
 - Store public keys on disk with appropriate permissions

@@ -2,7 +2,7 @@
 title: Deployment Guides
 description: Overview of deployment options and general production considerations.
 status: active
-updated: 2026-10-15
+updated: 2026-10-24
 type: Guide
 ---
 
@@ -46,7 +46,7 @@ docker pull ghcr.io/aurabx/harmony:v0.4.0
 
 ### Basic Docker Deployment
 
-See the main [README.md](../../readme.md#docker) for Docker and Docker Compose instructions.
+See the main [README](../../readme.md#docker) for Docker and Docker Compose instructions.
 
 ### Build from Source
 
@@ -67,13 +67,12 @@ See [Getting Started](getting-started.md) for building from source.
 
 ### Environment Variables
 
-All platforms require these environment variables:
+Harmony needs no environment variables to start. Most deployments set these two:
 
 - `RUST_LOG` - Logging level. Overrides `logging.log_level` in the config file, which defaults to `error`
-- `RUNBEAM_ENCRYPTION_KEY` - Encryption key for token storage (required in production)
-- `RUNBEAM_JWT_SECRET` - JWT secret for Runbeam Cloud integration (if enabled)
+- `RUNBEAM_ENCRYPTION_KEY` - Encryption key for the stored machine token. When Runbeam Cloud integration is enabled, set it and put `~/.runbeam` on a persistent volume. The token survives restarts only with both
 
-See [Security Documentation](../security/environment-variables.md#environment-variables) for details.
+See [Environment Variables](../configuration/environment.md) for the full list and [Managing Secrets](../security/secrets.md) for secret handling.
 
 ### Configuration File
 

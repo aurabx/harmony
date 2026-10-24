@@ -2,7 +2,7 @@
 title: Providers
 description: How providers resolve and synchronise resources from local files or Runbeam Cloud.
 status: active
-updated: 2026-01-01
+updated: 2026-10-24
 type: Configuration
 ---
 
@@ -162,7 +162,7 @@ Authorize the gateway:
 curl -X POST http://localhost:9090/admin/authorize \
   -H "Authorization: Bearer <jwt_token>" \
   -H "Content-Type: application/json" \
-  -d '{"gateway_code": "your-gateway-code"}'
+  -d '{"gateway_id": "your-gateway-id"}'
 ```
 
 ## Configuration Polling
@@ -187,7 +187,7 @@ Changes are applied using the same hot-reload mechanism as file-based changes:
 - **Zero-downtime changes**: Middleware, routes, backends updated immediately
 - **Adapter restarts**: Network changes require brief interruption (~1-2s)
 
-See [Hot Configuration Reload](../architecture/config-reload.md) for detailed reload behavior.
+See [Hot Configuration Reload](hot-reload.md) for detailed reload behavior.
 
 ### Automatic Transform Download
 

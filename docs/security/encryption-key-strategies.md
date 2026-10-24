@@ -54,7 +54,7 @@ runbeam harmony:authorize -l prod-harmony
 
 ```json
 {
-  "gateway_code": "my-gateway-001",
+  "gateway_id": "my-gateway-001",
   "encryption_key": "QUdFLVNFQ1JFVC1LRVktMTIzNDU2Nzg5MA=="
 }
 ```
@@ -144,12 +144,14 @@ spec:
 
 **Key Generation:**
 
-```bash
-# Generate key manually (optional)
-age-keygen -o encryption.key
+See [Managing Secrets](secrets.md) for more generation and storage commands.
 
-# Base64 encode for use in environment variable
-base64 encryption.key
+```bash
+# Generate a key and keep only the secret key line
+age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-' > encryption.key
+
+# Use it as the environment variable (raw form; base64 of this line also works)
+export RUNBEAM_ENCRYPTION_KEY=$(cat encryption.key)
 ```
 
 ### Strategy 4: Pre-Provisioned Tokens (Fully Automated Deployments)
@@ -162,7 +164,7 @@ For scenarios where you cannot call `/admin/authorize` at all (e.g., immutable i
 
 ```bash
 # Set machine token (JSON format)
-export RUNBEAM_MACHINE_TOKEN='{"machine_token":"mt_abc123...","expires_at":"2025-12-31T23:59:59Z","gateway_id":"gw-123","gateway_code":"prod-gateway","abilities":["gateway:read","gateway:write"],"issued_at":"2025-01-01T00:00:00Z"}'
+export RUNBEAM_MACHINE_TOKEN='{"machine_token":"mt_abc123...","expires_at":"2025-12-31T23:59:59Z","gateway_id":"gw-123","abilities":["gateway:read","gateway:write"],"issued_at":"2025-01-01T00:00:00Z"}'
 
 # Optionally set encryption key (for persistence to storage)
 export RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-...
@@ -180,7 +182,7 @@ metadata:
 type: Opaque
 stringData:
   machine-token: |
-    {"machine_token":"mt_abc123...","expires_at":"2025-12-31T23:59:59Z","gateway_id":"gw-123","gateway_code":"prod-gateway","abilities":[],"issued_at":"2025-01-01T00:00:00Z"}
+    {"machine_token":"mt_abc123...","expires_at":"2025-12-31T23:59:59Z","gateway_id":"gw-123","abilities":[],"issued_at":"2025-01-01T00:00:00Z"}
   encryption-key: AGE-SECRET-KEY-...
 ---
 apiVersion: apps/v1

@@ -2,7 +2,7 @@
 title: Getting Started
 description: How to build and run Harmony for the first time.
 status: active
-updated: 2025-11-30
+updated: 2026-10-24
 type: Guide
 ---
 
@@ -100,60 +100,18 @@ Conventions
 
 ## Environment Variables
 
-Harmony uses environment variables for runtime configuration and security settings. These are optional for local development but recommended for production deployments.
-
-### Quick Reference
-**RUST_LOG** - Logging verbosity (optional). Overrides `logging.log_level` when set. If unset, `logging.log_level` applies (default: `error`). An invalid value is reported on stderr and ignored.
-- Example: `RUST_LOG=harmony=debug,info`
-- Controls tracing output; use `debug` for development, `info` for production
-
-**RUNBEAM_ENCRYPTION_KEY** - Token storage encryption key (optional for local dev, recommended for containers)
-- Base64-encoded age X25519 key
-- Example: Generated via `age-keygen | base64 | tr -d '\n'`
-- In containers, ensures tokens survive restarts; without it, tokens are lost on restart
-
-**RUNBEAM_JWT_SECRET** - JWT validation secret for Runbeam Cloud (required for production cloud integration)
-- String (recommend 32+ character random value)
-- Example: Generated via `openssl rand -base64 32`
-- Must match secret configured in Runbeam Cloud
-
-
-### Local Development Example
+Local development needs no environment variables. To see more log output, set `RUST_LOG`:
 
 ```bash
-# Set logging level for detailed output
 export RUST_LOG=harmony=debug,info
-
-# Run with example configuration
-cargo run -- --config examples/basic-echo/config.toml
+cargo run -- --config path/to/config.toml
 ```
 
-### Production Container Example
-
-```bash
-# Generate encryption key for persistent token storage
-export RUNBEAM_ENCRYPTION_KEY=$(age-keygen | base64 | tr -d '\n')
-
-# Set JWT secret (must match Runbeam Cloud)
-export RUNBEAM_JWT_SECRET="your-production-secret"
-
-# Set production logging level
-export RUST_LOG=harmony=info
-
-# Run Harmony
-cargo run --release -- --config /etc/harmony/config.toml
-```
-
-**Notes**:
-- **RUNBEAM_ENCRYPTION_KEY**: In containers, this ensures tokens survive restarts. Without it, tokens are lost when container restarts. See [Security Documentation](../security/environment-variables.md#runbeam_encryption_key) for platform-specific generation commands.
-- **RUNBEAM_JWT_SECRET**: Required for Runbeam Cloud integration. Falls back to insecure development default with warning.
-- **RUST_LOG**: Controls tracing output. Use `debug` for development, `info` for production.
-
-For comprehensive environment variable documentation, security best practices, and production deployment examples, see [Security Documentation](../security/environment-variables.md#environment-variables).
+`RUST_LOG` overrides `logging.log_level`, which defaults to `error`. For every variable Harmony reads, see [Environment Variables](../configuration/environment.md). For secret handling in production, see [Managing Secrets](../security/secrets.md).
 
 Next steps
 - Read [adapters.md](../architecture/adapters.md) to understand protocol adapters (HTTP, DIMSE, and how to add new protocols)
-- Read [configuration.md](../configuration/configuration-file.md) for config structure and pipeline files
+- Read [Configuration](../configuration/configuration-file.md) for config structure and pipeline files
 - See [middleware.md](../configuration/middleware.md) for auth and transforms (including real JWT verification)
 - See [router.md](../architecture/router.md) for pipeline execution flow
 - See [testing.md](testing.md) for running tests

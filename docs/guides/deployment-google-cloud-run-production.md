@@ -96,23 +96,17 @@ gcloud iam service-accounts create $SERVICE_ACCOUNT \
 
 # Generate and store encryption key
 echo "Generating encryption key..."
-age-keygen | base64 | tr -d '\n' | \
+age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-' | tr -d '\n' | \
   gcloud secrets create harmony-encryption-key --data-file=- --project $PROJECT_ID || \
-  (age-keygen | base64 | tr -d '\n' | \
+  (age-keygen 2>/dev/null | grep '^AGE-SECRET-KEY-' | tr -d '\n' | \
    gcloud secrets versions add harmony-encryption-key --data-file=- --project $PROJECT_ID)
-
-# Store JWT secret (replace with your actual secret)
-echo -n "your-production-jwt-secret" | \
-  gcloud secrets create harmony-jwt-secret --data-file=- --project $PROJECT_ID || \
-  (echo -n "your-production-jwt-secret" | \
-   gcloud secrets versions add harmony-jwt-secret --data-file=- --project $PROJECT_ID)
 
 # Store configuration
 gcloud secrets create harmony-config --data-file=config.toml --project $PROJECT_ID || \
   gcloud secrets versions add harmony-config --data-file=config.toml --project $PROJECT_ID
 
 # Grant service account access to secrets
-for SECRET in harmony-config harmony-encryption-key harmony-jwt-secret; do
+for SECRET in harmony-config harmony-encryption-key; do
   gcloud secrets add-iam-policy-binding $SECRET \
     --member="serviceAccount:${SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com" \
     --role="roles/secretmanager.secretAccessor" \
@@ -135,7 +129,6 @@ gcloud run deploy $SERVICE_NAME \
   --service-account "${SERVICE_ACCOUNT}@${PROJECT_ID}.iam.gserviceaccount.com" \
   --set-env-vars "RUST_LOG=harmony=info" \
   --set-secrets "RUNBEAM_ENCRYPTION_KEY=harmony-encryption-key:latest" \
-  --set-secrets "RUNBEAM_JWT_SECRET=harmony-jwt-secret:latest" \
   --update-secrets "/etc/harmony/config.toml=harmony-config:latest" \
   --project $PROJECT_ID
 

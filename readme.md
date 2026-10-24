@@ -338,78 +338,17 @@ See [docs/configuration/configuration-file.md](docs/configuration/configuration-
 - Secrets: do not commit secrets; use environment variables or secret managers
 - Temporary files: prefer ./tmp within the working directory
 
-**Key Environment Variables:**
-- `RUNBEAM_MACHINE_TOKEN`: Pre-provisioned machine token (JSON format) for headless deployments - bypasses `/admin/authorize`
-- `RUNBEAM_ENCRYPTION_KEY`: Encryption key for secure token storage in production/container deployments (base64-encoded age X25519 key)
-- `RUNBEAM_JWT_SECRET`: Shared secret for Runbeam Cloud JWT validation
-- `RUST_LOG`: Logging verbosity control
-
-See [Security Documentation](docs/security/environment-variables.md#environment-variables) for complete environment variable reference, generation commands (Linux/macOS), secret management integration (Vault, AWS, Azure), and production deployment examples.
-
-**Encryption Key Management:**
-
-Harmony Proxy supports flexible encryption key management for securing machine tokens with three options:
-
-**1. CLI-Managed Keys (Recommended for Multiple Instances)**
-
-The `runbeam-cli` can manage encryption keys for specific Harmony instances:
+**Environment variables:**
 
 ```bash
-# Add instance with CLI-managed encryption key
-runbeam harmony:add my-instance https://my-instance.com --generate-key
-
-# Or provide your own key
-runbeam harmony:add my-instance https://my-instance.com \
-  --encryption-key AGE-SECRET-KEY-...
-
-# Manage keys after setup
-runbeam harmony:set-key my-instance AGE-SECRET-KEY-...
-runbeam harmony:show-key my-instance
-runbeam harmony:delete-key my-instance
-```
-
-The CLI can optionally manage and send encryption keys to Harmony's `/admin/authorize` endpoint during gateway authorization.
-
-**2. Environment Variable (Recommended for Single Instance/Container)**
-
-Set `RUNBEAM_ENCRYPTION_KEY` for the Harmony process:
-
-```bash
-export RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-...
+export RUST_LOG=harmony=info                       # overrides logging.log_level
+export RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-1...  # encrypts the stored machine token
 ./harmony --config config.toml
 ```
 
-This is ideal for containerized deployments where you want consistent encryption across restarts.
-
-**3. Auto-Generated Keys (Development/Fallback)**
-
-If neither CLI keys nor environment variables are provided, Harmony auto-generates and stores a unique encryption key per instance at `~/.runbeam/<proxy_id>/encryption.key` with 0600 permissions.
-
-**Priority Order:**
-1. CLI-provided key (via `/admin/authorize` request)
-2. `RUNBEAM_ENCRYPTION_KEY` environment variable
-3. Auto-generated key
-
-**Storage Backend:**
-- **Encrypted Filesystem**: `~/.runbeam/<proxy_id>/auth.json` encrypted with age X25519
-
-**Headless/Pre-Provisioned Deployments:**
-
-For fully automated deployments where you can't call `/admin/authorize`, provide the machine token directly:
-
-```bash
-# Export machine token as JSON
-export RUNBEAM_MACHINE_TOKEN='{"machine_token":"mt_abc...","expires_at":"2025-12-31T23:59:59Z","gateway_id":"gw-123","gateway_code":"prod-gw","abilities":[],"issued_at":"2025-01-01T00:00:00Z"}'
-
-# Optionally set encryption key for storage persistence
-export RUNBEAM_ENCRYPTION_KEY=AGE-SECRET-KEY-...
-
-./harmony --config config.toml
-```
-
-Harmony will use `RUNBEAM_MACHINE_TOKEN` on startup and optionally persist it to storage if it needs to be reused. Priority: environment variable > stored token.
-
-See [Management API Documentation](docs/api/management-api-endpoints.md#post-base_pathauthorize) for API details and [Security Documentation](docs/security/overview.md) for key generation best practices.
+- [Environment Variables](docs/configuration/environment.md): every variable Harmony reads, with defaults and precedence.
+- [Managing Secrets](docs/security/secrets.md): key generation, rotation, and secret managers.
+- [Encryption Key Management](docs/security/encryption-key-management.md): CLI-managed, environment, auto-generated, and pre-provisioned keys and tokens.
 
 ## Contributing
 We welcome issues and pull requests! Please read [CONTRIBUTING.md](CONTRIBUTING.md) and [DEVELOPER.md](DEVELOPER.md) for workflow and development standards. Our community guidelines are defined in [CODE_OF_CONDUCT.md](CODE_OF_CONDUCT.md).

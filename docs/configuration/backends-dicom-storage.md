@@ -63,7 +63,7 @@ persistent_store_scp = true
 use_tls = false
 ``` path=null start=null
 
-**Prerequisites**: DCMTK is needed for C-MOVE only (see [dimse-integration.md](../integrations/dicom-dimse.md))
+**Prerequisites**: DCMTK is needed for C-MOVE only (see [DIMSE Integration](../integrations/dicom-dimse.md))
 
 **Supported Operations**:
 - `C-ECHO`: Test connectivity
@@ -133,7 +133,7 @@ A failed store has `"success": false` and an `error` string. A `dicom_scp`
 endpoint in front of this backend then answers the sending device with status
 `0xC000`.
 
-See [dimse-integration.md](../integrations/dicom-dimse.md) for detailed DIMSE usage.
+See [DIMSE Integration](../integrations/dicom-dimse.md) for detailed DIMSE usage.
 
 ## Storage (Filesystem/S3)
 

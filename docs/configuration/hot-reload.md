@@ -6,62 +6,69 @@ updated: 2026-10-24
 type: Configuration
 related:
   - configuration/configuration-file.md
+  - architecture/config-reload.md
 ---
 
 # Hot Configuration Reload
 
-Which configuration changes reload without a restart, and how to use reload. This page is part of [Configuration](configuration-file.md).
-
-## Hot Configuration Reload
+Harmony applies most configuration changes while it runs. Save the config file and Harmony reloads it. This page is part of [Configuration](configuration-file.md). For how reload works inside Harmony, see [Config Hot-Reload Strategy](../architecture/config-reload.md).
 
 **Status**: Available since v0.4.0
 
-Harmony supports hot-reloading configuration changes without requiring a full application restart. Changes are automatically detected and applied based on their impact.
+## How It Works
 
-### How It Works
+Harmony starts a file watcher when you run it with a config file. The watcher reloads on file changes only. There is no reload endpoint in the Management API and no reload signal.
 
-The config file watcher monitors your configuration file for changes with a 200ms debounce. When changes are detected:
+The watcher watches two places:
 
-1. **Validation**: New config is validated before applying
-2. **Diff Computation**: Changes are classified into categories
-3. **Apply Strategy**:
-   - **Zero-downtime changes**: Atomic config swap (instant)
-   - **Adapter restarts**: Selective restart of affected networks only
-   - **Process restart required**: New values are stored but not applied. A WARN names the sections
-4. **Logging**: Reload results logged with details
+- The main config file.
+- The pipelines directory (`proxy.pipelines_path`), and everything under it. Harmony watches it only if it exists at startup.
 
-### Change Classification
+When a watched file changes, Harmony:
 
-#### Zero-Downtime Changes (Instant)
+1. Waits 200ms for the file to settle.
+2. Loads and validates the whole config. If that fails, it logs an error and keeps the old config.
+3. Compares the new config with the running one, table by table.
+4. Swaps in the new config. New requests use it at once.
+5. Restarts each network whose listeners must change.
+6. Logs what changed.
 
-These changes are picked up on the next request with no service interruption:
+## What Each Table Needs
 
-- **Middleware configuration**: Transform specs, auth rules, custom middleware options
-- **Route definitions**: Groups, endpoints, backends, path patterns
-- **Backend configuration**: Target URLs, timeouts, retry policies
-- **Policies and rules**: The top-level `[policies]` and `[rules]` tables
-- **Other tables read when used**: `[authentications]`, `[targets]`, `[peers]`, `[management]`
+| Table | On reload |
+|-------|-----------|
+| `[middleware]`, `[policies]`, `[rules]` | Zero downtime |
+| `[pipelines]`, `[endpoints]`, `[backends]` | Zero downtime, except DIMSE listener changes (see below) |
+| `[authentications]`, `[targets]`, `[peers]`, `[management]` | Zero downtime |
+| `[network.<name>]`, any field | Restarts that network |
+| New or removed `[network.<name>]` | Starts or stops that network |
+| `[mesh]`, `[ingress]`, `[egress]`, `[remote_ingress]` | Restarts every network |
+| `[logging]`, `[storage]`, `[provider]`, `[proxy]`, `[runbeam]`, `[services]`, `[middleware_types]`, `[extensions]` | Process restart needed for full effect |
 
-#### Adapter Restart Required (Brief Interruption)
+Some pipeline, endpoint and backend changes also restart a network:
 
-These changes require restarting specific protocol adapters (~1-2 second interruption for affected networks only):
+- A network gains its first pipeline of a protocol, or loses its last one. A network starts only the adapters its pipelines need.
+- A change to the `dicom_scp` endpoints or persistent-SCP backends a network serves, or to their options.
 
-- **Network topology**: Bind addresses, bind ports
-- **Adding/removing networks**: New adapters started or old ones stopped
-- **WireGuard configuration**: Interface names, peer settings
-- **Protocol-specific settings**: TLS certificates, connection pool sizes
-- **DIMSE listeners**: Any change to a network's `dicom_scp` endpoints or persistent-SCP backends
-- **Mesh routing**: Any change to `[mesh]`, `[ingress]`, `[egress]` or `[remote_ingress]` restarts every network
+A network restart stops every adapter on that network and starts them again. Other networks keep running.
 
-#### Process Restart Required
+### Process restart tables
 
-`[logging]`, `[storage]`, `[provider]`, `[proxy]`, `[runbeam]`, `[services]`, `[middleware_types]` and `[extensions]` are read wholly or partly at startup. A reload swaps in their new values and logs a warning. Restart the process for full effect. See [config-reload.md](../architecture/config-reload.md) for details.
+A reload still swaps in the new values for these tables. Code that reads the live config sees them. Code that read them at startup does not. Harmony logs a WARN that names the tables. Restart Harmony to apply them fully.
 
-### Usage
+What does not change until a restart:
 
-#### Automatic Reload (Default)
+- `[logging]`: the log level and log file. `RUST_LOG` is also read only at startup.
+- `[storage]`: the storage backend.
+- `[provider]`: the cloud polling interval. The provider list itself updates on reload.
+- `[proxy]`: the watched pipelines directory, and other `[proxy]` values read at startup.
+- `[runbeam]`: whether cloud polling runs.
+- `[services]` and `[middleware_types]`: the service and middleware type registries.
+- `[extensions]`: settings that plugins read when they start.
 
-File watching is enabled by default when you run Harmony:
+## Usage
+
+Run Harmony with a config file:
 
 ```bash
 cargo run -- --config config/config.toml
@@ -69,35 +76,53 @@ cargo run -- --config config/config.toml
 ./harmony --config config/config.toml
 ```
 
-Simply edit `config/config.toml` and save - changes will be detected and applied automatically.
+Edit the file and save it. Harmony reloads it.
 
-#### Reload Behavior Examples
+To check a config before you save it over the live one, run:
 
-**Example 1: Zero-Downtime Change**
+```bash
+./harmony --config path/to/new-config.toml --validate-config
+```
+
+## Examples
+
+**Example 1: add middleware (zero downtime)**
+
 ```toml
-# Add middleware to existing config
 [middleware.my_transform]
 type = "transform"
 
 [middleware.my_transform.options]
-spec_path = "transforms/my_spec.json"
+spec_path = "my_spec.json"
 ```
 
-Result: Atomic config swap, next request uses new middleware. No downtime.
+Harmony swaps in the new config. The next request that runs this middleware uses it. Log output:
 
-**Example 2: Adapter Restart**
+```
+✓ Config reloaded successfully
+  Zero-downtime changes: ["middleware"]
+```
+
+**Example 2: change a port (network restart)**
+
 ```toml
-# Change HTTP port
 [network.default.http]
 bind_address = "127.0.0.1"
-bind_port = 8081  # Changed from 8080
+bind_port = 8081  # was 8080
 ```
 
-Result: HTTP adapter for "default" network restarted on new port. DIMSE adapter unaffected. Brief interruption (~1-2s) for HTTP requests on "default" network only.
+Harmony restarts every adapter on the `default` network, including DIMSE and HTTP/3. Requests to that network fail until the new listener is up. Log output:
 
-**Example 3: Network Addition**
+```
+✓ Config reloaded successfully
+  Networks restarted: ["default"]
+  Networks added: []
+  Networks removed: []
+```
+
+**Example 3: add a network**
+
 ```toml
-# Add new network
 [network.secondary]
 interface = "eth1"
 
@@ -106,11 +131,11 @@ bind_address = "0.0.0.0"
 bind_port = 8082
 ```
 
-Result: New adapters started for "secondary" network. Existing "default" network unaffected.
+Harmony starts adapters for `secondary`. The `default` network keeps running.
 
-**Example 4: Adding HTTP/3 to a Network**
+**Example 4: add HTTP/3 to a network**
+
 ```toml
-# Add HTTP/3 listener alongside existing HTTP
 [network.default.http3]
 bind_address = "0.0.0.0"
 bind_port = 443
@@ -118,78 +143,70 @@ cert_path = "/etc/harmony/certs/fullchain.pem"
 key_path = "/etc/harmony/certs/privkey.pem"
 ```
 
-Result: Http3Adapter started on UDP port 443. Existing HTTP adapter on TCP port 8080 continues running. Both adapters serve the same pipelines.
+This changes the `default` network, so Harmony restarts that whole network. After the restart, HTTP on TCP and HTTP/3 on UDP port 443 serve the same pipelines.
 
-### Error Handling
+## Errors
 
-#### Invalid Configuration
+### Invalid configuration
 
-If the new configuration is invalid:
-- Validation errors are logged with details
-- **Old configuration is retained** - application continues running
-- No service interruption
-
-Example log output:
-```
-❌ Config reload failed: Configuration validation failed
-  Reason: Network 'default' has invalid bind port
-```
-
-#### Partial Reload Failure
-
-If adapter restart fails:
-- Error logged with network name
-- Old adapter continues running if possible
-- Other networks unaffected
-
-### Monitoring Reloads
-
-Watch the logs for reload events:
+Harmony keeps the old config and keeps serving. It logs the reason:
 
 ```
-📡 Watching config file for changes: config/config.toml
-✓ Config reloaded successfully
-  Zero-downtime changes: ["middleware", "endpoints"]
+❌ Config reload failed: Config validation failed: Invalid network 'default': interface is empty
 ```
 
-Or for adapter restarts:
+### A network fails to restart
+
+This happens after validation passed, for example when the new port is in use. Harmony behaves as follows:
+
+- The new config is already active. Harmony does not roll back.
+- Harmony still tries every other network.
+- A network that failed may be left stopped.
+- Harmony remembers the failed network and restarts it on the next reload, even if that reload changes nothing.
+
+Log output:
+
 ```
-✓ Config reloaded successfully
-  Networks restarted: ["default"]
-  Zero-downtime changes: ["backends"]
+❌ Config reload failed: New config is active, but some networks failed and will be retried on the next reload: restarting 'default': <reason>
 ```
 
-### Best Practices
+To retry after you fix the cause, save the config file again. The next reload logs `Retrying networks that failed on an earlier reload: ["default"]`.
 
-1. **Test config changes locally** before deploying to production
-2. **Use zero-downtime changes** when possible (middleware, routes, backends)
-3. **Schedule network topology changes** during low-traffic periods
-4. **Monitor logs** after config changes to verify successful reload
-5. **Keep backups** of previous config versions for quick rollback
-6. **Staged rollout**: Change non-critical settings first, then network topology
+## Limitations
 
-### Limitations
+- **One second between reloads.** After a successful reload, Harmony drops file changes for one second. It does not queue them. If you save twice inside a second, save again to apply the second change.
+- **Unwatched directories.** Changes under `proxy.transforms_path` and `proxy.mesh_path` do not trigger a reload. A pipelines directory created after startup is not watched either. Save the main config file to reload after such a change.
+- **No log for unchanged saves.** A save that changes nothing logs nothing.
+- **Network restarts interrupt traffic.** Harmony stops a network's adapters before it starts new ones. New requests to that network fail until the new adapters are up. Harmony waits up to 10 seconds for the old adapters to stop, then aborts them. Requests still running at that point fail.
+- **No rollback.** A failed network restart leaves the new config active.
+- **No audit trail.** Harmony does not record a history of config changes.
 
-- **In-flight requests**: Requests active during adapter restart may fail
-- **No connection draining**: Adapters shut down immediately (future enhancement)
-- **No automatic rollback**: Failed partial reloads keep old config but may leave inconsistent state
-- **No audit trail**: Config changes not logged/tracked (future enhancement)
+## Best Practices
 
-### Troubleshooting
+1. Run `--validate-config` on a new config before you save it over the live one.
+2. Prefer zero-downtime changes where you can.
+3. Make network and mesh changes during quiet periods. Mesh changes restart every network.
+4. Read the logs after each save. Check for the `✓` line or a WARN.
+5. Restart the process after you change a process restart table.
+6. Keep copies of earlier configs so you can roll back by saving the old file.
 
-**Config changes not detected?**
-- Verify file watcher is active (check logs for "📡 Watching config file")
-- Ensure 200ms debounce period has elapsed
-- Check file permissions
+## Troubleshooting
 
-**Reload failed?**
-- Check logs for validation errors
-- Verify config syntax with `cargo run -- --config config/config.toml --validate` (future feature)
-- Ensure referenced files (transforms, certs) exist
+**Changes are not detected**
 
-**Adapters not restarting?**
-- Verify network name matches config
-- Check for port conflicts
-- Review adapter-specific logs
+- Check the startup log for `📡 Watching config file for changes`.
+- Check whether the change is in an unwatched directory.
+- Wait one second after the last reload, then save again.
+- Harmony reacts only to file modify events. Some editors save by writing a new file and renaming it. That may stop the watch. Restart Harmony if saves stop being detected.
 
-For more details on the hot-reload architecture, see [docs/architecture/config-reload.md](../architecture/config-reload.md).
+**Reload failed**
+
+- Read the `❌ Config reload failed` line. It names the cause.
+- Run `--validate-config` on the file.
+- Check that referenced files, such as transform specs and certificates, exist.
+
+**A network did not come back**
+
+- Look for `restarting '<name>'` in the failure line.
+- Check for a port already in use.
+- Fix the cause and save the config file again.

@@ -27,7 +27,7 @@ Machine tokens issued by Runbeam Cloud are sensitive credentials that grant auto
 The SDK provides an encrypted storage backend:
 
 #### EncryptedFilesystemStorage
-- Stores encrypted files at `~/.runbeam/<instance_id>/auth.json`
+- Stores encrypted files at `~/.runbeam/<instance_id>/runbeam/auth.json`
 - Uses age X25519 encryption
 - Encryption key sources (priority order):
   1. `RUNBEAM_ENCRYPTION_KEY` environment variable (base64-encoded)
@@ -92,9 +92,9 @@ save_token(&proxy_id, &machine_token).await?;
 ```
 
 This ensures tokens for different instances are stored separately:
-- `~/.runbeam/harmony-prod/auth.json`
-- `~/.runbeam/harmony-staging/auth.json`
-- `~/.runbeam/harmony-dev/auth.json`
+- `~/.runbeam/harmony-prod/runbeam/auth.json`
+- `~/.runbeam/harmony-staging/runbeam/auth.json`
+- `~/.runbeam/harmony-dev/runbeam/auth.json`
 
 ## Implementation Details
 
@@ -166,7 +166,7 @@ export RUNBEAM_ENCRYPTION_KEY="$ENCRYPTION_KEY"
 ./harmony --config config.toml
 
 # Verify token encryption
-ls -la ~/.runbeam/harmony/auth.json
+ls -la ~/.runbeam/harmony/runbeam/auth.json
 # Should show encrypted data, not plaintext JSON
 ```
 

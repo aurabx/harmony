@@ -19,13 +19,10 @@ Reference for Harmony's configuration files, pipeline components, and validation
   - [Transform Middleware](middleware-transforms.md): Reference for middleware that transforms or converts request and response data.
   - [Utility Middleware](middleware-utilities.md): Reference for the log dump, webhook, and passthru middleware.
 - [Pipeline Middleware Split Configuration](middleware-split-configuration.md): How to configure pipeline middleware as a single list or as separate request and response lists.
-- [Policies Middleware](policies-middleware.md): How to configure the policies middleware, its evaluation logic, and rule weighting.
+- [Policies Middleware](policies-middleware.md): How to configure the policies middleware, a summary of all rule types, evaluation logic, status codes, rule weighting, and known issues.
   - [Policy Rules: Source and Access](policies-rules-source.md): Policy rule types that match on client address, path, location, headers, and rate.
   - [Policy Rules: Request Attributes](policies-rules-request.md): Policy rule types that match on time, method, user agent, content type, and query parameters.
   - [Policy Patterns and Troubleshooting](policies-patterns.md): Common policy patterns, best practices, troubleshooting, and examples.
-- [Policy Rules Quick Reference](policy-rules-reference.md): Quick reference for every policy rule type and its options.
-  - [Policy Rules Reference: Request Attributes](policy-rules-reference-request.md): Quick reference for the time, method, user agent, content type, and query parameter rules.
-  - [Policy Rules Examples](policy-rules-examples.md): Complete policy configurations that combine several rule types.
 - [Multi-Content-Type Support](content-types.md): How Harmony parses JSON, XML, CSV, form data, multipart, and binary bodies.
   - [Supported Content Types](content-types-formats.md): How each supported content type is parsed into normalised data.
   - [Content Type Security and Error Handling](content-types-handling.md): Security limits, error handling, fallback behaviour, and troubleshooting for content parsing.

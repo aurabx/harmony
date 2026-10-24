@@ -144,7 +144,7 @@ This endpoint implements the gateway authorization flow:
 ```bash
 # Authorize gateway with Runbeam Cloud
 curl -X POST http://localhost:9090/admin/authorize \
-  -H "Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..." \
+  -H "Authorization: Bearer eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..." \
   -H "Content-Type: application/json" \
   -d '{
     "gateway_id": "harmony-prod-01",
@@ -236,10 +236,10 @@ curl -X POST http://localhost:9090/admin/authorize \
 ```
 
 **Notes:**
-- The JWT token is obtained via the `runbeam login` CLI command or as a Laravel Sanctum API token
-- Both JWT and Sanctum tokens are supported for authorization
+- The JWT token is obtained via the `runbeam login` CLI command
+- Harmony accepts RS256 JWTs only. It validates the signature against the JWKS endpoint at the base URL of the token's `iss` claim. Harmony passes no trusted issuer list, so the SDK accepts a token from any issuer whose JWKS it can fetch. It logs a security warning when it does this.
 - Machine tokens are securely stored using:
-  - **Encrypted Filesystem** (`~/.runbeam/<proxy_id>/auth.json`) with age X25519 encryption
+  - **Encrypted Filesystem** (`~/.runbeam/<proxy_id>/runbeam/auth.json`) with age X25519 encryption
   - Storage is automatic - no configuration needed
 - **Encryption Key Management:**
   - If `encryption_key` is provided in the request, it will be used for token encryption
@@ -247,7 +247,7 @@ curl -X POST http://localhost:9090/admin/authorize \
   - If neither is set, the SDK auto-generates and stores a unique key per instance
   - CLI-managed keys allow centralized encryption key management across Harmony instances
 - Machine tokens expire after 30 days and must be renewed
-- The Runbeam API base URL is extracted from the JWT's `iss` (issuer) claim (JWT tokens) or configured directly (Sanctum tokens)
+- Harmony calls the Runbeam Cloud API at the primary provider's `api` URL, which defaults to `https://api.runbeam.cloud`
 - Each gateway instance uses its `proxy.id` from the configuration as the storage `instance_id` for isolated token storage
 
 ### POST /{base_path}/token
@@ -317,7 +317,7 @@ curl -X POST http://localhost:9090/admin/token \
 **Notes:**
 - This endpoint is called automatically by the `runbeam harmony:authorize` CLI command
 - If `encryption_key` is provided, it will be used to encrypt the token (via `RUNBEAM_ENCRYPTION_KEY` environment variable)
-- If no `encryption_key` is provided, Harmony will auto-generate one
+- If no `encryption_key` is provided, Harmony uses `RUNBEAM_ENCRYPTION_KEY` if set, and otherwise auto-generates a key
 - For manual authorization without the CLI, you can generate an age encryption key:
   ```bash
   # Generate a new encryption key

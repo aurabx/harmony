@@ -14,7 +14,7 @@ The Command system provides a **typed, protocol-agnostic way to express operatio
 
 Endpoints set commands. Backends interpret them. Middleware can read or modify them.
 
-> **For extension developers**: If you are building custom services via the extension system, see [extensions.md](extensions-types.md#service-factories) for how to register your service, then return here for how to produce and consume Commands.
+> **For extension developers**: If you are building custom services via the extension system, see [Extension Types](extensions-types.md#service-factories) for how to register your service, then return here for how to produce and consume Commands.
 
 ## Key Types
 
