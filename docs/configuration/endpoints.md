@@ -2,7 +2,7 @@
 title: Endpoints
 description: Endpoint types (HTTP, FHIR, JMIX, DICOMweb, DIMSE) and their connection settings.
 status: active
-updated: 2026-09-24
+updated: 2026-10-25
 type: Configuration
 ---
 
@@ -196,6 +196,29 @@ service = "dicomweb"
 [endpoints.dicomweb_pacs.options]
 path_prefix = "/pacs"
 ```
+
+#### STOW-RS response
+
+STOW-RS uses `POST /dicomweb/studies` and `POST /dicomweb/studies/{study_uid}`. When the backend is `dicom_scu`, Harmony sends one C-STORE per instance. It then answers with the Store Instances Response from PS3.18 Section 10.5.3.
+
+The response has the media type `application/dicom+json`. The status code reports the outcome:
+
+| Status | Meaning |
+|--------|---------|
+| 200 OK | Every instance was stored. |
+| 202 Accepted | Some instances were stored and some failed. |
+| 409 Conflict | No instance was stored. |
+
+The body is a DICOM JSON data set with these attributes:
+
+- Referenced SOP Sequence (0008,1199) lists each stored instance. Each item holds the SOP Class UID (0008,1150) and SOP Instance UID (0008,1155).
+- Failed SOP Sequence (0008,1198) lists each failed instance with both UIDs and a Failure Reason (0008,1197). The reason is 0x0110 (272) when the PACS does not take the instance.
+- Other Failures Sequence (0008,119A) holds the Failure Reason of each part that Harmony could not read. The reason is 0xC000 (49152).
+- Retrieve URL (0008,1190) is always present and always empty, at the top level and in each Referenced SOP item. Harmony cannot reliably know the public URL a client used, for example behind a reverse proxy.
+
+Each part of a multipart STOW-RS request must be a DICOM Part 10 file with a SOP Class UID and a SOP Instance UID. Harmony does not send any other part to the PACS. It reports that part in the Other Failures Sequence.
+
+When the backend is a DICOMweb HTTP server, Harmony returns that server's response unchanged.
 
 ### DICOM SCP (Service Class Provider)
 

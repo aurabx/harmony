@@ -160,6 +160,39 @@ impl DicomwebEndpoint {
                     .body(Body::from(r#"{"error":"Missing frame data"}"#))
                     .map_err(|_| Error::from("Failed to construct error response"))
             }
+            "stow_json" => {
+                // STOW-RS Store Instances Response (PS3.18 10.5.3). The status
+                // carries the outcome (200, 202 or 409), so a missing one is a
+                // defect upstream. It is never defaulted to 200.
+                let raw_status = metadata.and_then(|m| m.get("status"));
+                let status = raw_status
+                    .and_then(|v| v.as_u64())
+                    .and_then(|s| u16::try_from(s).ok())
+                    .and_then(|s| http::StatusCode::from_u16(s).ok())
+                    .ok_or_else(|| {
+                        let msg = format!(
+                            "STOW-RS response has no valid dicomweb_metadata.status (got {:?})",
+                            raw_status
+                        );
+                        // The HTTP adapter drops the error text when it maps
+                        // this to a 500, so log it here.
+                        tracing::error!("{}", msg);
+                        Error::from(msg)
+                    })?;
+                let json_data = data.ok_or_else(|| {
+                    let msg = "STOW-RS response has no dicomweb_data";
+                    tracing::error!("{}", msg);
+                    Error::from(msg)
+                })?;
+                let body_str = serde_json::to_string(json_data)
+                    .map_err(|_| Error::from("Failed to serialize STOW-RS response JSON"))?;
+
+                Response::builder()
+                    .status(status)
+                    .header("content-type", "application/dicom+json")
+                    .body(Body::from(body_str))
+                    .map_err(|_| Error::from("Failed to construct STOW-RS response"))
+            }
             "capabilities" => {
                 // Capabilities response: return the services JSON directly
                 let json_data = data.cloned().unwrap_or(serde_json::json!({}));
@@ -1217,5 +1250,86 @@ mod tests {
         let routes = endpoint.build_router(&options);
         assert!(!routes.is_empty());
         assert!(routes[0].path.starts_with("/fallback"));
+    }
+
+    fn stow_envelope(normalized_data: Value) -> ResponseEnvelope<Vec<u8>> {
+        ResponseEnvelope {
+            request_details: RequestDetails {
+                method: "POST".to_string(),
+                uri: "/dicomweb/studies".to_string(),
+                headers: HashMap::new(),
+                cookies: HashMap::new(),
+                query_params: HashMap::new(),
+                cache_status: None,
+                metadata: HashMap::new(),
+                content_metadata: None,
+            },
+            response_details: ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
+            command: None,
+            original_data: vec![],
+            normalized_data: Some(normalized_data),
+            normalized_snapshot: None,
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stow_response_uses_status_and_dicom_json() {
+        let endpoint = DicomwebEndpoint {};
+        let dataset = serde_json::json!({
+            "00081190": {"vr": "UR"},
+            "00081198": {"vr": "SQ", "Value": [{
+                "00081150": {"vr": "UI", "Value": ["1.2.840.10008.5.1.4.1.1.2"]},
+                "00081155": {"vr": "UI", "Value": ["1.2.3.4"]},
+                "00081197": {"vr": "US", "Value": [272]}
+            }]}
+        });
+        let envelope = stow_envelope(serde_json::json!({
+            "dicomweb_response_type": "stow_json",
+            "dicomweb_data": dataset,
+            "dicomweb_metadata": {"status": 409}
+        }));
+
+        let resp = endpoint
+            .endpoint_outgoing_response(envelope, &HashMap::new())
+            .await
+            .expect("STOW-RS response");
+
+        assert_eq!(resp.status(), http::StatusCode::CONFLICT);
+        assert_eq!(
+            resp.headers().get("content-type").unwrap(),
+            "application/dicom+json"
+        );
+        let body_bytes = to_bytes(resp.into_body(), usize::MAX).await.unwrap();
+        let body: Value = serde_json::from_slice(&body_bytes).unwrap();
+        assert_eq!(body, dataset);
+    }
+
+    #[tokio::test]
+    async fn test_stow_response_without_status_is_an_error() {
+        let endpoint = DicomwebEndpoint {};
+        for metadata in [
+            serde_json::json!({}),
+            serde_json::json!({"status": "200"}),
+            serde_json::json!({"status": 70000}),
+        ] {
+            let envelope = stow_envelope(serde_json::json!({
+                "dicomweb_response_type": "stow_json",
+                "dicomweb_data": {"00081190": {"vr": "UR"}},
+                "dicomweb_metadata": metadata
+            }));
+
+            let result = endpoint
+                .endpoint_outgoing_response(envelope, &HashMap::new())
+                .await;
+
+            match result {
+                Ok(resp) => panic!("expected an error for {}, got {}", metadata, resp.status()),
+                Err(e) => assert!(e.to_string().contains("status"), "unexpected error: {}", e),
+            }
+        }
     }
 }
