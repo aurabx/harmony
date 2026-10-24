@@ -412,25 +412,52 @@ pub(crate) async fn extract_multipart_dicom_parts(
     Ok(parts)
 }
 
-/// PS3.18 Failure Reason 0x0110, Processing failure.
-const STOW_FAILURE_PROCESSING: u16 = 0x0110;
-/// PS3.18 Failure Reason 0xC000, Cannot understand.
-const STOW_FAILURE_CANNOT_UNDERSTAND: u16 = 0xC000;
+/// PS3.18 Failure Reason 0x0110, Processing failure. The remote node did not
+/// take the instance.
+pub(crate) const STOW_FAILURE_PROCESSING: u16 = 0x0110;
 
-/// One entry of the `results` array the `dicom_scu` backend returns for a store.
-#[derive(Debug, serde::Deserialize)]
-struct StowPartResult {
-    success: bool,
-    sop_class_uid: Option<String>,
-    sop_instance_uid: Option<String>,
-    failure_reason: Option<u16>,
+/// PS3.18 Failure Reason 0xC000, Cannot understand. The instance was never
+/// sent because it could not be read.
+pub(crate) const STOW_FAILURE_CANNOT_UNDERSTAND: u16 = 0xC000;
+
+/// The outcome of storing one instance.
+///
+/// The `dicom_scu` backend returns one per instance in the `results` array of
+/// its store response. `build_stow_response` turns them into the PS3.18 Store
+/// Instances Response. Both sides use this type so the contract lives in one
+/// place.
+#[derive(Debug, Clone, PartialEq, serde::Serialize, serde::Deserialize)]
+pub(crate) struct StowPartResult {
+    /// Position of the instance in the request, from 0.
+    pub index: usize,
+    /// True when the remote node took the instance.
+    pub success: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sop_class_uid: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sop_instance_uid: Option<String>,
+    /// PS3.18 Failure Reason. Set only when `success` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub failure_reason: Option<u16>,
+    /// Why the instance was not stored. Set only when `success` is false.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+impl StowPartResult {
+    /// The JSON form carried in the backend response.
+    pub(crate) fn to_json(&self) -> Value {
+        // Serialising can only fail for maps with non-string keys or a custom
+        // `Serialize` that errors. This struct has neither.
+        serde_json::to_value(self).expect("StowPartResult always serialises to JSON")
+    }
 }
 
 /// Build the PS3.18 STOW-RS Store Instances Response from a store's results.
 ///
-/// `results` is the `results` array of a `dicom_scu` store response, one entry
-/// per instance. Returns the HTTP status and the response data set in the
-/// DICOM JSON model (PS3.18 Annex F.2):
+/// `results` is the `results` array of a `dicom_scu` store response, one
+/// `StowPartResult` per instance. Returns the HTTP status and the response
+/// data set in the DICOM JSON model (PS3.18 Annex F.2):
 /// - 200 when every instance was stored, 202 when some were, 409 when none were.
 /// - Referenced SOP Sequence (0008,1199) lists the stored instances.
 /// - Failed SOP Sequence (0008,1198) lists failed instances whose SOP Class
@@ -442,15 +469,21 @@ struct StowPartResult {
 /// Failures item of 0xC000. An entry that does not parse is counted as a
 /// failure with Failure Reason 0x0110.
 pub(crate) fn build_stow_response(results: &[Value]) -> (u16, Value) {
+    let mut stored: usize = 0;
     let mut referenced: Vec<Value> = Vec::new();
     let mut failed: Vec<Value> = Vec::new();
     let mut other: Vec<Value> = Vec::new();
 
-    for raw in results {
+    for (position, raw) in results.iter().enumerate() {
         let entry = match serde_json::from_value::<StowPartResult>(raw.clone()) {
             Ok(entry) => entry,
             Err(e) => {
-                tracing::error!("STOW-RS: unreadable store result {}: {}", raw, e);
+                // The entry may hold UIDs and backend error text. Log neither.
+                tracing::error!(
+                    "STOW-RS: unreadable store result at position {}: {}",
+                    position,
+                    e
+                );
                 other.push(stow_other_failure_item(STOW_FAILURE_PROCESSING));
                 continue;
             }
@@ -458,7 +491,23 @@ pub(crate) fn build_stow_response(results: &[Value]) -> (u16, Value) {
         let class_uid = entry.sop_class_uid.filter(|u| !u.is_empty());
         let instance_uid = entry.sop_instance_uid.filter(|u| !u.is_empty());
         if entry.success {
-            referenced.push(stow_referenced_item(class_uid, instance_uid));
+            stored += 1;
+            match (class_uid, instance_uid) {
+                (Some(class_uid), Some(instance_uid)) => {
+                    referenced.push(stow_referenced_item(class_uid, instance_uid))
+                }
+                // Both UIDs are Type 1 in a Referenced SOP item, so an item
+                // without them would be invalid. Listing the instance as a
+                // failure would be false: the PACS has it. The instance still
+                // counts as stored for the status code, and is left out of the
+                // sequence. The SCU cannot send an instance without both UIDs,
+                // so this only happens when Harmony could not read them back.
+                (_, _) => tracing::warn!(
+                    "STOW-RS: instance {} was stored but its SOP UIDs are unknown; \
+                     it is not listed in the Referenced SOP Sequence",
+                    entry.index
+                ),
+            }
             continue;
         }
         let reason = entry.failure_reason.unwrap_or(STOW_FAILURE_PROCESSING);
@@ -474,7 +523,7 @@ pub(crate) fn build_stow_response(results: &[Value]) -> (u16, Value) {
     }
 
     let any_failed = !failed.is_empty() || !other.is_empty();
-    let status = match (referenced.is_empty(), any_failed) {
+    let status = match (stored == 0, any_failed) {
         (false, false) => 200,
         (false, true) => 202,
         (true, _) => 409,
@@ -504,18 +553,12 @@ fn stow_empty_retrieve_url() -> Value {
     json!({"vr": "UR"})
 }
 
-/// A Referenced SOP Sequence item. A UID the backend did not report is left
-/// out. That happens only for a single-body store of bare data set bytes.
-fn stow_referenced_item(class_uid: Option<String>, instance_uid: Option<String>) -> Value {
-    let mut item = serde_json::Map::new();
-    if let Some(uid) = class_uid {
-        item.insert("00081150".to_string(), json!({"vr": "UI", "Value": [uid]}));
-    }
-    if let Some(uid) = instance_uid {
-        item.insert("00081155".to_string(), json!({"vr": "UI", "Value": [uid]}));
-    }
-    item.insert("00081190".to_string(), stow_empty_retrieve_url());
-    Value::Object(item)
+fn stow_referenced_item(class_uid: String, instance_uid: String) -> Value {
+    json!({
+        "00081150": {"vr": "UI", "Value": [class_uid]},
+        "00081155": {"vr": "UI", "Value": [instance_uid]},
+        "00081190": stow_empty_retrieve_url(),
+    })
 }
 
 fn stow_failed_item(class_uid: String, instance_uid: String, reason: u16) -> Value {
@@ -2650,6 +2693,65 @@ mod tests {
         assert_eq!(
             sequence_items(&dataset, "0008119A"),
             &vec![serde_json::json!({"00081197": {"vr": "US", "Value": [272]}})]
+        );
+    }
+
+    #[test]
+    fn test_stow_response_stored_without_uids_counts_but_is_not_referenced() {
+        let no_uids = serde_json::json!({"index": 1, "success": true});
+
+        let (status, dataset) = build_stow_response(&[stored("1.2.3.1"), no_uids.clone()]);
+
+        // Stored, so 200 and not a failure. Only the identifiable one is listed.
+        assert_eq!(status, 200);
+        let items = sequence_items(&dataset, "00081199");
+        assert_eq!(items.len(), 1);
+        assert_eq!(
+            items[0]["00081155"],
+            serde_json::json!({"vr": "UI", "Value": ["1.2.3.1"]})
+        );
+        assert!(
+            dataset.get("00081198").is_none(),
+            "no Failed SOP: {}",
+            dataset
+        );
+        assert!(
+            dataset.get("0008119A").is_none(),
+            "no Other Failures: {}",
+            dataset
+        );
+
+        let (status, dataset) = build_stow_response(&[no_uids]);
+        assert_eq!(status, 200);
+        assert!(
+            dataset.get("00081199").is_none(),
+            "no invalid item: {}",
+            dataset
+        );
+    }
+
+    #[test]
+    fn test_stow_part_result_round_trips_through_json() {
+        let result = StowPartResult {
+            index: 3,
+            success: false,
+            sop_class_uid: Some(CT_IMAGE_STORAGE.to_string()),
+            sop_instance_uid: None,
+            failure_reason: Some(STOW_FAILURE_PROCESSING),
+            error: Some("refused".to_string()),
+        };
+
+        let json = result.to_json();
+
+        assert!(
+            json.get("sop_instance_uid").is_none(),
+            "None is left out: {}",
+            json
+        );
+        assert_eq!(json["failure_reason"], 272);
+        assert_eq!(
+            serde_json::from_value::<StowPartResult>(json).unwrap(),
+            result
         );
     }
 

@@ -162,13 +162,17 @@ impl DicomwebEndpoint {
             }
             "stow_json" => {
                 // STOW-RS Store Instances Response (PS3.18 10.5.3). The status
-                // carries the outcome (200, 202 or 409), so a missing one is a
-                // defect upstream. It is never defaulted to 200.
+                // carries the outcome and PS3.18 allows only 200, 202 or 409.
+                // Anything else is a defect upstream. It is never defaulted.
                 let raw_status = metadata.and_then(|m| m.get("status"));
                 let status = raw_status
                     .and_then(|v| v.as_u64())
-                    .and_then(|s| u16::try_from(s).ok())
-                    .and_then(|s| http::StatusCode::from_u16(s).ok())
+                    .and_then(|s| match s {
+                        200 => Some(http::StatusCode::OK),
+                        202 => Some(http::StatusCode::ACCEPTED),
+                        409 => Some(http::StatusCode::CONFLICT),
+                        _ => None,
+                    })
                     .ok_or_else(|| {
                         let msg = format!(
                             "STOW-RS response has no valid dicomweb_metadata.status (got {:?})",
@@ -1309,12 +1313,16 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_stow_response_without_status_is_an_error() {
+    async fn test_stow_response_without_an_allowed_status_is_an_error() {
         let endpoint = DicomwebEndpoint {};
         for metadata in [
             serde_json::json!({}),
             serde_json::json!({"status": "200"}),
             serde_json::json!({"status": 70000}),
+            // Valid HTTP codes that PS3.18 does not allow for STOW-RS.
+            serde_json::json!({"status": 500}),
+            serde_json::json!({"status": 204}),
+            serde_json::json!({"status": 302}),
         ] {
             let envelope = stow_envelope(serde_json::json!({
                 "dicomweb_response_type": "stow_json",
@@ -1330,6 +1338,29 @@ mod tests {
                 Ok(resp) => panic!("expected an error for {}, got {}", metadata, resp.status()),
                 Err(e) => assert!(e.to_string().contains("status"), "unexpected error: {}", e),
             }
+        }
+    }
+
+    #[tokio::test]
+    async fn test_stow_response_accepts_each_allowed_status() {
+        let endpoint = DicomwebEndpoint {};
+        for (status, expected) in [
+            (200, http::StatusCode::OK),
+            (202, http::StatusCode::ACCEPTED),
+            (409, http::StatusCode::CONFLICT),
+        ] {
+            let envelope = stow_envelope(serde_json::json!({
+                "dicomweb_response_type": "stow_json",
+                "dicomweb_data": {"00081190": {"vr": "UR"}},
+                "dicomweb_metadata": {"status": status}
+            }));
+
+            let resp = endpoint
+                .endpoint_outgoing_response(envelope, &HashMap::new())
+                .await
+                .expect("STOW-RS response");
+
+            assert_eq!(resp.status(), expected);
         }
     }
 }
