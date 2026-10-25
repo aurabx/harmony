@@ -407,7 +407,9 @@ impl HttpStreamingEndpoint {
             match result {
                 Ok(envelope) => {
                     // Determine content type from envelope
-                    let content_type = envelope.response_details.headers
+                    let content_type = envelope
+                        .response_details
+                        .headers
                         .get("content-type")
                         .or_else(|| envelope.response_details.headers.get("Content-Type"))
                         .cloned()
@@ -425,14 +427,20 @@ impl HttpStreamingEndpoint {
                     part.push_str(&format!("Content-Type: {}\r\n", content_type));
 
                     // Add custom headers
-                    if let Some(sop_uid) = envelope.response_details.metadata.get("sop_instance_uid") {
+                    if let Some(sop_uid) =
+                        envelope.response_details.metadata.get("sop_instance_uid")
+                    {
                         part.push_str(&format!("X-DICOM-SOP-Instance-UID: {}\r\n", sop_uid));
                     }
                     part.push_str(&format!("X-Stream-Sequence: {}\r\n", sequence));
                     part.push_str("\r\n");
 
-                    debug!("Multipart section #{}: {} + {} bytes", 
-                           sequence, part.len(), envelope.original_data.len());
+                    debug!(
+                        "Multipart section #{}: {} + {} bytes",
+                        sequence,
+                        part.len(),
+                        envelope.original_data.len()
+                    );
 
                     // Combine header and body
                     let mut bytes = Vec::with_capacity(part.len() + envelope.original_data.len());
@@ -444,7 +452,8 @@ impl HttpStreamingEndpoint {
                 Err(e) => {
                     error!("Multipart stream item #{} failed: {}", sequence, e);
                     let error_part = format!(
-                        "\r\n--{}\r\nContent-Type: application/json\r\n\r\n{{\"error\": \"{}\"}}\r\n",
+                        "\r\n--{}\r\nContent-Type: application/json\r\n\r\n\
+                         {{\"error\": \"{}\"}}\r\n",
                         boundary_for_parts, STREAM_ERROR_MESSAGE
                     );
                     Ok(Bytes::from(error_part))
