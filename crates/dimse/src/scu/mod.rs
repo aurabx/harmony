@@ -216,7 +216,8 @@ mod tests {
     /// connect. Either way the caller must see an error.
     #[tokio::test]
     async fn test_move_unreachable_node_yields_error() {
-        let storage_dir = std::env::temp_dir().join(format!("dimse-move-{}", uuid::Uuid::new_v4()));
+        let storage_dir =
+            std::path::PathBuf::from("./tmp").join(format!("dimse-move-{}", uuid::Uuid::new_v4()));
         let scu = DimseScu::new(DimseConfig {
             storage_dir: storage_dir.clone(),
             incoming_store_port: closed_port(),

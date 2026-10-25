@@ -97,11 +97,56 @@ impl DimseError {
         Self::DicomParsing(msg.into())
     }
 
+    /// True when the remote node could not be reached or would not hold an
+    /// association: a network error, a failed or rejected association, or a
+    /// timeout.
+    ///
+    /// False for errors from a node that answered, such as an unsupported SOP
+    /// class or a failure status. Callers use this to decide whether a failed
+    /// step means the node is unusable or only that one operation failed.
+    pub fn is_connection_failure(&self) -> bool {
+        matches!(
+            self,
+            DimseError::Network(_)
+                | DimseError::DicomUl(_)
+                | DimseError::AssociationRejected(_)
+                | DimseError::Timeout(_)
+        )
+    }
+
     /// Check if this error is recoverable
     pub fn is_recoverable(&self) -> bool {
         matches!(
             self,
             DimseError::Network(_) | DimseError::Timeout(_) | DimseError::AssociationRejected(_)
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn connection_and_association_errors_are_connection_failures() {
+        for error in [
+            DimseError::network("connection refused"),
+            DimseError::association("could not connect to server"),
+            DimseError::AssociationRejected("called AE title not recognised".to_string()),
+            DimseError::Timeout("no reply".to_string()),
+        ] {
+            assert!(error.is_connection_failure(), "{:?}", error);
+        }
+    }
+
+    #[test]
+    fn errors_from_a_node_that_answered_are_not_connection_failures() {
+        for error in [
+            DimseError::NotSupported("no presentation context for C-FIND".to_string()),
+            DimseError::operation_failed("C-FIND failed with status: 0xC000"),
+            DimseError::parse("bad identifier"),
+        ] {
+            assert!(!error.is_connection_failure(), "{:?}", error);
+        }
     }
 }
