@@ -36,7 +36,7 @@
 //! }
 //! ```
 
-use crate::models::middleware::UpstreamFailure;
+use crate::models::middleware::{DicomObjectNotFound, UpstreamFailure};
 use crate::pipeline::executor::PipelineError;
 use dimse::types::DimseStatus;
 
@@ -101,6 +101,8 @@ pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
         PipelineError::MiddlewareError(e) => {
             if e.downcast_ref::<UpstreamFailure>().is_some() {
                 DimseStatus::Failure(0xA701) // Out of resources: unable to process
+            } else if e.downcast_ref::<DicomObjectNotFound>().is_some() {
+                DimseStatus::Failure(0xA801) // No such object instance
             } else {
                 DimseStatus::Failure(0x0110) // Processing failure
             }
@@ -235,6 +237,17 @@ mod tests {
         assert_eq!(
             pipeline_error_to_dimse(&error),
             DimseStatus::Failure(0xA701)
+        );
+    }
+
+    #[test]
+    fn test_middleware_dicom_object_not_found_maps_to_a801() {
+        let error = PipelineError::MiddlewareError(Box::new(DicomObjectNotFound(
+            "C-GET matched no instances".to_string(),
+        )));
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0xA801)
         );
     }
 

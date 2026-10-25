@@ -39,7 +39,9 @@ pub struct AccessDenied(pub String);
 ///
 /// A backend reported that the requested operation failed, for example a
 /// DIMSE C-FIND, C-GET or C-MOVE that could not reach the remote PACS.
-/// Maps to HTTP 502 Bad Gateway and DIMSE status 0xA701.
+/// The HTTP adapters answer with 502 Bad Gateway.
+/// `status_mapper::pipeline_error_to_dimse` maps it to 0xA701, but the DIMSE
+/// adapter does not call that function yet and sends 0xC000.
 ///
 /// The message names the operation and carries the raw backend error, which
 /// often includes hosts, ports and AE titles. It is for server logs only.
@@ -50,3 +52,15 @@ pub struct UpstreamFailure {
     pub operation: String,
     pub detail: String,
 }
+
+/// DICOM object not found error for middleware
+///
+/// A retrieve succeeded but matched no instances, for example a C-GET for a
+/// study the PACS does not hold. The HTTP adapters answer with 404 Not Found.
+/// `status_mapper::pipeline_error_to_dimse` maps it to 0xA801.
+///
+/// The message is for server logs only. Adapters must never send it to
+/// clients.
+#[derive(Debug, Error)]
+#[error("No DICOM object found: {0}")]
+pub struct DicomObjectNotFound(pub String);

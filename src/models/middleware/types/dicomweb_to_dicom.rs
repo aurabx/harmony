@@ -1,6 +1,6 @@
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
-use crate::models::middleware::UpstreamFailure;
+use crate::models::middleware::{DicomObjectNotFound, UpstreamFailure};
 use crate::utils::Error;
 use base64::Engine;
 use dicom_core::dictionary::{DataDictionary, VirtualVr};
@@ -276,23 +276,27 @@ impl DICOMwebToDICOMMiddleware {
         }
     }
 
-    fn read_instance_bytes(folder_path: &str) -> Result<Vec<Vec<u8>>, String> {
+    fn read_instance_bytes(folder_path: &str) -> Result<Vec<Vec<u8>>, InstanceReadError> {
         let mut parts: Vec<Vec<u8>> = Vec::new();
         let base = PathBuf::from(folder_path);
         if !base.exists() {
-            return Err(format!("folder not found: {}", folder_path));
+            return Err(InstanceReadError::Unreadable(format!(
+                "folder not found: {}",
+                folder_path
+            )));
         }
-        for entry in fs::read_dir(&base).map_err(|e| e.to_string())? {
-            let entry = entry.map_err(|e| e.to_string())?;
+        let unreadable = |e: std::io::Error| InstanceReadError::Unreadable(e.to_string());
+        for entry in fs::read_dir(&base).map_err(unreadable)? {
+            let entry = entry.map_err(unreadable)?;
             let p = entry.path();
             if p.is_file() {
                 // Include .dcm and other files
-                let bytes = fs::read(&p).map_err(|e| e.to_string())?;
+                let bytes = fs::read(&p).map_err(unreadable)?;
                 parts.push(bytes);
             }
         }
         if parts.is_empty() {
-            return Err("no files found".to_string());
+            return Err(InstanceReadError::NoInstances);
         }
         Ok(parts)
     }
@@ -311,10 +315,35 @@ impl DICOMwebToDICOMMiddleware {
     }
 }
 
-/// Parse the `boundary` parameter from a `multipart/related` Content-Type value.
+/// Why the instances a C-GET or C-MOVE retrieved could not be read.
+#[derive(Debug)]
+enum InstanceReadError {
+    /// The retrieve succeeded but its folder holds no instances.
+    NoInstances,
+    /// The folder is missing or a file in it cannot be read.
+    Unreadable(String),
+}
+
+impl std::fmt::Display for InstanceReadError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NoInstances => write!(f, "no instances retrieved"),
+            Self::Unreadable(e) => write!(f, "{}", e),
+        }
+    }
+}
+
+/// Returns `"get"` or `"move"` when the response came from a DIMSE retrieve.
 ///
-/// The parameter may appear anywhere after the media type and may be quoted.
-/// Returns `None` when no `boundary=` parameter is found.
+/// A DICOMweb HTTP backend sends no `operation` key, so its responses never
+/// match. A DIMSE retrieve result carries internal fields such as
+/// `folder_path`, so it must never reach the client as it is.
+pub(crate) fn dimse_retrieve_operation(nd: &Value) -> Option<&str> {
+    nd.get("operation")
+        .and_then(Value::as_str)
+        .filter(|op| matches!(*op, "get" | "move"))
+}
+
 /// Detects a DIMSE backend response that reports a failed C-FIND, C-GET or
 /// C-MOVE.
 ///
@@ -340,6 +369,10 @@ pub(crate) fn dimse_operation_failure(nd: &Value) -> Option<(String, String)> {
     Some((operation.to_string(), detail))
 }
 
+/// Parse the `boundary` parameter from a `multipart/related` Content-Type value.
+///
+/// The parameter may appear anywhere after the media type and may be quoted.
+/// Returns `None` when no `boundary=` parameter is found.
 pub(crate) fn parse_multipart_boundary(content_type: &str) -> Option<String> {
     for part in content_type.split(';') {
         let trimmed = part.trim();
@@ -1220,6 +1253,19 @@ impl Middleware for DICOMwebToDICOMMiddleware {
             // already recognizes image/* content-types and marks them as image_passthrough.
             // The response body and headers are preserved on the envelope, so the DICOMweb
             // endpoint can return the image directly in the HTTP response via standard handling.
+            if let Some(operation) = dimse_retrieve_operation(&nd) {
+                // Server-side rendering of DIMSE results is not implemented.
+                // Passing through would send the backend JSON to the client.
+                tracing::error!(
+                    operation = %operation,
+                    dicomweb_subpath = %path,
+                    "dicomweb_bridge.right: rendered/thumbnail is not supported for a DIMSE backend"
+                );
+                return Err(Error::from(format!(
+                    "dicomweb_bridge: rendered/thumbnail is not supported for a DIMSE {} on {}",
+                    operation, path
+                )));
+            }
             tracing::debug!(
                 "dicomweb_bridge.right: rendered/thumbnail route, passing through: {}",
                 path
@@ -1246,6 +1292,16 @@ impl Middleware for DICOMwebToDICOMMiddleware {
                             Some(metadata),
                         );
                         return Ok(envelope);
+                    }
+                    Err(InstanceReadError::NoInstances) => {
+                        tracing::info!(
+                            dicomweb_subpath = %path,
+                            "dicomweb_bridge.right: retrieve matched no instances"
+                        );
+                        return Err(Box::new(DicomObjectNotFound(format!(
+                            "retrieve for {} matched no instances",
+                            path
+                        ))));
                     }
                     Err(e) => {
                         // Falling through would send the backend JSON, which
@@ -1300,148 +1356,157 @@ impl Middleware for DICOMwebToDICOMMiddleware {
                     // try to match SOPInstanceUID; fallback to first file
                     let base = std::path::PathBuf::from(folder_path);
                     let mut chosen: Option<std::path::PathBuf> = None;
-                    if let Ok(rd) = std::fs::read_dir(&base) {
-                        for e in rd.flatten() {
-                            let p = e.path();
-                            if !p.is_file() {
-                                continue;
-                            }
-                            if let Ok(obj) = dicom_object::open_file(&p) {
-                                if let Ok(el) = obj.element_by_name("SOPInstanceUID") {
-                                    if let Ok(uid) = el.to_str() {
-                                        if uid == instance_uid {
-                                            chosen = Some(p.clone());
-                                            break;
-                                        }
+                    let rd = std::fs::read_dir(&base).map_err(|e| {
+                        tracing::error!(
+                            dicomweb_subpath = %path,
+                            folder_path = %folder_path,
+                            error = %e,
+                            "dicomweb_bridge.right: could not read retrieved frames folder"
+                        );
+                        Error::from(format!(
+                            "dicomweb_bridge: could not read retrieved frames folder: {}",
+                            e
+                        ))
+                    })?;
+                    for e in rd.flatten() {
+                        let p = e.path();
+                        if !p.is_file() {
+                            continue;
+                        }
+                        if let Ok(obj) = dicom_object::open_file(&p) {
+                            if let Ok(el) = obj.element_by_name("SOPInstanceUID") {
+                                if let Ok(uid) = el.to_str() {
+                                    if uid == instance_uid {
+                                        chosen = Some(p.clone());
+                                        break;
                                     }
                                 }
                             }
-                            if chosen.is_none() {
-                                chosen = Some(p.clone());
-                            }
+                        }
+                        if chosen.is_none() {
+                            chosen = Some(p.clone());
                         }
                     }
                     chosen
                 };
 
-                if let Some(ipath) = instance_path {
-                    // Decode frames using dicom-pixeldata 0.9 API
-                    let obj = dicom_object::open_file(&ipath)
-                        .map_err(|e| Error::from(format!("open dicom: {}", e)))?;
-                    match obj.decode_pixel_data() {
-                        Ok(pixel_data) => {
-                            let mut images: Vec<Vec<u8>> = Vec::new();
-                            for f in frame_numbers.iter() {
-                                let idx = f.saturating_sub(1) as u32;
-                                match pixel_data.to_dynamic_image(idx) {
-                                    Ok(dyn_img) => {
-                                        let mut buf: Vec<u8> = Vec::new();
-                                        if content_type == "image/jpeg" {
-                                            let mut enc =
-                                                img::codecs::jpeg::JpegEncoder::new_with_quality(
-                                                    &mut buf, 90,
-                                                );
-                                            if let Err(e) = enc.encode_image(&dyn_img) {
-                                                return Err(Error::from(format!(
-                                                    "jpeg encode: {}",
-                                                    e
-                                                )));
-                                            }
-                                        } else {
-                                            let enc = img::codecs::png::PngEncoder::new(&mut buf);
-                                            if let Err(e) = enc.write_image(
-                                                dyn_img.as_bytes(),
-                                                dyn_img.width(),
-                                                dyn_img.height(),
-                                                dyn_img.color().into(),
-                                            ) {
-                                                return Err(Error::from(format!(
-                                                    "png encode: {}",
-                                                    e
-                                                )));
-                                            }
+                let Some(ipath) = instance_path else {
+                    tracing::info!(
+                        dicomweb_subpath = %path,
+                        "dicomweb_bridge.right: frames retrieve matched no instances"
+                    );
+                    return Err(Box::new(DicomObjectNotFound(format!(
+                        "frames retrieve for {} matched no instances",
+                        path
+                    ))));
+                };
+
+                // Decode frames using dicom-pixeldata 0.9 API
+                let obj = dicom_object::open_file(&ipath)
+                    .map_err(|e| Error::from(format!("open dicom: {}", e)))?;
+                match obj.decode_pixel_data() {
+                    Ok(pixel_data) => {
+                        let mut images: Vec<Vec<u8>> = Vec::new();
+                        for f in frame_numbers.iter() {
+                            let idx = f.saturating_sub(1) as u32;
+                            match pixel_data.to_dynamic_image(idx) {
+                                Ok(dyn_img) => {
+                                    let mut buf: Vec<u8> = Vec::new();
+                                    if content_type == "image/jpeg" {
+                                        let mut enc =
+                                            img::codecs::jpeg::JpegEncoder::new_with_quality(
+                                                &mut buf, 90,
+                                            );
+                                        if let Err(e) = enc.encode_image(&dyn_img) {
+                                            return Err(Error::from(format!("jpeg encode: {}", e)));
                                         }
-                                        images.push(buf);
+                                    } else {
+                                        let enc = img::codecs::png::PngEncoder::new(&mut buf);
+                                        if let Err(e) = enc.write_image(
+                                            dyn_img.as_bytes(),
+                                            dyn_img.width(),
+                                            dyn_img.height(),
+                                            dyn_img.color().into(),
+                                        ) {
+                                            return Err(Error::from(format!("png encode: {}", e)));
+                                        }
                                     }
-                                    Err(e) => return Err(Error::from(format!("to image: {}", e))),
+                                    images.push(buf);
                                 }
-                            }
-
-                            if images.len() == 1 {
-                                let b64 =
-                                    base64::engine::general_purpose::STANDARD.encode(&images[0]);
-                                let mut metadata = serde_json::Map::new();
-                                metadata.insert(
-                                    "content_type".to_string(),
-                                    Value::String(content_type.to_string()),
-                                );
-                                metadata.insert("body_b64".to_string(), Value::String(b64));
-                                metadata.insert("is_single_frame".to_string(), Value::Bool(true));
-
-                                Self::set_dicomweb_data(
-                                    &mut envelope,
-                                    "wado_frames",
-                                    Value::Null,
-                                    Some(metadata),
-                                );
-                                return Ok(envelope);
-                            } else if !images.is_empty() {
-                                let boundary = format!("dicomweb_{}", uuid::Uuid::new_v4());
-                                let mut body: Vec<u8> = Vec::new();
-                                for img in images {
-                                    body.extend_from_slice(
-                                        format!("--{}\r\n", &boundary).as_bytes(),
-                                    );
-                                    body.extend_from_slice(
-                                        format!("Content-Type: {}\r\n\r\n", content_type)
-                                            .as_bytes(),
-                                    );
-                                    body.extend_from_slice(&img);
-                                    body.extend_from_slice(b"\r\n");
-                                }
-                                body.extend_from_slice(format!("--{}--\r\n", &boundary).as_bytes());
-                                let b64 = base64::engine::general_purpose::STANDARD.encode(&body);
-
-                                let mut metadata = serde_json::Map::new();
-                                metadata.insert(
-                                    "content_type".to_string(),
-                                    Value::String(content_type.to_string()),
-                                );
-                                metadata.insert("boundary".to_string(), Value::String(boundary));
-                                metadata.insert("body_b64".to_string(), Value::String(b64));
-                                metadata.insert("is_single_frame".to_string(), Value::Bool(false));
-
-                                Self::set_dicomweb_data(
-                                    &mut envelope,
-                                    "wado_frames",
-                                    Value::Null,
-                                    Some(metadata),
-                                );
-                                return Ok(envelope);
+                                Err(e) => return Err(Error::from(format!("to image: {}", e))),
                             }
                         }
-                        Err(_e) => {
-                            // Unsupported TS or decoding error - let endpoint handle the error response
+
+                        if images.len() == 1 {
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&images[0]);
                             let mut metadata = serde_json::Map::new();
                             metadata.insert(
-                                "error".to_string(),
-                                Value::String("UnsupportedTransferSyntax".to_string()),
+                                "content_type".to_string(),
+                                Value::String(content_type.to_string()),
                             );
-                            metadata.insert(
-                                "message".to_string(),
-                                Value::String(
-                                    "Unable to decode frames for requested instance".to_string(),
-                                ),
-                            );
+                            metadata.insert("body_b64".to_string(), Value::String(b64));
+                            metadata.insert("is_single_frame".to_string(), Value::Bool(true));
 
                             Self::set_dicomweb_data(
                                 &mut envelope,
-                                "wado_frames_error",
+                                "wado_frames",
+                                Value::Null,
+                                Some(metadata),
+                            );
+                            return Ok(envelope);
+                        } else if !images.is_empty() {
+                            let boundary = format!("dicomweb_{}", uuid::Uuid::new_v4());
+                            let mut body: Vec<u8> = Vec::new();
+                            for img in images {
+                                body.extend_from_slice(format!("--{}\r\n", &boundary).as_bytes());
+                                body.extend_from_slice(
+                                    format!("Content-Type: {}\r\n\r\n", content_type).as_bytes(),
+                                );
+                                body.extend_from_slice(&img);
+                                body.extend_from_slice(b"\r\n");
+                            }
+                            body.extend_from_slice(format!("--{}--\r\n", &boundary).as_bytes());
+                            let b64 = base64::engine::general_purpose::STANDARD.encode(&body);
+
+                            let mut metadata = serde_json::Map::new();
+                            metadata.insert(
+                                "content_type".to_string(),
+                                Value::String(content_type.to_string()),
+                            );
+                            metadata.insert("boundary".to_string(), Value::String(boundary));
+                            metadata.insert("body_b64".to_string(), Value::String(b64));
+                            metadata.insert("is_single_frame".to_string(), Value::Bool(false));
+
+                            Self::set_dicomweb_data(
+                                &mut envelope,
+                                "wado_frames",
                                 Value::Null,
                                 Some(metadata),
                             );
                             return Ok(envelope);
                         }
+                    }
+                    Err(_e) => {
+                        // Unsupported TS or decoding error - let endpoint handle the error response
+                        let mut metadata = serde_json::Map::new();
+                        metadata.insert(
+                            "error".to_string(),
+                            Value::String("UnsupportedTransferSyntax".to_string()),
+                        );
+                        metadata.insert(
+                            "message".to_string(),
+                            Value::String(
+                                "Unable to decode frames for requested instance".to_string(),
+                            ),
+                        );
+
+                        Self::set_dicomweb_data(
+                            &mut envelope,
+                            "wado_frames_error",
+                            Value::Null,
+                            Some(metadata),
+                        );
+                        return Ok(envelope);
                     }
                 }
             }
@@ -1478,6 +1543,21 @@ impl Middleware for DICOMwebToDICOMMiddleware {
             }
             // For other failed requests, let the original response pass through
             return Ok(envelope);
+        }
+
+        // A DIMSE retrieve result that no branch above turned into DICOMweb,
+        // for example bulkdata or a frames request without a folder. It holds
+        // internal fields such as folder_path and must not reach the client.
+        if let Some(operation) = dimse_retrieve_operation(&nd) {
+            tracing::error!(
+                operation = %operation,
+                dicomweb_subpath = %path,
+                "dicomweb_bridge.right: no DICOMweb response for this DIMSE retrieve"
+            );
+            return Err(Error::from(format!(
+                "dicomweb_bridge: no DICOMweb response for a DIMSE {} on {}",
+                operation, path
+            )));
         }
 
         Ok(envelope)
@@ -3095,5 +3175,169 @@ mod tests {
             Err(e) => e,
         };
         assert!(err.downcast_ref::<UpstreamFailure>().is_none());
+    }
+
+    /// A unique empty folder under ./tmp, removed when dropped.
+    struct EmptyFolder(std::path::PathBuf);
+
+    impl EmptyFolder {
+        fn new() -> Self {
+            let dir = std::path::PathBuf::from("./tmp")
+                .join(format!("aura-2566-empty-{}", uuid::Uuid::new_v4()));
+            std::fs::create_dir_all(&dir).expect("create empty folder");
+            Self(dir)
+        }
+
+        fn path(&self) -> String {
+            self.0.to_string_lossy().into_owned()
+        }
+    }
+
+    impl Drop for EmptyFolder {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+
+    fn get_success(folder_path: Option<String>) -> Value {
+        let mut nd = serde_json::json!({
+            "operation": "get",
+            "success": true,
+            "instances": [],
+            "folder_id": "internal-folder-id",
+            "file_count": 0
+        });
+        if let Some(folder_path) = folder_path {
+            nd["folder_path"] = Value::String(folder_path);
+        }
+        nd
+    }
+
+    fn expect_plain_error(result: Result<ResponseEnvelope<Value>, Error>) -> Error {
+        let err = match result {
+            Ok(envelope) => panic!(
+                "DIMSE retrieve JSON must not pass through: {:?}",
+                envelope.normalized_data
+            ),
+            Err(e) => e,
+        };
+        assert!(err.downcast_ref::<UpstreamFailure>().is_none());
+        assert!(err.downcast_ref::<DicomObjectNotFound>().is_none());
+        err
+    }
+
+    fn expect_not_found(result: Result<ResponseEnvelope<Value>, Error>) {
+        match result {
+            Ok(envelope) => panic!(
+                "expected DicomObjectNotFound, got Ok with {:?}",
+                envelope.normalized_data
+            ),
+            Err(e) => assert!(
+                e.downcast_ref::<DicomObjectNotFound>().is_some(),
+                "expected DicomObjectNotFound, got {}",
+                e
+            ),
+        }
+    }
+
+    #[test]
+    fn test_dimse_retrieve_operation_matches_get_and_move_only() {
+        assert_eq!(dimse_retrieve_operation(&get_success(None)), Some("get"));
+        assert_eq!(
+            dimse_retrieve_operation(&serde_json::json!({"operation": "move"})),
+            Some("move")
+        );
+        assert_eq!(
+            dimse_retrieve_operation(&serde_json::json!({"operation": "find"})),
+            None
+        );
+        assert_eq!(
+            dimse_retrieve_operation(&serde_json::json!({"body": "x"})),
+            None
+        );
+    }
+
+    #[tokio::test]
+    async fn test_right_rendered_from_dimse_backend_is_an_error() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let path = format!("{}/rendered", INSTANCE_PATH);
+        let envelope = retrieve_response_envelope(
+            &path,
+            Operation::Retrieve,
+            get_success(Some("./tmp/internal".to_string())),
+        );
+
+        expect_plain_error(bridge.right(envelope).await);
+    }
+
+    #[tokio::test]
+    async fn test_right_thumbnail_from_dicomweb_backend_still_passes_through() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let path = format!("{}/thumbnail", INSTANCE_PATH);
+        let upstream = serde_json::json!({"success": true});
+        let envelope = retrieve_response_envelope(&path, Operation::Retrieve, upstream.clone());
+
+        let nd = bridge
+            .right(envelope)
+            .await
+            .unwrap()
+            .normalized_data
+            .unwrap();
+
+        assert_eq!(nd, upstream);
+    }
+
+    #[tokio::test]
+    async fn test_right_bulkdata_from_dimse_backend_is_an_error() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let envelope = retrieve_response_envelope(
+            "/dicomweb/bulkdata/1.2.3/7fe00010",
+            Operation::Retrieve,
+            get_success(Some("./tmp/internal".to_string())),
+        );
+
+        expect_plain_error(bridge.right(envelope).await);
+    }
+
+    #[tokio::test]
+    async fn test_right_frames_without_folder_from_dimse_backend_is_an_error() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let path = format!("{}/frames/1", INSTANCE_PATH);
+        let envelope = retrieve_response_envelope(&path, Operation::Retrieve, get_success(None));
+
+        expect_plain_error(bridge.right(envelope).await);
+    }
+
+    #[tokio::test]
+    async fn test_right_frames_with_no_retrieved_instance_is_not_found() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let folder = EmptyFolder::new();
+        let path = format!("{}/frames/1", INSTANCE_PATH);
+        let envelope = retrieve_response_envelope(
+            &path,
+            Operation::Retrieve,
+            get_success(Some(folder.path())),
+        );
+
+        expect_not_found(bridge.right(envelope).await);
+    }
+
+    #[tokio::test]
+    async fn test_right_instance_retrieve_that_matched_nothing_is_not_found() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let folder = EmptyFolder::new();
+        let envelope = retrieve_response_envelope(
+            INSTANCE_PATH,
+            Operation::Retrieve,
+            get_success(Some(folder.path())),
+        );
+
+        expect_not_found(bridge.right(envelope).await);
     }
 }

@@ -475,64 +475,15 @@ impl DicomScuBackend {
 
                 // Perform C-FIND and collect results
                 match scu.find(&remote_node, query).await {
-                    Ok(mut stream) => {
-                        use futures_util::StreamExt;
-                        let mut matches: Vec<serde_json::Value> = Vec::new();
-                        while let Some(item) = stream.next().await {
-                            match item {
-                                Ok(dimse::types::DatasetStream::File { ref path, .. }) => {
-                                    if let Ok(obj) = dicom_object::open_file(path) {
-                                        if let Ok(json) =
-                                            dicom_json_tool::identifier_to_json_value(&obj)
-                                        {
-                                            matches.push(json);
-                                        }
-                                    }
-                                }
-                                Ok(dimse::types::DatasetStream::Memory { ref data, .. }) => {
-                                    // Handle in-memory DICOM data
-                                    if let Ok(obj) = dicom_object::from_reader(&**data) {
-                                        if let Ok(json) =
-                                            dicom_json_tool::identifier_to_json_value(&obj)
-                                        {
-                                            matches.push(json);
-                                        }
-                                    }
-                                }
-                                Ok(dimse::types::DatasetStream::Object { ref object, .. }) => {
-                                    // Handle DICOM object directly
-                                    if let Ok(json) =
-                                        dicom_json_tool::identifier_to_json_value(object)
-                                    {
-                                        matches.push(json);
-                                    }
-                                }
-                                Err(e) => {
-                                    // The SCU ends the stream after an error, so the
-                                    // matches so far are incomplete. A partial list must
-                                    // not be reported as a complete answer.
-                                    warn!("C-FIND stream error: {}", e);
-                                    envelope.normalized_data = Some(serde_json::json!({
-                                        "operation": "find",
-                                        "success": false,
-                                        "error": e.to_string()
-                                    }));
-                                    return Ok(envelope.clone());
-                                }
-                            }
-                        }
-
-                        serde_json::json!({
+                    Ok(stream) => match collect_find_matches(stream).await {
+                        Ok(matches) => serde_json::json!({
                             "operation": "find",
                             "success": true,
                             "matches": matches
-                        })
-                    }
-                    Err(e) => serde_json::json!({
-                        "operation": "find",
-                        "success": false,
-                        "error": e.to_string()
-                    }),
+                        }),
+                        Err(e) => dimse_failure_response("find", &e),
+                    },
+                    Err(e) => dimse_failure_response("find", &e),
                 }
             }
             "move" => {
@@ -596,20 +547,14 @@ impl DicomScuBackend {
                         find_q = find_q.with_parameter("0020000D".to_string(), uid.clone());
                         if let Ok(mut stream) = scu.find(&remote_node, find_q).await {
                             use futures_util::StreamExt;
-                            let any = match stream.next().await {
-                                Some(Ok(_)) => true,
-                                Some(Err(e)) => {
-                                    // An unreachable PACS is a failed move, not a
-                                    // found study.
-                                    warn!("C-MOVE preflight C-FIND failed: {}", e);
-                                    envelope.normalized_data = Some(serde_json::json!({
-                                        "operation": "move",
-                                        "success": false,
-                                        "error": e.to_string()
-                                    }));
+                            let any = match move_preflight_outcome(stream.next().await) {
+                                MovePreflight::Proceed => true,
+                                MovePreflight::StudyNotFound => false,
+                                MovePreflight::Unreachable(e) => {
+                                    envelope.normalized_data =
+                                        Some(dimse_failure_response("move", &e));
                                     return Ok(envelope.clone());
                                 }
-                                None => false,
                             };
                             if !any {
                                 // Study not found - set error in normalized_data
@@ -681,12 +626,8 @@ impl DicomScuBackend {
                             let item = match item {
                                 Ok(item) => item,
                                 Err(e) => {
-                                    warn!("C-MOVE stream error: {}", e);
-                                    envelope.normalized_data = Some(serde_json::json!({
-                                        "operation": "move",
-                                        "success": false,
-                                        "error": e.to_string()
-                                    }));
+                                    envelope.normalized_data =
+                                        Some(dimse_failure_response("move", &e));
                                     return Ok(envelope.clone());
                                 }
                             };
@@ -866,13 +807,8 @@ impl DicomScuBackend {
                                                 }
                                                 Ok(_) => {}
                                                 Err(e) => {
-                                                    warn!("C-MOVE fallback C-GET failed: {}", e);
                                                     envelope.normalized_data =
-                                                        Some(serde_json::json!({
-                                                            "operation": "move",
-                                                            "success": false,
-                                                            "error": e.to_string()
-                                                        }));
+                                                        Some(dimse_failure_response("move", &e));
                                                     return Ok(envelope.clone());
                                                 }
                                             }
@@ -887,11 +823,7 @@ impl DicomScuBackend {
 
                         response
                     }
-                    Err(e) => serde_json::json!({
-                        "operation": "move",
-                        "success": false,
-                        "error": e.to_string()
-                    }),
+                    Err(e) => dimse_failure_response("move", &e),
                 }
             }
             "get" => {
@@ -1050,12 +982,8 @@ impl DicomScuBackend {
                                     // A transport or association failure. The SCU ends
                                     // the stream after it, so any instances so far are
                                     // incomplete and the retrieve has failed.
-                                    tracing::warn!("C-GET stream error: {}", e);
-                                    envelope.normalized_data = Some(serde_json::json!({
-                                        "operation": "get",
-                                        "success": false,
-                                        "error": e.to_string()
-                                    }));
+                                    envelope.normalized_data =
+                                        Some(dimse_failure_response("get", &e));
                                     return Ok(envelope.clone());
                                 }
                             }
@@ -1093,11 +1021,7 @@ impl DicomScuBackend {
                         }
                         resp
                     }
-                    Err(e) => serde_json::json!({
-                        "operation": "get",
-                        "success": false,
-                        "error": e.to_string()
-                    }),
+                    Err(e) => dimse_failure_response("get", &e),
                 }
             }
             "store" => {
@@ -1572,6 +1496,92 @@ pub(crate) fn resolve_dimse_op(
         .and_then(|v| v.as_str())
         .map(|s| s.to_lowercase())
         .unwrap_or_else(|| "get".to_string())
+}
+
+/// The backend response for a failed C-FIND, C-GET or C-MOVE.
+///
+/// Any endpoint may send this JSON to its client, so `error` holds a fixed
+/// message. The raw error names hosts, ports and AE titles. It is logged here
+/// and goes no further. `operation` and `success: false` stay so middleware
+/// such as `dicomweb_bridge` can detect the failure.
+fn dimse_failure_response(operation: &str, error: &dyn std::fmt::Display) -> Value {
+    let message = match operation {
+        "find" => "C-FIND failed",
+        "get" => "C-GET failed",
+        "move" => "C-MOVE failed",
+        _ => "DIMSE operation failed",
+    };
+    warn!(
+        operation = operation,
+        "DIMSE {} failed: {}", operation, error
+    );
+    serde_json::json!({
+        "operation": operation,
+        "success": false,
+        "error": message
+    })
+}
+
+/// Collects C-FIND results as DICOM JSON identifiers.
+///
+/// Returns the first stream error. The SCU ends the stream after an error,
+/// so the matches before it are incomplete and must not be reported as a
+/// complete answer. Results that cannot be decoded are skipped, as before.
+async fn collect_find_matches<S>(mut stream: S) -> dimse::Result<Vec<Value>>
+where
+    S: futures_util::Stream<Item = dimse::Result<DatasetStream>> + Unpin,
+{
+    use futures_util::StreamExt;
+    let mut matches: Vec<Value> = Vec::new();
+    while let Some(item) = stream.next().await {
+        let json = match item? {
+            DatasetStream::File { ref path, .. } => dicom_object::open_file(path)
+                .ok()
+                .and_then(|obj| dicom_json_tool::identifier_to_json_value(&obj).ok()),
+            DatasetStream::Memory { ref data, .. } => dicom_object::from_reader(&**data)
+                .ok()
+                .and_then(|obj| dicom_json_tool::identifier_to_json_value(&obj).ok()),
+            DatasetStream::Object { ref object, .. } => {
+                dicom_json_tool::identifier_to_json_value(object).ok()
+            }
+        };
+        if let Some(json) = json {
+            matches.push(json);
+        }
+    }
+    Ok(matches)
+}
+
+/// What the C-FIND preflight before a C-MOVE allows.
+#[derive(Debug)]
+enum MovePreflight {
+    /// Go ahead with the C-MOVE.
+    Proceed,
+    /// The C-FIND answered with no match for the study.
+    StudyNotFound,
+    /// The node cannot be reached, so the C-MOVE would fail too.
+    Unreachable(dimse::DimseError),
+}
+
+/// Decides the C-MOVE preflight from the first C-FIND stream item.
+///
+/// Only a connection or association failure stops the move. A PACS may
+/// support C-MOVE but refuse C-FIND, or answer C-FIND with a failure status.
+/// The move still has a chance there, so it goes ahead as it did before the
+/// preflight could see errors.
+fn move_preflight_outcome(first: Option<dimse::Result<DatasetStream>>) -> MovePreflight {
+    match first {
+        Some(Ok(_)) => MovePreflight::Proceed,
+        None => MovePreflight::StudyNotFound,
+        Some(Err(e)) if e.is_connection_failure() => MovePreflight::Unreachable(e),
+        Some(Err(e)) => {
+            warn!(
+                "C-MOVE preflight C-FIND failed, trying the move anyway: {}",
+                e
+            );
+            MovePreflight::Proceed
+        }
+    }
 }
 
 #[cfg(test)]
@@ -2286,5 +2296,92 @@ mod tests {
             "unexpected error: {}",
             reason
         );
+    }
+
+    fn study_identifier(study_uid: &str) -> DatasetStream {
+        use dicom_core::{DataElement, PrimitiveValue, VR};
+        let mut object = dicom_object::InMemDicomObject::new_empty();
+        object.put(DataElement::new(
+            dicom_dictionary_std::tags::STUDY_INSTANCE_UID,
+            VR::UI,
+            PrimitiveValue::from(study_uid),
+        ));
+        DatasetStream::from_object(object)
+    }
+
+    #[test]
+    fn test_dimse_failure_response_hides_the_raw_error() {
+        let raw = "association to PACS_AET at 10.1.2.3:104 refused";
+        for (op, message) in [
+            ("find", "C-FIND failed"),
+            ("get", "C-GET failed"),
+            ("move", "C-MOVE failed"),
+        ] {
+            let response = dimse_failure_response(op, &raw);
+            assert_eq!(response["operation"], op);
+            assert_eq!(response["success"], false);
+            assert_eq!(response["error"], message);
+            assert!(!response.to_string().contains("10.1.2.3"));
+        }
+    }
+
+    #[tokio::test]
+    async fn test_collect_find_matches_returns_all_matches() {
+        let stream = futures_util::stream::iter(vec![
+            Ok(study_identifier("1.2.3")),
+            Ok(study_identifier("1.2.4")),
+        ]);
+
+        let matches = collect_find_matches(stream).await.unwrap();
+
+        assert_eq!(matches.len(), 2);
+        assert_eq!(matches[0]["0020000D"]["Value"][0], "1.2.3");
+    }
+
+    #[tokio::test]
+    async fn test_collect_find_matches_fails_on_an_error_after_some_matches() {
+        let stream = futures_util::stream::iter(vec![
+            Ok(study_identifier("1.2.3")),
+            Err(dimse::DimseError::network("connection reset")),
+        ]);
+
+        assert!(collect_find_matches(stream).await.is_err());
+    }
+
+    #[test]
+    fn test_move_preflight_proceeds_when_the_study_is_found() {
+        assert!(matches!(
+            move_preflight_outcome(Some(Ok(study_identifier("1.2.3")))),
+            MovePreflight::Proceed
+        ));
+    }
+
+    #[test]
+    fn test_move_preflight_reports_a_missing_study() {
+        assert!(matches!(
+            move_preflight_outcome(None),
+            MovePreflight::StudyNotFound
+        ));
+    }
+
+    #[test]
+    fn test_move_preflight_stops_on_a_connection_failure() {
+        let outcome = move_preflight_outcome(Some(Err(dimse::DimseError::association(
+            "Failed to establish association: could not connect to server",
+        ))));
+        assert!(matches!(outcome, MovePreflight::Unreachable(_)));
+    }
+
+    #[test]
+    fn test_move_preflight_proceeds_when_c_find_is_refused_but_the_node_answered() {
+        for error in [
+            dimse::DimseError::NotSupported("no presentation context for C-FIND".to_string()),
+            dimse::DimseError::operation_failed("C-FIND failed with status: 0xC000"),
+        ] {
+            assert!(matches!(
+                move_preflight_outcome(Some(Err(error))),
+                MovePreflight::Proceed
+            ));
+        }
     }
 }

@@ -13,13 +13,13 @@ use std::pin::Pin;
 
 use crate::router::route_config::{standard_methods, RouteConfig};
 use crate::utils::Error;
+use tracing::{debug, error, info};
 
 /// Error text sent to streaming clients when the upstream stream fails.
 ///
 /// The real error often names internal hosts, ports and AE titles, so it goes
 /// to the server log and the client gets only this fixed text.
 const STREAM_ERROR_MESSAGE: &str = "upstream stream failed";
-use tracing::{debug, error, info};
 
 /// HTTP streaming endpoint configuration
 ///

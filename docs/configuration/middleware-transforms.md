@@ -124,15 +124,21 @@ type = "dicomweb_bridge"
 
 **Backend failures:**
 
-A `dicom_scu` backend reports a failed C-FIND, C-GET or C-MOVE with `"success": false` in its response. This covers a PACS that cannot be reached, an association that is rejected, and a failure part way through. Any results received before the failure are dropped, because they are incomplete. The bridge then stops the request with an upstream failure error.
+A `dicom_scu` backend reports a failed C-FIND, C-GET or C-MOVE with `"success": false` in its response. This covers a PACS that cannot be reached, an association that is rejected, and a failure part way through. Any results received before the failure are dropped, because they are incomplete. The response's `error` field holds a fixed message such as `C-FIND failed`. The backend writes the real error to the server log.
 
-- An HTTP client gets `502 Bad Gateway` with an empty body.
-- A DIMSE client gets the failure status `0xC000`. The DIMSE adapter sends this for every pipeline error.
-- The backend's error text goes to the server log only. It often names hosts, ports and AE titles, so the client never sees it.
+When the bridge sees such a failure, it stops the request with an upstream failure error.
 
-A DICOMweb HTTP backend sends no `success` field. Its responses pass through unchanged. STOW-RS keeps its own PS3.18 failure response.
+- An HTTP client gets `502 Bad Gateway` with an empty body. This includes frame requests.
+- The backend's error text stays in the server log. It often names hosts, ports and AE titles, so the client never sees it.
+- If the bridge runs in a pipeline with a DIMSE endpoint, the DIMSE client gets status `0xC000`. The DIMSE adapter sends this for every pipeline error.
 
-If the backend reports success but the retrieved instances cannot be read, the client gets `500 Internal Server Error` with an empty body. A frame retrieval failure returns a fixed message with no backend detail.
+Other retrieve outcomes:
+
+- A retrieve that succeeds but matches no instances returns `404 Not Found` with an empty body. This applies to instance and frame requests.
+- If the retrieved instances cannot be read, the client gets `500 Internal Server Error` with an empty body.
+- A DIMSE retrieve that the bridge cannot turn into a DICOMweb response returns `500 Internal Server Error` with an empty body. This covers rendered and thumbnail requests, because server-side rendering is not implemented. It also covers bulkdata requests.
+
+A DICOMweb HTTP backend sends no `operation` or `success` field. Its responses pass through unchanged, including rendered and thumbnail images. For such a backend, a frame retrieval failure returns `406 Not Acceptable` with a fixed message and no backend detail. STOW-RS keeps its own PS3.18 failure response.
 
 **Features:**
 - Full DICOMweb QIDO-RS and WADO-RS compliance
