@@ -116,7 +116,7 @@ type = "dicomweb_bridge"
 **Right side behavior (DICOM → DICOMweb):**
 - **QIDO responses**: Converts DICOM find results to DICOMweb JSON arrays
 - **WADO metadata**: Returns filtered JSON metadata based on includefield
-- **WADO instances**: Creates multipart/related responses with DICOM files
+- **WADO-RS retrieve**: Creates a `multipart/related; type="application/dicom"` response over every retrieved file. This applies to study, series and instance retrieves.
 - **WADO frames**: Decodes DICOM pixel data to JPEG/PNG images
 - Handles both single-frame and multi-frame responses
 - Supports content negotiation (Accept: image/jpeg, image/png)
@@ -134,7 +134,8 @@ When the bridge sees such a failure, it stops the request with an upstream failu
 
 Other retrieve outcomes:
 
-- A retrieve that succeeds but matches no instances returns `404 Not Found` with an empty body. This applies to instance and frame requests.
+- WADO-RS study, series and instance retrieves through `dicom_scu` need filesystem storage. The backend then returns a `folder_path` that holds the retrieved files. Without it, the response is `500 Internal Server Error`.
+- A retrieve that succeeds but matches no instances returns `404 Not Found` with an empty body. This applies to study, series, instance and frame requests.
 - If the retrieved instances cannot be read, the client gets `500 Internal Server Error` with an empty body.
 - A DIMSE retrieve that the bridge cannot turn into a DICOMweb response returns `500 Internal Server Error` with an empty body. This covers rendered and thumbnail requests, because server-side rendering is not implemented. It also covers bulkdata requests.
 

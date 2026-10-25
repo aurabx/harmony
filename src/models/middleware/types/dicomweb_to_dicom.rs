@@ -333,6 +333,20 @@ impl std::fmt::Display for InstanceReadError {
     }
 }
 
+/// True for a WADO-RS retrieve of whole instances: a study, a series or one
+/// instance. Paths that end in `/metadata`, `/rendered`, `/thumbnail` or
+/// `/frames/...` are not matched. They have their own response shapes.
+pub(crate) fn is_wado_retrieve_path(path: &str) -> bool {
+    let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
+    let Some(start) = segments.iter().position(|s| *s == "studies") else {
+        return false;
+    };
+    matches!(
+        segments[start..],
+        [_, _] | [_, _, "series", _] | [_, _, "series", _, "instances", _]
+    )
+}
+
 /// Returns `"get"` or `"move"` when the response came from a DIMSE retrieve.
 ///
 /// A DICOMweb HTTP backend sends no `operation` key, so its responses never
@@ -1273,8 +1287,10 @@ impl Middleware for DICOMwebToDICOMMiddleware {
             return Ok(envelope);
         }
 
-        // WADO instance retrieval -> multipart DICOM data
-        if matches!(resolved_op, Some(Operation::Retrieve | Operation::Move)) && path.contains("/instances/") && !path.contains("/frames/") {
+        // WADO-RS study, series or instance retrieval -> multipart DICOM data
+        if matches!(resolved_op, Some(Operation::Retrieve | Operation::Move))
+            && is_wado_retrieve_path(&path)
+        {
             if let Some(folder_path) = nd.get("folder_path").and_then(|v| v.as_str()) {
                 match Self::read_instance_bytes(folder_path) {
                     Ok(parts) => {
@@ -3334,6 +3350,88 @@ mod tests {
         let folder = EmptyFolder::new();
         let envelope = retrieve_response_envelope(
             INSTANCE_PATH,
+            Operation::Retrieve,
+            get_success(Some(folder.path())),
+        );
+
+        expect_not_found(bridge.right(envelope).await);
+    }
+
+    #[test]
+    fn test_is_wado_retrieve_path_matches_study_series_and_instance() {
+        for path in [
+            "studies/1.2.3",
+            "studies/1.2.3/series/1.2.3.4",
+            "studies/1.2.3/series/1.2.3.4/instances/1.2.3.4.5",
+            "/dicomweb/studies/1.2.3",
+        ] {
+            assert!(is_wado_retrieve_path(path), "{}", path);
+        }
+        for path in [
+            "/dicomweb/studies",
+            "studies/1.2.3/metadata",
+            "studies/1.2.3/rendered",
+            "studies/1.2.3/series/1.2.3.4/thumbnail",
+            "studies/1.2.3/series/1.2.3.4/instances/1.2.3.4.5/frames/1",
+            "studies/1.2.3/series",
+            "bulkdata/1.2.3",
+        ] {
+            assert!(!is_wado_retrieve_path(path), "{}", path);
+        }
+    }
+
+    /// Runs a retrieve of `full_path` over a folder holding two files and
+    /// checks the response is one multipart/related body over both.
+    async fn assert_multipart_over_all_files(full_path: &str) {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let folder = EmptyFolder::new();
+        std::fs::write(folder.0.join("a.dcm"), b"FIRST-INSTANCE").unwrap();
+        std::fs::write(folder.0.join("b.dcm"), b"SECOND-INSTANCE").unwrap();
+        let envelope = retrieve_response_envelope(
+            full_path,
+            Operation::Retrieve,
+            get_success(Some(folder.path())),
+        );
+
+        let nd = bridge
+            .right(envelope)
+            .await
+            .unwrap()
+            .normalized_data
+            .unwrap();
+
+        assert_eq!(
+            nd["dicomweb_response_type"], "wado_instance",
+            "{}",
+            full_path
+        );
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(nd["dicomweb_metadata"]["body_b64"].as_str().unwrap())
+            .unwrap();
+        let body = String::from_utf8_lossy(&body);
+        assert!(body.contains("FIRST-INSTANCE"), "{}", body);
+        assert!(body.contains("SECOND-INSTANCE"), "{}", body);
+        assert_eq!(body.matches("Content-Type: application/dicom").count(), 2);
+    }
+
+    #[tokio::test]
+    async fn test_right_study_retrieve_builds_multipart_over_all_files() {
+        assert_multipart_over_all_files("/dicomweb/studies/1.2.3").await;
+    }
+
+    #[tokio::test]
+    async fn test_right_series_retrieve_builds_multipart_over_all_files() {
+        assert_multipart_over_all_files("/dicomweb/studies/1.2.3/series/1.2.3.4").await;
+    }
+
+    #[tokio::test]
+    async fn test_right_study_retrieve_that_matched_nothing_is_not_found() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let folder = EmptyFolder::new();
+        let envelope = retrieve_response_envelope(
+            "/dicomweb/studies/1.2.3",
             Operation::Retrieve,
             get_success(Some(folder.path())),
         );
