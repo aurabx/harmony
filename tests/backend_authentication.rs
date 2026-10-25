@@ -1036,8 +1036,12 @@ authentication = "pipeline_bearer"
 [backends.api_backend.options]
 base_url = "https://api.example.com"
 "#,
-    )
-    .replace(
+    );
+    assert!(
+        main.contains("id = \"auth-ref-test\""),
+        "config_with changed; this test must set transforms_path in [proxy]"
+    );
+    let main = main.replace(
         "id = \"auth-ref-test\"",
         "id = \"auth-ref-test\"\ntransforms_path = \"pipelines\"",
     );

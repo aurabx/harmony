@@ -96,7 +96,8 @@ impl fmt::Display for CredentialError {
 ///
 /// Returns an empty list for `none`. Returns an error for a missing or empty
 /// required option, a value that cannot go into a header, an invalid or
-/// reserved `api_key` header name, or a method a backend cannot send. Never logs, so it is safe to call on every request.
+/// reserved `api_key` header name, or a method a backend cannot send. Never
+/// logs, so it is safe to call on every request.
 pub fn credential_headers(
     auth_def: &AuthenticationDefinition,
 ) -> Result<Vec<(String, String)>, CredentialError> {

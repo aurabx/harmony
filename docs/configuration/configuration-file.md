@@ -124,7 +124,7 @@ Peers and endpoints accept an `authentication` reference, and Harmony checks it 
 | `none` | none | nothing |
 | `jwt` | checked by the jwt_auth middleware | nothing. Settings for jwt_auth middleware only |
 
-A required option must be a string that is not empty or only spaces. `token` and `api_key` must not contain control characters, such as a trailing newline from a secret file. A `basic` `username` must not contain `:`. `header_name` must be a valid HTTP header name. It cannot be a header Harmony controls, such as `Host`, `Content-Length`, `Transfer-Encoding` or `Connection`.
+A required option must be a string that is not empty or only spaces. `token` and `api_key` must contain only printable ASCII characters and spaces. A trailing newline from a secret file, or a non-ASCII character, fails the load. A `basic` `username` must not contain `:`. `header_name` must be a valid HTTP header name. It cannot be a header Harmony controls, such as `Host`, `Content-Length`, `Transfer-Encoding` or `Connection`.
 
 Harmony does not check the options of a `jwt` definition at load. The jwt_auth middleware checks them when it starts, so a `jwt` definition that nothing references is never checked.
 
