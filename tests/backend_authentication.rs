@@ -321,6 +321,9 @@ token = "t"
 [authentications.other_basic]
 id = "other_basic"
 method = "basic"
+[authentications.other_basic.options]
+username = "svc"
+password = "pw"
 
 [pipelines.core]
 networks = ["default"]
@@ -540,6 +543,9 @@ fn control_characters_in_authentication_references_are_escaped() {
 [authentications."a\nb"]
 id = "a_b"
 method = "basic"
+[authentications."a\nb".options]
+username = "svc"
+password = "pw"
 
 [targets.upstream]
 connection.host = "api.example.com"
@@ -625,4 +631,342 @@ authentication = "authentications.fhir_bearer"
             stderr
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Authentication definitions that cannot produce a credential must fail
+// config load (AURA-2437). Before this, they loaded and every request went
+// upstream without a credential.
+// ---------------------------------------------------------------------------
+
+const BACKEND_WITH_FHIR_BEARER: &str = r#"
+[backends.api_backend]
+service = "http"
+authentication = "fhir_bearer"
+[backends.api_backend.options]
+base_url = "https://api.example.com"
+"#;
+
+#[test]
+fn incomplete_authentication_definitions_fail_load() {
+    let cases = [
+        (
+            "method = \"bearer\"",
+            "method 'bearer' requires a non-empty 'token' option",
+        ),
+        (
+            "method = \"bearer\"\noptions = { token = \"\" }",
+            "method 'bearer' requires a non-empty 'token' option",
+        ),
+        (
+            "method = \"basic\"\noptions = { username = \"svc\" }",
+            "method 'basic' requires a non-empty 'password' option",
+        ),
+        (
+            "method = \"basic\"\noptions = { password = \"pw\" }",
+            "method 'basic' requires a non-empty 'username' option",
+        ),
+        (
+            "method = \"api_key\"\noptions = { header_name = \"X-Token\" }",
+            "method 'api_key' requires a non-empty 'api_key' option",
+        ),
+        (
+            "method = \"api_key\"\noptions = { api_key = \"k\", header_name = \"X Token\" }",
+            "'header_name' value 'X Token' is not a valid HTTP header name",
+        ),
+        ("method = \"digest\"", "unknown method 'digest'"),
+        ("method = \"\"", "unknown method ''"),
+    ];
+    for (definition, expected) in cases {
+        // Nothing references `broken`: an unused definition is still checked.
+        let toml = config_with(&format!(
+            "[authentications.broken]\nid = \"broken\"\n{}\n{}",
+            definition, BACKEND_WITH_FHIR_BEARER
+        ));
+        let err = load_via_file(&toml).expect_err(definition);
+        assert!(
+            err.contains("Authentication 'broken' is invalid") && err.contains(expected),
+            "{:?} should fail with {:?}, got: {}",
+            definition,
+            expected,
+            err
+        );
+    }
+}
+
+#[test]
+fn every_invalid_definition_is_reported_in_one_load() {
+    let toml = config_with(&format!(
+        r#"
+[authentications.no_token]
+id = "no_token"
+method = "bearer"
+
+[authentications.no_password]
+id = "no_password"
+method = "basic"
+options = {{ username = "svc" }}
+{}"#,
+        BACKEND_WITH_FHIR_BEARER
+    ));
+    let err = load_via_file(&toml).expect_err("both definitions are invalid");
+    assert!(
+        err.contains("Authentication 'no_password' is invalid"),
+        "{}",
+        err
+    );
+    assert!(
+        err.contains("Authentication 'no_token' is invalid"),
+        "{}",
+        err
+    );
+}
+
+#[test]
+fn invalid_definition_error_escapes_control_characters_in_key() {
+    let toml = config_with(&format!(
+        "[authentications.\"x\\nERROR: forged\"]\nid = \"x\"\nmethod = \"bearer\"\n{}",
+        BACKEND_WITH_FHIR_BEARER
+    ));
+    let err = load_via_file(&toml).expect_err("definition has no token");
+    assert!(
+        err.contains(r"Authentication 'x\nERROR: forged' is invalid"),
+        "key should be escaped: {}",
+        err
+    );
+    assert!(
+        !err.contains("\nERROR: forged"),
+        "raw newline must not reach the message: {}",
+        err
+    );
+}
+
+#[test]
+fn jwt_definition_is_rejected_for_targets_and_backends() {
+    let jwt = r#"
+[authentications.svc_jwt]
+id = "svc_jwt"
+method = "jwt"
+options = { use_hs256 = true, hs256_secret = "s" }
+"#;
+    let via_backend = config_with(&format!(
+        r#"{}
+[backends.api_backend]
+service = "http"
+authentication = "svc_jwt"
+[backends.api_backend.options]
+base_url = "https://api.example.com"
+"#,
+        jwt
+    ));
+    let err = load_via_file(&via_backend).expect_err("a backend cannot send a jwt definition");
+    assert!(
+        err.contains("Backend 'api_backend' references authentication 'svc_jwt' with method 'jwt', which a backend cannot send"),
+        "{}",
+        err
+    );
+
+    let via_target = config_with(&format!(
+        r#"{}
+[targets.upstream]
+connection.host = "api.example.com"
+connection.protocol = "https"
+authentication = "svc_jwt"
+{}"#,
+        jwt, BACKEND_VIA_TARGET
+    ));
+    let err = load_via_file(&via_target).expect_err("a target cannot send a jwt definition");
+    assert!(
+        err.contains("Target 'upstream' references authentication 'svc_jwt' with method 'jwt', which a target cannot send"),
+        "{}",
+        err
+    );
+}
+
+#[test]
+fn jwt_definition_is_accepted_for_middleware() {
+    let toml = config_with(&format!(
+        r#"
+[authentications.svc_jwt]
+id = "svc_jwt"
+method = "jwt"
+options = {{ use_hs256 = true, hs256_secret = "s", issuer = "https://auth.example.com/", audience = "api", public_key_path = "" }}
+
+[middleware.jwt_check]
+type = "jwt_auth"
+authentication = "svc_jwt"
+{}"#,
+        BACKEND_WITH_FHIR_BEARER
+    ));
+    load_via_file(&toml).expect("middleware may reference a jwt definition");
+}
+
+#[test]
+fn inline_authentication_def_in_options_fails_load() {
+    let inline = r#"authentication_def = { id = "x", method = "bearer", options = {} }"#;
+    let cases = [
+        (
+            format!(
+                "[backends.api_backend]\nservice = \"http\"\n[backends.api_backend.options]\nbase_url = \"https://api.example.com\"\n{}\n",
+                inline
+            ),
+            "Backend 'api_backend' sets 'authentication_def' in its options",
+        ),
+        (
+            format!(
+                "{}\n[middleware.hook]\ntype = \"webhook\"\n[middleware.hook.options]\nendpoint = \"https://hooks.example.com\"\n{}\n",
+                BACKEND_WITH_FHIR_BEARER, inline
+            ),
+            "Middleware 'hook' sets 'authentication_def' in its options",
+        ),
+    ];
+    for (extra, expected) in cases {
+        let err = load_via_file(&config_with(&extra)).expect_err(expected);
+        assert!(
+            err.contains(expected) && err.contains("Define the credential under [authentications]"),
+            "expected {:?}, got: {}",
+            expected,
+            err
+        );
+    }
+}
+
+#[test]
+fn inline_authentication_def_in_endpoint_options_fails_load() {
+    // config_with already defines [endpoints.http_in], so this builds its own
+    // endpoint table.
+    let toml = config_with(&format!(
+        r#"{}
+[endpoints.other_in]
+service = "http"
+[endpoints.other_in.options]
+path_prefix = "/other"
+authentication_def = {{ id = "x", method = "bearer", options = {{}} }}
+"#,
+        BACKEND_WITH_FHIR_BEARER
+    ));
+    let err = load_via_file(&toml).expect_err("inline definition on an endpoint");
+    assert!(
+        err.contains("Endpoint 'other_in' sets 'authentication_def' in its options"),
+        "{}",
+        err
+    );
+}
+
+/// Writes the main config and extra files (relative path, contents) into a
+/// temp dir, then loads the main config the way the binary does.
+fn load_files(main: &str, extra_files: &[(&str, &str)]) -> Result<Config, String> {
+    let dir = tempfile::TempDir::new().expect("create temp dir");
+    for (relative, contents) in extra_files {
+        let path = dir.path().join(relative);
+        std::fs::create_dir_all(path.parent().expect("file has a parent")).expect("create dir");
+        std::fs::write(&path, contents).expect("write extra config");
+    }
+    let path = dir.path().join("config.toml");
+    std::fs::write(&path, main).expect("write config");
+    Config::load(path.to_str().expect("utf-8 path")).map_err(|e| match e {
+        ConfigError::InvalidProxy { reason, .. } => reason,
+        other => format!("{:?}", other),
+    })
+}
+
+const PIPELINE_FILE_AUTH: &str = r#"
+[authentications.pipeline_bearer]
+id = "pipeline_bearer"
+method = "bearer"
+[authentications.pipeline_bearer.options]
+token = "from-pipeline-file"
+"#;
+
+#[test]
+fn authentication_defined_in_a_pipeline_file_is_merged() {
+    let main = config_with(
+        r#"
+[backends.api_backend]
+service = "http"
+authentication = "pipeline_bearer"
+[backends.api_backend.options]
+base_url = "https://api.example.com"
+"#,
+    );
+    let config = load_files(&main, &[("pipelines/auth.toml", PIPELINE_FILE_AUTH)])
+        .expect("a definition in a pipeline file must resolve");
+
+    let options = config.backends["api_backend"]
+        .options
+        .as_ref()
+        .expect("backend options");
+    assert_eq!(
+        options["authentication_def"]["options"]["token"],
+        serde_json::json!("from-pipeline-file")
+    );
+}
+
+#[test]
+fn authentication_defined_in_two_files_fails_load() {
+    let main = config_with(BACKEND_WITH_FHIR_BEARER);
+    let err = load_files(
+        &main,
+        &[
+            ("pipelines/auth.toml", PIPELINE_FILE_AUTH),
+            ("mesh/auth.toml", PIPELINE_FILE_AUTH),
+        ],
+    )
+    .expect_err("a key defined twice must fail load");
+    assert!(
+        err.contains("Authentication 'pipeline_bearer' is defined in both"),
+        "{}",
+        err
+    );
+    assert!(
+        err.contains("auth.toml"),
+        "error should name the files: {}",
+        err
+    );
+}
+
+#[test]
+fn authentication_in_a_file_that_duplicates_the_main_config_fails_load() {
+    let main = config_with(BACKEND_WITH_FHIR_BEARER);
+    let duplicate = r#"
+[authentications.fhir_bearer]
+id = "fhir_bearer"
+method = "bearer"
+[authentications.fhir_bearer.options]
+token = "other"
+"#;
+    let err = load_files(&main, &[("transforms/auth.toml", duplicate)])
+        .expect_err("a file must not replace a main-config credential");
+    assert!(
+        err.contains("Authentication 'fhir_bearer' is defined in both")
+            && err.contains("config.toml")
+            && err.contains("transforms/auth.toml"),
+        "{}",
+        err
+    );
+}
+
+#[test]
+fn jwt_definition_is_rejected_for_webhook_middleware() {
+    let toml = config_with(&format!(
+        r#"
+[authentications.svc_jwt]
+id = "svc_jwt"
+method = "jwt"
+options = {{ use_hs256 = true, hs256_secret = "s" }}
+
+[middleware.hook]
+type = "webhook"
+authentication = "svc_jwt"
+[middleware.hook.options]
+endpoint = "https://hooks.example.com"
+{}"#,
+        BACKEND_WITH_FHIR_BEARER
+    ));
+    let err = load_via_file(&toml).expect_err("a webhook cannot send a jwt definition");
+    assert!(
+        err.contains("Middleware 'hook' references authentication 'svc_jwt' with method 'jwt', which a webhook cannot send"),
+        "{}",
+        err
+    );
 }

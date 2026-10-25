@@ -263,6 +263,29 @@ mod tests {
         );
     }
 
+    /// A definition that builds no header must not count as Harmony sending
+    /// its own credential. Otherwise the forwarded client credential is
+    /// dropped and the request goes upstream with none.
+    #[test]
+    fn incomplete_target_auth_keeps_forwarded_client_credential() {
+        let opts = HashMap::from([
+            (FORWARD_AUTHORIZATION_OPTION.to_string(), json!(true)),
+            (
+                "authentication_def".to_string(),
+                json!({"id": "a", "method": "bearer", "options": {}}),
+            ),
+        ]);
+        let policy = InboundAuthorizationPolicy::from_backend_options(&opts).unwrap();
+        assert!(!policy.target_authenticates);
+
+        let inbound = HashMap::from([("Authorization".to_string(), "Bearer client".to_string())]);
+        let out = upstream_request_headers(&inbound, &inbound, policy, "test");
+        assert_eq!(
+            out.get("Authorization").map(String::as_str),
+            Some("Bearer client")
+        );
+    }
+
     #[test]
     fn policy_rejects_non_boolean_forward_authorization() {
         let opts = HashMap::from([(FORWARD_AUTHORIZATION_OPTION.to_string(), json!("true"))]);

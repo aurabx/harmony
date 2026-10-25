@@ -2,7 +2,7 @@
 title: Utility Middleware
 description: Reference for the log dump, webhook, and passthru middleware.
 status: active
-updated: 2026-10-24
+updated: 2026-10-25
 type: Configuration
 related:
   - configuration/middleware.md
@@ -71,7 +71,6 @@ Config keys:
 - `redact_headers` (array of strings, optional): Header names to redact
 - `redact_metadata` (array of strings, optional): Metadata keys to redact
 - `timeout_secs` (integer, optional): Request timeout in seconds (default: 5)
-- `authentication_def` (object, optional): Authentication configuration for the webhook request
 
 Example:
 ```toml
@@ -82,6 +81,16 @@ endpoint = "https://audit.example.com/logs"
 apply = "both"
 redact_headers = ["authorization", "cookie"]
 timeout_secs = 2
+```
+
+To authenticate the webhook request, set `authentication` on the instance to a key in `[authentications]`. The webhook accepts `bearer`, `basic`, `api_key` and `none`. See [Authentications](configuration-file.md#authentications). An `authentication_def` key in the options fails the load.
+
+```toml
+[middleware.audit_webhook]
+type = "webhook"
+authentication = "audit_bearer"
+[middleware.audit_webhook.options]
+endpoint = "https://audit.example.com/logs"
 ```
 
 ## Passthru

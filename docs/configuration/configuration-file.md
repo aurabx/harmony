@@ -2,7 +2,7 @@
 title: Configuration
 description: Reference for the main configuration file, including networks, authentications, reload, and Runbeam Cloud.
 status: active
-updated: 2026-10-24
+updated: 2026-10-25
 type: Configuration
 ---
 
@@ -100,7 +100,7 @@ Define each credential once under `[authentications.<key>]`. Targets, backends, 
 ```toml
 [authentications.fhir_bearer]
 id = "fhir_bearer"
-method = "bearer"            # bearer, basic, api_key or none
+method = "bearer"            # bearer, basic, api_key, none or jwt
 [authentications.fhir_bearer.options]
 token = "$FHIR_TOKEN"
 
@@ -111,6 +111,34 @@ authentication = "fhir_bearer"
 ```
 
 A backend with `target_ref` inherits the target's `authentication`. A backend can set its own `authentication` to override it.
+
+Peers and endpoints accept an `authentication` reference, and Harmony checks it at load. Harmony does not use it after that, so it has no effect on requests yet.
+
+### Methods and required options
+
+| Method | Required options | Sends |
+|---|---|---|
+| `bearer` | `token` | `Authorization: Bearer <token>` |
+| `basic` | `username`, `password` | `Authorization: Basic <base64 of username:password>` |
+| `api_key` | `api_key`. Optional `header_name`, default `X-API-Key` | `<header_name>: <api_key>` |
+| `none` | none | nothing |
+| `jwt` | checked by the jwt_auth middleware | nothing. Settings for jwt_auth middleware only |
+
+A required option must be a non-empty string. `header_name` must be a valid HTTP header name.
+
+Targets, backends and webhook middleware send the credential as a request header, so they cannot reference a `jwt` definition. Other middleware may reference any method.
+
+### Invalid definitions fail the load
+
+Harmony checks every definition in `[authentications]` when it loads the config, including definitions that nothing references. The load fails if a definition has an unknown method or is missing a required option. It also fails if a target, backend or webhook references a `jwt` definition:
+
+```
+ERROR: Configuration reference resolution failed: Authentication 'fhir_bearer' is invalid: method 'bearer' requires a non-empty 'token' option
+```
+
+Startup, `--validate-config` and hot reload handle this error the same way as an unresolved reference.
+
+Credentials are set by reference only. A backend, endpoint or middleware options table that contains `authentication_def` fails the load. Define the credential under `[authentications]` and set `authentication = "<key>"` instead.
 
 ### Reference format
 
@@ -129,7 +157,9 @@ ERROR: Configuration reference resolution failed: Target 'fhir_server' reference
 
 Harmony reports every bad reference in one error, one per line.
 
-`[authentications]` must be in the top-level config file. Pipeline, transform and mesh files do not merge their `[authentications]` tables.
+### Definitions in other files
+
+`[authentications]` can be in the top-level config file or in any pipeline, transform or mesh file. Harmony merges them all. Each key must be defined once. If two files define the same key, the load fails and the error names both files.
 
 ## Network Configuration
 

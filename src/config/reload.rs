@@ -482,7 +482,7 @@ interface = "wg0"
         let cases = [
             (
                 "authentications",
-                "[authentications.basic]\nid = \"basic\"\nmethod = \"basic\"",
+                "[authentications.basic]\nid = \"basic\"\nmethod = \"basic\"\noptions = { username = \"svc\", password = \"pw\" }",
             ),
             (
                 "targets",

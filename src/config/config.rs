@@ -2,7 +2,7 @@ use crate::config::env_substitution::substitute_env_vars;
 use crate::config::logging_config::LoggingConfig;
 use crate::config::provider_config::ProviderConfig;
 use crate::config::proxy_config::ProxyConfig;
-use crate::config::resolution::resolve_references;
+use crate::config::resolution::{escape_control_chars, resolve_references};
 use crate::config::runbeam_config::RunbeamConfig;
 use crate::config::Cli;
 use crate::management::ManagementConfig;
@@ -400,7 +400,7 @@ impl Config {
 
         // Load additional configs
         let additional_configs = Self::load_additional_configs(&config, config_path)?;
-        config = Self::merge_configs(config, additional_configs);
+        config = Self::merge_configs(config, config_path, additional_configs)?;
 
         // Resolve references
         match resolve_references(&mut config) {
@@ -463,11 +463,12 @@ impl Config {
         initialise_middleware_registry(self);
     }
 
-    /// Loads all additional configuration files from pipelines_path and transforms_path
+    /// Loads all additional configuration files from pipelines_path,
+    /// transforms_path and mesh_path, each paired with its file path.
     fn load_additional_configs(
         config: &Config,
         base_config_path: &str,
-    ) -> Result<Vec<Config>, ConfigError> {
+    ) -> Result<Vec<(String, Config)>, ConfigError> {
         let base_dir =
             Path::new(base_config_path)
                 .parent()
@@ -496,8 +497,8 @@ impl Config {
         Ok(configs)
     }
 
-    /// Loads configuration files from a directory
-    fn load_from_directory(dir: &Path) -> Result<Vec<Config>, ConfigError> {
+    /// Loads configuration files from a directory, each paired with its file path
+    fn load_from_directory(dir: &Path) -> Result<Vec<(String, Config)>, ConfigError> {
         if !dir.exists() {
             return Ok(vec![]); // Skip if the directory doesn't exist
         }
@@ -525,8 +526,9 @@ impl Config {
                         reason: format!("Failed to parse config file '{}': {}", path.display(), e),
                     }
                 })?;
-                config.record_endpoint_sources(&path.to_string_lossy());
-                configs.push(config);
+                let file = path.to_string_lossy().to_string();
+                config.record_endpoint_sources(&file);
+                configs.push((file, config));
             }
         }
 
@@ -534,8 +536,26 @@ impl Config {
     }
 
     /// Merges multiple configurations into a single base configuration
-    fn merge_configs(mut base: Config, additional: Vec<Config>) -> Config {
-        for config in additional {
+    ///
+    /// Fails if two files define the same `[authentications]` key. A later
+    /// file silently replacing a credential would send the wrong one upstream.
+    fn merge_configs(
+        mut base: Config,
+        base_path: &str,
+        additional: Vec<(String, Config)>,
+    ) -> Result<Config, ConfigError> {
+        let mut authentication_sources: HashMap<String, String> = base
+            .authentications
+            .keys()
+            .map(|key| (key.clone(), base_path.to_string()))
+            .collect();
+        for (file, config) in additional {
+            Self::merge_authentications(
+                &mut base.authentications,
+                &mut authentication_sources,
+                &file,
+                config.authentications,
+            )?;
             // Extend fields loaded from per-file configs
             base.provider.extend(config.provider);
             base.network.extend(config.network);
@@ -574,7 +594,33 @@ impl Config {
         // Extract nested mesh ingress/egress from pipelines to top-level
         base.extract_pipeline_mesh();
 
-        base
+        Ok(base)
+    }
+
+    /// Adds one file's authentication definitions, failing on a key that an
+    /// earlier file already defined. `sources` maps each key to its file.
+    fn merge_authentications(
+        authentications: &mut HashMap<String, AuthenticationDefinition>,
+        sources: &mut HashMap<String, String>,
+        file: &str,
+        incoming: HashMap<String, AuthenticationDefinition>,
+    ) -> Result<(), ConfigError> {
+        for (key, auth_def) in incoming {
+            if let Some(existing_file) = sources.get(&key) {
+                return Err(ConfigError::InvalidProxy {
+                    name: "config".to_string(),
+                    reason: format!(
+                        "Authentication '{}' is defined in both '{}' and '{}'. Each key in [authentications] must be defined once",
+                        escape_control_chars(&key),
+                        escape_control_chars(existing_file),
+                        escape_control_chars(file)
+                    ),
+                });
+            }
+            sources.insert(key.clone(), file.to_string());
+            authentications.insert(key, auth_def);
+        }
+        Ok(())
     }
 
     /// Extract nested mesh ingress/egress definitions from pipelines to top-level config.
