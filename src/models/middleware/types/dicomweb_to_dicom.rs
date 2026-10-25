@@ -336,15 +336,20 @@ impl std::fmt::Display for InstanceReadError {
 /// True for a WADO-RS retrieve of whole instances: a study, a series or one
 /// instance. Paths that end in `/metadata`, `/rendered`, `/thumbnail` or
 /// `/frames/...` are not matched. They have their own response shapes.
+///
+/// Every `studies` segment is tried, not only the first. The endpoint prefix
+/// can itself contain `studies`, for example `/studies` or `/my-studies`, and
+/// the caller's path extraction can leave that in front.
 pub(crate) fn is_wado_retrieve_path(path: &str) -> bool {
     let segments: Vec<&str> = path.split('/').filter(|s| !s.is_empty()).collect();
-    let Some(start) = segments.iter().position(|s| *s == "studies") else {
-        return false;
-    };
-    matches!(
-        segments[start..],
-        [_, _] | [_, _, "series", _] | [_, _, "series", _, "instances", _]
-    )
+    (0..segments.len())
+        .filter(|&start| segments[start] == "studies")
+        .any(|start| {
+            matches!(
+                segments[start..],
+                [_, _] | [_, _, "series", _] | [_, _, "series", _, "instances", _]
+            )
+        })
 }
 
 /// Returns `"get"` or `"move"` when the response came from a DIMSE retrieve.
@@ -3437,5 +3442,32 @@ mod tests {
         );
 
         expect_not_found(bridge.right(envelope).await);
+    }
+
+    #[test]
+    fn test_is_wado_retrieve_path_ignores_studies_in_the_endpoint_prefix() {
+        // The bridge cuts the path at the first "studies/". With a prefix of
+        // "/studies" or "/my-studies" that leaves an extra leading segment.
+        for path in [
+            "studies/studies/1.2.3",
+            "studies/studies/1.2.3/series/4",
+            "studies/studies/1.2.3/series/4/instances/5",
+        ] {
+            assert!(is_wado_retrieve_path(path), "{}", path);
+        }
+        assert!(!is_wado_retrieve_path("studies/studies/1.2.3/metadata"));
+    }
+
+    #[tokio::test]
+    async fn test_right_retrieve_with_studies_in_the_prefix_builds_multipart() {
+        for prefix in ["/studies", "/my-studies"] {
+            for tail in [
+                "/studies/1.2.3",
+                "/studies/1.2.3/series/4",
+                "/studies/1.2.3/series/4/instances/5",
+            ] {
+                assert_multipart_over_all_files(&format!("{}{}", prefix, tail)).await;
+            }
+        }
     }
 }
