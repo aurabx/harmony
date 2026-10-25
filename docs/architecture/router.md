@@ -76,11 +76,16 @@ Protocol Response (HTTP/DIMSE/HL7/...)
    - Builds `RequestEnvelope` via service
    
 3. **PipelineExecutor processes the request**:
-   a. **Endpoint preprocessing**: Service-specific request handling. The endpoint sets a typed `Command` on the envelope expressing the intended operation (e.g., Query, Retrieve, Store). See [commands.md](commands.md).
-   b. **Incoming middleware** (left): Auth, transforms, logging (in order). Protocol-bridge middleware may read or modify the Command.
-   c. **Backend invocation**: The backend reads the Command (via `resolve_operation()`) to decide what protocol action to perform (e.g., map `Query` to C-FIND, or to HTTP GET).
-   d. **Outgoing middleware** (right): Response transforms, logging (in order)
-   e. **Endpoint postprocessing**: Protocol-aware response shaping
+
+a. **Endpoint preprocessing**: Service-specific request handling. The endpoint sets a typed `Command` on the envelope expressing the intended operation (e.g., Query, Retrieve, Store). See [commands.md](commands.md).
+
+b. **Incoming middleware** (left): Auth, transforms, logging (in order). Protocol-bridge middleware may read or modify the Command.
+
+c. **Backend invocation**: The backend reads the Command (via `resolve_operation()`) to decide what protocol action to perform (e.g., map `Query` to C-FIND, or to HTTP GET).
+
+d. **Outgoing middleware** (right): Response transforms, logging (in order)
+
+e. **Endpoint postprocessing**: Protocol-aware response shaping
    
 4. **Adapter converts ResponseEnvelope back**
    - For HTTP: Axum `Response` with headers/body

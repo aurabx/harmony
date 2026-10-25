@@ -10,7 +10,6 @@
   ],
   "custom_agents": [],
   "custom_commands": [],
-  "custom_skills": [],
   "description": "",
   "file_rules": {
     "_project": [
@@ -21,7 +20,10 @@
       "automatic-code",
       "local-git-rules",
       "thinking-effort",
-      "automatic-workflow"
+      "automatic-workflow",
+      "local-rules",
+      "common-docs-documentation",
+      "common-docs-index"
     ]
   },
   "id": "bace4c91-4f66-415a-b426-980eeb5db523",
@@ -58,7 +60,8 @@
         "automatic-prose",
         "local-git-rules",
         "thinking-effort",
-        "automatic-workflow"
+        "automatic-workflow",
+        "local-rules"
       ]
     },
     "Runbeam": {
@@ -125,6 +128,21 @@
       "kind": "bundled",
       "source": "automatic/automatic-app"
     },
+    "common-docs-find": {
+      "id": "velvet-tiger/common-docs/common-docs-find",
+      "kind": "github",
+      "source": "velvet-tiger/common-docs"
+    },
+    "common-docs-scaffold": {
+      "id": "velvet-tiger/common-docs/common-docs-scaffold",
+      "kind": "github",
+      "source": "velvet-tiger/common-docs"
+    },
+    "common-docs-write": {
+      "id": "velvet-tiger/common-docs/common-docs-write",
+      "kind": "github",
+      "source": "velvet-tiger/common-docs"
+    },
     "git-commit": {
       "id": "github/awesome-copilot/git-commit",
       "kind": "github",
@@ -159,7 +177,12 @@
     "aurabox-rest-api",
     "harmony-pipeline-builder",
     "harmony-runner",
-    "integration-testing"
+    "integration-testing",
+    "common-docs-scaffold",
+    "common-docs-write",
+    "common-docs-find"
   ],
-  "tools": []
+  "tools": [
+    "common-docs"
+  ]
 }

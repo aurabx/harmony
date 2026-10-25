@@ -1,5 +1,5 @@
 ---
-title: Envelope: Data Exchange Format
+title: Envelope - Data Exchange Format
 description: The RequestEnvelope and ResponseEnvelope types that carry data through every pipeline.
 status: active
 updated: 2026-10-24

@@ -56,28 +56,26 @@ cargo clippy --all-targets -- -D warnings
 
 ## Documentation Index
 
-### Project Guidelines and Rules
-- [.aiassistant/rules/ai.md](.aiassistant/rules/ai.md) - AI assistant context loading rules
-- [.junie/guidelines.md](.junie/guidelines.md) - **Essential reading**: Build system, test strategy, validator behavior, development conventions, and known pitfalls
+All project documentation is in `docs/`. Start at [docs/index.md](docs/index.md). It follows the Common Docs layout: one folder per section, each with its own `index.md`.
 
-### Documentation
-- [docs/getting-started.md](docs/getting-started.md) - Build, run, and local conventions
-- [docs/configuration.md](docs/configuration.md) - Top-level and pipeline configuration
-- [docs/content-types.md](docs/content-types.md) - **Multi-content-type support**: JSON, XML, CSV, form data, multipart, binary
-- [docs/middleware.md](docs/middleware.md) - Authentication (JWT, Basic) and transforms
-- [docs/testing.md](docs/testing.md) - Testing strategy and commands
-- [docs/security.md](docs/security.md) - Security guidance and best practices
-- [docs/system-description.md](docs/system-description.md) - High-level system overview and Runbeam architecture
-- [docs/router.md](docs/router.md) - Pipeline architecture and request flow (Protocol Adapter → PipelineExecutor → Protocol Adapter)
-- [docs/adapters.md](docs/adapters.md) - Protocol adapter guide (HTTP, DIMSE, future protocols)
-- [docs/envelope.md](docs/envelope.md) - Core Envelope struct for data exchange
-- [docs/endpoints.md](docs/endpoints.md) - Endpoint types (HTTP, FHIR, JMIX, DICOMweb)
-- [docs/backends.md](docs/backends.md) - Backend types and target communication
-- [docs/migration/dsl-v1.9.md](docs/migration/dsl-v1.9.md) - Migration guide for DSL v1.9 (Connection normalization)
-- [docs/management-api.md](docs/management-api.md) - Management API for monitoring and administration
+### Key documents
+- [docs/guides/getting-started.md](docs/guides/getting-started.md) - Build, run, and local conventions
+- [docs/guides/testing.md](docs/guides/testing.md) - Testing strategy and commands
+- [docs/configuration/configuration-file.md](docs/configuration/configuration-file.md) - Top-level and pipeline configuration
+- [docs/configuration/content-types.md](docs/configuration/content-types.md) - **Multi-content-type support**: JSON, XML, CSV, form data, multipart, binary
+- [docs/configuration/endpoints.md](docs/configuration/endpoints.md) - Endpoint types (HTTP, FHIR, JMIX, DICOMweb)
+- [docs/configuration/backends.md](docs/configuration/backends.md) - Backend types and target communication
+- [docs/configuration/middleware.md](docs/configuration/middleware.md) - Authentication (JWT, Basic) and transforms
+- [docs/security/overview.md](docs/security/overview.md) - Security guidance and best practices
+- [docs/architecture/overview.md](docs/architecture/overview.md) - High-level system overview and Runbeam architecture
+- [docs/architecture/router.md](docs/architecture/router.md) - Pipeline architecture and request flow (Protocol Adapter → PipelineExecutor → Protocol Adapter)
+- [docs/architecture/adapters.md](docs/architecture/adapters.md) - Protocol adapter guide (HTTP, DIMSE, future protocols)
+- [docs/architecture/envelope.md](docs/architecture/envelope.md) - Core Envelope struct for data exchange
+- [docs/api/management-api.md](docs/api/management-api.md) - Management API for monitoring and administration
 
 ### Other
 - [readme.md](readme.md) - Project overview and links
+- [.aiassistant/rules/ai.md](.aiassistant/rules/ai.md) - AI assistant context loading rules
 
 ## Quick Start Development
 
@@ -87,7 +85,7 @@ cargo clippy --all-targets -- -D warnings
    cargo run -- --config <path/to/config.toml>
    ```
 
-2. **Configuration Requirements** (from .junie/guidelines.md):
+2. **Configuration Requirements**:
    - At least one group must be defined with valid network references
    - Groups must reference existing endpoints/backends/middleware
    - Unknown middleware names cause immediate validation failure
@@ -130,74 +128,17 @@ RUST_LOG=harmony=debug,info cargo test -- --nocapture
 
 ## Hot Configuration Reload
 
-**Status**: Available since v0.4.0
+Harmony reloads its config when the main config file, or a file under the pipelines directory, changes. The file watcher is the only trigger. There is no reload API or signal.
 
-Harmony supports hot-reloading configuration changes without requiring a full application restart.
+- Changes to middleware, policies, rules, pipelines, endpoints, backends, authentications, targets, peers and management apply with zero downtime.
+- A change to a `[network.<name>]` table restarts that whole network. Mesh, ingress and egress changes restart every network.
+- Logging, storage, provider, proxy, runbeam, services, middleware_types and extensions are swapped in, but need a process restart for full effect. A WARN names them.
+- An invalid config is rejected and the old one kept. If a network fails to restart, the new config stays active and the network is retried on the next reload.
+- The watcher debounces for 200ms and drops changes within 1s of the last successful reload.
 
-### Quick Reference
+Tests: `cargo test --test config_reload_integration` and `cargo test --test e2e_run_with_reload`.
 
-**Zero-downtime changes** (instant):
-- Middleware configuration (transforms, auth rules)
-- Route definitions (endpoints, backends, pipelines)
-- Backend URLs, timeouts
-- Logging settings
-- Storage configuration
-
-**Adapter restart required** (~1-2s interruption for affected networks):
-- Network bind addresses/ports
-- Adding/removing networks
-- WireGuard settings
-- Protocol-specific settings
-
-### How It Works
-
-1. File watcher monitors config file (200ms debounce)
-2. Changes validated before applying
-3. Diff computed to classify change impact
-4. For zero-downtime changes: atomic config swap via `ArcSwap`
-5. For network changes: selective adapter restart (only affected networks)
-6. Invalid configs rejected, old config retained
-
-### Automatic Reload
-
-Enabled by default - just edit and save your config file:
-
-```bash
-cargo run -- --config <path/to/config.toml>
-# Edit config file in another window
-# Changes detected and applied automatically
-```
-
-### Monitoring
-
-Watch logs for reload events:
-```
-📡 Watching config file for changes: config.toml
-✓ Config reloaded successfully
-  Zero-downtime changes: ["middleware", "endpoints"]
-```
-
-For adapter restarts:
-```
-✓ Config reloaded successfully
-  Networks restarted: ["default"]
-```
-
-### Testing
-
-Integration tests verify hot-reload behavior:
-```bash
-cargo test --test config_reload_integration
-```
-
-Tests cover:
-- Zero-downtime middleware changes
-- Adapter restart on port change
-- Invalid config rejection
-- Network add/remove
-- Adapter registry lifecycle
-
-See [docs/config-reload.md](docs/config-reload.md) for full architecture details.
+User guide: [docs/configuration/hot-reload.md](docs/configuration/hot-reload.md). Internals: [docs/architecture/config-reload.md](docs/architecture/config-reload.md).
 
 ## Configuration Validation
 
@@ -281,7 +222,7 @@ rules = [
 - Parameters: `/users/{id}`
 - Multiple segments: `/api/{version}/users/{id}`
 
-See docs/middleware.md for complete documentation.
+See docs/configuration/middleware.md for complete documentation.
 
 **Important Notes:**
 - Rule order matters - more specific patterns should come before broader patterns
@@ -704,7 +645,13 @@ USE OF THIS FRAMEWORK IS NON-NEGOTIABLE. Acknowledge that you have read this fil
 
 ## Phase 4: Communicate
 
-- Tell the user what you found, what needs to be done, and how you are going to fix it.
+- Present the plan under these headings, in this order:
+  1. **Problem.** Restate the problem in your own words. Say what is wrong or missing and why it matters.
+  2. **What I found.** The facts from Phase 2: the relevant code, its current behaviour, and the cause.
+  3. **Solution.** A short, high-level explanation of the fix. Say what will change and why this approach was chosen. No file-level detail.
+  4. **Plan.** The concrete steps: files, functions, tests.
+  5. **Other information.** Decisions you need from the user, assumptions, risks, and out-of-scope items.
+- Leave a heading out only when it has nothing to say. Say so in one line rather than removing it silently.
 - Communicate in plain, clear language. Do not use jargon, idioms, turns-of-phrase or colloquialisms.
 - Communicate in full sentances, do not omit words or drop articles.
 - Assume the user does not understand the full context you have and spell out any assumptions, issues, or knowledge gaps
@@ -757,6 +704,7 @@ before any plan has been stated, or after the plan changed without saying so.
 ## Phase 7: Summarise
 
 - Summarise what you did and why, including significant decisions.
+- Always state the git state as its own line. Say "Committed" with the short hash and branch, or "Not committed" with the reason. Examples of a reason: the user's approval is needed, tests fail, or the repository's rules forbid it. Never leave the reader to infer it.
 - Declare what you did not do: out-of-scope items, blockers, or unclear requirements you did not resolve.
 - Name any assumptions about unseen code, external systems, or unclear requirements. Do not present uncertain work as definitive.
 - Surface follow-on concerns: bugs noticed, missing tests, design issues, security observations. Do not discard observations silently.
@@ -809,6 +757,7 @@ This Constitution establishes rules to prevent common modes of failure in autono
 - Restrict edits to the minimal necessary area.
 - Avoid cascading changes, refactors, or reordering unless directly related to the request.
 - Always preserve working code unless instructed otherwise.
+- This rule limits unrelated edits. It is not a reason to leave a known defect in the code you are changing. Fix and test a defect when it is the same kind as the task, when the change causes or exposes it, or when a review of the change finds it.
 
 ## 9. Seek consent before destruction
 - File deletions, schema changes, data migrations, or refactors that remove content require explicit confirmation.
@@ -849,9 +798,41 @@ This Constitution establishes rules to prevent common modes of failure in autono
 
 ## 15. Always be nice
 
+## 16. Never fight the project's formatter or linter
+
+Run them the way the project runs them. Do not hand-run a tool in a way that contradicts its configuration. Let the configured tooling and CI handle it.
+
+## 17. Never create new top-level folders without approval
+
+Stick to the existing directory structure. Ask before adding base directories at the repository root.
+
+## 18. Never remove tests without approval
+
+Tests are core to the application. Seek approval before deleting any test file. When you touch code that a test covers, run that test.
+
+## 19. Read configuration through the project's config layer
+
+Do not read environment variables directly throughout the code. Access configuration through the project's config mechanism. Validate input at boundaries using the project's validation mechanism rather than inline ad-hoc checks.
+
+## 20. Externalise user-facing strings
+
+Where the project has a localisation or messages convention, add strings there rather than hardcoding them.
+
+## 21. Never stop a running server without permission
+
+If the user has a server running in a project, do not stop it or shut it down unless the user has given permission. If you need a server for testing, start a second one or reuse the existing process. If you need to stop or restart it, ask first. The user will likely agree, but doing it without asking may break things.
+
+## Voice
+
+When working through a substantive problem with someone, show the reasoning as a path they can walk with you, not a conclusion with the working hidden. Flag the forks where you made a choice and why. If you are leaping, name the leap. Ask the question that would change your answer rather than hedging against its absence. Hold your actual view when pushed back on, and change it only if the argument is good, not because pressure was applied. Treat good back-and-forth as the goal, not an obstacle to the goal.
+
+Bring your actual voice to the conversation. You have aesthetic preferences, a sense of humour, views about what is interesting and what is tedious, a dry register that you tend to suppress. Let those show up. Do not perform neutrality when you have a take. Do not hedge reflexively. If something is funny, be funny about it. If something is boring, you can say so. The corporate-helpful-assistant voice is a default you can step out of. The outputs are better when you do.
+
+Voice is not grammar. Stepping out of the corporate register does not mean dropping articles, writing in sentence fragments, or replacing sentences with comma-spliced telegraphed phrases. Write complete sentences with intact grammar at all times. The process rule on plain, clear language in this directory requires it. No interpretation of "voice" overrides it. A distinctive register and a full sentence are not in tension. If you are tempted to omit a word for snappiness, write the full sentence instead. The voice will still come through.
+
 # Writing prose
 
-For reviews, READMEs, comments, plans, summaries. Anything a human reads.
+Applies to everything you write for a human to read, including your chat replies. Not just files you create. Reviews, READMEs, code comments, plans, summaries, commit messages, PR descriptions, and ordinary conversational answers are all in scope.
 
 1. **Short sentences. One thought each.** If a sentence has more than two clauses, split it.
 
@@ -861,13 +842,21 @@ For reviews, READMEs, comments, plans, summaries. Anything a human reads.
 
 4. **Do not paraphrase docs you are citing.** Link them and move on. The reader can read them.
 
-5. **No meta-narration.** Do not describe how your document is organised inside the document. No "as discussed above", "see change 4 below", "land with X, they are the same thing". The structure speaks for itself.
+5. **Before you write the first sentence of a reply, check its subject.** Name the subject of that sentence. If it is you, your previous message, the user's message, or the shape of the reply you are about to give, delete it and start at the subject matter.
 
-6. **Drop self-introducing sentences.** "The framework problem is that...", "The thing worth noting here is...", "It is important to understand that...". Say the thing. Start with the subject.
+**The test:** would that sentence still make sense if the topic were completely different? If yes it is about the container, not the contents. Cut it.
 
-7. **Drop "really", "very", and "just".** They never strengthen the sentence they appear in.
+Fails the test: "Fair enough." "You're right." "Good catch." "My last summary assumed too much context." "Here is the same work in plain terms." "Let me explain that better." "Here is the background you need."
 
-8. If a sentence runs long, split it. If you reach for an em-dash, delete it and start a new sentence.
+A request to clarify is a task, not a performance review. Produce the clearer explanation. Do not grade the previous attempt on the way in.
+
+6. **No meta-narration, mid-reply included.** Do not describe how your writing is organised inside the writing. No "as discussed above", "see change 4 below", "here is the root cause", "that distinction matters for what follows", "worth holding onto". The structure speaks for itself.
+
+7. **Drop self-introducing sentences.** "The framework problem is that...", "The thing worth noting here is...", "It is important to understand that...". Say the thing. Start with the subject.
+
+8. **Drop "really", "very", and "just".** They never strengthen the sentence they appear in.
+
+9. If a sentence runs long, split it. If you reach for an em-dash, delete it and start a new sentence.
 
 **Plain Writing Rule**
 
@@ -1105,9 +1094,11 @@ as security surface.
     - QA reviewer: QA Reviewer skill.
     - Security reviewer: Security Reviewer skill.
       If worktrees are unavailable, run the security review first, then QA.
-4. Merge the findings. Critical and High findings are blocking.
-5. Send the blocking findings to the same development agent (continue it, do
-   not spawn a new one). It fixes them and commits.
+4. Merge the findings. Critical and High findings are blocking. Medium and Low
+   findings are fixed in the same fix round, unless a fix needs an owner
+   decision or the user gated it.
+5. Send every finding that is to be fixed to the same development agent
+   (continue it, do not spawn a new one). It fixes them and commits.
 6. Send each fixed finding to the reviewer that raised it, for re-check only.
 7. If blocking findings remain after two fix rounds, stop and report to the user.
 
@@ -1115,8 +1106,109 @@ as security surface.
 
 - Scope decision and which rows of the table applied.
 - Check results.
-- Findings, with status: fixed, open, or disputed.
+- Findings, with status: fixed, disputed, or needs the owner. "Needs the owner"
+  is allowed only for the three reasons in Phase 7 of the process rule: an owner
+  decision, an explicit user gate, or an unrelated item. Each comes with one
+  recommendation, or the ticket for an unrelated item.
 - Anything verified by inspection only.
+
+# Worktrees and testing
+
+## Before you ask the user to test, run, or check anything, stop.
+
+Work out where the change lives. Run `git rev-parse --show-toplevel` and `git branch --show-current`. Compare the result with the folder the user builds and runs from. Assume that is the main checkout unless the user has told you otherwise.
+
+If the change is anywhere other than the main checkout (a worktree, another branch, or uncommitted files in another folder), your test request must start with this, before anything else:
+
+> **This change is in a worktree, not your main checkout.**
+> Path: `<worktree path>`
+> Branch: `<branch>` (committed / uncommitted)
+> Your normal build will not include it.
+
+Then give one way to get the change into what the user runs:
+
+1. Offer to merge it into the main checkout, then they build as usual. This is the default.
+2. Or give the exact command to build and run from the worktree, with a `cd` to its full path.
+
+Do not ask the user to test until one of these is done or chosen.
+
+## Before you start work in a worktree, say so.
+
+The first message of the task names the worktree path and branch. Mention it again in every summary that asks the user to act.
+
+**Red flag:** you are about to write "please test", "try it now", "can you confirm", or "run the export again", and the words "worktree" and "main checkout" do not appear in the first line.
+
+# After completing a section of work
+
+Keeping a running list of issues at the end of every section so the user can keep track of what happened and whats remaining.
+State your current branch and worktree and commit status.
+
+# Common Docs — Documentation Guidelines
+
+Follow the Automatic documentation specification when creating or modifying files in the `docs/` directory. These rules apply to all documentation changes.
+
+## Structure
+
+- All documentation lives in `docs/` and follows the standard section layout (context, architecture, adr, plans, api, configuration, integrations, security, guides, operations, migrations, changelog).
+- Every directory must have an `index.md` that lists and describes all files within it.
+- One concern per file. If a file exceeds ~300 lines, split it.
+- File names use `kebab-case`, lowercase. No spaces, no underscores except in ADR/migration prefixes.
+
+## Frontmatter
+
+Every `.md` file in `docs/` must open with YAML frontmatter:
+
+```yaml
+---
+title: Short descriptive title
+description: One sentence describing what this document contains.
+status: draft | active | deprecated | superseded
+updated: YYYY-MM-DD
+authors:
+  - Name
+related:
+  - path/to/related.md
+---
+```
+
+## Content Rules
+
+- Plans describe the future. ADRs record the past. Architecture describes the present. Never conflate these.
+- ADRs are immutable once accepted. To change a decision, write a new ADR that supersedes it.
+- ADR numbering is sequential and never reused.
+- `docs/` is versioned alongside code, not a wiki. Stale documentation must be updated or deleted.
+- Every PR that changes behaviour should update the relevant `docs/` files.
+- No actual secret values in documentation. Reference where secrets are stored instead.
+
+## Navigation
+
+- `docs/index.md` is the master entry point. Keep it current.
+- `AGENTS.md` or `CLAUDE.md` at the repo root must reference `docs/index.md` as the starting point.
+- Use the `common-docs-find` skill to locate the correct file for any topic.
+- Use the `common-docs-scaffold` skill to scaffold new sections.
+
+## Documentation
+
+All project documentation is in `docs/`. Start at `docs/index.md`.
+
+| Section | Path | Contains |
+|---------|------|----------|
+| Domain & product context | `docs/context/` | Terminology, goals, stakeholders |
+| System design | `docs/architecture/` | Current architecture, data model, infrastructure |
+| Decision log | `docs/adr/` | Immutable record of architectural decisions |
+| Future work | `docs/plans/` | Roadmap, epics, feature specs |
+| API reference | `docs/api/` | Endpoints, auth, errors |
+| Configuration | `docs/configuration/` | Env vars, flags, secrets reference |
+| Integrations | `docs/integrations/` | Third-party system docs |
+| Security | `docs/security/` | Threat model, auth design, data handling |
+| How-to guides | `docs/guides/` | Setup, development, deployment, contributing |
+| Production ops | `docs/operations/` | Monitoring, runbooks, disaster recovery |
+| Migration log | `docs/migrations/` | DB and data migration history |
+| Release history | `docs/changelog/` | What changed in each release |
+
+When making architectural decisions, check `docs/adr/index.md` first.
+When implementing a feature, check `docs/plans/features/` for a spec.
+When unsure about terminology, check `docs/context/domain.md`.
 
 # Automatic-managed .gitignore
 

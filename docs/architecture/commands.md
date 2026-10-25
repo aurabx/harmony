@@ -1,5 +1,5 @@
 ---
-title: Commands: Protocol-Agnostic Operations
+title: Commands - Protocol-Agnostic Operations
 description: The Command type that lets endpoints and backends exchange protocol-agnostic operations.
 status: active
 updated: 2026-10-24

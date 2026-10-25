@@ -21,4 +21,4 @@ How Harmony works today. This section describes the current system, not planned 
   - [DICOM Streaming Use Cases and Performance](dicom-streaming-use-cases.md): Example DICOM streaming pipelines and their performance characteristics.
   - [DICOM Streaming Errors, Testing, and Troubleshooting](dicom-streaming-troubleshooting.md): How DICOM streaming handles errors, how it is tested, and how to diagnose problems.
 
-Last architecture review: not yet recorded. These files were moved into this section on 2026-10-24 without a content review.
+Last architecture review: 25 Oct 2026
