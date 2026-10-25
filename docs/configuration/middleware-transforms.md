@@ -2,7 +2,7 @@
 title: Transform Middleware
 description: Reference for middleware that transforms or converts request and response data.
 status: active
-updated: 2026-10-24
+updated: 2026-10-25
 type: Configuration
 related:
   - configuration/middleware.md
@@ -121,6 +121,18 @@ type = "dicomweb_bridge"
 - Handles both single-frame and multi-frame responses
 - Supports content negotiation (Accept: image/jpeg, image/png)
 - Provides proper error responses for unsupported transfer syntaxes
+
+**Backend failures:**
+
+A `dicom_scu` backend reports a failed C-FIND, C-GET or C-MOVE with `"success": false` in its response. This covers a PACS that cannot be reached, an association that is rejected, and a failure part way through. Any results received before the failure are dropped, because they are incomplete. The bridge then stops the request with an upstream failure error.
+
+- An HTTP client gets `502 Bad Gateway` with an empty body.
+- A DIMSE client gets the failure status `0xC000`. The DIMSE adapter sends this for every pipeline error.
+- The backend's error text goes to the server log only. It often names hosts, ports and AE titles, so the client never sees it.
+
+A DICOMweb HTTP backend sends no `success` field. Its responses pass through unchanged. STOW-RS keeps its own PS3.18 failure response.
+
+If the backend reports success but the retrieved instances cannot be read, the client gets `500 Internal Server Error` with an empty body. A frame retrieval failure returns a fixed message with no backend detail.
 
 **Features:**
 - Full DICOMweb QIDO-RS and WADO-RS compliance

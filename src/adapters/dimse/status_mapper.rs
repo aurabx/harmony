@@ -36,6 +36,7 @@
 //! }
 //! ```
 
+use crate::models::middleware::UpstreamFailure;
 use crate::pipeline::executor::PipelineError;
 use dimse::types::DimseStatus;
 
@@ -97,8 +98,12 @@ pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
             }
         }
 
-        PipelineError::MiddlewareError(_) => {
-            DimseStatus::Failure(0x0110) // Processing failure
+        PipelineError::MiddlewareError(e) => {
+            if e.downcast_ref::<UpstreamFailure>().is_some() {
+                DimseStatus::Failure(0xA701) // Out of resources: unable to process
+            } else {
+                DimseStatus::Failure(0x0110) // Processing failure
+            }
         }
 
         PipelineError::BackendError(msg) => {
@@ -215,6 +220,30 @@ mod tests {
     #[test]
     fn test_pipeline_error_generic() {
         let error = PipelineError::ServiceError("Something went wrong".to_string());
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0x0110)
+        );
+    }
+
+    #[test]
+    fn test_middleware_upstream_failure_maps_to_a701() {
+        let error = PipelineError::MiddlewareError(Box::new(UpstreamFailure {
+            operation: "find".to_string(),
+            detail: "connection refused to 10.0.0.5:104".to_string(),
+        }));
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0xA701)
+        );
+    }
+
+    #[test]
+    fn test_generic_middleware_error_maps_to_0110() {
+        let error = PipelineError::MiddlewareError(Box::new(std::io::Error::new(
+            std::io::ErrorKind::Other,
+            "generic",
+        )));
         assert_eq!(
             pipeline_error_to_dimse(&error),
             DimseStatus::Failure(0x0110)

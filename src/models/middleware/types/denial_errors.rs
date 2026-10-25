@@ -34,3 +34,19 @@ pub struct RateLimitExceeded(pub String);
 #[derive(Debug, Error)]
 #[error("Access forbidden: {0}")]
 pub struct AccessDenied(pub String);
+
+/// Upstream failure error for middleware
+///
+/// A backend reported that the requested operation failed, for example a
+/// DIMSE C-FIND, C-GET or C-MOVE that could not reach the remote PACS.
+/// Maps to HTTP 502 Bad Gateway and DIMSE status 0xA701.
+///
+/// The message names the operation and carries the raw backend error, which
+/// often includes hosts, ports and AE titles. It is for server logs only.
+/// Adapters must never send it to clients.
+#[derive(Debug, Error)]
+#[error("Upstream {operation} failed: {detail}")]
+pub struct UpstreamFailure {
+    pub operation: String,
+    pub detail: String,
+}

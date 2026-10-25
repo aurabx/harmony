@@ -1,5 +1,6 @@
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
+use crate::models::middleware::UpstreamFailure;
 use crate::utils::Error;
 use base64::Engine;
 use dicom_core::dictionary::{DataDictionary, VirtualVr};
@@ -314,6 +315,31 @@ impl DICOMwebToDICOMMiddleware {
 ///
 /// The parameter may appear anywhere after the media type and may be quoted.
 /// Returns `None` when no `boundary=` parameter is found.
+/// Detects a DIMSE backend response that reports a failed C-FIND, C-GET or
+/// C-MOVE.
+///
+/// Fires only on an explicit JSON `"success": false`. A DICOMweb HTTP backend
+/// sends no `success` key, so its responses never match. STOW-RS (`"store"`)
+/// has its own PS3.18 failure response and is not matched here.
+///
+/// Returns the operation name and the raw backend error. The error often
+/// names hosts, ports and AE titles, so it is for server logs only.
+pub(crate) fn dimse_operation_failure(nd: &Value) -> Option<(String, String)> {
+    if nd.get("success").and_then(Value::as_bool) != Some(false) {
+        return None;
+    }
+    let operation = nd.get("operation").and_then(Value::as_str)?;
+    if !matches!(operation, "find" | "get" | "move") {
+        return None;
+    }
+    let detail = nd
+        .get("error")
+        .and_then(Value::as_str)
+        .map(str::to_string)
+        .unwrap_or_else(|| nd.to_string());
+    Some((operation.to_string(), detail))
+}
+
 pub(crate) fn parse_multipart_boundary(content_type: &str) -> Option<String> {
     for part in content_type.split(';') {
         let trimmed = part.trim();
@@ -1077,6 +1103,19 @@ impl Middleware for DICOMwebToDICOMMiddleware {
             .and_then(|s| s.parse::<usize>().ok())
             .unwrap_or(0);
 
+        // A failed DIMSE find/get/move must not reach the client as an empty
+        // result or as the raw backend JSON. The typed error lets each
+        // adapter answer with a protocol status and no detail.
+        if let Some((operation, detail)) = dimse_operation_failure(&nd) {
+            tracing::error!(
+                operation = %operation,
+                dicomweb_subpath = %path,
+                error = %detail,
+                "dicomweb_bridge.right: DIMSE backend reported a failure"
+            );
+            return Err(Box::new(UpstreamFailure { operation, detail }));
+        }
+
         // QIDO lists -> DICOMweb JSON data
         if resolved_op == Some(Operation::Query) {
             let matches_val = nd.get("matches").cloned().unwrap_or(Value::Array(vec![]));
@@ -1208,8 +1247,19 @@ impl Middleware for DICOMwebToDICOMMiddleware {
                         );
                         return Ok(envelope);
                     }
-                    Err(_e) => {
-                        // fall through and do nothing; let endpoint serialize default JSON
+                    Err(e) => {
+                        // Falling through would send the backend JSON, which
+                        // holds the server-side folder path, to the client.
+                        tracing::error!(
+                            dicomweb_subpath = %path,
+                            folder_path = %folder_path,
+                            error = %e,
+                            "dicomweb_bridge.right: could not read retrieved instances"
+                        );
+                        return Err(Error::from(format!(
+                            "dicomweb_bridge: could not read retrieved instances: {}",
+                            e
+                        )));
                     }
                 }
             }
@@ -1400,18 +1450,23 @@ impl Middleware for DICOMwebToDICOMMiddleware {
         // Handle backend failures for frame and instance requests
         if !success {
             if path.contains("/frames/") {
-                // Frame retrieval failed - return appropriate error response
-                let error_msg = nd
-                    .get("error")
-                    .and_then(|v| v.as_str())
-                    .unwrap_or("Frame retrieval failed");
+                // The raw backend error can name internal hosts, so it goes
+                // to the server log and the client gets a fixed message.
+                tracing::error!(
+                    dicomweb_subpath = %path,
+                    error = ?nd.get("error"),
+                    "dicomweb_bridge.right: frame retrieval failed"
+                );
 
                 let mut metadata = serde_json::Map::new();
                 metadata.insert(
                     "error".to_string(),
                     Value::String("FrameRetrievalFailed".to_string()),
                 );
-                metadata.insert("message".to_string(), Value::String(error_msg.to_string()));
+                metadata.insert(
+                    "message".to_string(),
+                    Value::String("Frame retrieval failed".to_string()),
+                );
 
                 Self::set_dicomweb_data(
                     &mut envelope,
@@ -2823,5 +2878,222 @@ mod tests {
             .unwrap();
 
         assert_eq!(nd, upstream);
+    }
+
+    /// Builds a backend response for a GET on `full_path` with the given operation.
+    fn retrieve_response_envelope(
+        full_path: &str,
+        operation: crate::models::envelope::command::Operation,
+        normalized_data: Value,
+    ) -> ResponseEnvelope<Value> {
+        use crate::models::envelope::command::Command;
+        let mut metadata = HashMap::new();
+        metadata.insert(
+            "path".to_string(),
+            full_path.trim_start_matches("/dicomweb/").to_string(),
+        );
+        metadata.insert("full_path".to_string(), full_path.to_string());
+        ResponseEnvelope {
+            request_details: RequestDetails {
+                method: "GET".to_string(),
+                uri: full_path.to_string(),
+                headers: HashMap::new(),
+                cookies: HashMap::new(),
+                query_params: HashMap::new(),
+                cache_status: None,
+                content_metadata: None,
+                metadata,
+            },
+            response_details: crate::models::envelope::envelope::ResponseDetails {
+                status: 200,
+                headers: HashMap::new(),
+                metadata: HashMap::new(),
+            },
+            command: Some(Command::new(operation)),
+            original_data: serde_json::json!({}),
+            normalized_data: Some(normalized_data),
+            normalized_snapshot: None,
+        }
+    }
+
+    const RAW_SCU_ERROR: &str = "association to PACS_AET at 10.20.30.40:11112 refused";
+    const INSTANCE_PATH: &str = "/dicomweb/studies/1.2.3/series/1.2.3.4/instances/1.2.3.4.5";
+
+    fn failed(operation: &str) -> Value {
+        serde_json::json!({
+            "operation": operation,
+            "success": false,
+            "error": RAW_SCU_ERROR
+        })
+    }
+
+    fn expect_upstream_failure(result: Result<ResponseEnvelope<Value>, Error>, operation: &str) {
+        let err = match result {
+            Ok(envelope) => panic!(
+                "expected UpstreamFailure, got Ok with {:?}",
+                envelope.normalized_data
+            ),
+            Err(e) => e,
+        };
+        let failure = err
+            .downcast_ref::<UpstreamFailure>()
+            .expect("error must downcast to UpstreamFailure");
+        assert_eq!(failure.operation, operation);
+        assert_eq!(failure.detail, RAW_SCU_ERROR);
+    }
+
+    #[test]
+    fn test_dimse_operation_failure_matches_failed_find_get_move() {
+        for op in ["find", "get", "move"] {
+            assert_eq!(
+                dimse_operation_failure(&failed(op)),
+                Some((op.to_string(), RAW_SCU_ERROR.to_string()))
+            );
+        }
+    }
+
+    #[test]
+    fn test_dimse_operation_failure_ignores_store_echo_and_success() {
+        assert_eq!(dimse_operation_failure(&failed("store")), None);
+        assert_eq!(dimse_operation_failure(&failed("echo")), None);
+        assert_eq!(
+            dimse_operation_failure(&serde_json::json!({"operation": "find", "success": true})),
+            None
+        );
+    }
+
+    #[test]
+    fn test_dimse_operation_failure_needs_explicit_false() {
+        // A DICOMweb HTTP backend sends no `success` key.
+        assert_eq!(
+            dimse_operation_failure(&serde_json::json!({"operation": "get", "error": "x"})),
+            None
+        );
+        // A string "false" is not a JSON bool.
+        assert_eq!(
+            dimse_operation_failure(&serde_json::json!({"operation": "get", "success": "false"})),
+            None
+        );
+        // No operation means it is not a DIMSE find/get/move response.
+        assert_eq!(
+            dimse_operation_failure(&serde_json::json!({"success": false, "error": "x"})),
+            None
+        );
+    }
+
+    #[test]
+    fn test_dimse_operation_failure_without_error_text_uses_whole_response() {
+        let nd = serde_json::json!({"operation": "find", "success": false, "host": "pacs"});
+        let (_, detail) = dimse_operation_failure(&nd).unwrap();
+        assert!(detail.contains("\"host\":\"pacs\""));
+    }
+
+    #[tokio::test]
+    async fn test_right_failed_find_returns_upstream_failure_not_empty_list() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let envelope =
+            retrieve_response_envelope("/dicomweb/studies", Operation::Query, failed("find"));
+
+        expect_upstream_failure(bridge.right(envelope).await, "find");
+    }
+
+    #[tokio::test]
+    async fn test_right_failed_get_on_instance_returns_upstream_failure() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let envelope =
+            retrieve_response_envelope(INSTANCE_PATH, Operation::Retrieve, failed("get"));
+
+        expect_upstream_failure(bridge.right(envelope).await, "get");
+    }
+
+    #[tokio::test]
+    async fn test_right_failed_move_returns_upstream_failure() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let envelope = retrieve_response_envelope(INSTANCE_PATH, Operation::Move, failed("move"));
+
+        expect_upstream_failure(bridge.right(envelope).await, "move");
+    }
+
+    #[tokio::test]
+    async fn test_right_failed_get_on_metadata_returns_upstream_failure() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let path = format!("{}/metadata", INSTANCE_PATH);
+        let envelope = retrieve_response_envelope(&path, Operation::Retrieve, failed("get"));
+
+        expect_upstream_failure(bridge.right(envelope).await, "get");
+    }
+
+    #[tokio::test]
+    async fn test_right_retrieve_without_success_key_passes_through() {
+        // A DICOMweb HTTP backend has no `success` key and must pass untouched.
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let upstream = serde_json::json!({"operation": "get", "body": "opaque"});
+        let envelope =
+            retrieve_response_envelope(INSTANCE_PATH, Operation::Retrieve, upstream.clone());
+
+        let nd = bridge
+            .right(envelope)
+            .await
+            .unwrap()
+            .normalized_data
+            .unwrap();
+
+        assert_eq!(nd, upstream);
+    }
+
+    #[tokio::test]
+    async fn test_right_frames_failure_hides_raw_error() {
+        // No find/get/move operation, so the frames failure branch handles it.
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let path = format!("{}/frames/1", INSTANCE_PATH);
+        let envelope = retrieve_response_envelope(
+            &path,
+            Operation::Retrieve,
+            serde_json::json!({"success": false, "error": RAW_SCU_ERROR}),
+        );
+
+        let nd = bridge
+            .right(envelope)
+            .await
+            .unwrap()
+            .normalized_data
+            .unwrap();
+
+        assert_eq!(nd["dicomweb_response_type"], "wado_frames_error");
+        assert_eq!(nd["dicomweb_metadata"]["message"], "Frame retrieval failed");
+        // The DICOMweb endpoint builds the 406 body from dicomweb_metadata only.
+        let body = nd["dicomweb_metadata"].to_string();
+        assert!(!body.contains("10.20.30.40"), "raw error leaked: {}", body);
+        assert!(!body.contains("PACS_AET"), "raw error leaked: {}", body);
+    }
+
+    #[tokio::test]
+    async fn test_right_unreadable_instance_folder_is_an_error() {
+        use crate::models::envelope::command::Operation;
+        let bridge = DICOMwebToDICOMMiddleware::new();
+        let envelope = retrieve_response_envelope(
+            INSTANCE_PATH,
+            Operation::Retrieve,
+            serde_json::json!({
+                "operation": "get",
+                "success": true,
+                "folder_path": "./tmp/aura-2566-folder-that-does-not-exist"
+            }),
+        );
+
+        let err = match bridge.right(envelope).await {
+            Ok(envelope) => panic!(
+                "backend JSON with folder_path must not pass through: {:?}",
+                envelope.normalized_data
+            ),
+            Err(e) => e,
+        };
+        assert!(err.downcast_ref::<UpstreamFailure>().is_none());
     }
 }
