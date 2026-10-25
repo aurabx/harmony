@@ -124,7 +124,11 @@ Peers and endpoints accept an `authentication` reference, and Harmony checks it 
 | `none` | none | nothing |
 | `jwt` | checked by the jwt_auth middleware | nothing. Settings for jwt_auth middleware only |
 
-A required option must be a non-empty string. `header_name` must be a valid HTTP header name.
+A required option must be a string that is not empty or only spaces. `token` and `api_key` must not contain control characters, such as a trailing newline from a secret file. A `basic` `username` must not contain `:`. `header_name` must be a valid HTTP header name. It cannot be a header Harmony controls, such as `Host`, `Content-Length`, `Transfer-Encoding` or `Connection`.
+
+Harmony does not check the options of a `jwt` definition at load. The jwt_auth middleware checks them when it starts, so a `jwt` definition that nothing references is never checked.
+
+`method = ""` used to mean no credential. It now fails the load. Use `method = "none"`.
 
 Targets, backends and webhook middleware send the credential as a request header, so they cannot reference a `jwt` definition. Other middleware may reference any method.
 
@@ -155,11 +159,13 @@ ERROR: Configuration reference resolution failed: Target 'fhir_server' reference
 - At startup, and with `--validate-config`, Harmony prints the error on stderr and exits with code 1.
 - On hot reload, Harmony logs `Config reload failed` and keeps the previous config.
 
-Harmony reports every bad reference in one error, one per line.
+Harmony reports every bad reference and every invalid definition in one error, one per line.
 
 ### Definitions in other files
 
 `[authentications]` can be in the top-level config file or in any pipeline, transform or mesh file. Harmony merges them all. Each key must be defined once. If two files define the same key, the load fails and the error names both files.
+
+Hot reload watches only the main config file and the pipelines folder. A credential changed in a transform or mesh file takes effect at the next reload or restart. See [Hot Configuration Reload](hot-reload.md).
 
 ## Network Configuration
 

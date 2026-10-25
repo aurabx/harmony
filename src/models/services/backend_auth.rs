@@ -3,6 +3,7 @@
 //! This module provides common authentication functionality for HTTP and FHIR backends.
 
 use crate::models::connection::AuthenticationDefinition;
+use crate::models::services::upstream_headers::ALWAYS_STRIPPED;
 use base64::{engine::general_purpose, Engine as _};
 use std::collections::HashMap;
 use std::fmt;
@@ -30,6 +31,18 @@ pub enum CredentialError {
     },
     /// `api_key` names a `header_name` that is not a valid HTTP header name.
     InvalidHeaderName { header_name: String },
+    /// `api_key` names a header the upstream filter controls, such as
+    /// `Host` or `Content-Length`. Sending a credential there would corrupt
+    /// the request framing.
+    ReservedHeaderName { header_name: String },
+    /// An option's value cannot go into an HTTP header, for example a token
+    /// read from a file with a trailing newline. The value is never stored,
+    /// so it cannot reach an error message or a log.
+    InvalidOptionValue {
+        method: String,
+        option: &'static str,
+        reason: &'static str,
+    },
     /// The method is not one a backend can send.
     UnsupportedMethod { method: String },
 }
@@ -47,6 +60,22 @@ impl fmt::Display for CredentialError {
                 f,
                 "'header_name' value '{}' is not a valid HTTP header name",
                 header_name.escape_default()
+            ),
+            CredentialError::ReservedHeaderName { header_name } => write!(
+                f,
+                "'header_name' value '{}' is reserved for request framing and cannot carry a credential",
+                header_name.escape_default()
+            ),
+            CredentialError::InvalidOptionValue {
+                method,
+                option,
+                reason,
+            } => write!(
+                f,
+                "method '{}' option '{}' {}",
+                method.escape_default(),
+                option,
+                reason
             ),
             CredentialError::UnsupportedMethod { method } => write!(
                 f,
@@ -66,8 +95,8 @@ impl fmt::Display for CredentialError {
 /// handling calls it to build the headers, so the two cannot disagree.
 ///
 /// Returns an empty list for `none`. Returns an error for a missing or empty
-/// required option, an invalid `api_key` header name, or a method a backend
-/// cannot send. Never logs, so it is safe to call on every request.
+/// required option, a value that cannot go into a header, an invalid or
+/// reserved `api_key` header name, or a method a backend cannot send. Never logs, so it is safe to call on every request.
 pub fn credential_headers(
     auth_def: &AuthenticationDefinition,
 ) -> Result<Vec<(String, String)>, CredentialError> {
@@ -75,6 +104,15 @@ pub fn credential_headers(
         "basic" => {
             let username = required_option(auth_def, "username")?;
             let password = required_option(auth_def, "password")?;
+            // RFC 7617: the user-id cannot contain a colon, because the
+            // server splits user-id and password at the first one.
+            if username.contains(':') {
+                return Err(CredentialError::InvalidOptionValue {
+                    method: auth_def.method.clone(),
+                    option: "username",
+                    reason: "must not contain ':'",
+                });
+            }
             let encoded =
                 general_purpose::STANDARD.encode(format!("{}:{}", username, password).as_bytes());
             Ok(vec![(
@@ -83,14 +121,14 @@ pub fn credential_headers(
             )])
         }
         "bearer" => {
-            let token = required_option(auth_def, "token")?;
+            let token = header_safe_option(auth_def, "token")?;
             Ok(vec![(
                 "Authorization".to_string(),
                 format!("Bearer {}", token),
             )])
         }
         "api_key" => {
-            let api_key = required_option(auth_def, "api_key")?;
+            let api_key = header_safe_option(auth_def, "api_key")?;
             let header_name = match auth_def.options.get("header_name") {
                 None => DEFAULT_API_KEY_HEADER.to_string(),
                 Some(value) => {
@@ -101,6 +139,11 @@ pub fn credential_headers(
                                 .as_str()
                                 .map(str::to_string)
                                 .unwrap_or_else(|| value.to_string()),
+                        });
+                    }
+                    if ALWAYS_STRIPPED.contains(&name.to_ascii_lowercase().as_str()) {
+                        return Err(CredentialError::ReservedHeaderName {
+                            header_name: name.to_string(),
                         });
                     }
                     name.to_string()
@@ -115,7 +158,10 @@ pub fn credential_headers(
     }
 }
 
-/// Read a string option that must be present and non-empty.
+/// Read a string option that must be present and not blank.
+///
+/// A whitespace-only value counts as missing. It usually means an unset
+/// environment variable next to a stray space, such as `"$TOKEN "`.
 fn required_option<'a>(
     auth_def: &'a AuthenticationDefinition,
     option: &'static str,
@@ -124,11 +170,31 @@ fn required_option<'a>(
         .options
         .get(option)
         .and_then(|value| value.as_str())
-        .filter(|value| !value.is_empty())
+        .filter(|value| !value.trim().is_empty())
         .ok_or_else(|| CredentialError::MissingOption {
             method: auth_def.method.clone(),
             option,
         })
+}
+
+/// Read a required option that is sent as a header value as-is.
+///
+/// Rejects control characters such as a trailing newline. Load accepting
+/// such a value would make every request fail at send time with an error
+/// that does not name the cause.
+fn header_safe_option<'a>(
+    auth_def: &'a AuthenticationDefinition,
+    option: &'static str,
+) -> Result<&'a str, CredentialError> {
+    let value = required_option(auth_def, option)?;
+    if http::HeaderValue::from_str(value).is_err() || value.chars().any(char::is_control) {
+        return Err(CredentialError::InvalidOptionValue {
+            method: auth_def.method.clone(),
+            option,
+            reason: "contains characters that are not allowed in an HTTP header value, such as a newline",
+        });
+    }
+    Ok(value)
 }
 
 /// Return true when the backend options carry a credential Harmony will send.
@@ -336,6 +402,7 @@ mod tests {
             ("bearer", json!({}), "token"),
             ("bearer", json!({ "token": "" }), "token"),
             ("bearer", json!({ "token": 5 }), "token"),
+            ("bearer", json!({ "token": "  " }), "token"),
             ("basic", json!({ "password": "pw" }), "username"),
             ("basic", json!({ "username": "svc" }), "password"),
             (
@@ -415,5 +482,55 @@ mod tests {
             json!({})
         )));
         assert!(!has_backend_authentication(&HashMap::new()));
+    }
+
+    #[test]
+    fn credential_headers_rejects_values_that_cannot_be_header_values() {
+        let cases = [
+            ("bearer", json!({ "token": "abc\n" }), "token"),
+            ("bearer", json!({ "token": "a\tb" }), "token"),
+            (
+                "api_key",
+                json!({ "api_key": "k\r\nX-Injected: 1" }),
+                "api_key",
+            ),
+            (
+                "basic",
+                json!({ "username": "a:b", "password": "pw" }),
+                "username",
+            ),
+        ];
+        for (method, auth_options, option) in cases {
+            let result = credential_headers(&definition(method, auth_options.clone()));
+            match result {
+                Err(CredentialError::InvalidOptionValue {
+                    option: reported, ..
+                }) => assert_eq!(reported, option, "{}", auth_options),
+                other => panic!("{} with {}: {:?}", method, auth_options, other),
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_value_error_never_contains_the_value() {
+        let error = credential_headers(&definition("bearer", json!({ "token": "s3cret\n" })))
+            .expect_err("token has a newline");
+        assert!(!error.to_string().contains("s3cret"), "{}", error);
+    }
+
+    #[test]
+    fn credential_headers_rejects_reserved_api_key_header_names() {
+        for header_name in ["Host", "content-length", "Transfer-Encoding", "Connection"] {
+            let result = credential_headers(&definition(
+                "api_key",
+                json!({ "api_key": "k", "header_name": header_name }),
+            ));
+            assert!(
+                matches!(result, Err(CredentialError::ReservedHeaderName { .. })),
+                "{}: {:?}",
+                header_name,
+                result
+            );
+        }
     }
 }

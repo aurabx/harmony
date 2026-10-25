@@ -607,6 +607,12 @@ impl Config {
     ) -> Result<(), ConfigError> {
         for (key, auth_def) in incoming {
             if let Some(existing_file) = sources.get(&key) {
+                // Overlapping folder settings (for example pipelines_path and
+                // transforms_path naming the same folder) read a file twice.
+                // That is the same definition, not a second one.
+                if Self::is_same_file(existing_file, file) {
+                    continue;
+                }
                 return Err(ConfigError::InvalidProxy {
                     name: "config".to_string(),
                     reason: format!(
@@ -621,6 +627,15 @@ impl Config {
             authentications.insert(key, auth_def);
         }
         Ok(())
+    }
+
+    /// True when two paths name the same file. Falls back to comparing the
+    /// strings when a path cannot be resolved.
+    fn is_same_file(first: &str, second: &str) -> bool {
+        match (fs::canonicalize(first), fs::canonicalize(second)) {
+            (Ok(first), Ok(second)) => first == second,
+            _ => first == second,
+        }
     }
 
     /// Extract nested mesh ingress/egress definitions from pipelines to top-level config.

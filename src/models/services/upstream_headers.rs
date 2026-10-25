@@ -28,7 +28,7 @@ pub const FORWARD_AUTHORIZATION_OPTION: &str = "forward_authorization";
 ///
 /// `proxy-connection` is not in RFC 9110 but some clients still send it, and
 /// the backends stripped it before this filter existed.
-const ALWAYS_STRIPPED: &[&str] = &[
+pub(crate) const ALWAYS_STRIPPED: &[&str] = &[
     "host",
     "connection",
     "keep-alive",

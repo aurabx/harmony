@@ -39,11 +39,21 @@ const POLICIES_MIDDLEWARE_TYPE: &str = "policies";
 /// `[policies]`. The middleware resolves these ids per request, so a bad id
 /// that passed the load would turn every request into a 500.
 pub fn resolve_references(config: &mut Config) -> Result<std::collections::HashSet<String>, String> {
-    validate_no_inline_authentication_defs(config)?;
-    validate_authentication_refs(config)?;
-    validate_authentication_definitions(config)?;
-    validate_authentication_methods_per_reference(config)?;
-    validate_policy_refs(config)?;
+    // Run every check before failing, so one load reports every problem
+    // instead of revealing them one category at a time.
+    let errors: Vec<String> = [
+        validate_no_inline_authentication_defs(config),
+        validate_authentication_refs(config),
+        validate_authentication_definitions(config),
+        validate_authentication_methods_per_reference(config),
+        validate_policy_refs(config),
+    ]
+    .into_iter()
+    .filter_map(Result::err)
+    .collect();
+    if !errors.is_empty() {
+        return Err(errors.join("\n"));
+    }
     resolve_endpoints(config)?;
     let unresolved_backends = resolve_backends(config)?;
     Ok(unresolved_backends)

@@ -970,3 +970,77 @@ endpoint = "https://hooks.example.com"
         err
     );
 }
+
+#[test]
+fn token_with_trailing_newline_fails_load_without_echoing_it() {
+    let toml = config_with(&format!(
+        "[authentications.newline]\nid = \"newline\"\nmethod = \"bearer\"\noptions = {{ token = \"s3cret\\n\" }}\n{}",
+        BACKEND_WITH_FHIR_BEARER
+    ));
+    let err = load_via_file(&toml).expect_err("a newline cannot go into a header");
+    assert!(
+        err.contains("Authentication 'newline' is invalid")
+            && err.contains("option 'token' contains characters that are not allowed"),
+        "{}",
+        err
+    );
+    assert!(
+        !err.contains("s3cret"),
+        "the secret must not be echoed: {}",
+        err
+    );
+}
+
+#[test]
+fn errors_from_different_checks_are_reported_in_one_load() {
+    let toml = config_with(
+        r#"
+[authentications.no_token]
+id = "no_token"
+method = "bearer"
+
+[backends.api_backend]
+service = "http"
+authentication = "missing_auth"
+[backends.api_backend.options]
+base_url = "https://api.example.com"
+authentication_def = { id = "x", method = "bearer", options = {} }
+"#,
+    );
+    let err = load_via_file(&toml).expect_err("three separate problems");
+    assert!(
+        err.contains("Authentication 'no_token' is invalid"),
+        "{}",
+        err
+    );
+    assert!(
+        err.contains("Backend 'api_backend' references unknown authentication 'missing_auth'"),
+        "{}",
+        err
+    );
+    assert!(
+        err.contains("Backend 'api_backend' sets 'authentication_def' in its options"),
+        "{}",
+        err
+    );
+}
+
+#[test]
+fn overlapping_folder_settings_do_not_report_a_file_as_its_own_duplicate() {
+    // transforms_path names the pipelines folder, so the same file is read twice.
+    let main = config_with(
+        r#"
+[backends.api_backend]
+service = "http"
+authentication = "pipeline_bearer"
+[backends.api_backend.options]
+base_url = "https://api.example.com"
+"#,
+    )
+    .replace(
+        "id = \"auth-ref-test\"",
+        "id = \"auth-ref-test\"\ntransforms_path = \"pipelines\"",
+    );
+    load_files(&main, &[("pipelines/auth.toml", PIPELINE_FILE_AUTH)])
+        .expect("reading one file twice is not a duplicate definition");
+}
