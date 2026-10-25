@@ -48,7 +48,10 @@ pub fn unwrap_response(json_data: &Value) -> UnwrappedContent {
             tracing::debug!("envelope_unwrapper: found 'folder_path' key: {:?}", path);
             return UnwrappedContent::FolderPath(path);
         } else {
-            tracing::warn!("envelope_unwrapper: folder_path does not exist or is not a directory: {:?}", path);
+            tracing::warn!(
+                "envelope_unwrapper: folder_path does not exist or is not a directory: {:?}",
+                path
+            );
         }
     }
 

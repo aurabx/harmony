@@ -39,7 +39,12 @@ pub struct Http3Adapter {
 }
 
 impl Http3Adapter {
-    pub fn new(network_name: String, bind_addr: SocketAddr, cert_path: String, key_path: String) -> Self {
+    pub fn new(
+        network_name: String,
+        bind_addr: SocketAddr,
+        cert_path: String,
+        key_path: String,
+    ) -> Self {
         Self {
             network_name,
             bind_addr,
@@ -59,8 +64,8 @@ impl Http3Adapter {
 
         // Load certificate chain
         let mut cert_file = BufReader::new(File::open(&self.cert_path)?);
-        let cert_chain: Vec<CertificateDer<'static>> = certs(&mut cert_file)
-            .collect::<Result<_, _>>()?;
+        let cert_chain: Vec<CertificateDer<'static>> =
+            certs(&mut cert_file).collect::<Result<_, _>>()?;
 
         if cert_chain.is_empty() {
             anyhow::bail!("no certificates found in {}", self.cert_path);
@@ -227,7 +232,10 @@ impl Http3Adapter {
             );
         }
 
-        tracing::info!("HTTP/3 adapter for network '{}' shut down", self.network_name);
+        tracing::info!(
+            "HTTP/3 adapter for network '{}' shut down",
+            self.network_name
+        );
     }
 }
 
@@ -461,10 +469,7 @@ pub async fn handle_connection(
                 };
 
                 // Build envelope via service
-                let envelope = match service
-                    .build_protocol_envelope(ctx.clone(), options)
-                    .await
-                {
+                let envelope = match service.build_protocol_envelope(ctx.clone(), options).await {
                     Ok(env) => env,
                     Err(err) => {
                         tracing::warn!(
@@ -482,7 +487,15 @@ pub async fn handle_connection(
                 };
 
                 // Execute pipeline
-                let response_envelope = match PipelineExecutor::execute(envelope, &pipeline_name, pipeline, &config, &ctx).await {
+                let response_envelope = match PipelineExecutor::execute(
+                    envelope,
+                    &pipeline_name,
+                    pipeline,
+                    &config,
+                    &ctx,
+                )
+                .await
+                {
                     Ok(env) => env,
                     Err(err) => {
                         tracing::error!(
@@ -523,7 +536,8 @@ pub async fn handle_connection(
                 // Map axum::Response<Body> to HTTP/3 response frames
                 let status = response.status();
                 let resp_headers = response.headers().clone();
-                let resp_body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX).await?;
+                let resp_body_bytes =
+                    axum::body::to_bytes(response.into_body(), usize::MAX).await?;
 
                 let mut builder = HttpResponse::builder().status(status);
                 for (name, value) in resp_headers.iter() {
@@ -605,7 +619,10 @@ impl ProtocolAdapter for Http3Adapter {
     }
 
     fn summary(&self) -> String {
-        format!("Http3Adapter(network={}, bind={})", self.network_name, self.bind_addr)
+        format!(
+            "Http3Adapter(network={}, bind={})",
+            self.network_name, self.bind_addr
+        )
     }
 }
 

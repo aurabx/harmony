@@ -572,7 +572,10 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
                 .cloned()
                 .unwrap_or_default();
 
-            if content_type.to_ascii_lowercase().contains("multipart/related") {
+            if content_type
+                .to_ascii_lowercase()
+                .contains("multipart/related")
+            {
                 match crate::models::middleware::types::dicomweb_to_dicom::extract_multipart_dicom_parts(
                     &envelope.original_data,
                     &content_type,
@@ -726,7 +729,9 @@ impl ServiceHandler<Value> for DicomwebEndpoint {
     ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
         // Delegate to HttpEndpoint for generic HTTP backend behavior to support STOW-RS and other outbound requests
         let http_endpoint = HttpEndpoint {};
-        http_endpoint.backend_outgoing_request(envelope, options).await
+        http_endpoint
+            .backend_outgoing_request(envelope, options)
+            .await
     }
 
     async fn endpoint_outgoing_protocol(

@@ -6,12 +6,17 @@ use tempfile::TempDir;
 /// Generate a self-signed certificate for testing
 fn generate_test_certificate(temp_dir: &TempDir) -> (String, String) {
     let subject_alt_names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-    let cert = generate_simple_self_signed(subject_alt_names).expect("Failed to generate certificate");
+    let cert =
+        generate_simple_self_signed(subject_alt_names).expect("Failed to generate certificate");
 
     let cert_path = temp_dir.path().join("cert.pem");
     let key_path = temp_dir.path().join("key.pem");
 
-    fs::write(&cert_path, cert.serialize_pem().expect("Failed to serialize cert")).expect("Failed to write certificate");
+    fs::write(
+        &cert_path,
+        cert.serialize_pem().expect("Failed to serialize cert"),
+    )
+    .expect("Failed to write certificate");
     fs::write(&key_path, cert.serialize_private_key_pem()).expect("Failed to write key");
 
     (
@@ -78,10 +83,7 @@ module = ""
         .network
         .get("secure")
         .expect("Network 'secure' not found");
-    let tcp_config = network
-        .tcp_config
-        .as_ref()
-        .expect("TCP config not found");
+    let tcp_config = network.tcp_config.as_ref().expect("TCP config not found");
 
     assert_eq!(tcp_config.bind_address, "127.0.0.1");
     assert_eq!(tcp_config.bind_port, 8443);
@@ -136,10 +138,7 @@ module = ""
         .network
         .get("plain")
         .expect("Network 'plain' not found");
-    let tcp_config = network
-        .tcp_config
-        .as_ref()
-        .expect("TCP config not found");
+    let tcp_config = network.tcp_config.as_ref().expect("TCP config not found");
 
     assert_eq!(tcp_config.bind_address, "127.0.0.1");
     assert_eq!(tcp_config.bind_port, 8080);
@@ -289,10 +288,7 @@ module = ""
         .network
         .get("redirect")
         .expect("Network 'redirect' not found");
-    let tcp_config = network
-        .tcp_config
-        .as_ref()
-        .expect("TCP config not found");
+    let tcp_config = network.tcp_config.as_ref().expect("TCP config not found");
 
     assert_eq!(tcp_config.bind_address, "127.0.0.1");
     assert_eq!(tcp_config.bind_port, 8080);

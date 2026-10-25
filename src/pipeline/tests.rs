@@ -107,7 +107,8 @@ async fn test_execute_with_no_endpoints_fails() {
     let envelope = create_test_envelope();
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
+    let result =
+        PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     assert!(result.is_err());
     match result.unwrap_err() {
@@ -125,7 +126,8 @@ async fn test_execute_with_unknown_endpoint_fails() {
     let envelope = create_test_envelope();
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
+    let result =
+        PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     assert!(result.is_err());
     match result.unwrap_err() {
@@ -152,7 +154,8 @@ async fn test_execute_with_skip_backends_flag() {
 
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
+    let result =
+        PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     // Should succeed even though backend is present
     assert!(result.is_ok());
@@ -167,7 +170,8 @@ async fn test_execute_with_no_backends_succeeds() {
     let envelope = create_test_envelope();
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
+    let result =
+        PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     // Should succeed with empty response
     assert!(result.is_ok());
@@ -185,7 +189,8 @@ async fn test_execute_with_unknown_backend_returns_502() {
     let envelope = create_test_envelope();
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
+    let result =
+        PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     // Should return 502 when backend not found
     assert!(result.is_ok());
@@ -206,7 +211,9 @@ async fn test_protocol_ctx_carried_through_pipeline() {
     // Test with different protocols
     for protocol in [Protocol::Http, Protocol::Dimse, Protocol::Hl7V2Mllp] {
         let ctx = create_test_protocol_ctx(protocol);
-        let result = PipelineExecutor::execute(envelope.clone(), "test_pipeline", &pipeline, &config, &ctx).await;
+        let result =
+            PipelineExecutor::execute(envelope.clone(), "test_pipeline", &pipeline, &config, &ctx)
+                .await;
 
         // Should succeed regardless of protocol (protocol-agnostic!)
         assert!(result.is_ok(), "Failed for protocol: {:?}", protocol);
@@ -227,7 +234,8 @@ async fn test_normalized_data_preserved() {
 
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
+    let result =
+        PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     assert!(result.is_ok());
     // normalized_data should be preserved through the pipeline
@@ -243,7 +251,8 @@ async fn test_middleware_chain_empty_succeeds() {
     let envelope = create_test_envelope();
     let ctx = create_test_protocol_ctx(Protocol::Http);
 
-    let result = PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
+    let result =
+        PipelineExecutor::execute(envelope, "test_pipeline", &pipeline, &config, &ctx).await;
 
     // Should succeed with no middleware
     assert!(result.is_ok());
@@ -327,19 +336,16 @@ async fn test_backend_path_prefix_prepends_to_uri() {
         .unwrap();
 
     // Resolve target_details - executor sets up base_url and uri from request
-    let envelope_with_target = PipelineExecutor::resolve_target_details(
-        envelope,
-        &pipeline,
-        &config,
-    )
-    .await
-    .unwrap();
+    let envelope_with_target =
+        PipelineExecutor::resolve_target_details(envelope, &pipeline, &config)
+            .await
+            .unwrap();
 
     assert!(envelope_with_target.target_details.is_some());
     let target = envelope_with_target.target_details.unwrap();
 
     // Executor sets base_url and original URI (path_prefix NOT applied here)
-    assert_eq!(target.uri, "/users");  // path_prefix applied by service, not executor
+    assert_eq!(target.uri, "/users"); // path_prefix applied by service, not executor
     assert_eq!(target.base_url, "http://backend.example.com:8080");
 }
 
@@ -372,7 +378,10 @@ async fn test_backend_path_prefix_with_base_url() {
             max_retries: None,
             options: Some({
                 let mut opts = HashMap::new();
-                opts.insert("base_url".to_string(), serde_json::json!("http://api.example.com:5000"));
+                opts.insert(
+                    "base_url".to_string(),
+                    serde_json::json!("http://api.example.com:5000"),
+                );
                 opts.insert("path_prefix".to_string(), serde_json::json!("/v2"));
                 opts
             }),
@@ -392,18 +401,15 @@ async fn test_backend_path_prefix_with_base_url() {
         .build()
         .unwrap();
 
-    let envelope_with_target = PipelineExecutor::resolve_target_details(
-        envelope,
-        &pipeline,
-        &config,
-    )
-    .await
-    .unwrap();
+    let envelope_with_target =
+        PipelineExecutor::resolve_target_details(envelope, &pipeline, &config)
+            .await
+            .unwrap();
 
     let target = envelope_with_target.target_details.unwrap();
 
     // Executor sets base_url and original URI (path_prefix NOT applied here)
-    assert_eq!(target.uri, "/resource");  // path_prefix applied by service, not executor
+    assert_eq!(target.uri, "/resource"); // path_prefix applied by service, not executor
     assert_eq!(target.base_url, "http://api.example.com:5000");
 }
 
@@ -457,13 +463,10 @@ async fn test_backend_without_path_prefix() {
         .build()
         .unwrap();
 
-    let envelope_with_target = PipelineExecutor::resolve_target_details(
-        envelope,
-        &pipeline,
-        &config,
-    )
-    .await
-    .unwrap();
+    let envelope_with_target =
+        PipelineExecutor::resolve_target_details(envelope, &pipeline, &config)
+            .await
+            .unwrap();
 
     let target = envelope_with_target.target_details.unwrap();
 

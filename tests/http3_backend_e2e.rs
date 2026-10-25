@@ -231,7 +231,10 @@ async fn test_http3_client_post_request() {
         serde_json::from_slice(&response.body).expect("response should be JSON");
     assert_eq!(json["method"], "POST");
     assert_eq!(json["path"], "/api/echo");
-    assert!(json["body"].as_str().unwrap().contains("hello http3 backend"));
+    assert!(json["body"]
+        .as_str()
+        .unwrap()
+        .contains("hello http3 backend"));
 
     // Clean up
     server_task.abort();

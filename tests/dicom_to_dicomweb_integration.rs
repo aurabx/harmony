@@ -1,5 +1,5 @@
 /// Integration tests for the dicom_to_dicomweb middleware.
-/// 
+///
 /// These tests verify the full pipeline:
 /// DCMTK tools → DICOM SCP → dicom_to_dicomweb middleware → HTTP Backend (mock DICOMweb server)
 ///
@@ -8,7 +8,6 @@
 /// - C-FIND → QIDO-RS
 /// - C-GET → WADO-RS
 /// - C-MOVE → WADO-RS
-
 use harmony::adapters::registry::AdapterRegistry;
 use harmony::config::config::Config;
 use std::path::PathBuf;
@@ -35,19 +34,19 @@ impl TestHarness {
         let _ = tracing_subscriber::fmt()
             .with_env_filter("harmony=debug,dimse=debug,info")
             .try_init();
-        
+
         let temp_dir = TempDir::new().expect("Failed to create temp dir");
-        
+
         // Allocate ephemeral ports by binding then dropping listeners
         // Note: Small race condition window exists between drop and actual binding
         let dicom_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind dicom port");
         let dicom_port = dicom_listener.local_addr().unwrap().port();
         drop(dicom_listener);
-        
+
         let http_listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind http port");
         let http_backend_port = http_listener.local_addr().unwrap().port();
         drop(http_listener);
-        
+
         // Small delay to reduce race condition likelihood
         std::thread::sleep(std::time::Duration::from_millis(100));
 
@@ -65,8 +64,11 @@ impl TestHarness {
         let python_script = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("tests/dicomweb/mock_dicomweb_server.py");
 
-        println!("Starting mock DICOMweb server on port {}...", self.http_backend_port);
-        
+        println!(
+            "Starting mock DICOMweb server on port {}...",
+            self.http_backend_port
+        );
+
         // Use std::process::Command to get a std::process::Child
         let child = std::process::Command::new("python3")
             .arg(&python_script)
@@ -85,7 +87,10 @@ impl TestHarness {
         let client = reqwest::Client::new();
         for _ in 0..10 {
             if client
-                .get(format!("http://127.0.0.1:{}/studies", self.http_backend_port))
+                .get(format!(
+                    "http://127.0.0.1:{}/studies",
+                    self.http_backend_port
+                ))
                 .send()
                 .await
                 .is_ok()
@@ -169,31 +174,46 @@ module = ""
             eprintln!("Failed to parse config: {}", e);
             e.to_string()
         })?;
-        
+
         // Resolve target_ref/peer_ref references to inject connection configs into options
         harmony::config::resolution::resolve_references(&mut config).map_err(|e| {
             eprintln!("Reference resolution failed: {}", e);
             e
         })?;
-        
+
         config.validate().map_err(|e| {
             eprintln!("Config validation failed: {:?}", e);
             format!("{:?}", e)
         })?;
 
         println!("Starting Harmony proxy on port {}...", self.dicom_port);
-        println!("Config pipelines: {:?}", config.pipelines.keys().collect::<Vec<_>>());
-        println!("Config endpoints: {:?}", config.endpoints.keys().collect::<Vec<_>>());
-        println!("Config backends: {:?}", config.backends.keys().collect::<Vec<_>>());
-        
+        println!(
+            "Config pipelines: {:?}",
+            config.pipelines.keys().collect::<Vec<_>>()
+        );
+        println!(
+            "Config endpoints: {:?}",
+            config.endpoints.keys().collect::<Vec<_>>()
+        );
+        println!(
+            "Config backends: {:?}",
+            config.backends.keys().collect::<Vec<_>>()
+        );
+
         // Print endpoint details
         for (name, endpoint) in &config.endpoints {
-            println!("Endpoint '{}': service={}, options={:?}", name, endpoint.service, endpoint.options);
-            
+            println!(
+                "Endpoint '{}': service={}, options={:?}",
+                name, endpoint.service, endpoint.options
+            );
+
             // Check what protocol the service resolves to
             match harmony::models::services::services::resolve_service(&endpoint.service) {
                 Ok(service) => {
-                    println!("  -> Resolved to protocol: {:?}", service.required_protocol());
+                    println!(
+                        "  -> Resolved to protocol: {:?}",
+                        service.required_protocol()
+                    );
                 }
                 Err(e) => {
                     eprintln!("  -> Failed to resolve service: {}", e);
@@ -202,14 +222,17 @@ module = ""
         }
 
         let config_arc = Arc::new(config);
-        
+
         // Set global config for PipelineQueryProvider to access
         harmony::globals::set_config(config_arc.clone());
-        
+
         let registry = Arc::new(AdapterRegistry::new());
-        
+
         println!("Starting network 'default'...");
-        match registry.start_network("default".to_string(), config_arc.clone()).await {
+        match registry
+            .start_network("default".to_string(), config_arc.clone())
+            .await
+        {
             Ok(_) => println!("Network 'default' started successfully"),
             Err(e) => {
                 eprintln!("Failed to start network 'default': {}", e);
@@ -223,16 +246,19 @@ module = ""
         println!("Waiting for DICOM SCP to accept connections...");
         for i in 0..10 {
             sleep(Duration::from_millis(500)).await;
-            
+
             // Try a simple TCP connection to verify the port is listening
             if std::net::TcpStream::connect(format!("127.0.0.1:{}", self.dicom_port)).is_ok() {
                 println!("DICOM SCP is ready on port {}", self.dicom_port);
                 sleep(Duration::from_millis(500)).await; // Extra time for full initialization
                 return Ok(());
             }
-            
+
             if i == 9 {
-                return Err(format!("DICOM SCP failed to bind to port {} after 5 seconds", self.dicom_port));
+                return Err(format!(
+                    "DICOM SCP failed to bind to port {} after 5 seconds",
+                    self.dicom_port
+                ));
             }
         }
 
@@ -243,11 +269,11 @@ module = ""
     fn get_sample_dicom_file() -> PathBuf {
         let samples = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
             .join("samples/dicom/study_1/series_1/CT.1.1.dcm");
-        
+
         if !samples.exists() {
             panic!("Sample DICOM file not found at: {:?}", samples);
         }
-        
+
         samples
     }
 
@@ -257,7 +283,11 @@ module = ""
         let mut missing = Vec::new();
 
         for tool in tools {
-            if std::process::Command::new(tool).arg("--version").output().is_err() {
+            if std::process::Command::new(tool)
+                .arg("--version")
+                .output()
+                .is_err()
+            {
                 missing.push(tool);
             }
         }
@@ -307,15 +337,21 @@ impl Drop for TestHarness {
 #[ignore] // Run with --ignored flag, requires DCMTK tools
 async fn test_dicom_c_echo() {
     let mut harness = TestHarness::new().await;
-    
+
     // Check prerequisites
     if let Err(e) = TestHarness::check_dcmtk_available() {
         eprintln!("Skipping test: {}", e);
         return;
     }
 
-    harness.start_mock_server().await.expect("Failed to start mock server");
-    harness.start_harmony().await.expect("Failed to start Harmony");
+    harness
+        .start_mock_server()
+        .await
+        .expect("Failed to start mock server");
+    harness
+        .start_harmony()
+        .await
+        .expect("Failed to start Harmony");
 
     println!("Testing C-ECHO...");
 
@@ -323,8 +359,10 @@ async fn test_dicom_c_echo() {
     // DCMTK options: --aetitle (calling AE), --call (called AE)
     let output = Command::new("echoscu")
         .args([
-            "--aetitle", "TEST_SCU",
-            "--call", "BRIDGE_SCP",
+            "--aetitle",
+            "TEST_SCU",
+            "--call",
+            "BRIDGE_SCP",
             "127.0.0.1",
             &harness.dicom_port.to_string(),
         ])
@@ -332,11 +370,17 @@ async fn test_dicom_c_echo() {
         .await
         .expect("Failed to execute echoscu");
 
-    println!("echoscu output: {}", String::from_utf8_lossy(&output.stdout));
-    println!("echoscu stderr: {}", String::from_utf8_lossy(&output.stderr));
+    println!(
+        "echoscu output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    println!(
+        "echoscu stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     assert!(output.status.success(), "C-ECHO failed");
-    
+
     harness.cleanup().await;
 }
 
@@ -344,14 +388,20 @@ async fn test_dicom_c_echo() {
 #[ignore] // Run with --ignored flag, requires DCMTK tools
 async fn test_dicom_c_store_to_stow_rs() {
     let mut harness = TestHarness::new().await;
-    
+
     if let Err(e) = TestHarness::check_dcmtk_available() {
         eprintln!("Skipping test: {}", e);
         return;
     }
 
-    harness.start_mock_server().await.expect("Failed to start mock server");
-    harness.start_harmony().await.expect("Failed to start Harmony");
+    harness
+        .start_mock_server()
+        .await
+        .expect("Failed to start mock server");
+    harness
+        .start_harmony()
+        .await
+        .expect("Failed to start Harmony");
 
     println!("Testing C-STORE → STOW-RS...");
 
@@ -361,8 +411,10 @@ async fn test_dicom_c_store_to_stow_rs() {
     let output = Command::new("storescu")
         .args([
             "-d", // Enable DCMTK debug output
-            "--aetitle", "TEST_SCU",
-            "--call", "BRIDGE_SCP",
+            "--aetitle",
+            "TEST_SCU",
+            "--call",
+            "BRIDGE_SCP",
             "127.0.0.1",
             &harness.dicom_port.to_string(),
             dicom_file.to_str().unwrap(),
@@ -371,15 +423,21 @@ async fn test_dicom_c_store_to_stow_rs() {
         .await
         .expect("Failed to execute storescu");
 
-    println!("storescu output: {}", String::from_utf8_lossy(&output.stdout));
-    println!("storescu stderr: {}", String::from_utf8_lossy(&output.stderr));
+    println!(
+        "storescu output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    println!(
+        "storescu stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     assert!(output.status.success(), "C-STORE failed");
 
     // Verify that the mock server received the STOW-RS request
     // (In a real test, you might query the mock server's state)
     sleep(Duration::from_secs(1)).await;
-    
+
     harness.cleanup().await;
 }
 
@@ -387,14 +445,20 @@ async fn test_dicom_c_store_to_stow_rs() {
 #[ignore] // Run with --ignored flag, requires DCMTK tools
 async fn test_dicom_c_find_to_qido_rs() {
     let mut harness = TestHarness::new().await;
-    
+
     if let Err(e) = TestHarness::check_dcmtk_available() {
         eprintln!("Skipping test: {}", e);
         return;
     }
 
-    harness.start_mock_server().await.expect("Failed to start mock server");
-    harness.start_harmony().await.expect("Failed to start Harmony");
+    harness
+        .start_mock_server()
+        .await
+        .expect("Failed to start mock server");
+    harness
+        .start_harmony()
+        .await
+        .expect("Failed to start Harmony");
 
     println!("Testing C-FIND → QIDO-RS...");
 
@@ -402,10 +466,13 @@ async fn test_dicom_c_find_to_qido_rs() {
     // DCMTK flags: --aetitle (calling AE), --call (called AE), -P = Patient Root, -k = query key
     let output = Command::new("findscu")
         .args([
-            "--aetitle", "TEST_SCU",
-            "--call", "BRIDGE_SCP",
+            "--aetitle",
+            "TEST_SCU",
+            "--call",
+            "BRIDGE_SCP",
             "-P", // Patient Root query model
-            "-k", "0010,0020=*", // Patient ID (wildcard)
+            "-k",
+            "0010,0020=*", // Patient ID (wildcard)
             "127.0.0.1",
             &harness.dicom_port.to_string(),
         ])
@@ -413,8 +480,14 @@ async fn test_dicom_c_find_to_qido_rs() {
         .await
         .expect("Failed to execute findscu");
 
-    println!("findscu output: {}", String::from_utf8_lossy(&output.stdout));
-    println!("findscu stderr: {}", String::from_utf8_lossy(&output.stderr));
+    println!(
+        "findscu output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    println!(
+        "findscu stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // C-FIND may return no results if mock doesn't match query, just verify connection worked
     let stderr = String::from_utf8_lossy(&output.stderr);
@@ -422,7 +495,7 @@ async fn test_dicom_c_find_to_qido_rs() {
         output.status.success() || stderr.contains("Association Accepted"),
         "C-FIND should establish association"
     );
-    
+
     harness.cleanup().await;
 }
 
@@ -430,14 +503,20 @@ async fn test_dicom_c_find_to_qido_rs() {
 #[ignore] // Run with --ignored flag, requires DCMTK tools
 async fn test_dicom_c_get_to_wado_rs() {
     let mut harness = TestHarness::new().await;
-    
+
     if let Err(e) = TestHarness::check_dcmtk_available() {
         eprintln!("Skipping test: {}", e);
         return;
     }
 
-    harness.start_mock_server().await.expect("Failed to start mock server");
-    harness.start_harmony().await.expect("Failed to start Harmony");
+    harness
+        .start_mock_server()
+        .await
+        .expect("Failed to start mock server");
+    harness
+        .start_harmony()
+        .await
+        .expect("Failed to start Harmony");
 
     println!("Testing C-GET → WADO-RS...");
 
@@ -447,12 +526,17 @@ async fn test_dicom_c_get_to_wado_rs() {
     // Test C-GET using getscu with increased max-pdu to handle larger responses
     let output = Command::new("getscu")
         .args([
-            "--aetitle", "TEST_SCU",
-            "--call", "BRIDGE_SCP",
-            "--max-pdu", "65536", // Increase max PDU size
-            "-P", // Patient Root query model
-            "-k", "0010,0020=TEST123", // Patient ID
-            "-od", output_dir.to_str().unwrap(), // Output directory
+            "--aetitle",
+            "TEST_SCU",
+            "--call",
+            "BRIDGE_SCP",
+            "--max-pdu",
+            "65536", // Increase max PDU size
+            "-P",    // Patient Root query model
+            "-k",
+            "0010,0020=TEST123", // Patient ID
+            "-od",
+            output_dir.to_str().unwrap(), // Output directory
             "127.0.0.1",
             &harness.dicom_port.to_string(),
         ])
@@ -468,14 +552,14 @@ async fn test_dicom_c_get_to_wado_rs() {
     // 2. Request was transformed to WADO-RS format
     // Note: Full retrieval requires mock server to return actual DICOM data
     let stderr = String::from_utf8_lossy(&output.stderr);
-    
+
     // Check that the association was at least attempted (not refused immediately)
     // The actual retrieval may fail due to mock limitations
     assert!(
         !stderr.contains("Association Rejected"),
         "C-GET association should not be rejected"
     );
-    
+
     harness.cleanup().await;
 }
 
@@ -483,14 +567,20 @@ async fn test_dicom_c_get_to_wado_rs() {
 #[ignore] // Run with --ignored flag, requires DCMTK tools
 async fn test_dicom_c_move_to_wado_rs() {
     let mut harness = TestHarness::new().await;
-    
+
     if let Err(e) = TestHarness::check_dcmtk_available() {
         eprintln!("Skipping test: {}", e);
         return;
     }
 
-    harness.start_mock_server().await.expect("Failed to start mock server");
-    harness.start_harmony().await.expect("Failed to start Harmony");
+    harness
+        .start_mock_server()
+        .await
+        .expect("Failed to start mock server");
+    harness
+        .start_harmony()
+        .await
+        .expect("Failed to start Harmony");
 
     println!("Testing C-MOVE → WADO-RS...");
 
@@ -500,33 +590,44 @@ async fn test_dicom_c_move_to_wado_rs() {
 
     let output = Command::new("movescu")
         .args([
-            "--aetitle", "TEST_SCU",
-            "--call", "BRIDGE_SCP",
+            "--aetitle",
+            "TEST_SCU",
+            "--call",
+            "BRIDGE_SCP",
             "-P", // Patient Root query model
-            "-k", "0010,0020=TEST123", // Patient ID
-            "--port", &(harness.dicom_port + 1).to_string(), // Move destination port
+            "-k",
+            "0010,0020=TEST123", // Patient ID
+            "--port",
+            &(harness.dicom_port + 1).to_string(), // Move destination port
             "127.0.0.1",
             &harness.dicom_port.to_string(),
-            "--move", "MOVE_DEST", // Move destination AE title
+            "--move",
+            "MOVE_DEST", // Move destination AE title
         ])
         .output()
         .await
         .expect("Failed to execute movescu");
 
-    println!("movescu output: {}", String::from_utf8_lossy(&output.stdout));
-    println!("movescu stderr: {}", String::from_utf8_lossy(&output.stderr));
+    println!(
+        "movescu output: {}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    println!(
+        "movescu stderr: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
 
     // C-MOVE is not fully implemented yet.
     // The test verifies that the association was established and the request was processed,
     // even if the response indicates "out of resources" (expected until full implementation)
     let stderr = String::from_utf8_lossy(&output.stderr);
-    
+
     // Verify association was not rejected outright
     assert!(
         !stderr.contains("Association Rejected"),
         "C-MOVE association should not be rejected"
     );
-    
+
     harness.cleanup().await;
 }
 
@@ -534,14 +635,20 @@ async fn test_dicom_c_move_to_wado_rs() {
 #[ignore] // Run with --ignored flag, requires DCMTK tools
 async fn test_full_workflow() {
     let mut harness = TestHarness::new().await;
-    
+
     if let Err(e) = TestHarness::check_dcmtk_available() {
         eprintln!("Skipping test: {}", e);
         return;
     }
 
-    harness.start_mock_server().await.expect("Failed to start mock server");
-    harness.start_harmony().await.expect("Failed to start Harmony");
+    harness
+        .start_mock_server()
+        .await
+        .expect("Failed to start mock server");
+    harness
+        .start_harmony()
+        .await
+        .expect("Failed to start Harmony");
 
     println!("Testing full workflow: STORE → FIND...");
 
@@ -552,8 +659,10 @@ async fn test_full_workflow() {
     let store_output = Command::new("storescu")
         .args([
             "-d", // Enable DCMTK debug output
-            "--aetitle", "TEST_SCU",
-            "--call", "BRIDGE_SCP",
+            "--aetitle",
+            "TEST_SCU",
+            "--call",
+            "BRIDGE_SCP",
             "127.0.0.1",
             &harness.dicom_port.to_string(),
             dicom_file.to_str().unwrap(),
@@ -562,7 +671,10 @@ async fn test_full_workflow() {
         .await
         .expect("Failed to execute storescu");
 
-    println!("storescu stderr: {}", String::from_utf8_lossy(&store_output.stderr));
+    println!(
+        "storescu stderr: {}",
+        String::from_utf8_lossy(&store_output.stderr)
+    );
     assert!(store_output.status.success(), "C-STORE failed");
     sleep(Duration::from_secs(1)).await;
 
@@ -571,10 +683,13 @@ async fn test_full_workflow() {
     let find_output = Command::new("findscu")
         .args([
             "-d", // Enable DCMTK debug output
-            "--aetitle", "TEST_SCU",
-            "--call", "BRIDGE_SCP",
+            "--aetitle",
+            "TEST_SCU",
+            "--call",
+            "BRIDGE_SCP",
             "-P", // Patient Root
-            "-k", "0010,0020=*", // Patient ID wildcard
+            "-k",
+            "0010,0020=*", // Patient ID wildcard
             "127.0.0.1",
             &harness.dicom_port.to_string(),
         ])

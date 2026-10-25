@@ -12,13 +12,9 @@ static DCMTK_LOCK: Mutex<()> = Mutex::const_new(());
 /// Check if DCMTK tools are available
 pub fn dcmtk_available() -> bool {
     use std::process::Command as StdCommand;
-    
+
     for tool in ["dcmqrscp", "storescu", "dcmqridx", "getscu"].iter() {
-        if StdCommand::new(tool)
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+        if StdCommand::new(tool).arg("--version").output().is_err() {
             return false;
         }
     }
@@ -60,7 +56,8 @@ impl DcmtkQrScp {
             drop(listener);
 
             // Prepare storage directory and config
-            let base = PathBuf::from("../../tmp").join(format!("qrscp_{}_{}", test_name, Uuid::new_v4()));
+            let base =
+                PathBuf::from("../../tmp").join(format!("qrscp_{}_{}", test_name, Uuid::new_v4()));
             let dbdir = base.join("qrdb");
             std::fs::create_dir_all(&dbdir)?;
             let cfg_path = base.join("dcmqrscp.cfg");
@@ -88,7 +85,7 @@ impl DcmtkQrScp {
                 .arg(&cfg_path)
                 .arg(port.to_string())
                 .kill_on_drop(true);
-            
+
             if !verbose {
                 dcmqr.stdout(Stdio::null()).stderr(Stdio::null());
             }
@@ -97,7 +94,8 @@ impl DcmtkQrScp {
 
             // Wait for port to be ready
             let mut ready = false;
-            for _ in 0..20 { // 2 seconds max
+            for _ in 0..20 {
+                // 2 seconds max
                 // Check if child has exited early
                 if let Ok(Some(_)) = child.try_wait() {
                     // Exited early, probably port conflict
@@ -126,7 +124,7 @@ impl DcmtkQrScp {
                 let _ = child.kill().await;
             }
         }
-        
+
         anyhow::bail!("Failed to start dcmqrscp after multiple attempts");
     }
 
@@ -151,7 +149,7 @@ impl DcmtkQrScp {
             .arg("127.0.0.1")
             .arg(self.port.to_string())
             .arg(dicom_file);
-        
+
         if !verbose {
             cmd.stdout(Stdio::null()).stderr(Stdio::null());
         }
@@ -160,10 +158,10 @@ impl DcmtkQrScp {
         if !status.success() {
             anyhow::bail!("storescu failed");
         }
-        
+
         // Wait a bit for indexing and then run dcmqridx if available
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        
+
         // Try to index the database (dcmqridx might not always be needed, but helps)
         if std::process::Command::new("dcmqridx")
             .arg("--version")
@@ -180,10 +178,10 @@ impl DcmtkQrScp {
                 let _ = idx_cmd.status().await; // Ignore errors, indexing might not always be needed
             }
         }
-        
+
         // Wait a bit more for indexing to complete
         tokio::time::sleep(std::time::Duration::from_millis(500)).await;
-        
+
         Ok(())
     }
 }
@@ -224,4 +222,3 @@ pub fn create_test_dicom_file(
     dicom_json_tool::write_part10(output_path, &obj)?;
     Ok(())
 }
-

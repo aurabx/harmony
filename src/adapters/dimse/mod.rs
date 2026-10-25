@@ -277,7 +277,10 @@ impl ScpTasks {
     async fn stop(&mut self, network_name: &str) {
         let deadline = tokio::time::Instant::now() + DIMSE_SCP_STOP_TIMEOUT;
         for handle in &mut self.0 {
-            if tokio::time::timeout_at(deadline, &mut *handle).await.is_err() {
+            if tokio::time::timeout_at(deadline, &mut *handle)
+                .await
+                .is_err()
+            {
                 tracing::warn!(
                     "DIMSE SCP for network '{}' did not stop within {:?}; aborting it",
                     network_name,
@@ -636,9 +639,7 @@ impl ProtocolAdapter for DimseAdapter {
 
                 let group_names: Vec<String> = group_endpoints
                     .iter()
-                    .map(|ep| {
-                        format!("{}:{}", ep.pipeline_name, ep.endpoint_name)
-                    })
+                    .map(|ep| format!("{}:{}", ep.pipeline_name, ep.endpoint_name))
                     .collect();
 
                 tracing::info!(
@@ -650,8 +651,7 @@ impl ProtocolAdapter for DimseAdapter {
                 );
 
                 // Build merged DimseConfig (union of enabled operations)
-                let dimse_config =
-                    Self::build_merged_config(*bind_addr, *port, &group_endpoints);
+                let dimse_config = Self::build_merged_config(*bind_addr, *port, &group_endpoints);
 
                 // Build operation→pipeline routing table
                 let routes: Vec<(String, String, Vec<DimseOp>)> = group_endpoints
@@ -1035,18 +1035,9 @@ mod tests {
     #[test]
     fn test_enabled_ops_extraction() {
         let mut opts = HashMap::new();
-        opts.insert(
-            "enable_find".to_string(),
-            serde_json::Value::Bool(true),
-        );
-        opts.insert(
-            "enable_store".to_string(),
-            serde_json::Value::Bool(true),
-        );
-        opts.insert(
-            "enable_get".to_string(),
-            serde_json::Value::Bool(false),
-        );
+        opts.insert("enable_find".to_string(), serde_json::Value::Bool(true));
+        opts.insert("enable_store".to_string(), serde_json::Value::Bool(true));
+        opts.insert("enable_get".to_string(), serde_json::Value::Bool(false));
 
         let ops = DimseAdapter::enabled_ops(&opts);
         assert!(ops.contains(&DimseOp::Find));
@@ -1267,9 +1258,21 @@ mod tests {
         let smaller = endpoint_with_limit("smaller", Some(500_000));
         let large = endpoint_with_limit("large", Some(default * 2));
 
-        assert_eq!(merged_limit(&[&unset]), default, "the default applies when unset");
-        assert_eq!(merged_limit(&[&small]), 1_000_000, "one endpoint can go below the default");
-        assert_eq!(merged_limit(&[&small, &smaller]), 1_000_000, "the largest value wins");
+        assert_eq!(
+            merged_limit(&[&unset]),
+            default,
+            "the default applies when unset"
+        );
+        assert_eq!(
+            merged_limit(&[&small]),
+            1_000_000,
+            "one endpoint can go below the default"
+        );
+        assert_eq!(
+            merged_limit(&[&small, &smaller]),
+            1_000_000,
+            "the largest value wins"
+        );
         assert_eq!(
             merged_limit(&[&small, &unset]),
             default,

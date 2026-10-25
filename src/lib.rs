@@ -7,15 +7,18 @@ mod file;
 pub mod globals;
 pub mod integrations;
 pub mod logging;
+pub mod management;
 pub mod models;
 pub mod pipeline;
 pub mod router;
 pub mod storage;
 pub mod storage_adapter;
 mod utils;
-pub mod management;
 
 // Re-export key types for external use
+use crate::config::watcher::ConfigWatcher;
+use crate::integrations::provider_resolver::ProviderResolver;
+use crate::storage::create_storage_backend;
 pub use adapters::registry::AdapterRegistry;
 pub use adapters::ProtocolAdapter;
 pub use config::config::{Config, ConfigError};
@@ -29,13 +32,10 @@ pub use models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 pub use models::middleware::middleware::Middleware;
 pub use models::protocol::{Protocol, ProtocolCtx};
 pub use models::services::services::{ServiceHandler, ServiceType};
-pub use storage::{StorageBackend, StorageConfig};
-use crate::config::watcher::ConfigWatcher;
-use crate::integrations::provider_resolver::ProviderResolver;
-use crate::storage::create_storage_backend;
 use runbeam_sdk::{load_token, save_token};
 use std::path::Path;
 use std::sync::Arc;
+pub use storage::{StorageBackend, StorageConfig};
 
 pub async fn run(config: Config) {
     run_with_reload(config, None).await;
@@ -154,7 +154,8 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
         match token_result {
             Ok(Some(token)) if token.is_valid() => {
                 // Valid token found - start cloud polling using primary provider settings
-                let poll_interval = config.primary_poll_interval()
+                let poll_interval = config
+                    .primary_poll_interval()
                     .unwrap_or_else(|| std::time::Duration::from_secs(30));
                 let base_url = config.primary_api_base_url();
 
@@ -191,13 +192,15 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
                     // Check if push-on-startup is enabled (default: off)
                     if push_config_on_startup {
                         // Start polling with ready signal to prevent race conditions
-                        let ready_signal = management::cloud_poller::start_cloud_polling_when_ready(
-                            client.clone(),
-                            machine_token.clone(),
-                            poll_interval,
-                            registry_clone.clone(),
-                            cloud_shutdown.clone(),
-                        ).await;
+                        let ready_signal =
+                            management::cloud_poller::start_cloud_polling_when_ready(
+                                client.clone(),
+                                machine_token.clone(),
+                                poll_interval,
+                                registry_clone.clone(),
+                                cloud_shutdown.clone(),
+                            )
+                            .await;
 
                         // Push config while polling is waiting
                         // Note: After push completes, Runbeam Cloud should create Change records for the
@@ -206,14 +209,21 @@ pub async fn run_with_reload(config: Config, config_path: Option<String>) {
                         if let Err(e) = management::cloud_poller::push_config_on_startup(
                             &client,
                             &machine_token,
-                        ).await {
-                            tracing::warn!("Push config on startup failed: {}. Continuing with polling.", e);
+                        )
+                        .await
+                        {
+                            tracing::warn!(
+                                "Push config on startup failed: {}. Continuing with polling.",
+                                e
+                            );
                         }
 
                         // Signal polling to start and trigger immediate poll
                         let _ = ready_signal.send(());
                         if crate::globals::trigger_cloud_poll() {
-                            tracing::info!("Triggered immediate cloud poll after startup config push");
+                            tracing::info!(
+                                "Triggered immediate cloud poll after startup config push"
+                            );
                         }
                     } else {
                         // Start polling immediately if no startup push

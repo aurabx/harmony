@@ -25,7 +25,13 @@ pub fn build_command_response(
     has_dataset: bool,
     sop_class_uid: &str,
 ) -> InMemDicomObject<StandardDataDictionary> {
-    build_response(command_field, message_id, status_code, has_dataset, sop_class_uid)
+    build_response(
+        command_field,
+        message_id,
+        status_code,
+        has_dataset,
+        sop_class_uid,
+    )
 }
 
 /// Encode and send a response with optional dataset
@@ -66,18 +72,20 @@ pub async fn encode_and_send_response(
             .find(|pc| pc.id == presentation_context_id)
             .map(|pc| pc.transfer_syntax.as_str())
             .ok_or_else(|| DimseError::operation_failed("Presentation context not found"))?;
-        
+
         tracing::debug!("Encoding dataset with transfer syntax: {}", ts_uid);
 
-        let ts = TransferSyntaxRegistry
-            .get(ts_uid)
-            .ok_or_else(|| DimseError::operation_failed(format!("Transfer syntax not found: {}", ts_uid)))?;
+        let ts = TransferSyntaxRegistry.get(ts_uid).ok_or_else(|| {
+            DimseError::operation_failed(format!("Transfer syntax not found: {}", ts_uid))
+        })?;
 
         let mut dataset_bytes = Vec::new();
         dicom_obj
             .write_dataset_with_ts(&mut dataset_bytes, ts)
-            .map_err(|e| DimseError::operation_failed(format!("Failed to encode dataset: {}", e)))?;
-        
+            .map_err(|e| {
+                DimseError::operation_failed(format!("Failed to encode dataset: {}", e))
+            })?;
+
         tracing::debug!("Encoded dataset: {} bytes", dataset_bytes.len());
 
         // Fragment dataset if larger than requestor's max PDU size
@@ -96,7 +104,9 @@ pub async fn encode_and_send_response(
 
         tracing::debug!(
             "Sending dataset in {} chunk(s) (max_pdu: {}, max_data_per_pdu: {})",
-            num_chunks, max_pdu, max_data_per_pdu
+            num_chunks,
+            max_pdu,
+            max_data_per_pdu
         );
 
         for (i, chunk) in chunks.into_iter().enumerate() {
@@ -108,7 +118,14 @@ pub async fn encode_and_send_response(
                     data: vec![data_pdata],
                 })
                 .await
-                .map_err(|e| DimseError::network(format!("Failed to send dataset fragment {}/{}: {}", i + 1, num_chunks, e)))?;
+                .map_err(|e| {
+                    DimseError::network(format!(
+                        "Failed to send dataset fragment {}/{}: {}",
+                        i + 1,
+                        num_chunks,
+                        e
+                    ))
+                })?;
         }
     }
 
@@ -254,11 +271,9 @@ pub async fn send_store_suboperation(
         .map(|pc| pc.transfer_syntax.as_str())
         .ok_or_else(|| DimseError::operation_failed("Presentation context not found"))?;
 
-    let ts = TransferSyntaxRegistry
-        .get(ts_uid)
-        .ok_or_else(|| {
-            DimseError::operation_failed(format!("Transfer syntax not found: {}", ts_uid))
-        })?;
+    let ts = TransferSyntaxRegistry.get(ts_uid).ok_or_else(|| {
+        DimseError::operation_failed(format!("Transfer syntax not found: {}", ts_uid))
+    })?;
 
     let mut dataset_bytes = Vec::new();
     dicom_obj
@@ -286,14 +301,23 @@ pub async fn send_store_suboperation(
                 data: vec![data_pdata],
             })
             .await
-            .map_err(|e| DimseError::network(format!("Failed to send C-STORE-RQ dataset fragment {}/{}: {}", i + 1, num_chunks, e)))?;
+            .map_err(|e| {
+                DimseError::network(format!(
+                    "Failed to send C-STORE-RQ dataset fragment {}/{}: {}",
+                    i + 1,
+                    num_chunks,
+                    e
+                ))
+            })?;
     }
 
     Ok(())
 }
 
 /// Receive a C-STORE-RSP (after sending sub-operation)
-pub async fn receive_store_response(association: &mut AsyncServerAssociation<TcpStream>) -> Result<u16> {
+pub async fn receive_store_response(
+    association: &mut AsyncServerAssociation<TcpStream>,
+) -> Result<u16> {
     loop {
         match association.receive().await {
             Ok(Pdu::PData { data }) => {
@@ -311,14 +335,18 @@ pub async fn receive_store_response(association: &mut AsyncServerAssociation<Tcp
                             })?;
 
                         let cursor = Cursor::new(&value.data);
-                        let obj = InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
-                            cursor,
-                            ts,
-                            dicom_encoding::text::SpecificCharacterSet::default(),
-                        )
-                        .map_err(|e| {
-                            DimseError::parse(format!("Failed to parse response command: {}", e))
-                        })?;
+                        let obj =
+                            InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
+                                cursor,
+                                ts,
+                                dicom_encoding::text::SpecificCharacterSet::default(),
+                            )
+                            .map_err(|e| {
+                                DimseError::parse(format!(
+                                    "Failed to parse response command: {}",
+                                    e
+                                ))
+                            })?;
 
                         let command_field = obj
                             .element(dicom_dictionary_std::tags::COMMAND_FIELD)
@@ -347,13 +375,18 @@ pub async fn receive_store_response(association: &mut AsyncServerAssociation<Tcp
                 return Err(DimseError::network("Association aborted by peer"));
             }
             Ok(Pdu::ReleaseRQ) => {
-                return Err(DimseError::network("Association released by peer unexpectedly"));
+                return Err(DimseError::network(
+                    "Association released by peer unexpectedly",
+                ));
             }
             Ok(_) => {
                 continue;
             }
             Err(e) => {
-                return Err(DimseError::network(format!("Failed to receive response: {}", e)));
+                return Err(DimseError::network(format!(
+                    "Failed to receive response: {}",
+                    e
+                )));
             }
         }
     }
@@ -534,7 +567,9 @@ mod tests {
         assert_eq!(completed, 3);
 
         // A final response carries no remaining count
-        assert!(response.element(tags::NUMBER_OF_REMAINING_SUBOPERATIONS).is_err());
+        assert!(response
+            .element(tags::NUMBER_OF_REMAINING_SUBOPERATIONS)
+            .is_err());
     }
 
     #[test]
@@ -632,7 +667,7 @@ mod tests {
         // If max_pdu is too small (less than overhead), fallback to 4096
         let data_size = 10_000;
         let max_pdu = 10; // Too small - less than 16 byte overhead
-        // Should use fallback of 4096
+                          // Should use fallback of 4096
         let expected_chunks = (data_size + 4095) / 4096; // ceiling division by 4096
         assert_eq!(compute_chunk_count(data_size, max_pdu), expected_chunks);
     }
@@ -643,7 +678,7 @@ mod tests {
         // Test with exactly the overhead threshold
         let data_size = 1000;
         let max_pdu = 17; // Just over overhead
-        // max_data_per_pdu = 17 - 16 = 1
+                          // max_data_per_pdu = 17 - 16 = 1
         assert_eq!(compute_chunk_count(data_size, max_pdu), 1000);
     }
 }

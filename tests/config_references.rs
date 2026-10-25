@@ -49,15 +49,21 @@ fn test_endpoint_peer_reference_resolution() {
 
     // Check if endpoint resolved the connection
     let resolved_endpoint = config.endpoints.get("endpoint1").unwrap();
-    let conn = resolved_endpoint.connection.as_ref().expect("Connection not resolved");
-    
+    let conn = resolved_endpoint
+        .connection
+        .as_ref()
+        .expect("Connection not resolved");
+
     assert_eq!(conn.host, "peer.example.com");
     assert_eq!(conn.port, Some(11112));
     // Peer's top-level protocol should be merged into connection
     assert_eq!(conn.protocol, Some("dicom".to_string()));
-    
+
     // Check if options were injected
-    let options = resolved_endpoint.options.as_ref().expect("Options not injected");
+    let options = resolved_endpoint
+        .options
+        .as_ref()
+        .expect("Options not injected");
     assert!(options.contains_key("connection"));
 }
 
@@ -103,18 +109,24 @@ fn test_backend_target_reference_resolution() {
 
     // Check if backend resolved the connection
     let resolved_backend = config.backends.get("backend1").unwrap();
-    let conn = resolved_backend.connection.as_ref().expect("Connection not resolved");
-    
+    let conn = resolved_backend
+        .connection
+        .as_ref()
+        .expect("Connection not resolved");
+
     assert_eq!(conn.host, "api.example.com");
     assert_eq!(conn.port, Some(443));
     assert_eq!(conn.protocol, Some("https".to_string()));
     assert_eq!(conn.base_path, Some("/v1".to_string()));
-    
+
     assert_eq!(resolved_backend.timeout_secs, Some(60));
     assert_eq!(resolved_backend.max_retries, Some(5));
-    
+
     // Check if options were injected
-    let options = resolved_backend.options.as_ref().expect("Options not injected");
+    let options = resolved_backend
+        .options
+        .as_ref()
+        .expect("Options not injected");
     assert!(options.contains_key("connection"));
 }
 
@@ -165,7 +177,7 @@ fn test_override_precedence() {
 
     let resolved = config.backends.get("backend1").unwrap();
     let conn = resolved.connection.as_ref().unwrap();
-    
+
     assert_eq!(conn.host, "override.com");
     assert_eq!(conn.port, Some(80)); // Inherited
     assert_eq!(conn.protocol, Some("http".to_string())); // Inherited
@@ -188,10 +200,14 @@ fn test_missing_target_returns_unresolved_backend() {
     config.backends.insert("backend1".to_string(), backend);
 
     // Resolve references - should not panic, but return unresolved backend
-    let unresolved = resolve_references(&mut config).expect("Resolution should not fail on missing target");
+    let unresolved =
+        resolve_references(&mut config).expect("Resolution should not fail on missing target");
 
     // Verify that the backend was marked as unresolved
-    assert!(unresolved.contains("backend1"), "Backend should be in unresolved set");
+    assert!(
+        unresolved.contains("backend1"),
+        "Backend should be in unresolved set"
+    );
     assert_eq!(unresolved.len(), 1, "Only one backend should be unresolved");
 }
 
@@ -226,7 +242,9 @@ fn test_unresolved_backend_skipped_in_validation() {
         timeout_secs: None,
         max_retries: None,
     };
-    config.backends.insert("unreachable_backend".to_string(), backend);
+    config
+        .backends
+        .insert("unreachable_backend".to_string(), backend);
 
     // Create a pipeline referencing the unreachable backend
     config.pipelines.insert(
@@ -247,8 +265,14 @@ fn test_unresolved_backend_skipped_in_validation() {
 
     // Set required proxy and service defaults
     config.proxy.id = "test".to_string();
-    config.proxy.jwks_cache_duration_hours = 24;  // Set valid duration
-    config.services.insert("http".to_string(), ServiceConfig { id: None, module: "".to_string() });
+    config.proxy.jwks_cache_duration_hours = 24; // Set valid duration
+    config.services.insert(
+        "http".to_string(),
+        ServiceConfig {
+            id: None,
+            module: "".to_string(),
+        },
+    );
     config.management.enabled = false;
 
     // Validation should not fail, but skip the unresolved backend and pipeline

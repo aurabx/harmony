@@ -426,16 +426,11 @@ pub(crate) async fn extract_multipart_dicom_parts(
     content_type: &str,
 ) -> Result<Vec<Vec<u8>>, Error> {
     if body.is_empty() {
-        return Err(Error::from(
-            "STOW-RS multipart body is empty",
-        ));
+        return Err(Error::from("STOW-RS multipart body is empty"));
     }
 
-    let boundary = parse_multipart_boundary(content_type).ok_or_else(|| {
-        Error::from(
-            "STOW-RS Content-Type has no boundary parameter",
-        )
-    })?;
+    let boundary = parse_multipart_boundary(content_type)
+        .ok_or_else(|| Error::from("STOW-RS Content-Type has no boundary parameter"))?;
 
     // multer expects a stream of Result<Bytes, _>. Feed the whole buffer as one chunk.
     use bytes::Bytes;
@@ -959,31 +954,46 @@ impl Middleware for DICOMwebToDICOMMiddleware {
             ["studies", study_uid, "rendered"] => {
                 op = Some("get");
                 Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
-                envelope.request_details.metadata.insert(
-                    "dicomweb_response_mode".to_string(),
-                    "rendered".to_string(),
-                );
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("dicomweb_response_mode".to_string(), "rendered".to_string());
             }
             // WADO rendered: /studies/{study}/series/{series}/rendered
             ["studies", study_uid, "series", series_uid, "rendered"] => {
                 op = Some("get");
                 Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
-                Self::add_tag(&mut ident, "0020000E", "UI", vec![(*series_uid).to_string()]);
-                envelope.request_details.metadata.insert(
-                    "dicomweb_response_mode".to_string(),
-                    "rendered".to_string(),
+                Self::add_tag(
+                    &mut ident,
+                    "0020000E",
+                    "UI",
+                    vec![(*series_uid).to_string()],
                 );
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("dicomweb_response_mode".to_string(), "rendered".to_string());
             }
             // WADO rendered: /studies/{study}/series/{series}/instances/{instance}/rendered
             ["studies", study_uid, "series", series_uid, "instances", instance_uid, "rendered"] => {
                 op = Some("get");
                 Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
-                Self::add_tag(&mut ident, "0020000E", "UI", vec![(*series_uid).to_string()]);
-                Self::add_tag(&mut ident, "00080018", "UI", vec![(*instance_uid).to_string()]);
-                envelope.request_details.metadata.insert(
-                    "dicomweb_response_mode".to_string(),
-                    "rendered".to_string(),
+                Self::add_tag(
+                    &mut ident,
+                    "0020000E",
+                    "UI",
+                    vec![(*series_uid).to_string()],
                 );
+                Self::add_tag(
+                    &mut ident,
+                    "00080018",
+                    "UI",
+                    vec![(*instance_uid).to_string()],
+                );
+                envelope
+                    .request_details
+                    .metadata
+                    .insert("dicomweb_response_mode".to_string(), "rendered".to_string());
             }
             // WADO thumbnail: /studies/{study}/thumbnail
             ["studies", study_uid, "thumbnail"] => {
@@ -998,7 +1008,12 @@ impl Middleware for DICOMwebToDICOMMiddleware {
             ["studies", study_uid, "series", series_uid, "thumbnail"] => {
                 op = Some("get");
                 Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
-                Self::add_tag(&mut ident, "0020000E", "UI", vec![(*series_uid).to_string()]);
+                Self::add_tag(
+                    &mut ident,
+                    "0020000E",
+                    "UI",
+                    vec![(*series_uid).to_string()],
+                );
                 envelope.request_details.metadata.insert(
                     "dicomweb_response_mode".to_string(),
                     "thumbnail".to_string(),
@@ -1008,8 +1023,18 @@ impl Middleware for DICOMwebToDICOMMiddleware {
             ["studies", study_uid, "series", series_uid, "instances", instance_uid, "thumbnail"] => {
                 op = Some("get");
                 Self::add_tag(&mut ident, "0020000D", "UI", vec![(*study_uid).to_string()]);
-                Self::add_tag(&mut ident, "0020000E", "UI", vec![(*series_uid).to_string()]);
-                Self::add_tag(&mut ident, "00080018", "UI", vec![(*instance_uid).to_string()]);
+                Self::add_tag(
+                    &mut ident,
+                    "0020000E",
+                    "UI",
+                    vec![(*series_uid).to_string()],
+                );
+                Self::add_tag(
+                    &mut ident,
+                    "00080018",
+                    "UI",
+                    vec![(*instance_uid).to_string()],
+                );
                 envelope.request_details.metadata.insert(
                     "dicomweb_response_mode".to_string(),
                     "thumbnail".to_string(),
@@ -1035,7 +1060,8 @@ impl Middleware for DICOMwebToDICOMMiddleware {
                 "store" => Operation::Store,
                 _ => Operation::Retrieve, // Default for unrecognized ops
             };
-            envelope.command = Some(Command::new(operation).with_source("dicomweb_to_dicom_middleware"));
+            envelope.command =
+                Some(Command::new(operation).with_source("dicomweb_to_dicom_middleware"));
 
             // Clear any response set by upstream endpoint
             let mut nd = envelope
@@ -1343,7 +1369,9 @@ impl Middleware for DICOMwebToDICOMMiddleware {
         }
 
         // WADO frames -> decode and encode image data
-        if matches!(resolved_op, Some(Operation::Retrieve | Operation::Move)) && (path.contains("/frames/") || path.contains("frames/")) {
+        if matches!(resolved_op, Some(Operation::Retrieve | Operation::Move))
+            && (path.contains("/frames/") || path.contains("frames/"))
+        {
             // Accept negotiation - store preferred format for endpoint to use
             let accept = envelope
                 .request_details
@@ -1620,14 +1648,14 @@ mod tests {
         assert!(result.is_ok());
 
         let processed_envelope = result.unwrap();
-        
+
         // Verify that command is set for backend processing (check before consuming normalized_data)
         use crate::models::envelope::command::Operation;
         assert_eq!(
             processed_envelope.resolve_operation(),
             Some(Operation::Query)
         );
-        
+
         let nd = processed_envelope.normalized_data.unwrap();
         let identifier = nd.get("dimse_identifier").unwrap().as_object().unwrap();
 
@@ -1677,20 +1705,20 @@ mod tests {
         assert!(result.is_ok());
 
         let processed_envelope = result.unwrap();
-        
+
         // Verify that command is set for backend processing (check before consuming normalized_data)
         use crate::models::envelope::command::Operation;
         assert_eq!(
             processed_envelope.resolve_operation(),
             Some(Operation::Query)
         );
-        
+
         // Verify no includefield metadata is stored
         assert!(!processed_envelope
             .request_details
             .metadata
             .contains_key("dicomweb_includefield"));
-        
+
         let nd = processed_envelope.normalized_data.unwrap();
         let identifier = nd.get("dimse_identifier").unwrap().as_object().unwrap();
 
@@ -2579,10 +2607,7 @@ mod tests {
     async fn test_extract_multipart_dicom_parts_single_part() {
         let boundary = "harmonytest";
         let dicom_bytes: &[u8] = b"\x00\x01\x02FAKE-DICOM-PAYLOAD-1\x03\x04";
-        let body = build_multipart_related_body(
-            boundary,
-            &[("application/dicom", dicom_bytes)],
-        );
+        let body = build_multipart_related_body(boundary, &[("application/dicom", dicom_bytes)]);
         let ct = format!(
             "multipart/related; type=\"application/dicom\"; boundary={}",
             boundary
@@ -2603,10 +2628,7 @@ mod tests {
         let second: &[u8] = b"SECOND-DICOM-PART-with-more-bytes";
         let body = build_multipart_related_body(
             boundary,
-            &[
-                ("application/dicom", first),
-                ("application/dicom", second),
-            ],
+            &[("application/dicom", first), ("application/dicom", second)],
         );
         let ct = format!("multipart/related; boundary={}", boundary);
 

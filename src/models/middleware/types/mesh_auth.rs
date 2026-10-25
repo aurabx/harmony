@@ -19,7 +19,9 @@ use crate::models::mesh::config::{MeshAuthType, MeshProvider};
 use crate::models::middleware::middleware::Middleware;
 use crate::models::middleware::{AuthFailure, AuthUnavailable};
 use crate::utils::Error;
-use jsonwebtoken::{decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation};
+use jsonwebtoken::{
+    decode, decode_header, encode, Algorithm, DecodingKey, EncodingKey, Header, Validation,
+};
 use once_cell::sync::Lazy;
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -118,13 +120,19 @@ impl std::fmt::Debug for MeshAuthConfig {
             .field("auth_type", &self.auth_type)
             .field("mesh_name", &self.mesh_name)
             .field("mesh_id", &self.mesh_id)
-            .field("jwt_secret", &self.jwt_secret.as_ref().map(|_| "[REDACTED]"))
+            .field(
+                "jwt_secret",
+                &self.jwt_secret.as_ref().map(|_| "[REDACTED]"),
+            )
             .field("encoding_key", &self.encoding_key.as_ref().map(|_| "[KEY]"))
             .field("decoding_key", &self.decoding_key.as_ref().map(|_| "[KEY]"))
             .field("algorithm", &self.algorithm)
             .field("direction", &self.direction)
             .field("jwks_url", &self.jwks_url)
-            .field("destination_url", &self.destination_url.as_ref().map(|_| "[URL]"))
+            .field(
+                "destination_url",
+                &self.destination_url.as_ref().map(|_| "[URL]"),
+            )
             .finish()
     }
 }
@@ -186,23 +194,34 @@ impl MeshAuthMiddleware {
                     // Use HS256 with shared secret
                     let encoding = EncodingKey::from_secret(secret.as_bytes());
                     let decoding = DecodingKey::from_secret(secret.as_bytes());
-                    (Some(Arc::new(encoding)), Some(Arc::new(decoding)), Algorithm::HS256)
+                    (
+                        Some(Arc::new(encoding)),
+                        Some(Arc::new(decoding)),
+                        Algorithm::HS256,
+                    )
                 } else if let Some(ref key_path) = jwt_private_key_path {
                     // Use RS256 with private key for signing
-                    let pem = std::fs::read_to_string(key_path)
-                        .map_err(|e| format!("Failed to read JWT private key at '{}': {}", key_path, e))?;
+                    let pem = std::fs::read_to_string(key_path).map_err(|e| {
+                        format!("Failed to read JWT private key at '{}': {}", key_path, e)
+                    })?;
                     let encoding = EncodingKey::from_rsa_pem(pem.as_bytes())
                         .map_err(|e| format!("Failed to parse RSA private key: {}", e))?;
                     (Some(Arc::new(encoding)), None, Algorithm::RS256)
                 } else {
-                    return Err("Local mesh provider requires jwt_secret or jwt_private_key_path".to_string());
+                    return Err(
+                        "Local mesh provider requires jwt_secret or jwt_private_key_path"
+                            .to_string(),
+                    );
                 }
             }
             MeshProvider::Runbeam => {
                 // Runbeam provider - JWT will be fetched from API
                 // Validate that we have required mesh_id
                 if mesh_id.is_none() {
-                    return Err("Runbeam mesh provider requires mesh id to be set in configuration".to_string());
+                    return Err(
+                        "Runbeam mesh provider requires mesh id to be set in configuration"
+                            .to_string(),
+                    );
                 }
                 // No local keys needed for egress - tokens come from Runbeam API
                 (None, None, Algorithm::RS256)
@@ -244,23 +263,34 @@ impl MeshAuthMiddleware {
                     // Use HS256 with shared secret
                     let encoding = EncodingKey::from_secret(secret.as_bytes());
                     let decoding = DecodingKey::from_secret(secret.as_bytes());
-                    (Some(Arc::new(encoding)), Some(Arc::new(decoding)), Algorithm::HS256)
+                    (
+                        Some(Arc::new(encoding)),
+                        Some(Arc::new(decoding)),
+                        Algorithm::HS256,
+                    )
                 } else if let Some(ref key_path) = jwt_public_key_path {
                     // Use RS256 with public key for verification
-                    let pem = std::fs::read_to_string(key_path)
-                        .map_err(|e| format!("Failed to read JWT public key at '{}': {}", key_path, e))?;
+                    let pem = std::fs::read_to_string(key_path).map_err(|e| {
+                        format!("Failed to read JWT public key at '{}': {}", key_path, e)
+                    })?;
                     let decoding = DecodingKey::from_rsa_pem(pem.as_bytes())
                         .map_err(|e| format!("Failed to parse RSA public key: {}", e))?;
                     (None, Some(Arc::new(decoding)), Algorithm::RS256)
                 } else {
-                    return Err("Local mesh provider requires jwt_secret or jwt_public_key_path".to_string());
+                    return Err(
+                        "Local mesh provider requires jwt_secret or jwt_public_key_path"
+                            .to_string(),
+                    );
                 }
             }
             MeshProvider::Runbeam => {
                 // Runbeam provider - JWT will be verified via JWKS
                 // Validate that we have required mesh_id
                 if mesh_id.is_none() {
-                    return Err("Runbeam mesh provider requires mesh id to be set in configuration".to_string());
+                    return Err(
+                        "Runbeam mesh provider requires mesh id to be set in configuration"
+                            .to_string(),
+                    );
                 }
                 // No local keys needed - validation uses JWKS
                 (None, None, Algorithm::RS256)
@@ -294,8 +324,9 @@ impl MeshAuthMiddleware {
 
     /// Generate JWT locally using configured key
     fn generate_local_jwt(&self) -> Result<String, Error> {
-        let encoding_key = self.config.encoding_key.as_ref()
-            .ok_or_else(|| Error::from("No encoding key configured for local mesh JWT generation"))?;
+        let encoding_key = self.config.encoding_key.as_ref().ok_or_else(|| {
+            Error::from("No encoding key configured for local mesh JWT generation")
+        })?;
 
         let now = SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -308,7 +339,11 @@ impl MeshAuthMiddleware {
             aud: None,
             iat: now,
             exp: now + 300, // 5 minute expiry
-            mesh_id: self.config.mesh_id.clone().unwrap_or_else(|| self.config.mesh_name.clone()),
+            mesh_id: self
+                .config
+                .mesh_id
+                .clone()
+                .unwrap_or_else(|| self.config.mesh_name.clone()),
         };
 
         let header = Header::new(self.config.algorithm);
@@ -318,7 +353,10 @@ impl MeshAuthMiddleware {
 
     /// Fetch JWT from Runbeam API
     async fn fetch_runbeam_jwt(&self, destination_url: Option<&str>) -> Result<String, Error> {
-        let mesh_id = self.config.mesh_id.as_ref()
+        let mesh_id = self
+            .config
+            .mesh_id
+            .as_ref()
             .ok_or_else(|| Error::from("Mesh ID required for Runbeam provider"))?;
 
         // Get destination URL from parameter or config
@@ -338,7 +376,9 @@ impl MeshAuthMiddleware {
             .ok_or_else(|| Error::from("No machine token found - gateway must be authorized"))?;
 
         if !machine_token.is_valid() {
-            return Err(Error::from("Machine token has expired - re-authorization required"));
+            return Err(Error::from(
+                "Machine token has expired - re-authorization required",
+            ));
         }
 
         // Get Runbeam API base URL
@@ -381,21 +421,25 @@ impl MeshAuthMiddleware {
 
     /// Validate JWT locally using configured key
     fn validate_local_jwt(&self, token: &str) -> Result<MeshClaims, Error> {
-        let decoding_key = self.config.decoding_key.as_ref()
-            .ok_or_else(|| AuthFailure("No decoding key configured for local mesh JWT validation"))?;
+        let decoding_key = self.config.decoding_key.as_ref().ok_or_else(|| {
+            AuthFailure("No decoding key configured for local mesh JWT validation")
+        })?;
 
         let mut validation = Validation::new(self.config.algorithm);
         validation.validate_exp = true;
         validation.leeway = 60; // 60 second leeway
 
-        let token_data = decode::<MeshClaims>(token, decoding_key, &validation)
-            .map_err(|e| {
-                tracing::warn!("Mesh JWT validation failed: {}", e);
-                AuthFailure("Invalid mesh JWT")
-            })?;
+        let token_data = decode::<MeshClaims>(token, decoding_key, &validation).map_err(|e| {
+            tracing::warn!("Mesh JWT validation failed: {}", e);
+            AuthFailure("Invalid mesh JWT")
+        })?;
 
         // Verify mesh_id matches expected mesh (use mesh_id if set, otherwise mesh_name)
-        let expected_mesh_id = self.config.mesh_id.as_ref().unwrap_or(&self.config.mesh_name);
+        let expected_mesh_id = self
+            .config
+            .mesh_id
+            .as_ref()
+            .unwrap_or(&self.config.mesh_name);
         if &token_data.claims.mesh_id != expected_mesh_id {
             tracing::warn!(
                 "Mesh JWT mesh_id mismatch: expected '{}', got '{}'",
@@ -436,18 +480,21 @@ impl MeshAuthMiddleware {
         let mut validation = Validation::new(Algorithm::RS256);
         validation.validate_exp = true;
         validation.leeway = 60; // 60 second leeway
-        // The issuer is deliberately left unset, which skips the `iss` check.
-        // Runbeam tokens carry the mesh id as issuer and `mesh_id` is compared
-        // below. An empty issuer set would reject every token with an `iss`.
+                                // The issuer is deliberately left unset, which skips the `iss` check.
+                                // Runbeam tokens carry the mesh id as issuer and `mesh_id` is compared
+                                // below. An empty issuer set would reject every token with an `iss`.
 
-        let token_data = decode::<MeshClaims>(token, &decoding_key, &validation)
-            .map_err(|e| {
-                tracing::warn!("Mesh JWT validation failed: {}", e);
-                AuthFailure("Invalid mesh JWT")
-            })?;
+        let token_data = decode::<MeshClaims>(token, &decoding_key, &validation).map_err(|e| {
+            tracing::warn!("Mesh JWT validation failed: {}", e);
+            AuthFailure("Invalid mesh JWT")
+        })?;
 
         // Verify mesh_id matches expected mesh (use mesh_id if set, otherwise mesh_name)
-        let expected_mesh_id = self.config.mesh_id.as_ref().unwrap_or(&self.config.mesh_name);
+        let expected_mesh_id = self
+            .config
+            .mesh_id
+            .as_ref()
+            .unwrap_or(&self.config.mesh_name);
         if &token_data.claims.mesh_id != expected_mesh_id {
             tracing::warn!(
                 "Mesh JWT mesh_id mismatch: expected '{}', got '{}'",
@@ -512,11 +559,10 @@ impl MeshAuthMiddleware {
         }
 
         // Find the key
-        let key = Self::find_key_in_jwks(&jwks.keys, kid)
-            .ok_or_else(|| {
-                tracing::warn!("Key ID '{}' not found in JWKS", kid);
-                AuthFailure("Key not found in JWKS")
-            })?;
+        let key = Self::find_key_in_jwks(&jwks.keys, kid).ok_or_else(|| {
+            tracing::warn!("Key ID '{}' not found in JWKS", kid);
+            AuthFailure("Key not found in JWKS")
+        })?;
 
         Self::jwk_to_decoding_key(&key)
     }
@@ -638,10 +684,10 @@ impl Middleware for MeshAuthMiddleware {
         envelope.set_target_header("Authorization", format!("Bearer {}", jwt));
 
         // Also add to metadata for visibility
-        envelope.request_details.metadata.insert(
-            "mesh_auth_token_attached".to_string(),
-            "true".to_string(),
-        );
+        envelope
+            .request_details
+            .metadata
+            .insert("mesh_auth_token_attached".to_string(), "true".to_string());
 
         tracing::info!(
             "MeshAuth: attached JWT for egress to mesh '{}'",
@@ -691,31 +737,34 @@ pub fn parse_config_with_context(
         (name, mesh)
     } else if let Some(cfg) = config {
         // Try to infer from config
-        let enabled_meshes: Vec<_> = cfg.mesh.iter()
-            .filter(|(_, m)| m.enabled)
-            .collect();
-        
+        let enabled_meshes: Vec<_> = cfg.mesh.iter().filter(|(_, m)| m.enabled).collect();
+
         match enabled_meshes.len() {
-            0 => return Err("mesh_name is required for mesh_auth middleware (no meshes configured)".to_string()),
+            0 => {
+                return Err(
+                    "mesh_name is required for mesh_auth middleware (no meshes configured)"
+                        .to_string(),
+                )
+            }
             1 => {
                 let (name, mesh) = enabled_meshes.into_iter().next().unwrap();
                 tracing::debug!("Inferred mesh_name '{}' for mesh_auth middleware", name);
                 (name.clone(), Some(mesh))
             }
-            _ => return Err(format!(
+            _ => {
+                return Err(format!(
                 "mesh_name is required for mesh_auth middleware (multiple meshes configured: {})",
                 enabled_meshes.iter().map(|(n, _)| n.as_str()).collect::<Vec<_>>().join(", ")
-            )),
+            ))
+            }
         }
     } else {
         return Err("mesh_name is required for mesh_auth middleware".to_string());
     };
 
     // Get provider - prefer options, fall back to mesh config, default to local
-    let provider_str = options
-        .get("provider")
-        .and_then(|v| v.as_str());
-    
+    let provider_str = options.get("provider").and_then(|v| v.as_str());
+
     let provider = if let Some(p) = provider_str {
         match p {
             "local" => MeshProvider::Local,
@@ -808,7 +857,9 @@ pub fn parse_config_with_context(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::models::envelope::envelope::{RequestDetails, RequestEnvelopeBuilder, ResponseDetails};
+    use crate::models::envelope::envelope::{
+        RequestDetails, RequestEnvelopeBuilder, ResponseDetails,
+    };
     use std::collections::HashMap;
 
     fn create_test_request_envelope() -> RequestEnvelope<serde_json::Value> {
@@ -879,7 +930,9 @@ mod tests {
             None, // destination_url
         );
         assert!(result.is_err());
-        assert!(result.unwrap_err().contains("jwt_secret or jwt_private_key_path"));
+        assert!(result
+            .unwrap_err()
+            .contains("jwt_secret or jwt_private_key_path"));
     }
 
     #[test]
@@ -931,11 +984,18 @@ mod tests {
         // Check that target_details has the Authorization header
         let target = processed.target_details.as_ref().unwrap();
         assert!(target.headers.contains_key("Authorization"));
-        assert!(target.headers.get("Authorization").unwrap().starts_with("Bearer "));
+        assert!(target
+            .headers
+            .get("Authorization")
+            .unwrap()
+            .starts_with("Bearer "));
 
         // Check metadata
         assert_eq!(
-            processed.request_details.metadata.get("mesh_auth_token_attached"),
+            processed
+                .request_details
+                .metadata
+                .get("mesh_auth_token_attached"),
             Some(&"true".to_string())
         );
     }

@@ -444,13 +444,16 @@ impl ServiceHandler<Value> for HttpEndpoint {
         envelope.target_details = Some(target_details.clone());
 
         // Check if HTTP/3 (QUIC) is requested
-        let use_http3 = connection_config
-            .as_ref()
-            .is_some_and(|c| c.is_http3());
+        let use_http3 = connection_config.as_ref().is_some_and(|c| c.is_http3());
 
         let (status, response_headers, body_bytes) = if use_http3 {
-            self.make_http3_request(&connection_config.unwrap(), &target_details, &envelope, options)
-                .await?
+            self.make_http3_request(
+                &connection_config.unwrap(),
+                &target_details,
+                &envelope,
+                options,
+            )
+            .await?
         } else {
             self.make_http_request(&target_details, &envelope, options)
                 .await?
@@ -637,12 +640,7 @@ impl HttpEndpoint {
         let body_bytes = response
             .bytes()
             .await
-            .map_err(|e| {
-                Error::from(format!(
-                    "Failed to read response body: {}",
-                    e.without_url()
-                ))
-            })?
+            .map_err(|e| Error::from(format!("Failed to read response body: {}", e.without_url())))?
             .to_vec();
 
         Ok((status, response_headers, body_bytes))
@@ -660,10 +658,12 @@ impl HttpEndpoint {
 
         // Create HTTP/3 client - with custom CA if provided
         let client = if let Some(ref ca_path) = conn.ca_cert_path {
-            let ca_pem = std::fs::read_to_string(ca_path)
-                .map_err(|e| Error::from(format!("Failed to read CA cert at {}: {}", ca_path, e)))?;
-            Http3Client::with_ca_cert(&ca_pem)
-                .map_err(|e| Error::from(format!("Failed to create HTTP/3 client with CA: {}", e)))?
+            let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
+                Error::from(format!("Failed to read CA cert at {}: {}", ca_path, e))
+            })?;
+            Http3Client::with_ca_cert(&ca_pem).map_err(|e| {
+                Error::from(format!("Failed to create HTTP/3 client with CA: {}", e))
+            })?
         } else {
             Http3Client::new()
                 .map_err(|e| Error::from(format!("Failed to create HTTP/3 client: {}", e)))?
@@ -855,7 +855,11 @@ mod tests {
     async fn send_error_does_not_contain_search_values() {
         let marker = "DOE-PHI-MARKER";
         let err = HttpEndpoint {}
-            .make_http_request(&search_target(1, marker), &empty_envelope(), &HashMap::new())
+            .make_http_request(
+                &search_target(1, marker),
+                &empty_envelope(),
+                &HashMap::new(),
+            )
             .await
             .err()
             .expect("port 1 must refuse the connection");
@@ -871,7 +875,11 @@ mod tests {
         let (log, _guard) = crate::logging::test_capture::capture_debug();
         let marker = "DOE-PHI-MARKER";
         let _ = HttpEndpoint {}
-            .make_http_request(&search_target(1, marker), &empty_envelope(), &HashMap::new())
+            .make_http_request(
+                &search_target(1, marker),
+                &empty_envelope(),
+                &HashMap::new(),
+            )
             .await;
 
         let text = log.contents();
@@ -895,7 +903,9 @@ mod tests {
             "base_url".to_string(),
             Value::String("http://127.0.0.1:1".to_string()),
         );
-        let _ = HttpEndpoint {}.backend_outgoing_request(envelope, &options).await;
+        let _ = HttpEndpoint {}
+            .backend_outgoing_request(envelope, &options)
+            .await;
 
         let text = log.contents();
         assert!(
@@ -923,7 +933,9 @@ mod tests {
             "base_url".to_string(),
             Value::String("http://127.0.0.1:1".to_string()),
         );
-        let _ = HttpEndpoint {}.backend_outgoing_request(envelope, &options).await;
+        let _ = HttpEndpoint {}
+            .backend_outgoing_request(envelope, &options)
+            .await;
 
         let text = log.contents();
         assert!(
@@ -953,13 +965,20 @@ mod tests {
 
         let marker = "DOE-PHI-MARKER";
         let err = HttpEndpoint {}
-            .make_http_request(&search_target(port, marker), &empty_envelope(), &HashMap::new())
+            .make_http_request(
+                &search_target(port, marker),
+                &empty_envelope(),
+                &HashMap::new(),
+            )
             .await
             .err()
             .expect("a truncated body must fail");
 
         let text = format!("{} {:?}", err, err);
-        assert!(text.contains("Failed to read response body"), "error: {text}");
+        assert!(
+            text.contains("Failed to read response body"),
+            "error: {text}"
+        );
         assert!(!text.contains(marker), "search values leaked: {text}");
         assert!(!text.contains("birthdate"), "query string leaked: {text}");
     }

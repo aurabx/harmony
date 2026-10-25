@@ -2271,12 +2271,11 @@ mod tests {
         );
 
         // Instances built with a different key do not inherit the bucket.
-        let mw_c =
-            PoliciesMiddleware::with_instance_key(build_config(), "different-key").unwrap();
+        let mw_c = PoliciesMiddleware::with_instance_key(build_config(), "different-key").unwrap();
         let env = create_test_envelope("10.0.0.42");
-        mw_c.left(env).await.expect(
-            "different instance_key must not share state with the previous key",
-        );
+        mw_c.left(env)
+            .await
+            .expect("different instance_key must not share state with the previous key");
     }
 
     /// The registry must spawn exactly one cleanup task per instance key. The
@@ -4096,7 +4095,11 @@ mod tests {
         .unwrap();
 
         let reason = rules.check_peer(peer("10.1.2.3")).unwrap_err();
-        assert!(reason.contains("blocked"), "reason should name the rule: {}", reason);
+        assert!(
+            reason.contains("blocked"),
+            "reason should name the rule: {}",
+            reason
+        );
         assert!(rules.check_peer(peer("192.168.1.1")).is_ok());
     }
 

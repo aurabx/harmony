@@ -131,7 +131,11 @@ impl PipelineExecutor {
         config: &Config,
         ctx: &ProtocolCtx,
     ) -> Result<ResponseEnvelope<Vec<u8>>, PipelineError> {
-        tracing::info!("Executing pipeline '{}' for protocol: {:?}", pipeline_name, ctx.protocol);
+        tracing::info!(
+            "Executing pipeline '{}' for protocol: {:?}",
+            pipeline_name,
+            ctx.protocol
+        );
 
         // 1. Endpoint service preprocessing
         let envelope = Self::process_endpoint_incoming(envelope, pipeline, config).await?;
@@ -140,7 +144,8 @@ impl PipelineExecutor {
         let envelope = Self::resolve_target_details(envelope, pipeline, config).await?;
 
         // 3. Incoming middleware chain (left)
-        let envelope = Self::process_incoming_middleware(envelope, pipeline_name, pipeline, config).await?;
+        let envelope =
+            Self::process_incoming_middleware(envelope, pipeline_name, pipeline, config).await?;
 
         // 4. Backend invocation
         let response = Self::process_backends(envelope, pipeline, config).await?;
@@ -206,33 +211,42 @@ impl PipelineExecutor {
         config: &Config,
         ctx: &ProtocolCtx,
     ) -> Result<ResponseStream, PipelineError> {
-        tracing::info!("Executing streaming pipeline '{}' for protocol: {:?}", pipeline_name, ctx.protocol);
+        tracing::info!(
+            "Executing streaming pipeline '{}' for protocol: {:?}",
+            pipeline_name,
+            ctx.protocol
+        );
 
         // 1. Endpoint service preprocessing (same as non-streaming)
         let envelope = Self::process_endpoint_incoming(envelope, pipeline, config).await?;
 
         // 2. Incoming middleware chain (same as non-streaming)
-        let envelope = Self::process_incoming_middleware(envelope, pipeline_name, pipeline, config).await?;
+        let envelope =
+            Self::process_incoming_middleware(envelope, pipeline_name, pipeline, config).await?;
 
         // 3. Get streaming backend and invoke it
-        let backend_name = pipeline.backends.first()
+        let backend_name = pipeline
+            .backends
+            .first()
             .ok_or_else(|| PipelineError::ConfigError("No backends in pipeline".to_string()))?;
 
-        let backend = config.backends.get(backend_name)
-            .ok_or_else(|| PipelineError::ConfigError(format!("Backend '{}' not found", backend_name)))?;
+        let backend = config.backends.get(backend_name).ok_or_else(|| {
+            PipelineError::ConfigError(format!("Backend '{}' not found", backend_name))
+        })?;
 
         // 4. Get response stream from backend
         // We create the backend instance directly to access StreamingBackend trait
         let response_stream = match backend.service.to_lowercase().as_str() {
             "dicom_scu_streaming" => {
                 // Create a DicomScuStreamingBackend instance
-                let streaming_backend = crate::models::services::types::dicom_scu_streaming::DicomScuStreamingBackend {
-                    local_aet: None,
-                    aet: None,
-                    host: None,
-                    port: None,
-                    use_tls: None,
-                };
+                let streaming_backend =
+                    crate::models::services::types::dicom_scu_streaming::DicomScuStreamingBackend {
+                        local_aet: None,
+                        aet: None,
+                        host: None,
+                        port: None,
+                        use_tls: None,
+                    };
 
                 streaming_backend
                     .backend_outgoing_stream(
@@ -240,16 +254,19 @@ impl PipelineExecutor {
                         backend.options.as_ref().unwrap_or(&HashMap::new()),
                     )
                     .await
-                    .map_err(|e| PipelineError::BackendError(format!("Streaming backend failed: {}", e)))?
+                    .map_err(|e| {
+                        PipelineError::BackendError(format!("Streaming backend failed: {}", e))
+                    })?
             }
             "http_streaming_backend" => {
                 // Create an HttpStreamingBackend instance
-                let streaming_backend = crate::models::services::types::http_streaming_backend::HttpStreamingBackend {
-                    base_url: None,
-                    format: None,
-                    chunk_timeout_secs: None,
-                    max_chunk_size: None,
-                };
+                let streaming_backend =
+                    crate::models::services::types::http_streaming_backend::HttpStreamingBackend {
+                        base_url: None,
+                        format: None,
+                        chunk_timeout_secs: None,
+                        max_chunk_size: None,
+                    };
 
                 streaming_backend
                     .backend_outgoing_stream(
@@ -257,15 +274,15 @@ impl PipelineExecutor {
                         backend.options.as_ref().unwrap_or(&HashMap::new()),
                     )
                     .await
-                    .map_err(|e| PipelineError::BackendError(format!("Streaming backend failed: {}", e)))?
+                    .map_err(|e| {
+                        PipelineError::BackendError(format!("Streaming backend failed: {}", e))
+                    })?
             }
             _ => {
-                return Err(PipelineError::BackendError(
-                    format!(
-                        "Backend '{}' (service type: '{}') does not support streaming",
-                        backend_name, backend.service
-                    )
-                ));
+                return Err(PipelineError::BackendError(format!(
+                    "Backend '{}' (service type: '{}') does not support streaming",
+                    backend_name, backend.service
+                )));
             }
         };
 
@@ -288,17 +305,14 @@ impl PipelineExecutor {
                             response_envelope,
                             &pipeline,
                             &config,
-                        ).await
+                        )
+                        .await
                         .map_err(|e| Error::from(e.to_string()))?;
 
                         // Apply endpoint post-processing
-                        Self::process_endpoint_outgoing(
-                            &mut processed,
-                            &pipeline,
-                            &config,
-                            &ctx,
-                        ).await
-                        .map_err(|e| Error::from(e.to_string()))?;
+                        Self::process_endpoint_outgoing(&mut processed, &pipeline, &config, &ctx)
+                            .await
+                            .map_err(|e| Error::from(e.to_string()))?;
 
                         Ok(processed)
                     }
@@ -366,7 +380,9 @@ impl PipelineExecutor {
 
             // Add protocol to metadata if available
             if let Some(protocol) = &conn.protocol {
-                target.metadata.insert("protocol".to_string(), protocol.clone());
+                target
+                    .metadata
+                    .insert("protocol".to_string(), protocol.clone());
             }
         } else if let Some(base_url) = backend
             .options
@@ -384,10 +400,14 @@ impl PipelineExecutor {
 
         // Add reliability settings to metadata
         if let Some(timeout) = backend.timeout_secs {
-            target.metadata.insert("timeout_secs".to_string(), timeout.to_string());
+            target
+                .metadata
+                .insert("timeout_secs".to_string(), timeout.to_string());
         }
         if let Some(retries) = backend.max_retries {
-            target.metadata.insert("max_retries".to_string(), retries.to_string());
+            target
+                .metadata
+                .insert("max_retries".to_string(), retries.to_string());
         }
 
         tracing::debug!(
@@ -401,7 +421,6 @@ impl PipelineExecutor {
         envelope.target_details = Some(target);
         Ok(envelope)
     }
-
 
     /// Process endpoint incoming request
     async fn process_endpoint_incoming(
@@ -485,14 +504,12 @@ impl PipelineExecutor {
 
         // Build middleware instances from pipeline config
         let mut middleware_instances: Vec<Box<dyn Middleware>> =
-            build_middleware_instances_for_pipeline(&left_chain, config).map_err(
-                |err| {
-                    PipelineError::MiddlewareError(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        err,
-                    )))
-                },
-            )?;
+            build_middleware_instances_for_pipeline(&left_chain, config).map_err(|err| {
+                PipelineError::MiddlewareError(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    err,
+                )))
+            })?;
 
         // Auto-inject MeshAuth middleware based on mesh context
         Self::inject_mesh_auth_middleware(
@@ -682,18 +699,12 @@ impl PipelineExecutor {
                 );
 
                 if let Some(ref dest_url) = destination_url {
-                    let mesh_match = Self::find_mesh_for_egress(
-                        pipeline_name,
-                        pipeline,
-                        dest_url,
-                        config,
-                    );
+                    let mesh_match =
+                        Self::find_mesh_for_egress(pipeline_name, pipeline, dest_url, config);
 
                     // Check if any egress for this pipeline has mode=mesh
-                    let egress_requires_mesh = Self::pipeline_egress_requires_mesh(
-                        pipeline_name,
-                        config,
-                    );
+                    let egress_requires_mesh =
+                        Self::pipeline_egress_requires_mesh(pipeline_name, config);
 
                     if let Some((mesh_name, mesh)) = mesh_match {
                         if mesh.enabled {
@@ -826,7 +837,10 @@ impl PipelineExecutor {
             });
 
             if !has_pipeline_egress {
-                tracing::debug!("  Mesh '{}' has no matching pipeline egress, skipping", mesh_name);
+                tracing::debug!(
+                    "  Mesh '{}' has no matching pipeline egress, skipping",
+                    mesh_name
+                );
                 continue;
             }
 
@@ -839,7 +853,13 @@ impl PipelineExecutor {
                     }
 
                     for url_str in &ingress.urls {
-                        if Self::url_matches_pattern(dest_scheme, dest_host, dest_port, dest_path, url_str) {
+                        if Self::url_matches_pattern(
+                            dest_scheme,
+                            dest_host,
+                            dest_port,
+                            dest_path,
+                            url_str,
+                        ) {
                             tracing::debug!(
                                 "Egress destination '{}' matches local ingress '{}' in mesh '{}'",
                                 destination_url,
@@ -854,7 +874,13 @@ impl PipelineExecutor {
                 // Then check remote ingress definitions
                 if let Some(remote_ingress) = config.remote_ingress.get(ingress_name) {
                     for url_str in &remote_ingress.urls {
-                        if Self::url_matches_pattern(dest_scheme, dest_host, dest_port, dest_path, url_str) {
+                        if Self::url_matches_pattern(
+                            dest_scheme,
+                            dest_host,
+                            dest_port,
+                            dest_path,
+                            url_str,
+                        ) {
                             tracing::debug!(
                                 "Egress destination '{}' matches remote ingress '{}' in mesh '{}'",
                                 destination_url,
@@ -1081,15 +1107,13 @@ impl PipelineExecutor {
         })?;
 
         // Build middleware instances
-        let middleware_instances =
-            build_middleware_instances_for_pipeline(&right_chain, config).map_err(
-                |err| {
-                    PipelineError::MiddlewareError(Box::new(std::io::Error::new(
-                        std::io::ErrorKind::InvalidInput,
-                        err,
-                    )))
-                },
-            )?;
+        let middleware_instances = build_middleware_instances_for_pipeline(&right_chain, config)
+            .map_err(|err| {
+                PipelineError::MiddlewareError(Box::new(std::io::Error::new(
+                    std::io::ErrorKind::InvalidInput,
+                    err,
+                )))
+            })?;
 
         let middleware_chain = MiddlewareChain::new(middleware_instances);
 
@@ -1351,10 +1375,7 @@ mod tests {
         let envelope = RequestEnvelope::builder()
             .method("GET")
             .uri("/users?id=123")
-            .query_params(HashMap::from([(
-                "id".to_string(),
-                vec!["123".to_string()],
-            )]))
+            .query_params(HashMap::from([("id".to_string(), vec!["123".to_string()])]))
             .header("x-custom", "value")
             .original_data(vec![])
             .build()
@@ -1547,7 +1568,9 @@ mod tests {
 
     #[test]
     fn test_find_mesh_for_egress_matching() {
-        use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider};
+        use crate::models::mesh::config::{
+            Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider,
+        };
         use crate::models::pipelines::config::Pipeline;
 
         let mut config = Config::default();
@@ -1609,7 +1632,9 @@ mod tests {
 
     #[test]
     fn test_find_mesh_for_egress_no_match_wrong_destination() {
-        use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider};
+        use crate::models::mesh::config::{
+            Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider,
+        };
         use crate::models::pipelines::config::Pipeline;
 
         let mut config = Config::default();
@@ -1664,7 +1689,9 @@ mod tests {
 
     #[test]
     fn test_find_mesh_for_egress_no_match_pipeline_not_in_mesh() {
-        use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider};
+        use crate::models::mesh::config::{
+            Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider,
+        };
         use crate::models::pipelines::config::Pipeline;
 
         let mut config = Config::default();
@@ -1720,7 +1747,9 @@ mod tests {
 
     #[test]
     fn test_find_mesh_for_egress_disabled_mesh_ignored() {
-        use crate::models::mesh::config::{Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider};
+        use crate::models::mesh::config::{
+            Mesh, MeshEgress, MeshIngress, MeshProtocol, MeshProvider,
+        };
         use crate::models::pipelines::config::Pipeline;
 
         let mut config = Config::default();

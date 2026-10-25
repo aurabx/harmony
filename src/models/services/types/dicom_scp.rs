@@ -175,8 +175,9 @@ impl ServiceType for DicomScpEndpoint {
         if !enable_echo && !enable_find && !enable_move && !enable_get && !enable_store {
             return Err(ConfigError::InvalidEndpoint {
                 name: "dicom_scp".to_string(),
-                reason: "At least one DIMSE operation must be enabled (echo, find, move, get, or store)"
-                    .to_string(),
+                reason:
+                    "At least one DIMSE operation must be enabled (echo, find, move, get, or store)"
+                        .to_string(),
             });
         }
 
@@ -247,12 +248,15 @@ impl ServiceHandler<Value> for DicomScpEndpoint {
         // Validate that a supported Command was set by build_protocol_envelope
         use crate::models::envelope::command::Operation;
         match envelope.resolve_operation() {
-            Some(Operation::Query | Operation::Retrieve | Operation::Move | Operation::Store | Operation::Ping) => {}
+            Some(
+                Operation::Query
+                | Operation::Retrieve
+                | Operation::Move
+                | Operation::Store
+                | Operation::Ping,
+            ) => {}
             Some(op) => {
-                return Err(Error::from(format!(
-                    "Unsupported DICOM operation: {}",
-                    op
-                )));
+                return Err(Error::from(format!("Unsupported DICOM operation: {}", op)));
             }
             None => {
                 return Err(Error::from("Missing Command on DIMSE request envelope"));

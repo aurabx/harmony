@@ -47,7 +47,7 @@ pub async fn start_cloud_polling_when_ready(
     shutdown: CancellationToken,
 ) -> mpsc::UnboundedSender<()> {
     let (ready_tx, ready_rx) = mpsc::unbounded_channel();
-    
+
     tokio::spawn(async move {
         start_cloud_polling_with_ready(
             client,
@@ -59,7 +59,7 @@ pub async fn start_cloud_polling_when_ready(
         )
         .await;
     });
-    
+
     ready_tx
 }
 
@@ -126,19 +126,28 @@ async fn start_cloud_polling_with_ready(
             Ok(()) => {
                 // Reset error counter on success
                 if consecutive_errors > 0 {
-                    tracing::info!("Cloud polling recovered after {} errors", consecutive_errors);
+                    tracing::info!(
+                        "Cloud polling recovered after {} errors",
+                        consecutive_errors
+                    );
                     consecutive_errors = 0;
                 }
             }
             Err(e) => {
                 // Check if it's an authorization error or missing token
-                if e.contains("401") || e.contains("403") || e.contains("Unauthorized") || e.contains("Forbidden") {
+                if e.contains("401")
+                    || e.contains("403")
+                    || e.contains("Unauthorized")
+                    || e.contains("Forbidden")
+                {
                     tracing::error!("Authorization failed: {}. Stopping cloud polling.", e);
                     break;
                 }
 
                 // Check if machine token is missing (gateway not authorized)
-                if e.contains("No machine token found") || e.contains("Failed to load machine token") {
+                if e.contains("No machine token found")
+                    || e.contains("Failed to load machine token")
+                {
                     tracing::warn!("Machine token not found. Gateway needs to be authorized. Stopping cloud polling.");
                     break;
                 }
@@ -310,8 +319,7 @@ async fn poll_and_apply_changes(
         }
 
         // Write config file (file watcher will detect and apply)
-        match write_cloud_config(&detail.id, &detail.resource_type, toml_config, config_dir).await
-        {
+        match write_cloud_config(&detail.id, &detail.resource_type, toml_config, config_dir).await {
             Ok(path) => {
                 tracing::info!(
                     "✓ Wrote config change {} to {} (file watcher will apply)",
@@ -683,7 +691,8 @@ pub async fn push_config_on_startup(
                 let path = entry.path();
                 if path.extension().map_or(false, |ext| ext == "toml") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
-                        let filename = path.file_name()
+                        let filename = path
+                            .file_name()
                             .unwrap_or_default()
                             .to_str()
                             .unwrap_or("")
@@ -703,7 +712,8 @@ pub async fn push_config_on_startup(
                             Err(e) => {
                                 tracing::warn!(
                                     "Failed to push pipeline config {}: {}",
-                                    filename, e
+                                    filename,
+                                    e
                                 );
                             }
                         }
@@ -726,12 +736,14 @@ pub async fn push_config_on_startup(
                 // Transforms are .json files (JOLT specs) - wrap in TOML format
                 if path.extension().map_or(false, |ext| ext == "json") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
-                        let filename = path.file_name()
+                        let filename = path
+                            .file_name()
                             .unwrap_or_default()
                             .to_str()
                             .unwrap_or("")
                             .to_string();
-                        let name = path.file_stem()
+                        let name = path
+                            .file_stem()
                             .unwrap_or_default()
                             .to_str()
                             .unwrap_or("")
@@ -756,7 +768,8 @@ pub async fn push_config_on_startup(
                             Err(e) => {
                                 tracing::warn!(
                                     "Failed to push transform config {}: {}",
-                                    filename, e
+                                    filename,
+                                    e
                                 );
                             }
                         }
@@ -778,7 +791,8 @@ pub async fn push_config_on_startup(
                 let path = entry.path();
                 if path.extension().map_or(false, |ext| ext == "toml") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
-                        let filename = path.file_name()
+                        let filename = path
+                            .file_name()
                             .unwrap_or_default()
                             .to_str()
                             .unwrap_or("")
@@ -796,10 +810,7 @@ pub async fn push_config_on_startup(
                                 );
                             }
                             Err(e) => {
-                                tracing::warn!(
-                                    "Failed to push mesh config {}: {}",
-                                    filename, e
-                                );
+                                tracing::warn!("Failed to push mesh config {}: {}", filename, e);
                             }
                         }
                     }

@@ -129,7 +129,14 @@ async fn test_dicom_echo_to_qrscp() {
     let (mut qr_child, port, _base) = spawn_dcmqrscp(verbose).await;
 
     let output = Command::new("echoscu")
-        .args(["-aet", "TEST", "-aec", "QR_SCP", "localhost", &port.to_string()])
+        .args([
+            "-aet",
+            "TEST",
+            "-aec",
+            "QR_SCP",
+            "localhost",
+            &port.to_string(),
+        ])
         .output()
         .expect("echoscu failed");
 
@@ -249,14 +256,14 @@ fn test_setup_instructions() {
     println!("\n═══════════════════════════════════════════════════════════════");
     println!("  DICOM STREAMING INTEGRATION TESTS");
     println!("═══════════════════════════════════════════════════════════════\n");
-    
+
     println!("Self-contained tests (no external services required):");
     println!("  cargo test --test streaming_dicom_dcmtk\n");
-    
+
     println!("Tests that need a running Harmony are htest examples in harmony-examples:");
     println!("  htest --examples-dir . run dicom-scp");
     println!("  htest --examples-dir . run streaming-dicom   (skipped until AURA-2408 is fixed)\n");
-    
+
     println!("Available dcmtk tools:");
     let tools = ["echoscu", "findscu", "getscu", "storescu", "dcmqrscp"];
     for tool in &tools {
@@ -265,9 +272,12 @@ fn test_setup_instructions() {
                 let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
                 println!("  ✓ {} -> {}", tool, path);
             }
-            _ => println!("  ✗ {} (not found - install with: brew install dcmtk)", tool),
+            _ => println!(
+                "  ✗ {} (not found - install with: brew install dcmtk)",
+                tool
+            ),
         }
     }
-    
+
     println!("\n═══════════════════════════════════════════════════════════════\n");
 }

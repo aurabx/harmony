@@ -122,7 +122,9 @@ async fn test_cstore_filesystem_backend() {
     assert!(dimse_dir.exists(), "dimse storage directory should exist");
 
     let mut found = false;
-    let mut entries = tokio::fs::read_dir(&dimse_dir).await.expect("read dimse dir");
+    let mut entries = tokio::fs::read_dir(&dimse_dir)
+        .await
+        .expect("read dimse dir");
     while let Some(entry) = entries.next_entry().await.expect("next entry") {
         if entry
             .path()

@@ -440,8 +440,14 @@ fn compressed_instance() -> DatasetStream {
     for (tag, value) in [
         (tags::SOP_CLASS_UID, uids::SECONDARY_CAPTURE_IMAGE_STORAGE),
         (tags::SOP_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.5"),
-        (tags::STUDY_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.6"),
-        (tags::SERIES_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.7"),
+        (
+            tags::STUDY_INSTANCE_UID,
+            "1.2.826.0.1.3680043.9.7133.2470.6",
+        ),
+        (
+            tags::SERIES_INSTANCE_UID,
+            "1.2.826.0.1.3680043.9.7133.2470.7",
+        ),
     ] {
         object.put(DataElement::new(tag, VR::UI, PrimitiveValue::from(value)));
     }

@@ -50,7 +50,7 @@ backends = ["test_backend"]
 
     // Load the config using the harmony configuration system
     let contents = fs::read_to_string(&config_path).expect("Failed to read config");
-    
+
     // Verify that the raw content has environment variable references
     assert!(contents.contains("$TEST_PROXY_ID"));
     assert!(contents.contains("$TEST_LOG_LEVEL"));
@@ -69,19 +69,27 @@ backends = ["test_backend"]
     assert!(!substituted.contains("$TEST_HOST"));
 
     // Verify it can be parsed as valid TOML
-    let parsed: toml::Table = toml::from_str(&substituted).expect("Failed to parse substituted config");
-    
+    let parsed: toml::Table =
+        toml::from_str(&substituted).expect("Failed to parse substituted config");
+
     // Verify values were substituted correctly
     assert_eq!(
-        parsed.get("proxy").and_then(|p| p.get("id")).and_then(|v| v.as_str()),
+        parsed
+            .get("proxy")
+            .and_then(|p| p.get("id"))
+            .and_then(|v| v.as_str()),
         Some("test-proxy")
     );
     assert_eq!(
-        parsed.get("logging").and_then(|l| l.get("log_level")).and_then(|v| v.as_str()),
+        parsed
+            .get("logging")
+            .and_then(|l| l.get("log_level"))
+            .and_then(|v| v.as_str()),
         Some("info")
     );
     assert_eq!(
-        parsed.get("network")
+        parsed
+            .get("network")
             .and_then(|n| n.get("test_network"))
             .and_then(|tn| tn.get("http"))
             .and_then(|h| h.get("bind_address"))
@@ -89,7 +97,8 @@ backends = ["test_backend"]
         Some("127.0.0.1")
     );
     assert_eq!(
-        parsed.get("network")
+        parsed
+            .get("network")
             .and_then(|n| n.get("test_network"))
             .and_then(|tn| tn.get("http"))
             .and_then(|h| h.get("bind_port"))
@@ -145,11 +154,15 @@ backends = ["test_backend"]
 
     // Verify the missing variable was replaced with empty string
     assert!(substituted.contains("id = \"\""));
-    
+
     // Verify it can still be parsed as valid TOML
-    let parsed: toml::Table = toml::from_str(&substituted).expect("Failed to parse substituted config");
+    let parsed: toml::Table =
+        toml::from_str(&substituted).expect("Failed to parse substituted config");
     assert_eq!(
-        parsed.get("proxy").and_then(|p| p.get("id")).and_then(|v| v.as_str()),
+        parsed
+            .get("proxy")
+            .and_then(|p| p.get("id"))
+            .and_then(|v| v.as_str()),
         Some("")
     );
 }
@@ -196,9 +209,13 @@ backends = ["test_backend"]
     assert!(!substituted.contains("$$100"));
 
     // Verify it can be parsed as valid TOML
-    let parsed: toml::Table = toml::from_str(&substituted).expect("Failed to parse substituted config");
+    let parsed: toml::Table =
+        toml::from_str(&substituted).expect("Failed to parse substituted config");
     assert_eq!(
-        parsed.get("proxy").and_then(|p| p.get("description")).and_then(|v| v.as_str()),
+        parsed
+            .get("proxy")
+            .and_then(|p| p.get("description"))
+            .and_then(|v| v.as_str()),
         Some("Cost is $100")
     );
 }

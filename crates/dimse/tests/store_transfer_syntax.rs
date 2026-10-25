@@ -143,7 +143,10 @@ fn free_port() -> u16 {
 
 async fn wait_for_port(port: u16) {
     for _ in 0..250 {
-        if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+        if tokio::net::TcpStream::connect(("127.0.0.1", port))
+            .await
+            .is_ok()
+        {
             return;
         }
         tokio::time::sleep(Duration::from_millis(20)).await;
@@ -221,7 +224,11 @@ async fn a_compressed_instance_arrives_in_its_own_transfer_syntax() {
     assert!(stored);
 
     let received = received.lock().unwrap();
-    assert_eq!(received.len(), 1, "the SCP should hold exactly one instance");
+    assert_eq!(
+        received.len(),
+        1,
+        "the SCP should hold exactly one instance"
+    );
     assert_eq!(
         received[0].transfer_syntax.as_deref(),
         Some(JPEG_LOSSLESS_SV1),
@@ -250,7 +257,11 @@ async fn the_scp_records_the_transfer_syntax_of_an_uncompressed_instance() {
         .expect("the SCP accepts every transfer syntax");
 
     let received = received.lock().unwrap();
-    assert_eq!(received.len(), 1, "the SCP should hold exactly one instance");
+    assert_eq!(
+        received.len(),
+        1,
+        "the SCP should hold exactly one instance"
+    );
     // The SCU proposes the instance's transfer syntax first, and the SCP
     // takes the first one it supports.
     assert_eq!(
@@ -277,7 +288,11 @@ async fn a_deflated_instance_is_sent_as_explicit_vr() {
         .expect("the SCP accepts every transfer syntax");
 
     let received = received.lock().unwrap();
-    assert_eq!(received.len(), 1, "the SCP should hold exactly one instance");
+    assert_eq!(
+        received.len(),
+        1,
+        "the SCP should hold exactly one instance"
+    );
     assert_eq!(
         received[0].transfer_syntax.as_deref(),
         Some(uids::EXPLICIT_VR_LITTLE_ENDIAN),
@@ -298,7 +313,11 @@ async fn an_instance_without_a_recorded_transfer_syntax_is_sent_as_implicit_vr()
         .expect("the SCP accepts every transfer syntax");
 
     let received = received.lock().unwrap();
-    assert_eq!(received.len(), 1, "the SCP should hold exactly one instance");
+    assert_eq!(
+        received.len(),
+        1,
+        "the SCP should hold exactly one instance"
+    );
     assert_eq!(
         received[0].transfer_syntax.as_deref(),
         Some(uids::IMPLICIT_VR_LITTLE_ENDIAN)
@@ -353,7 +372,11 @@ async fn a_compressed_part10_file_arrives_in_its_own_transfer_syntax() {
     assert!(stored);
 
     let received = received.lock().unwrap();
-    assert_eq!(received.len(), 1, "the SCP should hold exactly one instance");
+    assert_eq!(
+        received.len(),
+        1,
+        "the SCP should hold exactly one instance"
+    );
     assert_eq!(
         received[0].transfer_syntax.as_deref(),
         Some(JPEG_LOSSLESS_SV1)
@@ -429,7 +452,11 @@ async fn an_instance_without_pixel_data_is_sent_in_a_compressed_syntax() {
         .expect("an instance without pixel data is valid in any transfer syntax");
 
     let received = received.lock().unwrap();
-    assert_eq!(received.len(), 1, "the SCP should hold exactly one instance");
+    assert_eq!(
+        received.len(),
+        1,
+        "the SCP should hold exactly one instance"
+    );
     assert_eq!(
         received[0].transfer_syntax.as_deref(),
         Some(JPEG_LOSSLESS_SV1)
@@ -562,7 +589,9 @@ async fn a_pacs_without_the_compressed_syntax_still_takes_an_uncompressed_instan
     .expect("the store should end when the PACS closes the connection")
     .expect_err("the PACS never answers the C-STORE");
     assert!(
-        !error.to_string().contains("accepted no presentation context"),
+        !error
+            .to_string()
+            .contains("accepted no presentation context"),
         "the PACS should accept an uncompressed transfer syntax: {}",
         error
     );

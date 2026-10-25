@@ -449,8 +449,14 @@ fn compressed_instance() -> DatasetStream {
     for (tag, value) in [
         (tags::SOP_CLASS_UID, uids::SECONDARY_CAPTURE_IMAGE_STORAGE),
         (tags::SOP_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.2"),
-        (tags::STUDY_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.3"),
-        (tags::SERIES_INSTANCE_UID, "1.2.826.0.1.3680043.9.7133.2470.4"),
+        (
+            tags::STUDY_INSTANCE_UID,
+            "1.2.826.0.1.3680043.9.7133.2470.3",
+        ),
+        (
+            tags::SERIES_INSTANCE_UID,
+            "1.2.826.0.1.3680043.9.7133.2470.4",
+        ),
     ] {
         object.put(DataElement::new(tag, VR::UI, PrimitiveValue::from(value)));
     }
@@ -508,8 +514,7 @@ async fn dicom_scu_backend_sends_a_compressed_instance_in_its_own_transfer_synta
 #[tokio::test]
 #[serial_test::serial(recording_pacs)]
 async fn dicom_scu_streaming_backend_sends_a_compressed_instance_in_its_own_transfer_syntax() {
-    assert_pipeline_keeps_a_compressed_instance("to_pacs_streaming", "scp_to_pacs_streaming")
-        .await;
+    assert_pipeline_keeps_a_compressed_instance("to_pacs_streaming", "scp_to_pacs_streaming").await;
 }
 
 #[tokio::test]

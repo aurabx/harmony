@@ -91,7 +91,7 @@ pub async fn handle_c_get(
             response_builder::send_get_response(
                 association,
                 message_id,
-                0xC000, // Unable to process
+                e.status_code().unwrap_or(0xC000),
                 SubOperationCounts::default(),
                 presentation_context_id,
             )
@@ -112,6 +112,9 @@ pub async fn handle_c_get(
         ..SubOperationCounts::default()
     };
     let mut sub_operation: u16 = 0;
+    // Status of the first stream item that carried no dataset because the
+    // retrieval itself failed, when the error states one.
+    let mut first_item_failure_status: Option<u16> = None;
 
     while let Some(item) = datasets.next().await {
         if expected_total.is_some()
@@ -136,6 +139,9 @@ pub async fn handle_c_get(
                     "C-GET sub-operation {} has no dataset: {}",
                     sub_operation, e
                 );
+                if first_item_failure_status.is_none() {
+                    first_item_failure_status = e.status_code();
+                }
                 SubOperationResult::Failed
             }
         };
@@ -151,14 +157,18 @@ pub async fn handle_c_get(
 
     // The final response never carries a remaining count.
     counts.remaining = None;
-    let status = if counts.failed > 0 {
-        if counts.completed > 0 {
-            0xB000 // One or more failures (Warning)
-        } else {
-            0xA702 // Unable to perform sub-operations (Refused)
+    let status = match first_item_failure_status {
+        // Nothing reached the client because the retrieval failed, so the
+        // retrieval's own status is the answer.
+        Some(code) if counts.completed == 0 && counts.warning == 0 => code,
+        _ if counts.failed > 0 => {
+            if counts.completed > 0 {
+                0xB000 // One or more failures (Warning)
+            } else {
+                0xA702 // Unable to perform sub-operations (Refused)
+            }
         }
-    } else {
-        0x0000 // Success
+        _ => 0x0000, // Success
     };
 
     info!(

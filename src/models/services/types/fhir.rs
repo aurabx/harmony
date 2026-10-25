@@ -50,7 +50,15 @@ impl ServiceType for FhirEndpoint {
         // Return route configurations for GET/POST/PUT/DELETE methods
         vec![RouteConfig {
             path: format!("{}/{{*wildcard}}", path_prefix), // Use {*wildcard} syntax
-            methods: vec![Method::GET, Method::POST, Method::PUT, Method::PATCH, Method::DELETE, Method::HEAD, Method::OPTIONS],
+            methods: vec![
+                Method::GET,
+                Method::POST,
+                Method::PUT,
+                Method::PATCH,
+                Method::DELETE,
+                Method::HEAD,
+                Method::OPTIONS,
+            ],
             description: Some("Handles FHIR RESTful API requests".to_string()),
         }]
     }
@@ -261,13 +269,16 @@ impl ServiceHandler<Value> for FhirEndpoint {
         envelope.target_details = Some(target_details.clone());
 
         // Check if HTTP/3 (QUIC) is requested
-        let use_http3 = connection_config
-            .as_ref()
-            .is_some_and(|c| c.is_http3());
+        let use_http3 = connection_config.as_ref().is_some_and(|c| c.is_http3());
 
         let (status, mut response_headers, body_bytes) = if use_http3 {
-            self.make_http3_request(&connection_config.unwrap(), &target_details, &envelope, options)
-                .await?
+            self.make_http3_request(
+                &connection_config.unwrap(),
+                &target_details,
+                &envelope,
+                options,
+            )
+            .await?
         } else {
             self.make_http_request(&target_details, &envelope, options)
                 .await?
@@ -486,10 +497,12 @@ impl FhirEndpoint {
 
         // Create HTTP/3 client - with custom CA if provided
         let client = if let Some(ref ca_path) = conn.ca_cert_path {
-            let ca_pem = std::fs::read_to_string(ca_path)
-                .map_err(|e| Error::from(format!("Failed to read CA cert at {}: {}", ca_path, e)))?;
-            Http3Client::with_ca_cert(&ca_pem)
-                .map_err(|e| Error::from(format!("Failed to create HTTP/3 client with CA: {}", e)))?
+            let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
+                Error::from(format!("Failed to read CA cert at {}: {}", ca_path, e))
+            })?;
+            Http3Client::with_ca_cert(&ca_pem).map_err(|e| {
+                Error::from(format!("Failed to create HTTP/3 client with CA: {}", e))
+            })?
         } else {
             Http3Client::new()
                 .map_err(|e| Error::from(format!("Failed to create HTTP/3 client: {}", e)))?
@@ -783,9 +796,7 @@ mod tests {
         };
         let envelope = RequestEnvelope::new(request_details, vec![]);
 
-        let result = endpoint
-            .backend_outgoing_request(envelope, &options)
-            .await;
+        let result = endpoint.backend_outgoing_request(envelope, &options).await;
         // It will fail to connect, but we check if the error message implies it tried the correct URL
         // OR we can check the target details if we could intercept it.
         // Since we can't easily mock the HTTP client here, we'll rely on the fact that it *tries* to send.

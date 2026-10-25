@@ -57,9 +57,10 @@ fn backend_authentication_resolved_from_target() {
     "#;
 
     let mut config = load_config_from_str(toml).expect("valid config");
-    
+
     // Resolve references (this should merge target auth to backend)
-    harmony::config::resolution::resolve_references(&mut config).expect("resolution should succeed");
+    harmony::config::resolution::resolve_references(&mut config)
+        .expect("resolution should succeed");
 
     // Verify backend has authentication reference from target
     let backend = config.backends.get("api_backend").expect("backend exists");
@@ -67,13 +68,16 @@ fn backend_authentication_resolved_from_target() {
 
     // Verify authentication_def was injected into backend options
     if let Some(options) = &backend.options {
-        assert!(options.contains_key("authentication_def"), "authentication_def should be in backend options");
-        
+        assert!(
+            options.contains_key("authentication_def"),
+            "authentication_def should be in backend options"
+        );
+
         // Verify the authentication definition was resolved correctly
         if let Some(auth_def_json) = options.get("authentication_def") {
-            let auth_def: harmony::models::connection::AuthenticationDefinition = 
+            let auth_def: harmony::models::connection::AuthenticationDefinition =
                 serde_json::from_value(auth_def_json.clone()).expect("should deserialize");
-            
+
             assert_eq!(auth_def.id, "api-auth");
             assert_eq!(auth_def.method, "bearer");
             assert_eq!(
@@ -129,8 +133,9 @@ fn backend_with_direct_authentication() {
     "#;
 
     let mut config = load_config_from_str(toml).expect("valid config");
-    
-    harmony::config::resolution::resolve_references(&mut config).expect("resolution should succeed");
+
+    harmony::config::resolution::resolve_references(&mut config)
+        .expect("resolution should succeed");
 
     // Verify backend has authentication reference
     let backend = config.backends.get("api_backend").expect("backend exists");
@@ -139,11 +144,11 @@ fn backend_with_direct_authentication() {
     // Verify authentication_def was injected
     if let Some(options) = &backend.options {
         assert!(options.contains_key("authentication_def"));
-        
+
         if let Some(auth_def_json) = options.get("authentication_def") {
-            let auth_def: harmony::models::connection::AuthenticationDefinition = 
+            let auth_def: harmony::models::connection::AuthenticationDefinition =
                 serde_json::from_value(auth_def_json.clone()).expect("should deserialize");
-            
+
             assert_eq!(auth_def.id, "basic-auth");
             assert_eq!(auth_def.method, "basic");
             assert_eq!(
@@ -216,8 +221,9 @@ fn backend_overrides_target_authentication() {
     "#;
 
     let mut config = load_config_from_str(toml).expect("valid config");
-    
-    harmony::config::resolution::resolve_references(&mut config).expect("resolution should succeed");
+
+    harmony::config::resolution::resolve_references(&mut config)
+        .expect("resolution should succeed");
 
     // Verify backend has its own authentication, not target's
     let backend = config.backends.get("api_backend").expect("backend exists");
@@ -226,9 +232,9 @@ fn backend_overrides_target_authentication() {
     // Verify the correct authentication was resolved
     if let Some(options) = &backend.options {
         if let Some(auth_def_json) = options.get("authentication_def") {
-            let auth_def: harmony::models::connection::AuthenticationDefinition = 
+            let auth_def: harmony::models::connection::AuthenticationDefinition =
                 serde_json::from_value(auth_def_json.clone()).expect("should deserialize");
-            
+
             assert_eq!(auth_def.id, "backend-auth");
             assert_eq!(
                 auth_def.options.get("token").and_then(|v| v.as_str()),
@@ -274,8 +280,9 @@ fn backend_with_no_authentication() {
     "#;
 
     let mut config = load_config_from_str(toml).expect("valid config");
-    
-    harmony::config::resolution::resolve_references(&mut config).expect("resolution should succeed");
+
+    harmony::config::resolution::resolve_references(&mut config)
+        .expect("resolution should succeed");
 
     // Verify backend has no authentication
     let backend = config.backends.get("api_backend").expect("backend exists");
@@ -385,7 +392,11 @@ authentication = "fhir_bearr"
         "error should list the available keys: {}",
         err
     );
-    assert!(!err.contains("prefix"), "bare key needs no prefix hint: {}", err);
+    assert!(
+        !err.contains("prefix"),
+        "bare key needs no prefix hint: {}",
+        err
+    );
 }
 
 #[test]
@@ -455,7 +466,9 @@ authentication = "missing_auth"
 
     let err = load_via_file(&toml).expect_err("unknown middleware authentication must fail load");
     assert!(
-        err.contains("Middleware 'jwt_middleware' references unknown authentication 'missing_auth'"),
+        err.contains(
+            "Middleware 'jwt_middleware' references unknown authentication 'missing_auth'"
+        ),
         "error should name the middleware and the missing key: {}",
         err
     );
@@ -475,7 +488,9 @@ authentication = "authentications.fhir_bearer"
 
     let err = load_via_file(&toml).expect_err("prefixed authentication reference must fail load");
     assert!(
-        err.contains("Target 'upstream' references unknown authentication 'authentications.fhir_bearer'"),
+        err.contains(
+            "Target 'upstream' references unknown authentication 'authentications.fhir_bearer'"
+        ),
         "error should name the target and the reference as written: {}",
         err
     );
@@ -504,8 +519,16 @@ authentication = "nope"
     ));
 
     let err = load_via_file(&toml).expect_err("unresolved references must fail load");
-    assert!(err.contains("Target 'upstream'"), "first bad target missing: {}", err);
-    assert!(err.contains("Target 'second'"), "second bad target missing: {}", err);
+    assert!(
+        err.contains("Target 'upstream'"),
+        "first bad target missing: {}",
+        err
+    );
+    assert!(
+        err.contains("Target 'second'"),
+        "second bad target missing: {}",
+        err
+    );
 }
 
 #[test]

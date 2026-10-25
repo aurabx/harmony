@@ -2,7 +2,7 @@
 //
 // Test Status:
 // ✅ test_jmix_backend_post_forwarding - PASSING
-// ✅ test_jmix_backend_get_manifest_forwarding - PASSING  
+// ✅ test_jmix_backend_get_manifest_forwarding - PASSING
 // ✅ test_jmix_backend_get_forwarding - PASSING (fixed in envelope.rs)
 //
 // Previously, the GET forwarding test failed because application/zip was not recognized
@@ -82,7 +82,10 @@ impl MockJmixServer {
                             eprintln!("Mock server: GET /api/jmix/{}", id);
                             let store = envelopes.lock().await;
                             if let Some(data) = store.get(&id) {
-                                eprintln!("Mock server: Found envelope, returning {} bytes", data.len());
+                                eprintln!(
+                                    "Mock server: Found envelope, returning {} bytes",
+                                    data.len()
+                                );
                                 (
                                     StatusCode::OK,
                                     [("content-type", "application/zip")],
@@ -213,9 +216,9 @@ async fn test_jmix_backend_post_forwarding() {
         .unwrap();
 
     let response = app.oneshot(request).await.unwrap();
-    
+
     let status = response.status();
-    
+
     // Debug: print status and body if not 200
     if status != StatusCode::OK {
         let body_bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
@@ -280,7 +283,11 @@ async fn test_jmix_backend_get_forwarding() {
         .await
         .unwrap();
 
-    eprintln!("Expected {} bytes, got {} bytes", test_data.len(), body_bytes.len());
+    eprintln!(
+        "Expected {} bytes, got {} bytes",
+        test_data.len(),
+        body_bytes.len()
+    );
     if body_bytes.is_empty() {
         eprintln!("ERROR: Response body is empty!");
     }

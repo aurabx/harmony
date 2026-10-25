@@ -222,7 +222,8 @@ impl AdapterRegistry {
         let Some(handles) = self.adapters.write().await.remove(network_name) else {
             return Ok(());
         };
-        self.stop_handles(vec![(network_name.to_string(), handles)]).await;
+        self.stop_handles(vec![(network_name.to_string(), handles)])
+            .await;
         Ok(())
     }
 
@@ -262,7 +263,11 @@ impl AdapterRegistry {
 
         match tokio::time::timeout_at(deadline, &mut task_handle).await {
             Ok(Ok(())) => {
-                tracing::info!("✓ Stopped {} for network '{}'", adapter_summary, network_name);
+                tracing::info!(
+                    "✓ Stopped {} for network '{}'",
+                    adapter_summary,
+                    network_name
+                );
             }
             Ok(Err(e)) => {
                 tracing::error!(
@@ -422,9 +427,10 @@ mod tests {
 
         // The registry must stay readable while the stop is in progress.
         tokio::time::sleep(Duration::from_millis(50)).await;
-        let running = tokio::time::timeout(Duration::from_millis(100), registry.get_running_networks())
-            .await
-            .expect("registry lock was held while stop_network waited");
+        let running =
+            tokio::time::timeout(Duration::from_millis(100), registry.get_running_networks())
+                .await
+                .expect("registry lock was held while stop_network waited");
         assert!(running.is_empty());
 
         tokio::time::timeout(Duration::from_secs(2), stopping)

@@ -5,12 +5,12 @@
 
 mod scu_test_helpers;
 
+use dimse::types::{DatasetStream, FindQuery, GetQuery, MoveQuery, QueryLevel};
 use dimse::{DimseConfig, DimseScu, RemoteNode};
-use dimse::types::{FindQuery, GetQuery, MoveQuery, QueryLevel, DatasetStream};
 use futures::stream::StreamExt;
 use tempfile::TempDir;
 
-use scu_test_helpers::{dcmtk_available, DcmtkQrScp, create_test_dicom_file, mkuid};
+use scu_test_helpers::{create_test_dicom_file, dcmtk_available, mkuid, DcmtkQrScp};
 
 #[tokio::test(flavor = "multi_thread")]
 async fn test_scu_echo_success() {
@@ -28,7 +28,7 @@ async fn test_scu_echo_success() {
     let scu = DimseScu::new(config);
 
     let result = scu.echo(&remote).await;
-    
+
     assert!(result.is_ok(), "C-ECHO should succeed");
     assert!(result.unwrap(), "C-ECHO should return true");
 }
@@ -41,22 +41,17 @@ async fn test_scu_find() {
     }
 
     let qr_scp = DcmtkQrScp::start("find").await.expect("start QR SCP");
-    
+
     // Create and store test DICOM file
     let patient_id = "FIND_TEST_123";
     let study_uid = mkuid("study");
     let series_uid = mkuid("series");
     let sop_uid = mkuid("sop");
-    
+
     let test_file = qr_scp.base_dir().join("test.dcm");
-    create_test_dicom_file(
-        &test_file,
-        patient_id,
-        &study_uid,
-        &series_uid,
-        &sop_uid,
-    ).expect("create test DICOM");
-    
+    create_test_dicom_file(&test_file, patient_id, &study_uid, &series_uid, &sop_uid)
+        .expect("create test DICOM");
+
     qr_scp.store_file(&test_file).await.expect("store file");
 
     let remote = RemoteNode::new("QR_SCP", "127.0.0.1", qr_scp.port());
@@ -67,8 +62,7 @@ async fn test_scu_find() {
     let scu = DimseScu::new(config);
 
     // Query by Study Instance UID at Study level
-    let query = FindQuery::study(Some(study_uid.clone()))
-        .with_max_results(10);
+    let query = FindQuery::study(Some(study_uid.clone())).with_max_results(10);
     let mut stream = scu.find(&remote, query).await.expect("C-FIND should start");
 
     // Collect results
@@ -101,15 +95,10 @@ async fn test_scu_store() {
     let study_uid = mkuid("study");
     let series_uid = mkuid("series");
     let sop_uid = mkuid("sop");
-    
+
     let test_file = temp_dir.path().join("to_store.dcm");
-    create_test_dicom_file(
-        &test_file,
-        patient_id,
-        &study_uid,
-        &series_uid,
-        &sop_uid,
-    ).expect("create test DICOM");
+    create_test_dicom_file(&test_file, patient_id, &study_uid, &series_uid, &sop_uid)
+        .expect("create test DICOM");
 
     let remote = RemoteNode::new("QR_SCP", "127.0.0.1", qr_scp.port());
     let config = DimseConfig {
@@ -120,7 +109,7 @@ async fn test_scu_store() {
 
     let dataset = DatasetStream::from_file(test_file, false);
     let result = scu.store(&remote, dataset).await;
-    
+
     assert!(result.is_ok(), "C-STORE should succeed");
     assert!(result.unwrap(), "C-STORE should return true");
 }
@@ -133,22 +122,17 @@ async fn test_scu_get() {
     }
 
     let qr_scp = DcmtkQrScp::start("get").await.expect("start QR SCP");
-    
+
     // Create and store test DICOM file
     let patient_id = "GET_TEST_123";
     let study_uid = mkuid("study");
     let series_uid = mkuid("series");
     let sop_uid = mkuid("sop");
-    
+
     let test_file = qr_scp.base_dir().join("test.dcm");
-    create_test_dicom_file(
-        &test_file,
-        patient_id,
-        &study_uid,
-        &series_uid,
-        &sop_uid,
-    ).expect("create test DICOM");
-    
+    create_test_dicom_file(&test_file, patient_id, &study_uid, &series_uid, &sop_uid)
+        .expect("create test DICOM");
+
     qr_scp.store_file(&test_file).await.expect("store file");
 
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -162,10 +146,10 @@ async fn test_scu_get() {
     let scu = DimseScu::new(config);
 
     // Query by Study Instance UID
-    let query = GetQuery::new(QueryLevel::Study)
-        .with_parameter("StudyInstanceUID", &study_uid);
-    
-    let mut stream = scu.get_request(&remote, query, Some(output_dir.clone()))
+    let query = GetQuery::new(QueryLevel::Study).with_parameter("StudyInstanceUID", &study_uid);
+
+    let mut stream = scu
+        .get_request(&remote, query, Some(output_dir.clone()))
         .await
         .expect("C-GET should start");
 
@@ -191,7 +175,9 @@ async fn test_scu_get_in_memory() {
         return;
     }
 
-    let qr_scp = DcmtkQrScp::start("get_in_memory").await.expect("start QR SCP");
+    let qr_scp = DcmtkQrScp::start("get_in_memory")
+        .await
+        .expect("start QR SCP");
 
     let patient_id = "GET_MEM_123";
     let study_uid = mkuid("study");
@@ -232,7 +218,10 @@ async fn test_scu_get_in_memory() {
     );
     let metadata = dataset.metadata();
     assert_eq!(metadata.sop_instance_uid.as_deref(), Some(sop_uid.as_str()));
-    assert_eq!(metadata.study_instance_uid.as_deref(), Some(study_uid.as_str()));
+    assert_eq!(
+        metadata.study_instance_uid.as_deref(),
+        Some(study_uid.as_str())
+    );
     assert!(
         metadata.transfer_syntax.is_some(),
         "the negotiated transfer syntax must be recorded"
@@ -251,22 +240,17 @@ async fn test_scu_move() {
     }
 
     let qr_scp = DcmtkQrScp::start("move").await.expect("start QR SCP");
-    
+
     // Create and store test DICOM file
     let patient_id = "MOVE_TEST_123";
     let study_uid = mkuid("study");
     let series_uid = mkuid("series");
     let sop_uid = mkuid("sop");
-    
+
     let test_file = qr_scp.base_dir().join("test.dcm");
-    create_test_dicom_file(
-        &test_file,
-        patient_id,
-        &study_uid,
-        &series_uid,
-        &sop_uid,
-    ).expect("create test DICOM");
-    
+    create_test_dicom_file(&test_file, patient_id, &study_uid, &series_uid, &sop_uid)
+        .expect("create test DICOM");
+
     qr_scp.store_file(&test_file).await.expect("store file");
 
     let temp_dir = TempDir::new().expect("create temp dir");
@@ -276,7 +260,7 @@ async fn test_scu_move() {
     let config = DimseConfig {
         local_aet: "HARMONY_SCU".to_string(),
         incoming_store_port: 11124, // Match HostTable in helper
-        external_store_scp: false, // Use transient listener
+        external_store_scp: false,  // Use transient listener
         ..Default::default()
     };
     let scu = DimseScu::new(config);
@@ -284,8 +268,9 @@ async fn test_scu_move() {
     // Query by Study Instance UID with destination AET
     let query = MoveQuery::new(QueryLevel::Study, "HARMONY_SCU")
         .with_parameter("StudyInstanceUID", &study_uid);
-    
-    let mut stream = scu.move_request(&remote, query, Some(output_dir.clone()))
+
+    let mut stream = scu
+        .move_request(&remote, query, Some(output_dir.clone()))
         .await
         .expect("C-MOVE should start");
 
@@ -427,10 +412,10 @@ async fn test_scu_handles_server_disconnect() {
     // Start a QR SCP then stop it
     let qr_scp = DcmtkQrScp::start("disconnect").await.expect("start QR SCP");
     let port = qr_scp.port();
-    
+
     // Drop the SCP to stop it
     drop(qr_scp);
-    
+
     // Wait for it to fully stop
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
 
@@ -451,7 +436,7 @@ async fn test_scu_handles_server_disconnect() {
 async fn test_scu_handles_invalid_response() {
     // This tests the SCU's ability to handle unexpected scenarios
     // by checking error handling when server isn't ready
-    
+
     let mut remote = RemoteNode::new("TEST_SCP", "127.0.0.1", 1); // Invalid port 1
     remote.connect_timeout_ms = Some(500);
 
@@ -470,7 +455,7 @@ async fn test_scu_find_with_empty_results() {
     }
 
     let qr_scp = DcmtkQrScp::start("empty_find").await.expect("start QR SCP");
-    
+
     // Don't store any files - database is empty
 
     let remote = RemoteNode::new("QR_SCP", "127.0.0.1", qr_scp.port());
@@ -481,11 +466,13 @@ async fn test_scu_find_with_empty_results() {
     let scu = DimseScu::new(config);
 
     // Query with UID that doesn't exist
-    let query = FindQuery::study(Some("9.9.9.9.9".to_string()))
-        .with_max_results(10);
+    let query = FindQuery::study(Some("9.9.9.9.9".to_string())).with_max_results(10);
     let stream_result = scu.find(&remote, query).await;
 
-    assert!(stream_result.is_ok(), "C-FIND should start even with no results");
+    assert!(
+        stream_result.is_ok(),
+        "C-FIND should start even with no results"
+    );
 
     let mut stream = stream_result.unwrap();
     let mut count = 0;
@@ -496,7 +483,7 @@ async fn test_scu_find_with_empty_results() {
     assert_eq!(count, 0, "Should have no results for non-existent UID");
 }
 
-#[tokio::test(flavor = "multi_thread")]  
+#[tokio::test(flavor = "multi_thread")]
 async fn test_scu_get_with_no_results() {
     if !dcmtk_available() {
         eprintln!("Skipping test: DCMTK not available");
@@ -516,13 +503,15 @@ async fn test_scu_get_with_no_results() {
     let scu = DimseScu::new(config);
 
     // Query with UID that doesn't exist
-    let query = GetQuery::new(QueryLevel::Study)
-        .with_parameter("StudyInstanceUID", "9.9.9.9.9");
-    
+    let query = GetQuery::new(QueryLevel::Study).with_parameter("StudyInstanceUID", "9.9.9.9.9");
+
     let stream_result = scu.get_request(&remote, query, Some(output_dir)).await;
 
     // C-GET should complete without error even with no results
-    assert!(stream_result.is_ok(), "C-GET should start even with no matching data");
+    assert!(
+        stream_result.is_ok(),
+        "C-GET should start even with no matching data"
+    );
 
     let mut stream = stream_result.unwrap();
     let mut count = 0;
@@ -545,19 +534,19 @@ async fn test_scu_validates_query_level() {
     assert_eq!(study_query.query_level, QueryLevel::Study);
 
     // For series/image levels, use the generic constructor with parameters
-    let get_query = GetQuery::new(QueryLevel::Series)
-        .with_parameter("SeriesInstanceUID", "1.2.3.4");
+    let get_query =
+        GetQuery::new(QueryLevel::Series).with_parameter("SeriesInstanceUID", "1.2.3.4");
     assert_eq!(get_query.query_level, QueryLevel::Series);
 
-    let move_query = MoveQuery::new(QueryLevel::Image, "DEST_AET")
-        .with_parameter("SOPInstanceUID", "1.2.3.4.5");
+    let move_query =
+        MoveQuery::new(QueryLevel::Image, "DEST_AET").with_parameter("SOPInstanceUID", "1.2.3.4.5");
     assert_eq!(move_query.query_level, QueryLevel::Image);
 }
 
 #[tokio::test]
 async fn test_scu_remote_node_validation_comprehensive() {
     // Test all validation cases
-    
+
     // Valid node
     let valid = RemoteNode::new("VALID_AET", "localhost", 11112);
     assert!(valid.validate().is_ok());

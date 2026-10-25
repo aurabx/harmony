@@ -10,7 +10,9 @@ use serde_json::Value;
 pub struct DicomUnflattenConfig {}
 
 /// Parses middleware configuration from options
-pub fn parse_config(_options: &std::collections::HashMap<String, Value>) -> Result<DicomUnflattenConfig, String> {
+pub fn parse_config(
+    _options: &std::collections::HashMap<String, Value>,
+) -> Result<DicomUnflattenConfig, String> {
     Ok(DicomUnflattenConfig {})
 }
 

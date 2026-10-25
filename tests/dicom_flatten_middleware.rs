@@ -235,4 +235,3 @@ async fn test_dicom_flatten_both_sides() {
 
     assert_eq!(response.status(), StatusCode::OK);
 }
-

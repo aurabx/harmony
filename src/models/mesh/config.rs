@@ -450,8 +450,14 @@ mod tests {
         "#;
 
         let mesh: Mesh = toml::from_str(toml_str).unwrap();
-        assert_eq!(mesh.jwt_private_key_path, Some("/path/to/private.pem".to_string()));
-        assert_eq!(mesh.jwt_public_key_path, Some("/path/to/public.pem".to_string()));
+        assert_eq!(
+            mesh.jwt_private_key_path,
+            Some("/path/to/private.pem".to_string())
+        );
+        assert_eq!(
+            mesh.jwt_public_key_path,
+            Some("/path/to/public.pem".to_string())
+        );
         assert!(mesh.jwt_secret.is_none());
     }
 
@@ -484,6 +490,9 @@ mod tests {
         assert_eq!(egress.pipeline, "outbound_pipeline");
         assert_eq!(egress.egress_type, MeshProtocol::Http3);
         assert_eq!(egress.backend, Some("remote-backend".to_string()));
-        assert_eq!(egress.description, Some("Egress to remote service".to_string()));
+        assert_eq!(
+            egress.description,
+            Some("Egress to remote service".to_string())
+        );
     }
 }

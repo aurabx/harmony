@@ -540,7 +540,10 @@ async fn test_malformed_xml_partial_parse() {
     // Malformed XML parsing fails, so it falls back to binary representation
     // Verify we got a response with the original_data field (binary fallback)
     assert!(json.is_object(), "Should have response object");
-    assert!(json["original_data"].is_array(), "Should have binary fallback for failed parse");
+    assert!(
+        json["original_data"].is_array(),
+        "Should have binary fallback for failed parse"
+    );
 }
 
 #[tokio::test]

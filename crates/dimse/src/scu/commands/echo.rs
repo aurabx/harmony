@@ -21,10 +21,7 @@ fn next_message_id() -> u16 {
 }
 
 /// Handle C-ECHO request using native DICOM UL
-pub async fn handle_echo(
-    config: &DimseConfig,
-    node: &RemoteNode,
-) -> Result<bool> {
+pub async fn handle_echo(config: &DimseConfig, node: &RemoteNode) -> Result<bool> {
     info!(
         "Sending C-ECHO to {}@{}:{}",
         node.ae_title, node.host, node.port
@@ -34,11 +31,14 @@ pub async fn handle_echo(
 
     // Establish association with Verification SOP Class
     let sop_class_uids = vec![VERIFICATION_SOP_CLASS];
-    let mut association = native_connection::establish_association(config, node, &sop_class_uids)
-        .await?;
+    let mut association =
+        native_connection::establish_association(config, node, &sop_class_uids).await?;
 
     // Get presentation context ID
-    let pc_id = match native_connection::get_presentation_context_id(&association, VERIFICATION_SOP_CLASS) {
+    let pc_id = match native_connection::get_presentation_context_id(
+        &association,
+        VERIFICATION_SOP_CLASS,
+    ) {
         Ok(id) => id,
         Err(e) => {
             let _ = association.abort().await;
@@ -59,7 +59,9 @@ pub async fn handle_echo(
     debug!("Sending C-ECHO request (message ID: {})", message_id);
 
     // Send the request
-    if let Err(e) = command_builder::encode_and_send_request(&mut association, request, None, pc_id).await {
+    if let Err(e) =
+        command_builder::encode_and_send_request(&mut association, request, None, pc_id).await
+    {
         let _ = association.abort().await;
         return Err(e);
     }
@@ -70,22 +72,24 @@ pub async fn handle_echo(
         match association.receive().await {
             Ok(Pdu::PData { data }) => {
                 // Parse the response
-                let (response_obj, _dataset, _pc_id) = match command_builder::parse_response_command(data) {
-                    Ok(result) => result,
-                    Err(e) => {
-                        let _ = association.abort().await;
-                        return Err(e);
-                    }
-                };
+                let (response_obj, _dataset, _pc_id) =
+                    match command_builder::parse_response_command(data) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            let _ = association.abort().await;
+                            return Err(e);
+                        }
+                    };
 
                 // Verify this is the response to our request
-                let responded_to = match command_builder::extract_message_id_being_responded_to(&response_obj) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        let _ = association.abort().await;
-                        return Err(e);
-                    }
-                };
+                let responded_to =
+                    match command_builder::extract_message_id_being_responded_to(&response_obj) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            let _ = association.abort().await;
+                            return Err(e);
+                        }
+                    };
 
                 if responded_to != message_id {
                     debug!(
@@ -137,7 +141,10 @@ pub async fn handle_echo(
                 // Unexpected release - send release response
                 if let Err(e) = association.send(&Pdu::ReleaseRP).await {
                     let _ = association.abort().await;
-                    return Err(DimseError::network(format!("Failed to send release response: {}", e)));
+                    return Err(DimseError::network(format!(
+                        "Failed to send release response: {}",
+                        e
+                    )));
                 }
                 return Err(DimseError::operation_failed(
                     "Association released unexpectedly during C-ECHO",

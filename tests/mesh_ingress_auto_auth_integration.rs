@@ -293,8 +293,7 @@ async fn streaming_ingress_rejects_missing_token_before_backend() {
 #[serial_test::serial]
 async fn streaming_ingress_rejects_wrong_secret_before_backend() {
     let token = sign_token("not-the-mesh-secret");
-    let (status, hits) =
-        send_through_ingress(STREAM_HOST, Some(format!("Bearer {}", token))).await;
+    let (status, hits) = send_through_ingress(STREAM_HOST, Some(format!("Bearer {}", token))).await;
     assert_eq!(status, StatusCode::UNAUTHORIZED);
     assert_eq!(hits, 0, "backend must not be called with an invalid token");
 }
@@ -303,8 +302,7 @@ async fn streaming_ingress_rejects_wrong_secret_before_backend() {
 #[serial_test::serial]
 async fn streaming_ingress_accepts_valid_token() {
     let token = sign_token(MESH_SECRET);
-    let (status, hits) =
-        send_through_ingress(STREAM_HOST, Some(format!("Bearer {}", token))).await;
+    let (status, hits) = send_through_ingress(STREAM_HOST, Some(format!("Bearer {}", token))).await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(hits, 1, "backend should be called exactly once");
 }

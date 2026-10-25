@@ -84,10 +84,7 @@ pub async fn prepare_output_dir(
 }
 
 /// Execute a DCMTK command and stream results back through a channel
-pub fn spawn_dcmtk_command(
-    cmd: DcmtkCommand,
-    tx: mpsc::Sender<Result<DatasetStream>>,
-) {
+pub fn spawn_dcmtk_command(cmd: DcmtkCommand, tx: mpsc::Sender<Result<DatasetStream>>) {
     let DcmtkCommand {
         command,
         args,
@@ -103,9 +100,11 @@ pub fn spawn_dcmtk_command(
             Ok(output) => {
                 if output.status.success() {
                     info!("{} completed successfully", operation_name);
-                    
+
                     // Stream files from output directory
-                    if let Err(e) = stream_directory_files(&output_dir, &tx, cleanup_on_complete).await {
+                    if let Err(e) =
+                        stream_directory_files(&output_dir, &tx, cleanup_on_complete).await
+                    {
                         warn!("Error streaming files: {}", e);
                     }
                 } else {
@@ -128,9 +127,15 @@ pub fn spawn_dcmtk_command(
         // Clean up if needed
         if cleanup_on_complete && output_dir.exists() {
             if let Err(e) = tokio::fs::remove_dir_all(&output_dir).await {
-                warn!("Failed to cleanup {} temp directory {:?}: {}", operation_name, output_dir, e);
+                warn!(
+                    "Failed to cleanup {} temp directory {:?}: {}",
+                    operation_name, output_dir, e
+                );
             } else {
-                debug!("Cleaned up {} temp directory: {:?}", operation_name, output_dir);
+                debug!(
+                    "Cleaned up {} temp directory: {:?}",
+                    operation_name, output_dir
+                );
             }
         }
     });

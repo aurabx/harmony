@@ -37,9 +37,7 @@ use std::sync::Arc;
 pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Router {
     // Build mesh registry for priority routing (with remote reference resolution)
     let resolver = crate::globals::get_provider_resolver();
-    let mesh_registry = Arc::new(
-        MeshRegistry::from_config_with_resolver(&config, resolver).await
-    );
+    let mesh_registry = Arc::new(MeshRegistry::from_config_with_resolver(&config, resolver).await);
 
     tracing::info!(
         "🔧 Building router for network '{}' with {} pipelines",
@@ -62,13 +60,13 @@ pub async fn build_network_router(config: Arc<Config>, network_name: &str) -> Ro
     if !mesh_registry.is_empty() {
         let mesh_registry_layer = mesh_registry.clone();
 
-        app = app.layer(axum::middleware::from_fn(move |req: Request, next: axum::middleware::Next| {
-            let mesh_registry = mesh_registry_layer.clone();
-            let mesh_source = mesh_source.clone();
-            async move {
-                mesh_routing_layer(req, next, mesh_registry, mesh_source).await
-            }
-        }));
+        app = app.layer(axum::middleware::from_fn(
+            move |req: Request, next: axum::middleware::Next| {
+                let mesh_registry = mesh_registry_layer.clone();
+                let mesh_source = mesh_source.clone();
+                async move { mesh_routing_layer(req, next, mesh_registry, mesh_source).await }
+            },
+        ));
 
         tracing::info!("🔗 Mesh routing layer registered (priority routing)");
     }
@@ -164,12 +162,20 @@ fn log_routes(table: &RouteTable, network_name: &str, level: tracing::Level) {
         if level == tracing::Level::INFO {
             tracing::info!(
                 "✅ Registered route: {} [{}] -> endpoint '{}' (pipeline '{}') on network '{}'",
-                entry.pattern, methods, entry.owner.endpoint, entry.owner.pipeline, network_name
+                entry.pattern,
+                methods,
+                entry.owner.endpoint,
+                entry.owner.pipeline,
+                network_name
             );
         } else {
             tracing::debug!(
                 "Registered route: {} [{}] -> endpoint '{}' (pipeline '{}') on network '{}'",
-                entry.pattern, methods, entry.owner.endpoint, entry.owner.pipeline, network_name
+                entry.pattern,
+                methods,
+                entry.owner.endpoint,
+                entry.owner.pipeline,
+                network_name
             );
         }
     }
@@ -433,7 +439,8 @@ async fn handle_request_with_mesh(
 
     // Check if this is a streaming pipeline
     if PipelineExecutor::is_streaming_pipeline(pipeline, &config) {
-        return handle_streaming_request(req, config, endpoint_name, pipeline_name, mesh_context).await;
+        return handle_streaming_request(req, config, endpoint_name, pipeline_name, mesh_context)
+            .await;
     }
 
     // 1. Convert HTTP Request → ProtocolCtx
@@ -474,12 +481,13 @@ async fn handle_request_with_mesh(
         })?;
 
     // 3. Execute pipeline (using standard PipelineExecutor)
-    let response_envelope = PipelineExecutor::execute(envelope, &pipeline_name, pipeline, &config, &ctx)
-        .await
-        .map_err(|err| {
-            tracing::error!("Pipeline execution failed: {}", err);
-            map_pipeline_error_to_status(&err)
-        })?;
+    let response_envelope =
+        PipelineExecutor::execute(envelope, &pipeline_name, pipeline, &config, &ctx)
+            .await
+            .map_err(|err| {
+                tracing::error!("Pipeline execution failed: {}", err);
+                map_pipeline_error_to_status(&err)
+            })?;
 
     // 4. Convert ResponseEnvelope → HTTP Response
     let response = service
@@ -561,12 +569,13 @@ async fn handle_streaming_request(
         })?;
 
     // 3. Execute streaming pipeline
-    let response_stream = PipelineExecutor::execute_streaming(envelope, &pipeline_name, pipeline, &config, &ctx)
-        .await
-        .map_err(|err| {
-            tracing::error!("Streaming pipeline execution failed: {}", err);
-            map_pipeline_error_to_status(&err)
-        })?;
+    let response_stream =
+        PipelineExecutor::execute_streaming(envelope, &pipeline_name, pipeline, &config, &ctx)
+            .await
+            .map_err(|err| {
+                tracing::error!("Streaming pipeline execution failed: {}", err);
+                map_pipeline_error_to_status(&err)
+            })?;
 
     // 4. Check if endpoint is http_streaming - if so, use its streaming response builder
     if endpoint.service.to_lowercase() == "http_streaming" {
@@ -586,7 +595,8 @@ async fn handle_streaming_request(
             StreamFormat::from_config(format_value.as_str().unwrap_or("ndjson"))
         } else {
             // Check Accept header
-            let accept = req.headers()
+            let accept = req
+                .headers()
                 .get("accept")
                 .and_then(|h| h.to_str().ok())
                 .unwrap_or("");
@@ -637,7 +647,9 @@ async fn handle_streaming_request(
         let response = Response::builder()
             .status(StatusCode::OK)
             .header("content-type", "application/json")
-            .body(Body::from(serde_json::to_vec(&json_array).unwrap_or_default()))
+            .body(Body::from(
+                serde_json::to_vec(&json_array).unwrap_or_default(),
+            ))
             .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
 
         Ok(response)
@@ -647,11 +659,18 @@ async fn handle_streaming_request(
 /// Attach mesh context to ProtocolCtx for downstream middleware.
 fn attach_mesh_context(ctx: &mut crate::models::protocol::ProtocolCtx, mesh_ctx: &MeshContext) {
     // Add mesh info to meta
-    ctx.meta.insert("mesh_name".to_string(), mesh_ctx.mesh_name.clone());
-    ctx.meta.insert("mesh_ingress".to_string(), mesh_ctx.ingress_name.clone());
-    ctx.meta.insert("mesh_pipeline".to_string(), mesh_ctx.pipeline_name.clone());
-    ctx.meta.insert("mesh_provider".to_string(), mesh_ctx.mesh.provider.to_string());
-    ctx.meta.insert("mesh_type".to_string(), mesh_ctx.mesh.mesh_type.to_string());
+    ctx.meta
+        .insert("mesh_name".to_string(), mesh_ctx.mesh_name.clone());
+    ctx.meta
+        .insert("mesh_ingress".to_string(), mesh_ctx.ingress_name.clone());
+    ctx.meta
+        .insert("mesh_pipeline".to_string(), mesh_ctx.pipeline_name.clone());
+    ctx.meta.insert(
+        "mesh_provider".to_string(),
+        mesh_ctx.mesh.provider.to_string(),
+    );
+    ctx.meta
+        .insert("mesh_type".to_string(), mesh_ctx.mesh.mesh_type.to_string());
 
     // Add structured mesh context to attrs
     if let serde_json::Value::Object(ref mut attrs) = ctx.attrs {
@@ -780,7 +799,10 @@ mod tests {
         let changed = Arc::new(changed);
         assert!(!source.matches(&changed));
         let last = source.last_match.load_full().expect("earlier match kept");
-        assert!(Arc::ptr_eq(&last, &live), "a mismatch must not be remembered");
+        assert!(
+            Arc::ptr_eq(&last, &live),
+            "a mismatch must not be remembered"
+        );
     }
     use crate::pipeline::PipelineError;
     use http::StatusCode;

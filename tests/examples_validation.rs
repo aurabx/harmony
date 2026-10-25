@@ -29,9 +29,7 @@ fn test_basic_echo_example_loads() {
 
     // Check that policy middleware is present
     let pipeline = &config.pipelines["echo_basic"];
-    assert!(pipeline
-        .middleware
-        .contains(&"echo_policies".to_string()));
+    assert!(pipeline.middleware.contains(&"echo_policies".to_string()));
 
     // Check middleware definition exists
     assert!(config.middleware.contains_key("echo_policies"));
@@ -41,7 +39,8 @@ fn test_basic_echo_example_loads() {
 
 #[test]
 fn test_content_types_example_loads() {
-    let config = load_and_validate_example("../harmony-examples/pipelines/content-types/config.toml");
+    let config =
+        load_and_validate_example("../harmony-examples/pipelines/content-types/config.toml");
     assert_eq!(config.proxy.effective_id(), "content-types-example");
 
     // Check that pipelines loaded
@@ -210,16 +209,34 @@ fn test_jmix_has_read_only_policy() {
 #[ignore = "Some examples require specialized services"]
 fn test_all_examples_have_required_services() {
     let examples = vec![
-        ("../harmony-examples/pipelines/basic-echo/config.toml", vec!["http", "echo"]),
-        ("../harmony-examples/pipelines/content-types/config.toml", vec!["http"]),
-        ("../harmony-examples/pipelines/http-http/config.toml", vec!["http"]),
-        ("../harmony-examples/pipelines/fhir/config.toml", vec!["http", "fhir"]),
+        (
+            "../harmony-examples/pipelines/basic-echo/config.toml",
+            vec!["http", "echo"],
+        ),
+        (
+            "../harmony-examples/pipelines/content-types/config.toml",
+            vec!["http"],
+        ),
+        (
+            "../harmony-examples/pipelines/http-http/config.toml",
+            vec!["http"],
+        ),
+        (
+            "../harmony-examples/pipelines/fhir/config.toml",
+            vec!["http", "fhir"],
+        ),
         (
             "../harmony-examples/pipelines/dicomweb/config.toml",
             vec!["dicomweb", "dicom_scu"],
         ),
-        ("../harmony-examples/pipelines/jmix/config.toml", vec!["jmix", "dicom_scu"]),
-        ("../harmony-examples/pipelines/transform/config.toml", vec!["http", "echo"]),
+        (
+            "../harmony-examples/pipelines/jmix/config.toml",
+            vec!["jmix", "dicom_scu"],
+        ),
+        (
+            "../harmony-examples/pipelines/transform/config.toml",
+            vec!["http", "echo"],
+        ),
     ];
 
     for (config_path, required_services) in examples {

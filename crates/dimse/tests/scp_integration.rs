@@ -3,7 +3,9 @@
 //! These tests verify the SCP can handle real DICOM associations and commands.
 
 use dimse::scp::QueryProvider;
-use dimse::types::{dataset_stream_from_vec, BoxDatasetStream, DatasetStream, QueryLevel, RetrieveStream};
+use dimse::types::{
+    dataset_stream_from_vec, BoxDatasetStream, DatasetStream, QueryLevel, RetrieveStream,
+};
 use dimse::{DimseConfig, DimseScp};
 use std::collections::HashMap;
 use std::net::{IpAddr, Ipv4Addr};
@@ -109,7 +111,10 @@ async fn test_scp_starts_and_stops() {
     let handle = tokio::spawn(async move { scp.run(shutdown_clone).await });
 
     // Give SCP time to start
-    assert!(wait_for_port(port, 2000).await, "SCP should be listening on port");
+    assert!(
+        wait_for_port(port, 2000).await,
+        "SCP should be listening on port"
+    );
 
     // Verify port is listening
     let result = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port)).await;
@@ -307,7 +312,9 @@ async fn test_scp_accepts_c_store() {
             .media_storage_sop_instance_uid("1.2.3.4.5.6.7")
             .transfer_syntax("1.2.840.10008.1.2.1"); // Explicit VR Little Endian
 
-        let file_obj = obj.with_meta(file_meta).expect("Failed to create file object");
+        let file_obj = obj
+            .with_meta(file_meta)
+            .expect("Failed to create file object");
         file_obj
             .write_to_file(&dcm_path)
             .expect("Failed to create DICOM file");
@@ -858,7 +865,10 @@ async fn test_scp_handles_connection_drop() {
     // SCP should still be running
     tokio::time::sleep(Duration::from_millis(100)).await;
     let result = tokio::net::TcpStream::connect(format!("127.0.0.1:{}", port)).await;
-    assert!(result.is_ok(), "SCP should still be accepting connections after drops");
+    assert!(
+        result.is_ok(),
+        "SCP should still be accepting connections after drops"
+    );
 
     shutdown.cancel();
     let _ = timeout(Duration::from_secs(2), handle).await;
@@ -932,9 +942,15 @@ async fn test_scp_respects_small_pdu_from_client() {
     let _ = timeout(Duration::from_secs(2), handle).await;
 
     if !output.status.success() {
-        eprintln!("echoscu stderr: {}", String::from_utf8_lossy(&output.stderr));
+        eprintln!(
+            "echoscu stderr: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
     }
-    assert!(output.status.success(), "echoscu with small PDU should succeed");
+    assert!(
+        output.status.success(),
+        "echoscu with small PDU should succeed"
+    );
 }
 
 /// Test that SCP can handle C-FIND responses when client has small PDU

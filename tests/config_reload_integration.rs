@@ -4,13 +4,13 @@ use harmony::config::reload::compute_diff;
 use harmony::config::watcher::ConfigWatcher;
 use harmony::config::Cli;
 use harmony::globals;
+use serial_test::serial;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 use tempfile::TempDir;
 use tokio::time::sleep;
-use serial_test::serial;
 
 /// Helper to create a test config file
 fn create_test_config(dir: &TempDir, port: u16) -> PathBuf {
@@ -478,13 +478,16 @@ async fn test_file_watcher_detects_changes() {
     let mut retry_count = 0;
     loop {
         sleep(Duration::from_millis(100)).await;
-        
+
         let current = globals::get_config().unwrap();
         if current.middleware.contains_key("test_middleware") {
-            tracing::info!("✓ File watcher detected middleware change after {} retries", retry_count);
+            tracing::info!(
+                "✓ File watcher detected middleware change after {} retries",
+                retry_count
+            );
             break;
         }
-        
+
         retry_count += 1;
         if retry_count >= max_retries {
             tracing::error!("Timeout waiting for file watcher to detect changes");
@@ -586,13 +589,16 @@ module = ""
     let mut retry_count = 0;
     loop {
         sleep(Duration::from_millis(100)).await;
-        
+
         let updated = globals::get_config().unwrap();
         if updated.middleware.contains_key("cloud_middleware") {
-            tracing::info!("✓ Cloud config update detected after {} retries", retry_count);
+            tracing::info!(
+                "✓ Cloud config update detected after {} retries",
+                retry_count
+            );
             break;
         }
-        
+
         retry_count += 1;
         if retry_count >= max_retries {
             // Log current config for debugging

@@ -103,41 +103,56 @@ impl Middleware for JoltTransformMiddleware {
             }
 
             if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
-                tracing::debug!("JOLT transform input (request): {}", serde_json::to_string_pretty(&transform_input).unwrap_or_default());
+                tracing::debug!(
+                    "JOLT transform input (request): {}",
+                    serde_json::to_string_pretty(&transform_input).unwrap_or_default()
+                );
             }
 
             match self.engine.transform(transform_input) {
                 Ok(transformed) => {
                     if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
-                        tracing::debug!("JOLT transform output (request): {}", serde_json::to_string_pretty(&transformed).unwrap_or_default());
+                        tracing::debug!(
+                            "JOLT transform output (request): {}",
+                            serde_json::to_string_pretty(&transformed).unwrap_or_default()
+                        );
                     }
                     // Extract the "data" field
-                    let result_data = transformed.get("data").cloned().unwrap_or(transformed.clone());
+                    let result_data = transformed
+                        .get("data")
+                        .cloned()
+                        .unwrap_or(transformed.clone());
 
                     // Check for context updates to merge back
                     if let Some(context_out) = transformed.get("context") {
                         // Merge target_details if present in output context
                         if let Some(td_out) = context_out.get("target_details") {
-                            if let Ok(td_from_transform) = serde_json::from_value::<crate::models::envelope::envelope::TargetDetails>(td_out.clone()) {
+                            if let Ok(td_from_transform) =
+                                serde_json::from_value::<
+                                    crate::models::envelope::envelope::TargetDetails,
+                                >(td_out.clone())
+                            {
                                 // Transform provided full target_details - use it
                                 envelope.target_details = Some(td_from_transform);
                             } else if td_out.is_object() {
                                 // Partial target_details - merge into existing or create new
                                 let td_obj = td_out.as_object().unwrap();
-                                let mut target = envelope.target_details.take().unwrap_or_else(|| {
-                                    crate::models::envelope::envelope::TargetDetails {
-                                        method: "GET".to_string(),
-                                        uri: String::new(),
-                                        base_url: String::new(),
-                                        headers: HashMap::new(),
-                                        cookies: HashMap::new(),
-                                        query_params: HashMap::new(),
-                                        metadata: HashMap::new(),
-                                    }
-                                });
-                                
+                                let mut target =
+                                    envelope.target_details.take().unwrap_or_else(|| {
+                                        crate::models::envelope::envelope::TargetDetails {
+                                            method: "GET".to_string(),
+                                            uri: String::new(),
+                                            base_url: String::new(),
+                                            headers: HashMap::new(),
+                                            cookies: HashMap::new(),
+                                            query_params: HashMap::new(),
+                                            metadata: HashMap::new(),
+                                        }
+                                    });
+
                                 // Merge individual fields
-                                if let Some(method) = td_obj.get("method").and_then(|v| v.as_str()) {
+                                if let Some(method) = td_obj.get("method").and_then(|v| v.as_str())
+                                {
                                     target.method = method.to_string();
                                 }
                                 if let Some(uri) = td_obj.get("uri").and_then(|v| v.as_str()) {
@@ -148,31 +163,46 @@ impl Middleware for JoltTransformMiddleware {
                                         target.query_params.clear();
                                     }
                                 }
-                                if let Some(base_url) = td_obj.get("base_url").and_then(|v| v.as_str()) {
+                                if let Some(base_url) =
+                                    td_obj.get("base_url").and_then(|v| v.as_str())
+                                {
                                     target.base_url = base_url.to_string();
                                 }
-                                if let Some(headers) = td_obj.get("headers").and_then(|v| v.as_object()) {
+                                if let Some(headers) =
+                                    td_obj.get("headers").and_then(|v| v.as_object())
+                                {
                                     for (k, v) in headers {
                                         if let Some(s) = v.as_str() {
                                             target.headers.insert(k.clone(), s.to_string());
                                         }
                                     }
                                 }
-                                if let Some(query_params) = td_obj.get("query_params").and_then(|v| v.as_object()) {
+                                if let Some(query_params) =
+                                    td_obj.get("query_params").and_then(|v| v.as_object())
+                                {
                                     // Replace existing query_params entirely (not merge)
                                     target.query_params.clear();
                                     for (k, v) in query_params {
                                         if let Some(s) = v.as_str() {
-                                            target.query_params.insert(k.clone(), vec![s.to_string()]);
+                                            target
+                                                .query_params
+                                                .insert(k.clone(), vec![s.to_string()]);
                                         } else if let Some(arr) = v.as_array() {
-                                            let values: Vec<String> = arr.iter().filter_map(|item| item.as_str().map(|s| s.to_string())).collect();
+                                            let values: Vec<String> = arr
+                                                .iter()
+                                                .filter_map(|item| {
+                                                    item.as_str().map(|s| s.to_string())
+                                                })
+                                                .collect();
                                             if !values.is_empty() {
                                                 target.query_params.insert(k.clone(), values);
                                             }
                                         }
                                     }
                                 }
-                                if let Some(metadata) = td_obj.get("metadata").and_then(|v| v.as_object()) {
+                                if let Some(metadata) =
+                                    td_obj.get("metadata").and_then(|v| v.as_object())
+                                {
                                     for (k, v) in metadata {
                                         if let Some(s) = v.as_str() {
                                             target.metadata.insert(k.clone(), s.to_string());
@@ -182,22 +212,30 @@ impl Middleware for JoltTransformMiddleware {
                                 envelope.target_details = Some(target);
                             }
                         }
-                        
+
                         // Merge request_details.metadata if present in output context
-                         if let Some(rd_out) = context_out.get("request_details") {
-                             if let Some(meta_out) = rd_out.get("metadata").and_then(|m| m.as_object()) {
-                                 for (k, v) in meta_out {
-                                     if let Some(s) = v.as_str() {
-                                         envelope.request_details.metadata.insert(k.clone(), s.to_string());
-                                     }
-                                 }
-                             }
-                         }
+                        if let Some(rd_out) = context_out.get("request_details") {
+                            if let Some(meta_out) =
+                                rd_out.get("metadata").and_then(|m| m.as_object())
+                            {
+                                for (k, v) in meta_out {
+                                    if let Some(s) = v.as_str() {
+                                        envelope
+                                            .request_details
+                                            .metadata
+                                            .insert(k.clone(), s.to_string());
+                                    }
+                                }
+                            }
+                        }
 
                         // Merge command if present in output context
                         if let Some(cmd_out) = context_out.get("command") {
                             if !cmd_out.is_null() {
-                                if let Ok(cmd) = serde_json::from_value::<crate::models::envelope::command::Command>(cmd_out.clone()) {
+                                if let Ok(cmd) = serde_json::from_value::<
+                                    crate::models::envelope::command::Command,
+                                >(cmd_out.clone())
+                                {
                                     envelope.command = Some(cmd);
                                 }
                             }
@@ -262,28 +300,42 @@ impl Middleware for JoltTransformMiddleware {
             });
 
             if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
-                tracing::debug!("JOLT transform input (response): {}", serde_json::to_string_pretty(&transform_input).unwrap_or_default());
+                tracing::debug!(
+                    "JOLT transform input (response): {}",
+                    serde_json::to_string_pretty(&transform_input).unwrap_or_default()
+                );
             }
             match self.engine.transform(transform_input) {
                 Ok(transformed) => {
                     if self.debug && tracing::enabled!(tracing::Level::DEBUG) {
-                        tracing::debug!("JOLT transform output (response): {}", serde_json::to_string_pretty(&transformed).unwrap_or_default());
+                        tracing::debug!(
+                            "JOLT transform output (response): {}",
+                            serde_json::to_string_pretty(&transformed).unwrap_or_default()
+                        );
                     }
                     // Extract the "data" field
-                    let result_data = transformed.get("data").cloned().unwrap_or(transformed.clone());
+                    let result_data = transformed
+                        .get("data")
+                        .cloned()
+                        .unwrap_or(transformed.clone());
 
                     // Check for context updates to merge back
                     if let Some(context_out) = transformed.get("context") {
                         // Merge response_details.metadata if present in output context
-                         if let Some(rd_out) = context_out.get("response_details") {
-                             if let Some(meta_out) = rd_out.get("metadata").and_then(|m| m.as_object()) {
-                                 for (k, v) in meta_out {
-                                     if let Some(s) = v.as_str() {
-                                         envelope.response_details.metadata.insert(k.clone(), s.to_string());
-                                     }
-                                 }
-                             }
-                         }
+                        if let Some(rd_out) = context_out.get("response_details") {
+                            if let Some(meta_out) =
+                                rd_out.get("metadata").and_then(|m| m.as_object())
+                            {
+                                for (k, v) in meta_out {
+                                    if let Some(s) = v.as_str() {
+                                        envelope
+                                            .response_details
+                                            .metadata
+                                            .insert(k.clone(), s.to_string());
+                                    }
+                                }
+                            }
+                        }
                     }
 
                     envelope.normalized_data = Some(result_data);
@@ -638,10 +690,6 @@ mod tests {
         let result = middleware.left(envelope).await.unwrap();
 
         // Verify the transform still works with debug enabled
-        assert_eq!(
-            result.normalized_data,
-            Some(json!({"name": "Alice"}))
-        );
+        assert_eq!(result.normalized_data, Some(json!({"name": "Alice"})));
     }
-
 }

@@ -15,9 +15,9 @@ use crate::DimseError;
 use crate::Result;
 
 use crate::scp::DimseScp;
-use dicom_object::{InMemDicomObject, StandardDataDictionary};
-use dicom_core::header::Header;
 use crate::types::QueryLevel;
+use dicom_core::header::Header;
+use dicom_object::{InMemDicomObject, StandardDataDictionary};
 
 /// Extract query parameters from identifier dataset
 ///
@@ -47,17 +47,18 @@ pub fn extract_query_parameters(
         let tag = elem.tag();
         // Format tag as 8-character hex string (e.g., "00100020" for PatientID)
         let tag_str = format!("{:04X}{:04X}", tag.group(), tag.element());
-        
+
         // Skip the QueryRetrieveLevel tag itself - it's handled separately
         if tag_str == "00080052" {
             continue;
         }
-        
+
         // Try to extract string value
-        let value = elem.to_str()
+        let value = elem
+            .to_str()
             .map(|s| s.trim().to_string())
             .unwrap_or_default();
-        
+
         parameters.insert(tag_str, value);
     }
 

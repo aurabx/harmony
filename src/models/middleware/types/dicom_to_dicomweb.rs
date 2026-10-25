@@ -35,7 +35,8 @@ impl DicomToDicomwebMiddleware {
     /// Build multipart body for STOW-RS
     fn build_stow_multipart(file_path: &str) -> Result<(String, Vec<u8>), Error> {
         let path = PathBuf::from(file_path);
-        let bytes = std::fs::read(&path).map_err(|e| Error::from(format!("Failed to read DICOM file: {}", e)))?;
+        let bytes = std::fs::read(&path)
+            .map_err(|e| Error::from(format!("Failed to read DICOM file: {}", e)))?;
 
         let boundary = format!("boundary_{}", uuid::Uuid::new_v4());
         let mut body = Vec::new();
@@ -45,7 +46,7 @@ impl DicomToDicomwebMiddleware {
         body.extend_from_slice(b"Content-Type: application/dicom\r\n\r\n");
         body.extend_from_slice(&bytes);
         body.extend_from_slice(b"\r\n");
-        
+
         // Terminator
         body.extend_from_slice(format!("--{}--\r\n", boundary).as_bytes());
 
@@ -137,10 +138,7 @@ impl Middleware for DicomToDicomwebMiddleware {
 
 impl DicomToDicomwebMiddleware {
     /// Transform C-FIND request from DIMSE to QIDO-RS GET
-    fn transform_cfind_request(
-        &self,
-        envelope: &mut RequestEnvelope<Value>,
-    ) -> Result<(), Error> {
+    fn transform_cfind_request(&self, envelope: &mut RequestEnvelope<Value>) -> Result<(), Error> {
         let nd = envelope.normalized_data.clone().unwrap_or(Value::Null);
         let wrapper = nd;
         let identifier = wrapper.get("identifier").and_then(|v| v.as_object());
@@ -194,10 +192,7 @@ impl DicomToDicomwebMiddleware {
     }
 
     /// Transform C-STORE request from DIMSE to STOW-RS POST
-    fn transform_cstore_request(
-        &self,
-        envelope: &mut RequestEnvelope<Value>,
-    ) -> Result<(), Error> {
+    fn transform_cstore_request(&self, envelope: &mut RequestEnvelope<Value>) -> Result<(), Error> {
         let nd = envelope.normalized_data.clone().unwrap_or(Value::Null);
 
         if let Some(file_path) = nd.get("file").and_then(|s| s.as_str()) {
@@ -270,7 +265,8 @@ impl DicomToDicomwebMiddleware {
                 .and_then(|s| s.as_str())
                 .unwrap_or("");
 
-            let uri = if !instance_uid.is_empty() && !series_uid.is_empty() && !study_uid.is_empty() {
+            let uri = if !instance_uid.is_empty() && !series_uid.is_empty() && !study_uid.is_empty()
+            {
                 format!(
                     "/studies/{}/series/{}/instances/{}",
                     study_uid, series_uid, instance_uid
@@ -588,7 +584,10 @@ impl DicomToDicomwebMiddleware {
             return Ok(());
         }
 
-        debug!("Parsing multipart WADO-RS response with boundary: {}", boundary);
+        debug!(
+            "Parsing multipart WADO-RS response with boundary: {}",
+            boundary
+        );
 
         // Store boundary in metadata for downstream consumers
         envelope
@@ -608,7 +607,11 @@ impl DicomToDicomwebMiddleware {
             } else {
                 None
             }
-        } else if let Some(b64) = envelope.original_data.get("body_b64").and_then(|v| v.as_str()) {
+        } else if let Some(b64) = envelope
+            .original_data
+            .get("body_b64")
+            .and_then(|v| v.as_str())
+        {
             use base64::Engine;
             base64::engine::general_purpose::STANDARD.decode(b64).ok()
         } else {
@@ -620,7 +623,10 @@ impl DicomToDicomwebMiddleware {
             let parts = Self::parse_multipart_binary(&bytes, boundary);
             let dataset_count = parts.len();
 
-            debug!("Parsed {} DICOM datasets from multipart response", dataset_count);
+            debug!(
+                "Parsed {} DICOM datasets from multipart response",
+                dataset_count
+            );
 
             // Store parts as base64-encoded array for downstream consumption
             use base64::Engine;
@@ -681,7 +687,8 @@ impl DicomToDicomwebMiddleware {
             };
 
             // Find next delimiter
-            if let Some(next_pos) = Self::find_subsequence(&body[content_start..], delimiter_bytes) {
+            if let Some(next_pos) = Self::find_subsequence(&body[content_start..], delimiter_bytes)
+            {
                 let part_bytes = &body[content_start..content_start + next_pos];
 
                 // Find end of headers (double CRLF)
@@ -728,7 +735,7 @@ impl DicomToDicomwebMiddleware {
                 }
             }
             409 => dicom_status::WARNING_SUBOPS_COMPLETE_WITH_FAILURES, // Conflict
-            413 => dicom_status::FAILURE_OUT_OF_RESOURCES, // Payload Too Large
+            413 => dicom_status::FAILURE_OUT_OF_RESOURCES,              // Payload Too Large
             500..=599 => dicom_status::FAILURE_UNABLE_TO_PROCESS,
             _ => dicom_status::FAILURE_UNABLE_TO_PROCESS,
         }

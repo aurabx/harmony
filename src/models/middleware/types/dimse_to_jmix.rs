@@ -213,15 +213,12 @@ impl Middleware for DimseToJmixMiddleware {
         })?;
 
         let src = PathBuf::from(&file_path);
-        let file_name = src
-            .file_name()
-            .map(|n| n.to_owned())
-            .ok_or_else(|| {
-                Error::from(format!(
-                    "dimse_to_jmix: source file has no basename: {}",
-                    file_path
-                ))
-            })?;
+        let file_name = src.file_name().map(|n| n.to_owned()).ok_or_else(|| {
+            Error::from(format!(
+                "dimse_to_jmix: source file has no basename: {}",
+                file_path
+            ))
+        })?;
         let dst = study_dir.join(&file_name);
         // Prefer rename because the source is a per-instance temp file.
         // Fall back to copy when the source and destination live on
@@ -500,24 +497,14 @@ async fn build_jmix_package(
 
     let builder = jmix_rs::builder::JmixBuilder::new();
     let (envelope_built, dicom_files) = builder
-        .build_from_dicom_with_options(
-            &staging_str,
-            &jcfg,
-            state.skip_hashing,
-            state.skip_listing,
-        )
+        .build_from_dicom_with_options(&staging_str, &jcfg, state.skip_hashing, state.skip_listing)
         .map_err(|e| format!("jmix_rs build: {}", e))?;
 
     let jmix_id = envelope_built.manifest.id.clone();
     let store_root = jmix_store_root().map_err(|e| e.to_string())?;
     let pkg_dir = store_root.join(&jmix_id);
-    std::fs::create_dir_all(&pkg_dir).map_err(|e| {
-        format!(
-            "create package dir {}: {}",
-            pkg_dir.display(),
-            e
-        )
-    })?;
+    std::fs::create_dir_all(&pkg_dir)
+        .map_err(|e| format!("create package dir {}: {}", pkg_dir.display(), e))?;
 
     let _saved = builder
         .save_to_files_with_options(
@@ -648,11 +635,7 @@ mod tests {
         Arc::new(FilesystemStorage::new(&path).expect("test storage"))
     }
 
-    fn cstore_envelope(
-        file_path: &str,
-        study_uid: &str,
-        base_url: &str,
-    ) -> RequestEnvelope<Value> {
+    fn cstore_envelope(file_path: &str, study_uid: &str, base_url: &str) -> RequestEnvelope<Value> {
         let mut metadata = HashMap::new();
         metadata.insert("StudyInstanceUID".into(), study_uid.into());
         metadata.insert("protocol".into(), "dimse".into());
@@ -736,7 +719,10 @@ mod tests {
         );
         let out = mw.left(envelope).await.expect("middleware left");
         assert_eq!(
-            out.request_details.metadata.get("skip_backends").map(|s| s.as_str()),
+            out.request_details
+                .metadata
+                .get("skip_backends")
+                .map(|s| s.as_str()),
             Some("true"),
             "staging C-STOREs must skip the backend chain"
         );
@@ -756,9 +742,15 @@ mod tests {
             "{}.zip",
             pkg.file_name().unwrap().to_string_lossy()
         ));
-        assert!(zip.exists(), "package zip should exist at {}", zip.display());
         assert!(
-            std::fs::metadata(&zip).map(|m| m.len() > 0).unwrap_or(false),
+            zip.exists(),
+            "package zip should exist at {}",
+            zip.display()
+        );
+        assert!(
+            std::fs::metadata(&zip)
+                .map(|m| m.len() > 0)
+                .unwrap_or(false),
             "zip should not be empty"
         );
     }
@@ -786,11 +778,7 @@ mod tests {
         });
 
         for f in [&f1, &f2, &f3] {
-            let envelope = cstore_envelope(
-                &f.to_string_lossy(),
-                "1.2.3.4.multi",
-                "",
-            );
+            let envelope = cstore_envelope(&f.to_string_lossy(), "1.2.3.4.multi", "");
             mw.left(envelope).await.expect("stage");
         }
 
@@ -902,9 +890,13 @@ mod tests {
             sweep_interval_ms: 10_000,
             ..DimseToJmixConfig::default()
         });
-        mw.left(cstore_envelope(&temp_file.to_string_lossy(), study_uid, base_url))
-            .await
-            .expect("middleware left");
+        mw.left(cstore_envelope(
+            &temp_file.to_string_lossy(),
+            study_uid,
+            base_url,
+        ))
+        .await
+        .expect("middleware left");
 
         let (log, _guard) = crate::logging::test_capture::capture_debug();
         force_flush_now().await.expect("force flush");

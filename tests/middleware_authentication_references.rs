@@ -258,7 +258,7 @@ fn missing_authentication_reference_fails_validation() {
     "#;
 
     let config: Config = toml::from_str(toml).expect("TOML parse should succeed");
-    
+
     // Validation resolves each middleware instance, so the dangling
     // reference is rejected at load.
     match config.validate() {
@@ -278,12 +278,20 @@ fn missing_authentication_reference_fails_validation() {
         &["jwt_middleware".to_string()],
         &config,
     );
-    
+
     match result {
         Ok(_) => panic!("Expected error for missing authentication reference"),
         Err(err) => {
-            assert!(err.contains("unknown authentication"), "Error message should mention 'unknown authentication': {}", err);
-            assert!(err.contains("nonexistent"), "Error message should mention the missing auth ID: {}", err);
+            assert!(
+                err.contains("unknown authentication"),
+                "Error message should mention 'unknown authentication': {}",
+                err
+            );
+            assert!(
+                err.contains("nonexistent"),
+                "Error message should mention the missing auth ID: {}",
+                err
+            );
         }
     }
 }

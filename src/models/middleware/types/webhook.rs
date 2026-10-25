@@ -10,18 +10,29 @@ use std::collections::HashMap;
 #[derive(Debug, Deserialize, Clone)]
 pub struct WebhookConfig {
     pub endpoint: String,
-    #[serde(default = "default_apply")] pub apply: String,
-    #[serde(default)] pub redact_headers: Vec<String>,
-    #[serde(default)] pub redact_metadata: Vec<String>,
-    #[serde(default = "default_timeout")] pub timeout_secs: u64,
-    #[serde(default)] pub instance_name: String,
-    #[serde(skip)] pub auth_def: Option<crate::models::connection::AuthenticationDefinition>,
+    #[serde(default = "default_apply")]
+    pub apply: String,
+    #[serde(default)]
+    pub redact_headers: Vec<String>,
+    #[serde(default)]
+    pub redact_metadata: Vec<String>,
+    #[serde(default = "default_timeout")]
+    pub timeout_secs: u64,
+    #[serde(default)]
+    pub instance_name: String,
+    #[serde(skip)]
+    pub auth_def: Option<crate::models::connection::AuthenticationDefinition>,
     /// Global sensitive field patterns from proxy config (regex patterns)
-    #[serde(default)] pub sensitive_field_patterns: Vec<String>,
+    #[serde(default)]
+    pub sensitive_field_patterns: Vec<String>,
 }
 
-fn default_apply() -> String { "left".to_string() }
-fn default_timeout() -> u64 { 5 }
+fn default_apply() -> String {
+    "left".to_string()
+}
+fn default_timeout() -> u64 {
+    5
+}
 
 pub struct WebhookMiddleware {
     cfg: WebhookConfig,
@@ -32,7 +43,10 @@ pub struct WebhookMiddleware {
 impl WebhookMiddleware {
     pub fn new(cfg: WebhookConfig) -> Self {
         let sensitive_matcher = SensitiveFieldMatcher::new(&cfg.sensitive_field_patterns);
-        Self { cfg, sensitive_matcher }
+        Self {
+            cfg,
+            sensitive_matcher,
+        }
     }
 
     fn should_left(&self) -> bool {
@@ -45,10 +59,15 @@ impl WebhookMiddleware {
     fn redact_headers(&self, headers: &HashMap<String, String>) -> HashMap<String, String> {
         // First apply pattern-based redaction from global sensitive_field_patterns
         let mut redacted = self.sensitive_matcher.redact_headers(headers);
-        
+
         // Then apply explicit redact_headers list (case-insensitive exact match)
         if !self.cfg.redact_headers.is_empty() {
-            let set: Vec<String> = self.cfg.redact_headers.iter().map(|s| s.to_lowercase()).collect();
+            let set: Vec<String> = self
+                .cfg
+                .redact_headers
+                .iter()
+                .map(|s| s.to_lowercase())
+                .collect();
             for (k, v) in redacted.iter_mut() {
                 if set.iter().any(|rk| rk == &k.to_lowercase()) {
                     *v = "<redacted>".to_string();
@@ -61,10 +80,15 @@ impl WebhookMiddleware {
     fn redact_metadata(&self, metadata: &HashMap<String, String>) -> HashMap<String, String> {
         // First apply pattern-based redaction from global sensitive_field_patterns
         let mut redacted = self.sensitive_matcher.redact_metadata(metadata);
-        
+
         // Then apply explicit redact_metadata list (case-insensitive exact match)
         if !self.cfg.redact_metadata.is_empty() {
-            let set: Vec<String> = self.cfg.redact_metadata.iter().map(|s| s.to_lowercase()).collect();
+            let set: Vec<String> = self
+                .cfg
+                .redact_metadata
+                .iter()
+                .map(|s| s.to_lowercase())
+                .collect();
             for (k, v) in redacted.iter_mut() {
                 if set.iter().any(|rk| rk == &k.to_lowercase()) {
                     *v = "<redacted>".to_string();
@@ -86,16 +110,15 @@ impl WebhookMiddleware {
         Value::Null
     }
 
-    fn apply_auth(
-        &self,
-        builder: reqwest::RequestBuilder,
-    ) -> reqwest::RequestBuilder {
+    fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         if let Some(auth) = &self.cfg.auth_def {
             let mut opts = HashMap::new();
             if let Ok(val) = serde_json::to_value(auth) {
                 opts.insert("authentication_def".to_string(), val);
             }
-            return crate::models::services::backend_auth::apply_backend_authentication(builder, &opts, "WEBHOOK");
+            return crate::models::services::backend_auth::apply_backend_authentication(
+                builder, &opts, "WEBHOOK",
+            );
         }
         builder
     }
@@ -114,7 +137,9 @@ impl Middleware for WebhookMiddleware {
         &self,
         envelope: RequestEnvelope<Value>,
     ) -> Result<RequestEnvelope<Value>, Error> {
-        if !self.should_left() { return Ok(envelope); }
+        if !self.should_left() {
+            return Ok(envelope);
+        }
 
         let client = self.client()?;
         let headers = self.redact_headers(&envelope.request_details.headers);
@@ -136,7 +161,9 @@ impl Middleware for WebhookMiddleware {
         });
 
         let endpoint = self.cfg.endpoint.clone();
-        let req = client.post(endpoint).header("content-type", "application/json");
+        let req = client
+            .post(endpoint)
+            .header("content-type", "application/json");
         let req = self.apply_auth(req).json(&payload);
 
         tokio::spawn(async move {
@@ -152,7 +179,9 @@ impl Middleware for WebhookMiddleware {
         &self,
         envelope: ResponseEnvelope<Value>,
     ) -> Result<ResponseEnvelope<Value>, Error> {
-        if !self.should_right() { return Ok(envelope); }
+        if !self.should_right() {
+            return Ok(envelope);
+        }
 
         let client = self.client()?;
         let headers = self.redact_headers(&envelope.request_details.headers);
@@ -174,7 +203,9 @@ impl Middleware for WebhookMiddleware {
         });
 
         let endpoint = self.cfg.endpoint.clone();
-        let req = client.post(endpoint).header("content-type", "application/json");
+        let req = client
+            .post(endpoint)
+            .header("content-type", "application/json");
         let req = self.apply_auth(req).json(&payload);
 
         tokio::spawn(async move {
@@ -204,19 +235,29 @@ pub fn parse_config_with_patterns(
         .to_string();
 
     let apply = options
-        .get("apply").and_then(|v| v.as_str()).map(|s| s.to_string())
+        .get("apply")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_string())
         .unwrap_or_else(default_apply);
 
     let redact_headers = options
         .get("redact_headers")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     let redact_metadata = options
         .get("redact_metadata")
         .and_then(|v| v.as_array())
-        .map(|arr| arr.iter().filter_map(|v| v.as_str().map(|s| s.to_string())).collect())
+        .map(|arr| {
+            arr.iter()
+                .filter_map(|v| v.as_str().map(|s| s.to_string()))
+                .collect()
+        })
         .unwrap_or_default();
 
     let timeout_secs = options
@@ -230,20 +271,21 @@ pub fn parse_config_with_patterns(
         .unwrap_or("webhook")
         .to_string();
 
-    let auth_def = options
-        .get("authentication_def")
-        .and_then(|v| serde_json::from_value::<crate::models::connection::AuthenticationDefinition>(v.clone()).ok());
+    let auth_def = options.get("authentication_def").and_then(|v| {
+        serde_json::from_value::<crate::models::connection::AuthenticationDefinition>(v.clone())
+            .ok()
+    });
 
     // Use global patterns passed from proxy config
     let sensitive_field_patterns = global_sensitive_patterns.to_vec();
 
-    Ok(WebhookConfig { 
-        endpoint, 
-        apply, 
-        redact_headers, 
-        redact_metadata, 
-        timeout_secs, 
-        instance_name, 
+    Ok(WebhookConfig {
+        endpoint,
+        apply,
+        redact_headers,
+        redact_metadata,
+        timeout_secs,
+        instance_name,
         auth_def,
         sensitive_field_patterns,
     })
@@ -274,10 +316,10 @@ mod tests {
     fn test_parse_config_with_global_patterns() {
         let mut opts = HashMap::new();
         opts.insert("endpoint".into(), json!("https://example.com/hook"));
-        
+
         let global_patterns = vec![".*ssn.*".to_string(), ".*password.*".to_string()];
         let cfg = parse_config_with_patterns(&opts, &global_patterns).unwrap();
-        
+
         assert_eq!(cfg.sensitive_field_patterns, global_patterns);
     }
 

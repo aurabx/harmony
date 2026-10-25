@@ -39,7 +39,7 @@ async fn spawn_dcmqrscp(verbose: bool) -> (tokio::process::Child, u16, tempfile:
         .prefix("qrscp_")
         .tempdir_in("./tmp")
         .expect("create temp dir");
-    
+
     let base = temp_dir.path();
     let dbdir = base.join("qrdb");
     std::fs::create_dir_all(&dbdir).expect("create qr db dir");
@@ -828,15 +828,15 @@ async fn test_dicom_scu_backend_cstore() {
     let bytes = axum::body::to_bytes(response.into_body(), usize::MAX)
         .await
         .unwrap();
-    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(|_| {
-        serde_json::json!({ "raw": String::from_utf8_lossy(&bytes).to_string() })
-    });
-    
+    let json: serde_json::Value = serde_json::from_slice(&bytes).unwrap_or_else(
+        |_| serde_json::json!({ "raw": String::from_utf8_lossy(&bytes).to_string() }),
+    );
+
     if status != StatusCode::OK {
         eprintln!("C-STORE failed with status {}: {:?}", status, json);
     }
     assert_eq!(status, StatusCode::OK, "Response: {:?}", json);
-    
+
     assert_eq!(
         json.get("operation").and_then(|v| v.as_str()),
         Some("store"),

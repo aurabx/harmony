@@ -6,8 +6,8 @@ use tracing::debug;
 
 use crate::{DimseError, Result};
 
-use crate::scp::DimseScp;
 use crate::scp::response_builder;
+use crate::scp::DimseScp;
 
 /// Handle C-ECHO request
 pub async fn handle_c_echo(

@@ -12,4 +12,3 @@ pub use find::handle_find;
 pub use get::handle_get;
 pub use r#move::handle_move;
 pub use store::handle_store;
-

@@ -200,10 +200,16 @@ impl Middleware for MetadataTransformMiddleware {
                 }
 
                 // Apply transform to create/modify target_details
-                tracing::debug!("Metadata transform input: {}", crate::logging::json_shape(&input_json));
+                tracing::debug!(
+                    "Metadata transform input: {}",
+                    crate::logging::json_shape(&input_json)
+                );
                 match self.engine.transform(input_json) {
                     Ok(transformed) => {
-                        tracing::debug!("Metadata transform output: {}", crate::logging::json_shape(&transformed));
+                        tracing::debug!(
+                            "Metadata transform output: {}",
+                            crate::logging::json_shape(&transformed)
+                        );
                         // Create or update target_details from transformed JSON
                         let target_details = self.json_to_target_details(&transformed)?;
 
@@ -221,7 +227,10 @@ impl Middleware for MetadataTransformMiddleware {
                         // Check for command in transform output
                         if let Some(cmd_out) = transformed.get("command") {
                             if !cmd_out.is_null() {
-                                if let Ok(cmd) = serde_json::from_value::<crate::models::envelope::command::Command>(cmd_out.clone()) {
+                                if let Ok(cmd) = serde_json::from_value::<
+                                    crate::models::envelope::command::Command,
+                                >(cmd_out.clone())
+                                {
                                     envelope.command = Some(cmd);
                                 }
                             }
@@ -652,7 +661,7 @@ mod tests {
         };
         let mw = MetadataTransformMiddleware::new(cfg).unwrap();
         let out = mw.left(env).await.unwrap();
-        
+
         // Check that command is set
         assert_eq!(out.resolve_operation(), Some(Operation::Query));
     }

@@ -1,5 +1,5 @@
-use harmony::models::envelope::envelope::{RequestEnvelopeBuilder, ResponseEnvelope};
 use harmony::models::envelope::command::{Command, Operation};
+use harmony::models::envelope::envelope::{RequestEnvelopeBuilder, ResponseEnvelope};
 use harmony::models::middleware::middleware::Middleware;
 use harmony::models::middleware::types::dicom_to_dicomweb::DicomToDicomwebMiddleware;
 use serde_json::{json, Value};
@@ -17,7 +17,7 @@ async fn test_left_c_find_to_qido() {
         "00100010": { "vr": "PN", "Value": [{"Alphabetic": "Smith^John"}] },
         "00100020": { "vr": "LO", "Value": ["12345"] }
     });
-    
+
     let normalized_data = json!({
         "identifier": identifier
     });
@@ -37,11 +37,11 @@ async fn test_left_c_find_to_qido() {
     // Verify QIDO-RS transformation
     assert_eq!(result.request_details.method, "GET");
     assert_eq!(result.request_details.uri, "/studies");
-    
+
     let qp = result.request_details.query_params;
     assert!(qp.contains_key("00100010"));
     assert!(qp.contains_key("00100020"));
-    
+
     assert_eq!(qp.get("00100010").unwrap()[0], "Smith^John");
     assert_eq!(qp.get("00100020").unwrap()[0], "12345");
 }
@@ -52,7 +52,9 @@ async fn test_left_c_store_to_stow() {
 
     // Create a dummy DICOM file
     let mut tmp_file = NamedTempFile::new().expect("create temp file");
-    tmp_file.write_all(b"FAKE_DICOM_DATA").expect("write temp file");
+    tmp_file
+        .write_all(b"FAKE_DICOM_DATA")
+        .expect("write temp file");
     let path = tmp_file.path().to_string_lossy().to_string();
 
     let normalized_data = json!({
@@ -74,20 +76,26 @@ async fn test_left_c_store_to_stow() {
     // Verify STOW-RS transformation
     assert_eq!(result.request_details.method, "POST");
     assert_eq!(result.request_details.uri, "/studies");
-    
+
     let headers = result.request_details.headers;
     let content_type = headers.get("content-type").expect("Missing content-type");
     assert!(content_type.contains("multipart/related"));
     assert!(content_type.contains("application/dicom"));
-    
+
     // Verify body_b64 is set in normalized_data
     let nd = result.normalized_data.expect("Missing normalized_data");
-    let b64 = nd.get("body_b64").expect("Missing body_b64").as_str().expect("body_b64 not string");
-    
+    let b64 = nd
+        .get("body_b64")
+        .expect("Missing body_b64")
+        .as_str()
+        .expect("body_b64 not string");
+
     use base64::Engine;
-    let body_bytes = base64::engine::general_purpose::STANDARD.decode(b64).expect("Failed to decode body_b64");
+    let body_bytes = base64::engine::general_purpose::STANDARD
+        .decode(b64)
+        .expect("Failed to decode body_b64");
     let body_str = String::from_utf8_lossy(&body_bytes);
-    
+
     assert!(body_str.contains("FAKE_DICOM_DATA"));
     assert!(body_str.contains("--boundary_"));
 }
@@ -102,7 +110,7 @@ async fn test_left_c_get_to_wado() {
         "0020000E": { "vr": "UI", "Value": ["1.2.840.113619.2.55.3.42710457.305.1"] }, // Series
         "00080018": { "vr": "UI", "Value": ["1.2.840.113619.2.55.3.42710457.305.1.1"] } // Instance
     });
-    
+
     let normalized_data = json!({
         "identifier": identifier
     });
@@ -122,7 +130,7 @@ async fn test_left_c_get_to_wado() {
     // Verify WADO-RS transformation
     assert_eq!(result.request_details.method, "GET");
     assert_eq!(result.request_details.uri, "/studies/1.2.840.113619.2.55.3.42710457.305/series/1.2.840.113619.2.55.3.42710457.305.1/instances/1.2.840.113619.2.55.3.42710457.305.1.1");
-    
+
     let headers = result.request_details.headers;
     let accept = headers.get("accept").expect("Missing accept header");
     assert!(accept.contains("multipart/related"));
@@ -137,7 +145,7 @@ async fn test_left_c_move_to_wado() {
     let identifier = json!({
         "0020000D": { "vr": "UI", "Value": ["1.2.3.4"] }
     });
-    
+
     let normalized_data = json!({
         "identifier": identifier
     });
@@ -201,13 +209,8 @@ async fn test_right_cfind_response_array() {
         { "00100020": { "vr": "LO", "Value": ["PATIENT2"] } }
     ]);
 
-    let envelope = create_response_envelope(
-        "find",
-        200,
-        HashMap::new(),
-        Value::Null,
-        Some(qido_results),
-    );
+    let envelope =
+        create_response_envelope("find", 200, HashMap::new(), Value::Null, Some(qido_results));
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -228,13 +231,7 @@ async fn test_right_cget_response_image_jpeg_passthrough() {
     let mut headers = HashMap::new();
     headers.insert("content-type".to_string(), "image/jpeg".to_string());
 
-    let envelope = create_response_envelope(
-        "get",
-        200,
-        headers,
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("get", 200, headers, Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -259,13 +256,7 @@ async fn test_right_cget_response_image_png_passthrough() {
     let mut headers = HashMap::new();
     headers.insert("content-type".to_string(), "image/png".to_string());
 
-    let envelope = create_response_envelope(
-        "get",
-        200,
-        headers,
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("get", 200, headers, Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -290,13 +281,7 @@ async fn test_right_cget_response_image_gif_passthrough() {
     let mut headers = HashMap::new();
     headers.insert("content-type".to_string(), "image/gif".to_string());
 
-    let envelope = create_response_envelope(
-        "get",
-        200,
-        headers,
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("get", 200, headers, Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -321,13 +306,7 @@ async fn test_right_cfind_response_single_object() {
         "00100020": { "vr": "LO", "Value": ["PATIENT1"] }
     });
 
-    let envelope = create_response_envelope(
-        "find",
-        200,
-        HashMap::new(),
-        qido_result.clone(),
-        None,
-    );
+    let envelope = create_response_envelope("find", 200, HashMap::new(), qido_result.clone(), None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -344,7 +323,9 @@ async fn test_right_cfind_response_single_object() {
     );
 
     // Verify normalized_data is now an array
-    let nd = result.normalized_data.expect("normalized_data should exist");
+    let nd = result
+        .normalized_data
+        .expect("normalized_data should exist");
     assert!(nd.is_array());
     assert_eq!(nd.as_array().unwrap().len(), 1);
 }
@@ -354,13 +335,7 @@ async fn test_right_cfind_response_empty_null() {
     let middleware = DicomToDicomwebMiddleware::new();
 
     // Empty response (no matches)
-    let envelope = create_response_envelope(
-        "find",
-        200,
-        HashMap::new(),
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("find", 200, HashMap::new(), Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -377,7 +352,9 @@ async fn test_right_cfind_response_empty_null() {
     );
 
     // Verify normalized_data is empty array
-    let nd = result.normalized_data.expect("normalized_data should exist");
+    let nd = result
+        .normalized_data
+        .expect("normalized_data should exist");
     assert!(nd.is_array());
     assert_eq!(nd.as_array().unwrap().len(), 0);
 }
@@ -387,13 +364,7 @@ async fn test_right_cfind_response_404_no_matches() {
     let middleware = DicomToDicomwebMiddleware::new();
 
     // 404 for C-FIND means no matches (should map to SUCCESS)
-    let envelope = create_response_envelope(
-        "find",
-        404,
-        HashMap::new(),
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("find", 404, HashMap::new(), Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -409,13 +380,7 @@ async fn test_right_cfind_response_500_failure() {
     let middleware = DicomToDicomwebMiddleware::new();
 
     // 500 should map to FAILURE_UNABLE_TO_PROCESS
-    let envelope = create_response_envelope(
-        "find",
-        500,
-        HashMap::new(),
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("find", 500, HashMap::new(), Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -465,13 +430,7 @@ async fn test_right_cstore_response_failure() {
     let middleware = DicomToDicomwebMiddleware::new();
 
     // STOW-RS failure (500)
-    let envelope = create_response_envelope(
-        "store",
-        500,
-        HashMap::new(),
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("store", 500, HashMap::new(), Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -487,13 +446,7 @@ async fn test_right_cstore_response_404_failure() {
     let middleware = DicomToDicomwebMiddleware::new();
 
     // 404 for C-STORE is a failure (unlike C-FIND)
-    let envelope = create_response_envelope(
-        "store",
-        404,
-        HashMap::new(),
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("store", 404, HashMap::new(), Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -514,13 +467,7 @@ async fn test_right_cget_response_single_dicom() {
     let mut headers = HashMap::new();
     headers.insert("content-type".to_string(), "application/dicom".to_string());
 
-    let envelope = create_response_envelope(
-        "get",
-        200,
-        headers,
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("get", 200, headers, Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -546,7 +493,10 @@ async fn test_right_cget_response_multipart_with_body() {
     let mut headers = HashMap::new();
     headers.insert(
         "content-type".to_string(),
-        format!("multipart/related; type=\"application/dicom\"; boundary={}", boundary),
+        format!(
+            "multipart/related; type=\"application/dicom\"; boundary={}",
+            boundary
+        ),
     );
 
     // Create fake multipart body
@@ -563,13 +513,8 @@ async fn test_right_cget_response_multipart_with_body() {
         "content_length": multipart_body.len()
     });
 
-    let envelope = create_response_envelope(
-        "get",
-        200,
-        headers,
-        Value::Null,
-        Some(normalized_data),
-    );
+    let envelope =
+        create_response_envelope("get", 200, headers, Value::Null, Some(normalized_data));
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -592,7 +537,9 @@ async fn test_right_cget_response_multipart_with_body() {
     );
 
     // Verify normalized_data contains parsed datasets
-    let nd = result.normalized_data.expect("normalized_data should exist");
+    let nd = result
+        .normalized_data
+        .expect("normalized_data should exist");
     let datasets = nd.get("datasets").expect("datasets array should exist");
     assert!(datasets.is_array());
     assert_eq!(datasets.as_array().unwrap().len(), 2);
@@ -607,7 +554,10 @@ async fn test_right_cmove_response_multipart_with_body() {
     let mut headers = HashMap::new();
     headers.insert(
         "Content-Type".to_string(), // mixed-case header key
-        format!("multipart/related; type=\"application/dicom\"; boundary=\"{}\"", boundary), // quoted boundary
+        format!(
+            "multipart/related; type=\"application/dicom\"; boundary=\"{}\"",
+            boundary
+        ), // quoted boundary
     );
 
     let multipart_body = format!(
@@ -623,40 +573,41 @@ async fn test_right_cmove_response_multipart_with_body() {
         "content_length": multipart_body.len()
     });
 
-    let envelope = create_response_envelope(
-        "move",
-        200,
-        headers,
-        Value::Null,
-        Some(normalized_data),
-    );
+    let envelope =
+        create_response_envelope("move", 200, headers, Value::Null, Some(normalized_data));
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
     // SUCCESS and dataset_count==1
-    assert_eq!(result.response_details.metadata.get("dicom_status"), Some(&"0x0000".to_string()));
-    assert_eq!(result.response_details.metadata.get("dataset_count"), Some(&"1".to_string()));
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0x0000".to_string())
+    );
+    assert_eq!(
+        result.response_details.metadata.get("dataset_count"),
+        Some(&"1".to_string())
+    );
 
     // Boundary extracted without quotes
-    assert_eq!(result.response_details.metadata.get("multipart_boundary"), Some(&boundary.to_string()));
+    assert_eq!(
+        result.response_details.metadata.get("multipart_boundary"),
+        Some(&boundary.to_string())
+    );
 }
 
 #[tokio::test]
 async fn test_right_cstore_response_409_warning() {
     let middleware = DicomToDicomwebMiddleware::new();
 
-    let envelope = create_response_envelope(
-        "store",
-        409,
-        HashMap::new(),
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("store", 409, HashMap::new(), Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
     // Warning status 0xB000
-    assert_eq!(result.response_details.metadata.get("dicom_status"), Some(&"0xB000".to_string()));
+    assert_eq!(
+        result.response_details.metadata.get("dicom_status"),
+        Some(&"0xB000".to_string())
+    );
 }
 
 #[tokio::test]
@@ -664,13 +615,7 @@ async fn test_right_cget_response_404_failure() {
     let middleware = DicomToDicomwebMiddleware::new();
 
     // 404 for C-GET is a failure (resource not found)
-    let envelope = create_response_envelope(
-        "get",
-        404,
-        HashMap::new(),
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("get", 404, HashMap::new(), Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -686,13 +631,7 @@ async fn test_right_cmove_response_404_failure() {
     let middleware = DicomToDicomwebMiddleware::new();
 
     // 404 for C-MOVE is also a failure
-    let envelope = create_response_envelope(
-        "move",
-        404,
-        HashMap::new(),
-        Value::Null,
-        None,
-    );
+    let envelope = create_response_envelope("move", 404, HashMap::new(), Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 
@@ -709,15 +648,12 @@ async fn test_right_cget_response_dicom_json() {
 
     // WADO-RS metadata endpoint returns JSON
     let mut headers = HashMap::new();
-    headers.insert("content-type".to_string(), "application/dicom+json".to_string());
-
-    let envelope = create_response_envelope(
-        "get",
-        200,
-        headers,
-        Value::Null,
-        None,
+    headers.insert(
+        "content-type".to_string(),
+        "application/dicom+json".to_string(),
     );
+
+    let envelope = create_response_envelope("get", 200, headers, Value::Null, None);
 
     let result = middleware.right(envelope).await.expect("Middleware failed");
 

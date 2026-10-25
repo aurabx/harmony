@@ -147,10 +147,8 @@ mod tests {
         assert!(result, "Should successfully trigger poll");
 
         // Verify the message was received
-        let received = tokio::time::timeout(
-            tokio::time::Duration::from_millis(100),
-            rx.recv()
-        ).await;
+        let received =
+            tokio::time::timeout(tokio::time::Duration::from_millis(100), rx.recv()).await;
         assert!(received.is_ok(), "Should receive trigger message");
         assert!(received.unwrap().is_some(), "Message should not be None");
     }

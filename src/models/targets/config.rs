@@ -40,11 +40,13 @@ impl TargetConfig {
 
         let protocol = self.get_protocol();
         if protocol.is_none() {
-             return Err("Protocol must be specified either in 'protocol' (or 'type') field or 'connection.protocol'".to_string());
+            return Err("Protocol must be specified either in 'protocol' (or 'type') field or 'connection.protocol'".to_string());
         }
         let protocol = protocol.unwrap();
 
-        let valid_types = ["http", "https", "dicom", "harmony", "fhir", "hl7v2", "custom"];
+        let valid_types = [
+            "http", "https", "dicom", "harmony", "fhir", "hl7v2", "custom",
+        ];
         if !valid_types.contains(&protocol.as_str()) {
             return Err(format!(
                 "Invalid protocol '{}'. Must be one of: {:?}",
@@ -165,7 +167,7 @@ mod tests {
 
     #[test]
     fn test_missing_protocol() {
-         let config = TargetConfig {
+        let config = TargetConfig {
             id: None,
             name: None,
             connection: ConnectionConfig {
@@ -210,7 +212,7 @@ mod tests {
         // Should pass validation - auth reference is resolved later
         assert!(config.validate().is_ok());
     }
-    
+
     #[test]
     fn test_type_alias_deserialization() {
         let json = r#"{

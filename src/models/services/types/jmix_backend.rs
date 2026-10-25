@@ -190,9 +190,9 @@ impl ServiceHandler<Value> for JmixBackend {
         envelope.target_details = Some(target_details.clone());
 
         // Make the HTTP request to upstream JMIX server
-        let (status, response_headers, body_bytes) =
-            self.make_jmix_request(&target_details, &envelope, options)
-                .await?;
+        let (status, response_headers, body_bytes) = self
+            .make_jmix_request(&target_details, &envelope, options)
+            .await?;
 
         tracing::debug!(
             "JMIX backend response status: {}, body size: {} bytes",
@@ -490,9 +490,8 @@ mod tests {
 
     #[test]
     fn test_map_backend_uri_rejects_unknown_scheme() {
-        let err = map_backend_uri("hl7://mllp/store").expect_err(
-            "unknown scheme must not be concatenated with path_prefix",
-        );
+        let err = map_backend_uri("hl7://mllp/store")
+            .expect_err("unknown scheme must not be concatenated with path_prefix");
         let msg = format!("{}", err);
         assert!(
             msg.contains("hl7"),
@@ -539,13 +538,20 @@ mod tests {
     async fn send_error_does_not_contain_search_values() {
         let marker = "DOE-PHI-MARKER";
         let err = JmixBackend {}
-            .make_jmix_request(&search_target(1, marker), &empty_envelope(), &HashMap::new())
+            .make_jmix_request(
+                &search_target(1, marker),
+                &empty_envelope(),
+                &HashMap::new(),
+            )
             .await
             .err()
             .expect("port 1 must refuse the connection");
 
         let text = format!("{} {:?}", err, err);
-        assert!(text.contains("JMIX request to upstream failed"), "error: {text}");
+        assert!(
+            text.contains("JMIX request to upstream failed"),
+            "error: {text}"
+        );
         assert!(!text.contains(marker), "search values leaked: {text}");
         assert!(!text.contains("birthdate"), "query string leaked: {text}");
     }
@@ -555,7 +561,11 @@ mod tests {
         let (log, _guard) = crate::logging::test_capture::capture_debug();
         let marker = "DOE-PHI-MARKER";
         let _ = JmixBackend {}
-            .make_jmix_request(&search_target(1, marker), &empty_envelope(), &HashMap::new())
+            .make_jmix_request(
+                &search_target(1, marker),
+                &empty_envelope(),
+                &HashMap::new(),
+            )
             .await;
 
         let text = log.contents();
@@ -579,7 +589,9 @@ mod tests {
             "base_url".to_string(),
             Value::String("http://127.0.0.1:1".to_string()),
         );
-        let _ = JmixBackend {}.backend_outgoing_request(envelope, &options).await;
+        let _ = JmixBackend {}
+            .backend_outgoing_request(envelope, &options)
+            .await;
 
         let text = log.contents();
         assert!(
@@ -610,13 +622,20 @@ mod tests {
 
         let marker = "DOE-PHI-MARKER";
         let err = JmixBackend {}
-            .make_jmix_request(&search_target(port, marker), &empty_envelope(), &HashMap::new())
+            .make_jmix_request(
+                &search_target(port, marker),
+                &empty_envelope(),
+                &HashMap::new(),
+            )
             .await
             .err()
             .expect("a truncated body must fail");
 
         let text = format!("{} {:?}", err, err);
-        assert!(text.contains("Failed to read JMIX response body"), "error: {text}");
+        assert!(
+            text.contains("Failed to read JMIX response body"),
+            "error: {text}"
+        );
         assert!(!text.contains(marker), "search values leaked: {text}");
         assert!(!text.contains("birthdate"), "query string leaked: {text}");
     }

@@ -19,7 +19,8 @@ async fn http_to_dicom_backend_echo_succeeds() {
         listener.local_addr().expect("local addr").port()
     };
 
-    let toml = format!(r#"
+    let toml = format!(
+        r#"
         [proxy]
         id = "dicom-backend-test"
         log_level = "info"
@@ -58,7 +59,9 @@ async fn http_to_dicom_backend_echo_succeeds() {
         module = ""
         [services.dicom]
         module = ""
-    "#, port);
+    "#,
+        port
+    );
 
     // Start a DCMTK storescp to respond to C-ECHO on the dynamic port
     // If dcmtk is not installed, this test will fail. Ensure `brew install dcmtk`.

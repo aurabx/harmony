@@ -61,10 +61,7 @@ pub async fn handle_token_post(body: &[u8]) -> Result<JsonValue, (u16, String)> 
         return Err((400, "Gateway ID cannot be empty".to_string()));
     }
 
-    tracing::info!(
-        "Saving machine token for gateway: {}",
-        request.gateway_id
-    );
+    tracing::info!("Saving machine token for gateway: {}", request.gateway_id);
 
     // Get proxy ID for instance isolation (needed for both API URL and token storage)
     let proxy_id = crate::globals::get_config()

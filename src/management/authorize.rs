@@ -1,7 +1,7 @@
 use crate::adapters::registry::AdapterRegistry;
 use runbeam_sdk::{
-    extract_bearer_token, save_token, save_token_with_key, validate_jwt_token, ApiError, JwtValidationOptions,
-    MachineToken, RunbeamClient, RunbeamError,
+    extract_bearer_token, save_token, save_token_with_key, validate_jwt_token, ApiError,
+    JwtValidationOptions, MachineToken, RunbeamClient, RunbeamError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::Value as JsonValue;
@@ -103,11 +103,11 @@ pub async fn handle_authorize(
             ..Default::default()
         },
     )
-        .await
-        .map_err(|e| {
-            tracing::error!("JWT validation failed: {}", e);
-            (401, format!("Invalid or expired token: {}", e))
-        })?;
+    .await
+    .map_err(|e| {
+        tracing::error!("JWT validation failed: {}", e);
+        (401, format!("Invalid or expired token: {}", e))
+    })?;
 
     // Use the override API base URL provided by the caller (from config)
     // This is the base URL that will be used for both the authorization call and cloud polling

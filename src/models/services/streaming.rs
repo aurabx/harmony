@@ -90,7 +90,8 @@ pub trait StreamingBackend: Send + Sync {
 }
 
 /// Type alias for response envelope streams
-pub type ResponseStream = Pin<Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>>;
+pub type ResponseStream =
+    Pin<Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>>;
 
 /// Metadata about a streaming operation
 ///
@@ -100,16 +101,16 @@ pub type ResponseStream = Pin<Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<
 pub struct StreamMetadata {
     /// Unique identifier for this stream session
     pub stream_id: String,
-    
+
     /// Expected number of items in the stream (if known)
     pub expected_items: Option<usize>,
-    
+
     /// Total expected size in bytes (if known)
     pub expected_bytes: Option<u64>,
-    
+
     /// Stream operation type (e.g., "dimse-get", "dimse-find", "query-results")
     pub operation: String,
-    
+
     /// Additional operation-specific metadata
     pub metadata: HashMap<String, String>,
 }
@@ -125,19 +126,19 @@ impl StreamMetadata {
             metadata: HashMap::new(),
         }
     }
-    
+
     /// Set the expected number of items
     pub fn with_expected_items(mut self, count: usize) -> Self {
         self.expected_items = Some(count);
         self
     }
-    
+
     /// Set the expected total size in bytes
     pub fn with_expected_bytes(mut self, bytes: u64) -> Self {
         self.expected_bytes = Some(bytes);
         self
     }
-    
+
     /// Add operation-specific metadata
     pub fn with_metadata(mut self, key: impl Into<String>, value: impl Into<String>) -> Self {
         self.metadata.insert(key.into(), value.into());
@@ -148,14 +149,14 @@ impl StreamMetadata {
 #[cfg(test)]
 mod tests {
     use super::*;
-    
+
     #[test]
     fn test_stream_metadata_creation() {
         let metadata = StreamMetadata::new("test-operation")
             .with_expected_items(10)
             .with_expected_bytes(1024)
             .with_metadata("key", "value");
-        
+
         assert_eq!(metadata.operation, "test-operation");
         assert_eq!(metadata.expected_items, Some(10));
         assert_eq!(metadata.expected_bytes, Some(1024));

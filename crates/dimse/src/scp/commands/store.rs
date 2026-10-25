@@ -13,8 +13,8 @@ use tracing::{debug, error};
 use crate::types::DatasetStream;
 use crate::{DimseError, Result};
 
-use crate::scp::DimseScp;
 use crate::scp::response_builder;
+use crate::scp::DimseScp;
 
 /// Handle C-STORE request
 pub async fn handle_c_store(
@@ -70,14 +70,24 @@ pub async fn handle_c_store(
     match scp.query_provider.store(peer_addr, dataset).await {
         Ok(()) => {
             // Send success response
-            response_builder::send_store_response(association, message_id, 0x0000, presentation_context_id)
-                .await
+            response_builder::send_store_response(
+                association,
+                message_id,
+                0x0000,
+                presentation_context_id,
+            )
+            .await
         }
         Err(e) => {
             error!("Failed to store dataset: {}", e);
             // Send failure response (0xC000 = Error: Cannot Understand)
-            response_builder::send_store_response(association, message_id, 0xC000, presentation_context_id)
-                .await
+            response_builder::send_store_response(
+                association,
+                message_id,
+                0xC000,
+                presentation_context_id,
+            )
+            .await
         }
     }
 }

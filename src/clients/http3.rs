@@ -72,8 +72,7 @@ impl Http3Client {
 
         // Parse the PEM certificate
         let certs: Vec<CertificateDer<'static>> =
-            rustls_pemfile::certs(&mut ca_cert_pem.as_bytes())
-                .collect::<Result<_, _>>()?;
+            rustls_pemfile::certs(&mut ca_cert_pem.as_bytes()).collect::<Result<_, _>>()?;
 
         if certs.is_empty() {
             anyhow::bail!("No certificates found in CA PEM");
@@ -133,9 +132,7 @@ impl Http3Client {
 
         // Build request
         let uri = format!("https://{}:{}{}", host, port, path);
-        let mut req_builder = Request::builder()
-            .method(method.clone())
-            .uri(&uri);
+        let mut req_builder = Request::builder().method(method.clone()).uri(&uri);
 
         // Add headers
         for (key, value) in headers {

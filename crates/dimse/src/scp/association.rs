@@ -11,10 +11,10 @@ use tracing::{debug, error, info, warn};
 
 use crate::{DimseError, Result};
 
-use super::{DimseScp, PeerAdmission};
 use super::commands;
 use super::message_assembler::MessageAssembler;
 use super::pdu_handler;
+use super::{DimseScp, PeerAdmission};
 
 /// Handle a single association
 pub async fn handle_association(
@@ -31,7 +31,6 @@ pub async fn handle_association(
 
     // Decrement active associations
     scp.active_associations.fetch_sub(1, Ordering::Relaxed);
-
 
     result
 }
@@ -58,8 +57,11 @@ async fn handle_association_inner(
         // The rejection was logged by `peer_verdict`. Reading the request only
         // serves to answer it with an A-ASSOCIATE-RJ, so a silent peer is cut
         // off after the connect timeout instead of holding an association slot.
-        match tokio::time::timeout(scp.config.connect_timeout(), scp_options.establish_async(stream))
-            .await
+        match tokio::time::timeout(
+            scp.config.connect_timeout(),
+            scp_options.establish_async(stream),
+        )
+        .await
         {
             Ok(Ok(_)) => {
                 error!(
@@ -68,15 +70,19 @@ async fn handle_association_inner(
                 );
             }
             Ok(Err(e)) => debug!("Sent A-ASSOCIATE-RJ to {}: {}", peer_addr, e),
-            Err(_) => debug!("Rejected peer {} sent no association request in time", peer_addr),
+            Err(_) => debug!(
+                "Rejected peer {} sent no association request in time",
+                peer_addr
+            ),
         }
         return Ok(());
     }
 
     // Establish the association
-    let mut association = scp_options.establish_async(stream).await.map_err(|e| {
-        DimseError::association(format!("Failed to establish association: {}", e))
-    })?;
+    let mut association = scp_options
+        .establish_async(stream)
+        .await
+        .map_err(|e| DimseError::association(format!("Failed to establish association: {}", e)))?;
 
     // Log negotiated PDU sizes for debugging
     info!(
@@ -116,9 +122,10 @@ async fn handle_association_inner(
             Ok(Pdu::ReleaseRQ) => {
                 // Association release requested by SCU
                 info!("Association release requested by {}", peer_addr);
-                association.send(&Pdu::ReleaseRP).await.map_err(|e| {
-                    DimseError::network(format!("Failed to send release: {}", e))
-                })?;
+                association
+                    .send(&Pdu::ReleaseRP)
+                    .await
+                    .map_err(|e| DimseError::network(format!("Failed to send release: {}", e)))?;
                 break;
             }
             Ok(Pdu::AbortRQ { source }) => {

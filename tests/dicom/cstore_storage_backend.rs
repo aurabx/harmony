@@ -82,7 +82,13 @@ fn files_under(dir: &Path) -> Vec<PathBuf> {
     files
 }
 
-fn config(adapter_storage: &Path, admit_root: &Path, admit_port: u16, deny_root: &Path, deny_port: u16) -> Config {
+fn config(
+    adapter_storage: &Path,
+    admit_root: &Path,
+    admit_port: u16,
+    deny_root: &Path,
+    deny_port: u16,
+) -> Config {
     let toml = format!(
         r#"
         [proxy]
@@ -226,7 +232,10 @@ async fn test_cstore_is_archived_only_when_policies_admit_it() {
 
     let admitted = write_instance(input_dir.path());
     let status = storescu(admit_port, &admitted.path).await;
-    assert!(status.success(), "storescu to the admitted pipeline should succeed");
+    assert!(
+        status.success(),
+        "storescu to the admitted pipeline should succeed"
+    );
 
     let archived = admit_root
         .path()
@@ -235,7 +244,10 @@ async fn test_cstore_is_archived_only_when_policies_admit_it() {
     let stored = dicom_object::open_file(&archived)
         .unwrap_or_else(|e| panic!("archived instance at {}: {}", archived.display(), e));
     assert_eq!(
-        stored.meta().media_storage_sop_instance_uid().trim_end_matches('\0'),
+        stored
+            .meta()
+            .media_storage_sop_instance_uid()
+            .trim_end_matches('\0'),
         admitted.sop_uid
     );
     assert_eq!(files_under(admit_root.path()), vec![archived.clone()]);

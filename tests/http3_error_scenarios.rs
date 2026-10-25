@@ -258,7 +258,10 @@ async fn test_http3_connection_refused() {
         .await;
 
     // Connection should fail (timeout or connection refused)
-    assert!(result.is_err(), "Expected connection to fail with no server");
+    assert!(
+        result.is_err(),
+        "Expected connection to fail with no server"
+    );
 }
 
 // =============================================================================
@@ -282,7 +285,10 @@ async fn test_http3_invalid_host() {
         )
         .await;
 
-    assert!(result.is_err(), "Expected connection to fail with invalid host");
+    assert!(
+        result.is_err(),
+        "Expected connection to fail with invalid host"
+    );
     let err_msg = result.unwrap_err().to_string().to_lowercase();
     // Different OSes give different error messages for failed DNS lookups
     assert!(
@@ -392,7 +398,10 @@ async fn test_http3_malformed_path_handled() {
         .await;
 
     // This should succeed - the path is unusual but valid
-    assert!(result.is_ok(), "Expected request with encoded path to succeed");
+    assert!(
+        result.is_ok(),
+        "Expected request with encoded path to succeed"
+    );
     let response = result.unwrap();
     assert_eq!(response.status, StatusCode::OK);
 
@@ -434,10 +443,20 @@ async fn test_http3_large_request_body() {
     let large_body = vec![b'x'; 1024 * 1024];
 
     let mut headers = std::collections::HashMap::new();
-    headers.insert("content-type".to_string(), "application/octet-stream".to_string());
+    headers.insert(
+        "content-type".to_string(),
+        "application/octet-stream".to_string(),
+    );
 
     let result = client
-        .request(Method::POST, "127.0.0.1", 19605, "/upload", &headers, large_body)
+        .request(
+            Method::POST,
+            "127.0.0.1",
+            19605,
+            "/upload",
+            &headers,
+            large_body,
+        )
         .await;
 
     assert!(result.is_ok(), "Expected large body request to succeed");
@@ -452,4 +471,3 @@ async fn test_http3_large_request_body() {
     endpoint.close(0u32.into(), b"test complete");
     endpoint.wait_idle().await;
 }
-

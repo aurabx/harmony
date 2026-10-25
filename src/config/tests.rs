@@ -104,19 +104,28 @@ fn test_peers_and_targets_config() {
     "#;
 
     let result = load_config_from_str(toml);
-    assert!(result.is_ok(), "Configuration with peers and targets should parse");
-    
+    assert!(
+        result.is_ok(),
+        "Configuration with peers and targets should parse"
+    );
+
     let config = result.unwrap();
-    
+
     // Check Peer
-    let peer = config.peers.get("hospital_a").expect("Peer hospital_a not found");
+    let peer = config
+        .peers
+        .get("hospital_a")
+        .expect("Peer hospital_a not found");
     assert_eq!(peer.name, Some("Hospital A".to_string()));
     assert_eq!(peer.protocol, Some("dicom".to_string()));
     assert_eq!(peer.connection.host, "10.0.0.1");
     assert_eq!(peer.connection.port, Some(11112));
-    
+
     // Check Target
-    let target = config.targets.get("pacs_archive").expect("Target pacs_archive not found");
+    let target = config
+        .targets
+        .get("pacs_archive")
+        .expect("Target pacs_archive not found");
     assert_eq!(target.name, Some("Main PACS".to_string()));
     assert_eq!(target.protocol, Some("dicom".to_string()));
     assert_eq!(target.connection.host, "pacs.internal");

@@ -122,8 +122,12 @@ impl ConfigWatcher {
             Err(e) => {
                 let msg = match e {
                     crate::config::config::ConfigError::InvalidProxy { reason, .. } => reason,
-                    crate::config::config::ConfigError::InvalidNetwork { name, reason } => format!("Invalid network '{}': {}", name, reason),
-                    crate::config::config::ConfigError::InvalidPipeline { name, reason } => format!("Invalid pipeline '{}': {}", name, reason),
+                    crate::config::config::ConfigError::InvalidNetwork { name, reason } => {
+                        format!("Invalid network '{}': {}", name, reason)
+                    }
+                    crate::config::config::ConfigError::InvalidPipeline { name, reason } => {
+                        format!("Invalid pipeline '{}': {}", name, reason)
+                    }
                     _ => format!("{:?}", e),
                 };
                 return Err(anyhow::anyhow!("Config validation failed: {}", msg));

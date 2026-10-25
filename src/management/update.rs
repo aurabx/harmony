@@ -81,18 +81,19 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
     })?;
 
     let config_dir = Path::new(&config_path).parent().unwrap_or(Path::new("."));
-    
+
     // Collect pipeline configs from the pipelines/ directory
     let pipelines_dir = config_dir.join("pipelines");
     let mut pipeline_configs: Vec<(String, String)> = Vec::new();
-    
+
     if pipelines_dir.exists() && pipelines_dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&pipelines_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().map_or(false, |ext| ext == "toml") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
-                        let filename = path.file_name()
+                        let filename = path
+                            .file_name()
                             .unwrap_or_default()
                             .to_str()
                             .unwrap_or("")
@@ -112,7 +113,7 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
         .unwrap_or_else(|| "transforms".to_string());
     let transforms_dir = config_dir.join(&transforms_path);
     let mut transform_configs: Vec<(String, String)> = Vec::new();
-    
+
     if transforms_dir.exists() && transforms_dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&transforms_dir) {
             for entry in entries.flatten() {
@@ -120,13 +121,15 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
                 // Transforms can be .json (JOLT specs) - we wrap them in TOML format
                 if path.extension().map_or(false, |ext| ext == "json") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
-                        let filename = path.file_name()
+                        let filename = path
+                            .file_name()
                             .unwrap_or_default()
                             .to_str()
                             .unwrap_or("")
                             .to_string();
                         // Extract transform name from filename (without extension)
-                        let name = path.file_stem()
+                        let name = path
+                            .file_stem()
                             .unwrap_or_default()
                             .to_str()
                             .unwrap_or("")
@@ -147,14 +150,15 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
     // Collect mesh configs from the mesh/ directory
     let mesh_dir = config_dir.join("mesh");
     let mut mesh_configs: Vec<(String, String)> = Vec::new();
-    
+
     if mesh_dir.exists() && mesh_dir.is_dir() {
         if let Ok(entries) = std::fs::read_dir(&mesh_dir) {
             for entry in entries.flatten() {
                 let path = entry.path();
                 if path.extension().map_or(false, |ext| ext == "toml") {
                     if let Ok(content) = std::fs::read_to_string(&path) {
-                        let filename = path.file_name()
+                        let filename = path
+                            .file_name()
                             .unwrap_or_default()
                             .to_str()
                             .unwrap_or("")
@@ -196,7 +200,10 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
     };
 
     // Step 1: Upload gateway configuration
-    tracing::info!("Uploading gateway configuration for gateway: {}", gateway_id);
+    tracing::info!(
+        "Uploading gateway configuration for gateway: {}",
+        gateway_id
+    );
     client
         .store_config(
             &machine_token.machine_token,
@@ -209,14 +216,17 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
             tracing::error!("Failed to upload gateway configuration: {}", e);
             map_sdk_error(e)
         })?;
-    
-    tracing::info!("Gateway configuration uploaded successfully: {} bytes", config_size);
+
+    tracing::info!(
+        "Gateway configuration uploaded successfully: {} bytes",
+        config_size
+    );
 
     // Step 2: Upload each pipeline configuration separately
     let mut pipeline_count = 0;
     for (filename, content) in &pipeline_configs {
         tracing::info!("Uploading pipeline configuration from: {}", filename);
-        
+
         match client
             .store_config(
                 &machine_token.machine_token,
@@ -235,7 +245,11 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
                 pipeline_count += 1;
             }
             Err(e) => {
-                tracing::error!("Failed to upload pipeline configuration {}: {}", filename, e);
+                tracing::error!(
+                    "Failed to upload pipeline configuration {}: {}",
+                    filename,
+                    e
+                );
                 // Continue with other configs rather than failing entirely
             }
         }
@@ -245,7 +259,7 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
     let mut transform_count = 0;
     for (filename, content) in &transform_configs {
         tracing::info!("Uploading transform configuration from: {}", filename);
-        
+
         match client
             .store_config(
                 &machine_token.machine_token,
@@ -264,7 +278,11 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
                 transform_count += 1;
             }
             Err(e) => {
-                tracing::error!("Failed to upload transform configuration {}: {}", filename, e);
+                tracing::error!(
+                    "Failed to upload transform configuration {}: {}",
+                    filename,
+                    e
+                );
                 // Continue with other configs rather than failing entirely
             }
         }
@@ -274,7 +292,7 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
     let mut mesh_count = 0;
     for (filename, content) in &mesh_configs {
         tracing::info!("Uploading mesh configuration from: {}", filename);
-        
+
         match client
             .store_config(
                 &machine_token.machine_token,
@@ -300,9 +318,12 @@ pub async fn handle_update() -> Result<(Value, u16), (u16, String)> {
     }
 
     // Build success response
-    let total_size = config_size 
+    let total_size = config_size
         + pipeline_configs.iter().map(|(_, c)| c.len()).sum::<usize>()
-        + transform_configs.iter().map(|(_, c)| c.len()).sum::<usize>()
+        + transform_configs
+            .iter()
+            .map(|(_, c)| c.len())
+            .sum::<usize>()
         + mesh_configs.iter().map(|(_, c)| c.len()).sum::<usize>();
     let response = UpdateResponse {
         success: true,

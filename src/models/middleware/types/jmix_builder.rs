@@ -252,7 +252,8 @@ impl Middleware for JmixBuilderMiddleware {
                 // No local matches - let backends handle it
                 // Set Command for DICOM backend to use "get" operation (retrieve study data)
                 use crate::models::envelope::command::Operation;
-                envelope.command = Some(Command::new(Operation::Retrieve).with_source("jmix_builder_middleware"));
+                envelope.command =
+                    Some(Command::new(Operation::Retrieve).with_source("jmix_builder_middleware"));
                 return Ok(envelope);
             }
 
@@ -277,7 +278,8 @@ impl Middleware for JmixBuilderMiddleware {
                 // Pass through to backends without setting skip_backends
                 // Set Command for DICOM backend to use "get" operation
                 use crate::models::envelope::command::Operation;
-                envelope.command = Some(Command::new(Operation::Retrieve).with_source("jmix_builder_middleware"));
+                envelope.command =
+                    Some(Command::new(Operation::Retrieve).with_source("jmix_builder_middleware"));
                 return Ok(envelope);
             }
 

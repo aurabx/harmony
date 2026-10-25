@@ -145,10 +145,7 @@ async fn test_stream_format_from_config() {
     );
 
     // Test default fallback
-    assert_eq!(
-        StreamFormat::from_config("invalid"),
-        StreamFormat::Ndjson
-    );
+    assert_eq!(StreamFormat::from_config("invalid"), StreamFormat::Ndjson);
 }
 
 /// Test StreamFormat detection from Accept header

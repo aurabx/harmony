@@ -141,7 +141,10 @@ impl UnifiedRegistry {
 
     /// Get all registered middleware type names
     pub fn middleware_type_names(&self) -> Vec<&str> {
-        self.middleware_factories.keys().map(|s| s.as_str()).collect()
+        self.middleware_factories
+            .keys()
+            .map(|s| s.as_str())
+            .collect()
     }
 
     /// Get all registered service names

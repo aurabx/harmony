@@ -37,13 +37,13 @@ use tracing::{debug, info, warn};
 pub struct HttpStreamingBackend {
     /// Base URL of the streaming endpoint
     pub base_url: Option<String>,
-    
+
     /// Expected streaming format (auto-detect if not specified)
     pub format: Option<StreamFormat>,
-    
+
     /// Timeout for receiving each chunk (seconds)
     pub chunk_timeout_secs: Option<u64>,
-    
+
     /// Maximum chunk size (bytes)
     pub max_chunk_size: Option<usize>,
 }
@@ -71,10 +71,12 @@ impl StreamFormat {
     /// Detect format from Content-Type header
     pub fn from_content_type(content_type: &str) -> Self {
         let ct_lower = content_type.to_lowercase();
-        
+
         if ct_lower.contains("text/event-stream") {
             Self::Sse
-        } else if ct_lower.contains("application/x-ndjson") || ct_lower.contains("application/ndjson") {
+        } else if ct_lower.contains("application/x-ndjson")
+            || ct_lower.contains("application/ndjson")
+        {
             Self::Ndjson
         } else if ct_lower.contains("multipart/") {
             Self::Multipart
@@ -93,7 +95,7 @@ impl ServiceType for HttpStreamingBackend {
             .get("base_url")
             .and_then(|v| v.as_str())
             .or(self.base_url.as_deref());
-            
+
         if base_url.is_none() {
             return Err(ConfigError::InvalidEndpoint {
                 name: "http_streaming_backend".to_string(),
@@ -201,7 +203,9 @@ impl StreamingBackend for HttpStreamingBackend {
             .unwrap_or("");
 
         // Build request URL - combine base_url + path_prefix + path from metadata
-        let path = envelope.request_details.metadata
+        let path = envelope
+            .request_details
+            .metadata
             .get("path")
             .map(|p| format!("/{}", p))
             .unwrap_or_default();
@@ -209,7 +213,10 @@ impl StreamingBackend for HttpStreamingBackend {
 
         // The request path can hold identifiers such as a patient ID, so
         // only the configured part of the URL is logged.
-        debug!("Streaming from: {}{} (request path omitted)", base_url, path_prefix);
+        debug!(
+            "Streaming from: {}{} (request path omitted)",
+            base_url, path_prefix
+        );
 
         // Build HTTP client
         let client = reqwest::Client::builder()
@@ -219,7 +226,7 @@ impl StreamingBackend for HttpStreamingBackend {
 
         // Determine HTTP method
         let method = envelope.request_details.method.as_str();
-        
+
         // Build request
         let mut request = match method.to_uppercase().as_str() {
             "GET" => client.get(&url),
@@ -260,7 +267,10 @@ impl StreamingBackend for HttpStreamingBackend {
         // Check status
         let status = response.status();
         if !status.is_success() {
-            return Err(Error::from(format!("HTTP request failed with status: {}", status)));
+            return Err(Error::from(format!(
+                "HTTP request failed with status: {}",
+                status
+            )));
         }
 
         // Detect format from Content-Type
@@ -296,11 +306,13 @@ impl StreamingBackend for HttpStreamingBackend {
         let command = envelope.command.clone();
         let envelope_stream = match detected_format {
             StreamFormat::Sse => Self::parse_sse_stream(byte_stream, request_details, command),
-            StreamFormat::Ndjson => Self::parse_ndjson_stream(byte_stream, request_details, command),
+            StreamFormat::Ndjson => {
+                Self::parse_ndjson_stream(byte_stream, request_details, command)
+            }
             StreamFormat::Multipart => {
                 let boundary = boundary_opt
                     .ok_or_else(|| Error::from("Missing boundary in multipart Content-Type"))?;
-                
+
                 Self::parse_multipart_stream(byte_stream, request_details, boundary, command)
             }
             StreamFormat::Auto => {
@@ -331,25 +343,28 @@ impl HttpStreamingBackend {
 
                     // Split by double newline (SSE event separator)
                     let mut envelopes = Vec::new();
-                    
+
                     while let Some(pos) = buffer.find("\n\n") {
                         let event = buffer[..pos].to_string();
                         buffer = buffer[pos + 2..].to_string();
 
                         // Parse SSE event
-                        if let Some(envelope) = Self::parse_sse_event(&event, &request_details, &mut sequence, &command) {
+                        if let Some(envelope) =
+                            Self::parse_sse_event(&event, &request_details, &mut sequence, &command)
+                        {
                             envelopes.push(Ok(envelope));
                         }
                     }
 
                     futures_util::stream::iter(envelopes)
                 }
-                Err(e) => {
-                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e.without_url())))])
-                }
+                Err(e) => futures_util::stream::iter(vec![Err(Error::from(format!(
+                    "Stream error: {}",
+                    e.without_url()
+                )))]),
             }
         });
-        
+
         Box::pin(stream)
     }
 
@@ -388,7 +403,7 @@ impl HttpStreamingBackend {
         match serde_json::from_str::<serde_json::Value>(&data) {
             Ok(json) => {
                 let body = serde_json::to_vec(&json).unwrap_or_default();
-                
+
                 let mut metadata = HashMap::new();
                 metadata.insert("stream_sequence".to_string(), sequence.to_string());
                 metadata.insert("event_type".to_string(), event_type.to_string());
@@ -403,8 +418,12 @@ impl HttpStreamingBackend {
                 );
 
                 response.normalized_data = Some(json);
-                
-                debug!("Parsed SSE event #{}: {} bytes", sequence, response.original_data.len());
+
+                debug!(
+                    "Parsed SSE event #{}: {} bytes",
+                    sequence,
+                    response.original_data.len()
+                );
                 Some(response)
             }
             Err(e) => {
@@ -415,7 +434,7 @@ impl HttpStreamingBackend {
     }
 
     /// Parse NDJSON stream into ResponseEnvelopes
-    /// 
+    ///
     /// Also handles JSON array responses - if the entire content is a JSON array,
     /// each element is treated as a separate item.
     pub(crate) fn parse_ndjson_stream(
@@ -434,7 +453,7 @@ impl HttpStreamingBackend {
                     buffer.push_str(&String::from_utf8_lossy(&bytes));
 
                     let mut envelopes = Vec::new();
-                    
+
                     // First try to parse NDJSON (newline-delimited)
                     while let Some(pos) = buffer.find('\n') {
                         let line = buffer[..pos].to_string();
@@ -449,7 +468,12 @@ impl HttpStreamingBackend {
                         // Parse JSON line
                         match serde_json::from_str::<serde_json::Value>(&line) {
                             Ok(json) => {
-                                if let Some(envelope) = Self::json_to_envelope(&json, &request_details, sequence, &command) {
+                                if let Some(envelope) = Self::json_to_envelope(
+                                    &json,
+                                    &request_details,
+                                    sequence,
+                                    &command,
+                                ) {
                                     envelopes.push(Ok(envelope));
                                 }
                             }
@@ -463,25 +487,36 @@ impl HttpStreamingBackend {
                     // Try to parse it when it looks complete (ends with ] or })
                     if envelopes.is_empty() && !processed_as_array {
                         let trimmed = buffer.trim();
-                        if (trimmed.starts_with('[') && trimmed.ends_with(']')) ||
-                           (trimmed.starts_with('{') && trimmed.ends_with('}')) {
+                        if (trimmed.starts_with('[') && trimmed.ends_with(']'))
+                            || (trimmed.starts_with('{') && trimmed.ends_with('}'))
+                        {
                             // Try to parse as JSON
                             if let Ok(json) = serde_json::from_str::<serde_json::Value>(trimmed) {
                                 processed_as_array = true;
-                                
+
                                 // If it's an array, treat each element as a separate item
                                 if let Some(array) = json.as_array() {
                                     debug!("Parsing JSON array with {} elements", array.len());
                                     for item in array {
                                         sequence += 1;
-                                        if let Some(envelope) = Self::json_to_envelope(item, &request_details, sequence, &command) {
+                                        if let Some(envelope) = Self::json_to_envelope(
+                                            item,
+                                            &request_details,
+                                            sequence,
+                                            &command,
+                                        ) {
                                             envelopes.push(Ok(envelope));
                                         }
                                     }
                                 } else {
                                     // Single object
                                     sequence += 1;
-                                    if let Some(envelope) = Self::json_to_envelope(&json, &request_details, sequence, &command) {
+                                    if let Some(envelope) = Self::json_to_envelope(
+                                        &json,
+                                        &request_details,
+                                        sequence,
+                                        &command,
+                                    ) {
                                         envelopes.push(Ok(envelope));
                                     }
                                 }
@@ -492,12 +527,13 @@ impl HttpStreamingBackend {
 
                     futures_util::stream::iter(envelopes)
                 }
-                Err(e) => {
-                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e.without_url())))])
-                }
+                Err(e) => futures_util::stream::iter(vec![Err(Error::from(format!(
+                    "Stream error: {}",
+                    e.without_url()
+                )))]),
             }
         });
-        
+
         Box::pin(stream)
     }
 
@@ -511,15 +547,18 @@ impl HttpStreamingBackend {
         // Check for error marker
         if let Some(error) = json.get("_error") {
             // Upstream error text can quote the failed record.
-            warn!("JSON item carried an _error marker ({})", json_type_name(error));
+            warn!(
+                "JSON item carried an _error marker ({})",
+                json_type_name(error)
+            );
             return None;
         }
 
         let body = serde_json::to_vec(json).unwrap_or_default();
-        
+
         let mut metadata = HashMap::new();
         metadata.insert("stream_sequence".to_string(), sequence.to_string());
-        
+
         // Extract SOP Instance UID if present
         if let Some(sop_uid) = json.get("_sop_instance_uid").and_then(|v| v.as_str()) {
             metadata.insert("sop_instance_uid".to_string(), sop_uid.to_string());
@@ -535,8 +574,12 @@ impl HttpStreamingBackend {
         );
 
         response.normalized_data = Some(json.clone());
-        
-        debug!("Parsed JSON item #{}: {} bytes", sequence, response.original_data.len());
+
+        debug!(
+            "Parsed JSON item #{}: {} bytes",
+            sequence,
+            response.original_data.len()
+        );
         Some(response)
     }
 
@@ -558,39 +601,49 @@ impl HttpStreamingBackend {
                     buffer.extend_from_slice(&bytes);
 
                     let mut envelopes = Vec::new();
-                    
+
                     // Look for boundary markers
-                    while let Some(part) = Self::extract_multipart_part(&mut buffer, &boundary_marker) {
+                    while let Some(part) =
+                        Self::extract_multipart_part(&mut buffer, &boundary_marker)
+                    {
                         sequence += 1;
 
-                        if let Some(envelope) = Self::parse_multipart_part(&part, &request_details, sequence, &command) {
-                            debug!("Parsed multipart part #{}: {} bytes", sequence, envelope.original_data.len());
+                        if let Some(envelope) =
+                            Self::parse_multipart_part(&part, &request_details, sequence, &command)
+                        {
+                            debug!(
+                                "Parsed multipart part #{}: {} bytes",
+                                sequence,
+                                envelope.original_data.len()
+                            );
                             envelopes.push(Ok(envelope));
                         }
                     }
 
                     futures_util::stream::iter(envelopes)
                 }
-                Err(e) => {
-                    futures_util::stream::iter(vec![Err(Error::from(format!("Stream error: {}", e.without_url())))])
-                }
+                Err(e) => futures_util::stream::iter(vec![Err(Error::from(format!(
+                    "Stream error: {}",
+                    e.without_url()
+                )))]),
             }
         });
-        
+
         Box::pin(stream)
     }
 
     /// Extract a single multipart part from buffer
     fn extract_multipart_part(buffer: &mut Vec<u8>, boundary: &str) -> Option<Vec<u8>> {
         let boundary_bytes = boundary.as_bytes();
-        
+
         // Find first boundary
-        let start_pos = buffer.windows(boundary_bytes.len())
+        let start_pos = buffer
+            .windows(boundary_bytes.len())
             .position(|window| window == boundary_bytes)?;
-        
+
         // Skip past the boundary and CRLF
         let content_start = start_pos + boundary_bytes.len() + 2; // +2 for \r\n
-        
+
         if content_start >= buffer.len() {
             return None;
         }
@@ -599,15 +652,15 @@ impl HttpStreamingBackend {
         let next_boundary_pos = buffer[content_start..]
             .windows(boundary_bytes.len())
             .position(|window| window == boundary_bytes)?;
-        
+
         let content_end = content_start + next_boundary_pos;
-        
+
         // Extract part
         let part = buffer[content_start..content_end].to_vec();
-        
+
         // Remove processed data from buffer
         buffer.drain(..content_end);
-        
+
         Some(part)
     }
 
@@ -621,23 +674,23 @@ impl HttpStreamingBackend {
         // Split headers and body by double CRLF
         let part_str = String::from_utf8_lossy(part);
         let mut parts = part_str.splitn(2, "\r\n\r\n");
-        
+
         let headers_str = parts.next()?;
         let body_start = headers_str.len() + 4; // +4 for \r\n\r\n
-        
+
         if body_start >= part.len() {
             return None;
         }
-        
+
         // Parse headers
         let mut headers = HashMap::new();
         let mut metadata = HashMap::new();
-        
+
         for line in headers_str.lines() {
             if let Some((key, value)) = line.split_once(':') {
                 let key = key.trim().to_lowercase();
                 let value = value.trim().to_string();
-                
+
                 if key.starts_with("x-") {
                     // Custom header -> metadata
                     let meta_key = key.strip_prefix("x-").unwrap_or(&key);
@@ -647,12 +700,12 @@ impl HttpStreamingBackend {
                 }
             }
         }
-        
+
         metadata.insert("stream_sequence".to_string(), sequence.to_string());
-        
+
         // Extract body
         let body = part[body_start..].to_vec();
-        
+
         let response = ResponseEnvelope::from_backend_with_command(
             request_details.clone(),
             200,
@@ -661,22 +714,20 @@ impl HttpStreamingBackend {
             Some(metadata),
             command.clone(),
         );
-        
+
         Some(response)
     }
 
     /// Extract boundary from Content-Type header
     fn extract_boundary(content_type: &str) -> Option<String> {
-        content_type
-            .split(';')
-            .find_map(|part| {
-                let part = part.trim();
-                if part.starts_with("boundary=") {
-                    Some(part[9..].trim_matches('"').to_string())
-                } else {
-                    None
-                }
-            })
+        content_type.split(';').find_map(|part| {
+            let part = part.trim();
+            if part.starts_with("boundary=") {
+                Some(part[9..].trim_matches('"').to_string())
+            } else {
+                None
+            }
+        })
     }
 }
 
@@ -715,11 +766,15 @@ mod tests {
     #[test]
     fn test_extract_boundary() {
         assert_eq!(
-            HttpStreamingBackend::extract_boundary("multipart/x-mixed-replace; boundary=harmony-stream-123"),
+            HttpStreamingBackend::extract_boundary(
+                "multipart/x-mixed-replace; boundary=harmony-stream-123"
+            ),
             Some("harmony-stream-123".to_string())
         );
         assert_eq!(
-            HttpStreamingBackend::extract_boundary("multipart/x-mixed-replace; boundary=\"harmony-stream-123\""),
+            HttpStreamingBackend::extract_boundary(
+                "multipart/x-mixed-replace; boundary=\"harmony-stream-123\""
+            ),
             Some("harmony-stream-123".to_string())
         );
         assert_eq!(
@@ -799,8 +854,7 @@ mod tests {
         let (log, _guard) = crate::logging::test_capture::capture_debug();
         let marker = "DOE-PHI-MARKER";
         let json = serde_json::json!({ "_error": format!("no study for patient {}", marker) });
-        let out =
-            HttpStreamingBackend::json_to_envelope(&json, &Default::default(), 1, &None);
+        let out = HttpStreamingBackend::json_to_envelope(&json, &Default::default(), 1, &None);
 
         assert!(out.is_none());
         let text = log.contents();
@@ -822,7 +876,10 @@ mod tests {
             "base_url".to_string(),
             Value::String("http://127.0.0.1:1".to_string()),
         );
-        options.insert("path_prefix".to_string(), Value::String("/fhir".to_string()));
+        options.insert(
+            "path_prefix".to_string(),
+            Value::String("/fhir".to_string()),
+        );
         let mut envelope: RequestEnvelope<Vec<u8>> =
             RequestEnvelope::new(Default::default(), vec![]);
         envelope.request_details.method = "GET".to_string();

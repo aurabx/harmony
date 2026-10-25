@@ -941,7 +941,12 @@ impl DicomScuBackend {
                                         }
                                     }
                                 }
-                                Ok(ref dataset @ dimse::types::DatasetStream::Object { ref object, ref metadata }) => {
+                                Ok(
+                                    ref dataset @ dimse::types::DatasetStream::Object {
+                                        ref object,
+                                        ref metadata,
+                                    },
+                                ) => {
                                     // Without an output directory the native C-GET SCU hands
                                     // instances over in memory. Persist them under the same
                                     // storage folder the file-backed path uses.
@@ -956,13 +961,17 @@ impl DicomScuBackend {
                                                         .chars()
                                                         .filter(|c| c.is_ascii_digit() || *c == '.')
                                                         .collect();
-                                                    let stem = if stem.chars().any(|c| c.is_ascii_digit()) {
-                                                        stem
-                                                    } else {
-                                                        metadata.id.to_string()
-                                                    };
-                                                    let rel = format!("dimse/{}/{}.dcm", folder_id, stem);
-                                                    let _ = storage.write_file_str(&rel, &bytes).await;
+                                                    let stem =
+                                                        if stem.chars().any(|c| c.is_ascii_digit())
+                                                        {
+                                                            stem
+                                                        } else {
+                                                            metadata.id.to_string()
+                                                        };
+                                                    let rel =
+                                                        format!("dimse/{}/{}.dcm", folder_id, stem);
+                                                    let _ =
+                                                        storage.write_file_str(&rel, &bytes).await;
                                                 }
                                             }
                                             file_count += 1;
@@ -1244,7 +1253,9 @@ impl DicomScuBackend {
             // start with that byte have no group 0008, so no SOP Class UID,
             // and could not be stored anyway.
             Err(StoreBodyError::NotPart10OrJson { .. }) if body.first() != Some(&b'{') => {
-                return Ok(DatasetStream::from_bytes(bytes::Bytes::copy_from_slice(body)));
+                return Ok(DatasetStream::from_bytes(bytes::Bytes::copy_from_slice(
+                    body,
+                )));
             }
             Err(e) => return Err(format!("dicom_scu store: {}", e)),
         };
@@ -1419,7 +1430,11 @@ pub(crate) fn reject_dimse_op_metadata(
         return Ok(());
     }
 
-    let location = if in_target { "target_details" } else { "request_details" };
+    let location = if in_target {
+        "target_details"
+    } else {
+        "request_details"
+    };
     Err(Error::from(format!(
         "{}: {}.metadata.dimse_op is no longer supported. \
          Set the operation with `command` instead (see docs/architecture/commands.md).",
@@ -1605,11 +1620,15 @@ mod tests {
     }
 
     fn with_meta(env: &mut RequestEnvelope<Vec<u8>>, key: &str, val: &str) {
-        env.request_details.metadata.insert(key.to_string(), val.to_string());
+        env.request_details
+            .metadata
+            .insert(key.to_string(), val.to_string());
     }
 
     fn with_header(env: &mut RequestEnvelope<Vec<u8>>, key: &str, val: &str) {
-        env.request_details.headers.insert(key.to_string(), val.to_string());
+        env.request_details
+            .headers
+            .insert(key.to_string(), val.to_string());
     }
 
     fn opts() -> HashMap<String, Value> {
@@ -1676,8 +1695,15 @@ mod tests {
     fn test_reject_dimse_op_in_request_metadata() {
         let mut env = make_envelope("/");
         with_meta(&mut env, "dimse_op", "find");
-        let msg = format!("{:?}", reject_dimse_op_metadata(&env, "dicom_scu").unwrap_err());
-        assert!(msg.contains("dicom_scu: request_details.metadata.dimse_op"), "{}", msg);
+        let msg = format!(
+            "{:?}",
+            reject_dimse_op_metadata(&env, "dicom_scu").unwrap_err()
+        );
+        assert!(
+            msg.contains("dicom_scu: request_details.metadata.dimse_op"),
+            "{}",
+            msg
+        );
         assert!(msg.contains("command"), "{}", msg);
     }
 
@@ -1685,8 +1711,15 @@ mod tests {
     fn test_reject_dimse_op_in_target_metadata() {
         let mut env = make_envelope("/");
         env.set_target_metadata("dimse_op", "find");
-        let msg = format!("{:?}", reject_dimse_op_metadata(&env, "dicom_scu").unwrap_err());
-        assert!(msg.contains("dicom_scu: target_details.metadata.dimse_op"), "{}", msg);
+        let msg = format!(
+            "{:?}",
+            reject_dimse_op_metadata(&env, "dicom_scu").unwrap_err()
+        );
+        assert!(
+            msg.contains("dicom_scu: target_details.metadata.dimse_op"),
+            "{}",
+            msg
+        );
     }
 
     #[tokio::test]
@@ -1709,7 +1742,11 @@ mod tests {
             .expect_err("dimse_op metadata must be rejected");
 
         let msg = format!("{:?}", err);
-        assert!(msg.contains("dicom_scu: target_details.metadata.dimse_op"), "{}", msg);
+        assert!(
+            msg.contains("dicom_scu: target_details.metadata.dimse_op"),
+            "{}",
+            msg
+        );
     }
 
     #[tokio::test]
@@ -1731,8 +1768,16 @@ mod tests {
             .expect_err("a handler failure must be returned as an error");
 
         let msg = err.to_string();
-        assert!(msg.starts_with("dicom_scu backend request failed: "), "{}", msg);
-        assert!(msg.contains("dicom_scu: target_details.metadata.dimse_op"), "{}", msg);
+        assert!(
+            msg.starts_with("dicom_scu backend request failed: "),
+            "{}",
+            msg
+        );
+        assert!(
+            msg.contains("dicom_scu: target_details.metadata.dimse_op"),
+            "{}",
+            msg
+        );
     }
 
     // ── 3. Path-based (the bug scenario) ──────────────────────────────────────
@@ -1789,15 +1834,18 @@ mod tests {
     fn test_retrieve_mode_overrides_default() {
         let env = make_envelope("/api/dicom");
         let mut options = opts();
-        options.insert("dimse_retrieve_mode".to_string(), Value::String("move".to_string()));
+        options.insert(
+            "dimse_retrieve_mode".to_string(),
+            Value::String("move".to_string()),
+        );
         assert_eq!(resolve_dimse_op(&env, &options), "move");
     }
 
     // ── C-STORE request bodies ───────────────────────────────────────────────
 
     fn sample_part10() -> Vec<u8> {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("samples/dicom/study_1/series_1/CT.1.1.dcm");
+        let path =
+            Path::new(env!("CARGO_MANIFEST_DIR")).join("samples/dicom/study_1/series_1/CT.1.1.dcm");
         fs::read(&path).unwrap_or_else(|e| panic!("read {}: {}", path.display(), e))
     }
 
@@ -1862,13 +1910,16 @@ mod tests {
             "file": file.to_string_lossy(),
         })));
 
-        assert!(reason.contains("does not read files"), "unexpected error: {}", reason);
+        assert!(
+            reason.contains("does not read files"),
+            "unexpected error: {}",
+            reason
+        );
     }
 
     #[test]
     fn test_store_dataset_accepts_part10_body() {
-        let dataset =
-            DicomScuBackend::store_dataset_from_body(&sample_part10()).expect("instance");
+        let dataset = DicomScuBackend::store_dataset_from_body(&sample_part10()).expect("instance");
 
         assert!(matches!(dataset, DatasetStream::Object { .. }));
         assert_eq!(
@@ -1883,8 +1934,7 @@ mod tests {
             .expect("sample instance parses");
         let expected = file.meta().transfer_syntax().to_string();
 
-        let dataset =
-            DicomScuBackend::store_dataset_from_body(&sample_part10()).expect("instance");
+        let dataset = DicomScuBackend::store_dataset_from_body(&sample_part10()).expect("instance");
 
         assert_eq!(dataset.metadata().transfer_syntax, Some(expected));
     }
@@ -1893,9 +1943,8 @@ mod tests {
 
     /// What the test PACS was handed for one C-STORE: the negotiated transfer
     /// syntax and the instance.
-    type ReceivedParts = std::sync::Arc<
-        std::sync::Mutex<Vec<(Option<String>, dicom_object::InMemDicomObject)>>,
-    >;
+    type ReceivedParts =
+        std::sync::Arc<std::sync::Mutex<Vec<(Option<String>, dicom_object::InMemDicomObject)>>>;
 
     struct RecordingPacs {
         received: ReceivedParts,
@@ -1940,7 +1989,10 @@ mod tests {
         ) -> dimse::Result<()> {
             let transfer_syntax = dataset.metadata().transfer_syntax.clone();
             let object = dataset.to_object().await?;
-            self.received.lock().unwrap().push((transfer_syntax, object));
+            self.received
+                .lock()
+                .unwrap()
+                .push((transfer_syntax, object));
             Ok(())
         }
     }
@@ -1969,7 +2021,10 @@ mod tests {
         );
         tokio::spawn(scp.run(tokio_util::sync::CancellationToken::new()));
         for _ in 0..250 {
-            if tokio::net::TcpStream::connect(("127.0.0.1", port)).await.is_ok() {
+            if tokio::net::TcpStream::connect(("127.0.0.1", port))
+                .await
+                .is_ok()
+            {
                 return (port, received, storage_dir);
             }
             tokio::time::sleep(std::time::Duration::from_millis(20)).await;
@@ -2043,7 +2098,11 @@ mod tests {
         );
 
         let received = received.lock().unwrap();
-        assert_eq!(received.len(), 1, "the PACS should hold exactly one instance");
+        assert_eq!(
+            received.len(),
+            1,
+            "the PACS should hold exactly one instance"
+        );
         assert_eq!(received[0].0.as_deref(), Some(JPEG_LOSSLESS_SV1));
         match received[0]
             .1
@@ -2265,7 +2324,10 @@ mod tests {
 
         match &dataset {
             DatasetStream::Memory { data, .. } => assert_eq!(data.as_ref(), &bare[..]),
-            other => panic!("expected the body as bare bytes, got {:?}", other.metadata()),
+            other => panic!(
+                "expected the body as bare bytes, got {:?}",
+                other.metadata()
+            ),
         }
     }
 
@@ -2289,8 +2351,14 @@ mod tests {
     fn test_store_dataset_rejects_bodies_without_an_instance() {
         let rejected = [
             (Vec::new(), "No DICOM data provided"),
-            (json_body(serde_json::json!({"dataset": {}})), "no 'part10_b64' string"),
-            (json_body(serde_json::json!({"part10_b64": 7})), "no 'part10_b64' string"),
+            (
+                json_body(serde_json::json!({"dataset": {}})),
+                "no 'part10_b64' string",
+            ),
+            (
+                json_body(serde_json::json!({"part10_b64": 7})),
+                "no 'part10_b64' string",
+            ),
             (
                 json_body(serde_json::json!({"part10_b64": "not base64!"})),
                 "not valid base64",
@@ -2302,7 +2370,12 @@ mod tests {
         ];
         for (body, expected) in rejected {
             let reason = store_body_error(&body);
-            assert!(reason.contains(expected), "expected {:?} in: {}", expected, reason);
+            assert!(
+                reason.contains(expected),
+                "expected {:?} in: {}",
+                expected,
+                reason
+            );
         }
     }
 

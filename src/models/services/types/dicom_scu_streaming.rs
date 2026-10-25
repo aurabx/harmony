@@ -2,7 +2,7 @@ use crate::config::config::ConfigError;
 use crate::models::envelope::command::Command;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
-use crate::models::services::streaming::{ResponseStream, StreamingBackend, StreamMetadata};
+use crate::models::services::streaming::{ResponseStream, StreamMetadata, StreamingBackend};
 use async_trait::async_trait;
 use axum::response::Response;
 use futures_util::{Stream, StreamExt};
@@ -117,8 +117,8 @@ impl DicomScuStreamingBackend {
         &self,
         envelope: &RequestEnvelope<Vec<u8>>,
     ) -> Result<HashMap<String, String>, Error> {
-        let body_json: serde_json::Value = serde_json::from_slice(&envelope.original_data)
-            .unwrap_or(serde_json::Value::Null);
+        let body_json: serde_json::Value =
+            serde_json::from_slice(&envelope.original_data).unwrap_or(serde_json::Value::Null);
 
         // Extract identifier JSON (allow override from normalized_data.dimse_identifier)
         let mut identifier_json = match body_json {
@@ -174,7 +174,11 @@ impl DicomScuStreamingBackend {
     /// Build a FindQuery from query parameters
     ///
     /// If `explicit_level` is provided, it takes precedence over inference.
-    fn build_find_query(&self, params: &HashMap<String, String>, explicit_level: Option<QueryLevel>) -> FindQuery {
+    fn build_find_query(
+        &self,
+        params: &HashMap<String, String>,
+        explicit_level: Option<QueryLevel>,
+    ) -> FindQuery {
         // Use explicit level if provided, otherwise infer from parameters
         let query_level = explicit_level.unwrap_or_else(|| {
             // Determine appropriate query level based on filters and return keys
@@ -268,12 +272,13 @@ impl DicomScuStreamingBackend {
         let part10 = part10_from_store_body(&envelope.original_data)
             .map_err(|e| Error::from(format!("dicom_scu_streaming store: {}", e)))?;
 
-        let file = dicom_object::from_reader(std::io::Cursor::new(part10.as_ref())).map_err(|e| {
-            Error::from(format!(
+        let file =
+            dicom_object::from_reader(std::io::Cursor::new(part10.as_ref())).map_err(|e| {
+                Error::from(format!(
                 "dicom_scu_streaming store: the instance is not a readable DICOM Part 10 file: {}",
                 e
             ))
-        })?;
+            })?;
         let transfer_syntax = file.meta().transfer_syntax().to_string();
 
         let mut dataset = DatasetStream::from_object(file.into_inner());
@@ -346,7 +351,11 @@ impl DicomScuStreamingBackend {
         envelope_metadata.insert("dicom_status".to_string(), dicom_status.to_string());
         envelope_metadata.insert(
             "store_result".to_string(),
-            if success { "success".to_string() } else { "failure".to_string() },
+            if success {
+                "success".to_string()
+            } else {
+                "failure".to_string()
+            },
         );
         if let Some(ref uid) = sop_class_uid {
             envelope_metadata.insert("sop_class_uid".to_string(), uid.clone());
@@ -714,7 +723,10 @@ impl DicomScuStreamingBackend {
         let mut headers = HashMap::new();
         headers.insert("content-type".to_string(), "application/dicom".to_string());
         if let Some(ref sop_instance_uid) = metadata.sop_instance_uid {
-            headers.insert("x-dicom-sop-instance-uid".to_string(), sop_instance_uid.clone());
+            headers.insert(
+                "x-dicom-sop-instance-uid".to_string(),
+                sop_instance_uid.clone(),
+            );
         }
         if let Some(ref sop_class_uid) = metadata.sop_class_uid {
             headers.insert("x-dicom-sop-class-uid".to_string(), sop_class_uid.clone());
@@ -752,7 +764,11 @@ impl DicomScuStreamingBackend {
             sequence += 1;
 
             match result {
-                Ok(DatasetStream::File { ref path, ref metadata, .. }) => {
+                Ok(DatasetStream::File {
+                    ref path,
+                    ref metadata,
+                    ..
+                }) => {
                     debug!("Processing DICOM file: {:?}", path);
 
                     let bytes = std::fs::read(path)
@@ -760,17 +776,28 @@ impl DicomScuStreamingBackend {
                     let object = dicom_object::open_file(path)
                         .map_err(|e| Error::from(format!("Failed to parse DICOM file: {}", e)))?;
 
-                    Self::instance_envelope(bytes, &object, metadata, sequence, &request_details, &command)
+                    Self::instance_envelope(
+                        bytes,
+                        &object,
+                        metadata,
+                        sequence,
+                        &request_details,
+                        &command,
+                    )
                 }
-                Ok(DatasetStream::Memory { ref data, ref metadata }) => {
+                Ok(DatasetStream::Memory {
+                    ref data,
+                    ref metadata,
+                }) => {
                     debug!("Processing in-memory DICOM dataset");
 
                     // Parse DICOM object
                     let obj = dicom_object::from_reader(&**data)
                         .map_err(|e| Error::from(format!("Failed to parse DICOM: {}", e)))?;
 
-                    let json = dicom_json_tool::identifier_to_json_value(&obj)
-                        .map_err(|e| Error::from(format!("Failed to convert DICOM to JSON: {}", e)))?;
+                    let json = dicom_json_tool::identifier_to_json_value(&obj).map_err(|e| {
+                        Error::from(format!("Failed to convert DICOM to JSON: {}", e))
+                    })?;
 
                     let mut headers = HashMap::new();
                     headers.insert("content-type".to_string(), "application/json".to_string());
@@ -779,7 +806,8 @@ impl DicomScuStreamingBackend {
                     envelope_metadata.insert("stream_sequence".to_string(), sequence.to_string());
 
                     if let Some(ref sop_instance_uid) = metadata.sop_instance_uid {
-                        envelope_metadata.insert("sop_instance_uid".to_string(), sop_instance_uid.clone());
+                        envelope_metadata
+                            .insert("sop_instance_uid".to_string(), sop_instance_uid.clone());
                     }
 
                     let mut response = ResponseEnvelope::from_backend_with_command(
@@ -795,7 +823,12 @@ impl DicomScuStreamingBackend {
 
                     Ok(response)
                 }
-                Ok(ref dataset @ DatasetStream::Object { ref object, ref metadata }) => {
+                Ok(
+                    ref dataset @ DatasetStream::Object {
+                        ref object,
+                        ref metadata,
+                    },
+                ) => {
                     // The native C-GET SCU hands instances over in memory. They go out
                     // in the same shape as file-backed ones so the wire format does not
                     // depend on which SCU produced them.
@@ -806,10 +839,19 @@ impl DicomScuStreamingBackend {
 
                     let bytes = dataset
                         .to_part10_bytes()
-                        .map_err(|e| Error::from(format!("Failed to encode DICOM instance: {}", e)))?
+                        .map_err(|e| {
+                            Error::from(format!("Failed to encode DICOM instance: {}", e))
+                        })?
                         .to_vec();
 
-                    Self::instance_envelope(bytes, object, metadata, sequence, &request_details, &command)
+                    Self::instance_envelope(
+                        bytes,
+                        object,
+                        metadata,
+                        sequence,
+                        &request_details,
+                        &command,
+                    )
                 }
                 Err(e) => {
                     warn!("DIMSE stream error: {}", e);
@@ -831,7 +873,11 @@ mod tests {
 
     // ── helpers ─────────────────────────────────────────────────────────────
 
-    fn make_backend(aet: Option<&str>, host: Option<&str>, port: Option<u16>) -> DicomScuStreamingBackend {
+    fn make_backend(
+        aet: Option<&str>,
+        host: Option<&str>,
+        port: Option<u16>,
+    ) -> DicomScuStreamingBackend {
         DicomScuStreamingBackend {
             local_aet: None,
             aet: aet.map(|s| s.to_string()),
@@ -842,7 +888,10 @@ mod tests {
     }
 
     fn make_options(pairs: &[(&str, serde_json::Value)]) -> HashMap<String, serde_json::Value> {
-        pairs.iter().map(|(k, v)| (k.to_string(), v.clone())).collect()
+        pairs
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.clone()))
+            .collect()
     }
 
     fn dummy_request_details() -> RequestDetails {
@@ -862,26 +911,50 @@ mod tests {
 
     #[test]
     fn test_parse_query_level_patient() {
-        assert_eq!(DicomScuStreamingBackend::parse_query_level("PATIENT"), Some(QueryLevel::Patient));
-        assert_eq!(DicomScuStreamingBackend::parse_query_level("patient"), Some(QueryLevel::Patient));
+        assert_eq!(
+            DicomScuStreamingBackend::parse_query_level("PATIENT"),
+            Some(QueryLevel::Patient)
+        );
+        assert_eq!(
+            DicomScuStreamingBackend::parse_query_level("patient"),
+            Some(QueryLevel::Patient)
+        );
     }
 
     #[test]
     fn test_parse_query_level_study() {
-        assert_eq!(DicomScuStreamingBackend::parse_query_level("STUDY"), Some(QueryLevel::Study));
-        assert_eq!(DicomScuStreamingBackend::parse_query_level("study"), Some(QueryLevel::Study));
+        assert_eq!(
+            DicomScuStreamingBackend::parse_query_level("STUDY"),
+            Some(QueryLevel::Study)
+        );
+        assert_eq!(
+            DicomScuStreamingBackend::parse_query_level("study"),
+            Some(QueryLevel::Study)
+        );
     }
 
     #[test]
     fn test_parse_query_level_series() {
-        assert_eq!(DicomScuStreamingBackend::parse_query_level("SERIES"), Some(QueryLevel::Series));
+        assert_eq!(
+            DicomScuStreamingBackend::parse_query_level("SERIES"),
+            Some(QueryLevel::Series)
+        );
     }
 
     #[test]
     fn test_parse_query_level_image() {
-        assert_eq!(DicomScuStreamingBackend::parse_query_level("IMAGE"), Some(QueryLevel::Image));
-        assert_eq!(DicomScuStreamingBackend::parse_query_level("INSTANCE"), Some(QueryLevel::Image));
-        assert_eq!(DicomScuStreamingBackend::parse_query_level("instance"), Some(QueryLevel::Image));
+        assert_eq!(
+            DicomScuStreamingBackend::parse_query_level("IMAGE"),
+            Some(QueryLevel::Image)
+        );
+        assert_eq!(
+            DicomScuStreamingBackend::parse_query_level("INSTANCE"),
+            Some(QueryLevel::Image)
+        );
+        assert_eq!(
+            DicomScuStreamingBackend::parse_query_level("instance"),
+            Some(QueryLevel::Image)
+        );
     }
 
     #[test]
@@ -967,7 +1040,10 @@ mod tests {
         let mut params = HashMap::new();
         params.insert("0020000D".to_string(), "1.2.3".to_string());
         let query = backend.build_get_query(&params);
-        assert_eq!(query.parameters.get("0020000D").map(|s| s.as_str()), Some("1.2.3"));
+        assert_eq!(
+            query.parameters.get("0020000D").map(|s| s.as_str()),
+            Some("1.2.3")
+        );
     }
 
     // ── get_local_aet ────────────────────────────────────────────────────────
@@ -976,7 +1052,10 @@ mod tests {
     fn test_get_local_aet_from_options() {
         let backend = make_backend(None, None, None);
         let options = make_options(&[("local_aet", serde_json::json!("FROM_OPTIONS"))]);
-        assert_eq!(backend.get_local_aet(&options), Some("FROM_OPTIONS".to_string()));
+        assert_eq!(
+            backend.get_local_aet(&options),
+            Some("FROM_OPTIONS".to_string())
+        );
     }
 
     #[test]
@@ -984,14 +1063,20 @@ mod tests {
         let mut backend = make_backend(None, None, None);
         backend.local_aet = Some("FROM_STRUCT".to_string());
         let options = make_options(&[]);
-        assert_eq!(backend.get_local_aet(&options), Some("FROM_STRUCT".to_string()));
+        assert_eq!(
+            backend.get_local_aet(&options),
+            Some("FROM_STRUCT".to_string())
+        );
     }
 
     #[test]
     fn test_get_local_aet_default_fallback() {
         let backend = make_backend(None, None, None);
         let options = make_options(&[]);
-        assert_eq!(backend.get_local_aet(&options), Some("HARMONY_STREAM".to_string()));
+        assert_eq!(
+            backend.get_local_aet(&options),
+            Some("HARMONY_STREAM".to_string())
+        );
     }
 
     #[test]
@@ -999,7 +1084,10 @@ mod tests {
         let mut backend = make_backend(None, None, None);
         backend.local_aet = Some("FROM_STRUCT".to_string());
         let options = make_options(&[("local_aet", serde_json::json!("FROM_OPTIONS"))]);
-        assert_eq!(backend.get_local_aet(&options), Some("FROM_OPTIONS".to_string()));
+        assert_eq!(
+            backend.get_local_aet(&options),
+            Some("FROM_OPTIONS".to_string())
+        );
     }
 
     // ── create_remote_node ───────────────────────────────────────────────────
@@ -1080,9 +1168,13 @@ mod tests {
         let mut metadata = DatasetMetadata::new();
         metadata.sop_instance_uid = Some("1.2.3.4.5".to_string());
 
-        let dataset = DatasetStream::Object { object: obj, metadata };
-        let dimse_stream: Pin<Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>> =
-            Box::pin(stream::once(async { Ok(dataset) }));
+        let dataset = DatasetStream::Object {
+            object: obj,
+            metadata,
+        };
+        let dimse_stream: Pin<
+            Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>,
+        > = Box::pin(stream::once(async { Ok(dataset) }));
 
         let stream_metadata = StreamMetadata::new("dimse-get");
 
@@ -1093,7 +1185,10 @@ mod tests {
             Some(command.clone()),
         );
 
-        let item = result_stream.next().await.expect("stream should yield one item");
+        let item = result_stream
+            .next()
+            .await
+            .expect("stream should yield one item");
         let envelope = item.expect("item should be Ok");
 
         // Command is propagated to the response envelope
@@ -1110,10 +1205,14 @@ mod tests {
         let request_details = dummy_request_details();
         let obj = InMemDicomObject::new_empty();
         let metadata = DatasetMetadata::new();
-        let dataset = DatasetStream::Object { object: obj, metadata };
+        let dataset = DatasetStream::Object {
+            object: obj,
+            metadata,
+        };
 
-        let dimse_stream: Pin<Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>> =
-            Box::pin(stream::once(async { Ok(dataset) }));
+        let dimse_stream: Pin<
+            Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>,
+        > = Box::pin(stream::once(async { Ok(dataset) }));
 
         let stream_metadata = StreamMetadata::new("dimse-get");
 
@@ -1124,10 +1223,16 @@ mod tests {
             None,
         );
 
-        let item = result_stream.next().await.expect("stream should yield one item");
+        let item = result_stream
+            .next()
+            .await
+            .expect("stream should yield one item");
         let envelope = item.expect("item should be Ok");
 
-        assert!(envelope.command.is_none(), "None command should propagate as None");
+        assert!(
+            envelope.command.is_none(),
+            "None command should propagate as None"
+        );
     }
 
     #[tokio::test]
@@ -1136,8 +1241,9 @@ mod tests {
 
         let request_details = dummy_request_details();
         let err = dimse::DimseError::operation_failed("test error");
-        let dimse_stream: Pin<Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>> =
-            Box::pin(stream::once(async { Err(err) }));
+        let dimse_stream: Pin<
+            Box<dyn Stream<Item = Result<DatasetStream, dimse::DimseError>> + Send>,
+        > = Box::pin(stream::once(async { Err(err) }));
 
         let stream_metadata = StreamMetadata::new("dimse-get");
         let mut result_stream = DicomScuStreamingBackend::convert_dimse_stream_to_envelopes(
@@ -1147,7 +1253,10 @@ mod tests {
             None,
         );
 
-        let item = result_stream.next().await.expect("stream should yield one item");
+        let item = result_stream
+            .next()
+            .await
+            .expect("stream should yield one item");
         assert!(item.is_err(), "DIMSE error should surface as Err");
     }
 
@@ -1240,7 +1349,11 @@ mod tests {
     #[test]
     fn test_extract_store_dataset_rejects_empty_payload() {
         let msg = extract_error(&envelope_with_original_data(Vec::new()));
-        assert!(msg.contains("no original_data"), "unexpected error: {}", msg);
+        assert!(
+            msg.contains("no original_data"),
+            "unexpected error: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1257,7 +1370,11 @@ mod tests {
             "file": file.to_string_lossy(),
         })));
 
-        assert!(msg.contains("does not read files"), "unexpected error: {}", msg);
+        assert!(
+            msg.contains("does not read files"),
+            "unexpected error: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1311,7 +1428,10 @@ mod tests {
 
         let dataset = DicomScuStreamingBackend::extract_store_dataset(&envelope).expect("extract");
 
-        assert_eq!(dataset.metadata().transfer_syntax.as_deref(), Some(implicit_vr_le));
+        assert_eq!(
+            dataset.metadata().transfer_syntax.as_deref(),
+            Some(implicit_vr_le)
+        );
         assert_eq!(dataset.metadata().sop_instance_uid.as_deref(), Some(uid));
     }
 
@@ -1348,7 +1468,11 @@ mod tests {
         let msg = extract_error(&envelope_with_original_data(
             b"raw dataset bytes without DICM magic".to_vec(),
         ));
-        assert!(msg.contains("neither a DICOM Part 10 file nor JSON"), "unexpected error: {}", msg);
+        assert!(
+            msg.contains("neither a DICOM Part 10 file nor JSON"),
+            "unexpected error: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1360,7 +1484,11 @@ mod tests {
             serde_json::json!({ "body_b64": b64(&make_part10_bytes("1.2.3.4.99.7")) }),
         ] {
             let msg = extract_error(&json_envelope(payload));
-            assert!(msg.contains("no 'part10_b64' string"), "unexpected error: {}", msg);
+            assert!(
+                msg.contains("no 'part10_b64' string"),
+                "unexpected error: {}",
+                msg
+            );
         }
     }
 
@@ -1378,8 +1506,14 @@ mod tests {
 
     #[test]
     fn test_extract_store_dataset_rejects_invalid_base64() {
-        let msg = extract_error(&json_envelope(serde_json::json!({ "part10_b64": "not base64!" })));
-        assert!(msg.contains("not valid base64"), "unexpected error: {}", msg);
+        let msg = extract_error(&json_envelope(
+            serde_json::json!({ "part10_b64": "not base64!" }),
+        ));
+        assert!(
+            msg.contains("not valid base64"),
+            "unexpected error: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1387,7 +1521,11 @@ mod tests {
         let msg = extract_error(&json_envelope(serde_json::json!({
             "part10_b64": b64(b"raw dataset bytes without DICM magic"),
         })));
-        assert!(msg.contains("not a DICOM Part 10 file"), "unexpected error: {}", msg);
+        assert!(
+            msg.contains("not a DICOM Part 10 file"),
+            "unexpected error: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1397,7 +1535,11 @@ mod tests {
         bytes.extend_from_slice(&[0u8; 100]);
 
         let msg = extract_error(&envelope_with_original_data(bytes));
-        assert!(msg.contains("not a readable DICOM Part 10 file"), "unexpected error: {}", msg);
+        assert!(
+            msg.contains("not a readable DICOM Part 10 file"),
+            "unexpected error: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1418,8 +1560,16 @@ mod tests {
             "1.2.840.10008.1.2".to_string(),
         );
         let msg = extract_error(&contradicting);
-        assert!(msg.contains(TRANSFER_SYNTAX_HEADER), "unexpected error: {}", msg);
-        assert!(msg.contains("1.2.840.10008.1.2\\\" but the instance"), "unexpected error: {}", msg);
+        assert!(
+            msg.contains(TRANSFER_SYNTAX_HEADER),
+            "unexpected error: {}",
+            msg
+        );
+        assert!(
+            msg.contains("1.2.840.10008.1.2\\\" but the instance"),
+            "unexpected error: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1430,7 +1580,10 @@ mod tests {
             let mut envelope = envelope_with_original_data(bytes.clone());
             let headers = &mut envelope.request_details.headers;
             headers.insert(SOP_CLASS_UID_HEADER.to_string(), class_uid.to_string());
-            headers.insert(SOP_INSTANCE_UID_HEADER.to_string(), instance_uid.to_string());
+            headers.insert(
+                SOP_INSTANCE_UID_HEADER.to_string(),
+                instance_uid.to_string(),
+            );
             envelope
         };
 
@@ -1441,10 +1594,18 @@ mod tests {
         .expect("headers that match the instance are accepted");
 
         let msg = extract_error(&with_headers("1.2.840.10008.5.1.4.1.1.7", "1.2.3.4.99.6"));
-        assert!(msg.contains(SOP_INSTANCE_UID_HEADER), "unexpected error: {}", msg);
+        assert!(
+            msg.contains(SOP_INSTANCE_UID_HEADER),
+            "unexpected error: {}",
+            msg
+        );
 
         let msg = extract_error(&with_headers("1.2.840.10008.5.1.4.1.1.2", uid));
-        assert!(msg.contains(SOP_CLASS_UID_HEADER), "unexpected error: {}", msg);
+        assert!(
+            msg.contains(SOP_CLASS_UID_HEADER),
+            "unexpected error: {}",
+            msg
+        );
     }
 
     #[test]
@@ -1465,11 +1626,17 @@ mod tests {
 
         assert_eq!(env.response_details.status, 200);
         assert_eq!(
-            env.response_details.metadata.get("dicom_status").map(|s| s.as_str()),
+            env.response_details
+                .metadata
+                .get("dicom_status")
+                .map(|s| s.as_str()),
             Some("0x0000"),
         );
         assert_eq!(
-            env.response_details.metadata.get("sop_instance_uid").map(|s| s.as_str()),
+            env.response_details
+                .metadata
+                .get("sop_instance_uid")
+                .map(|s| s.as_str()),
             Some("1.2.3.4.99.9"),
         );
     }
@@ -1491,13 +1658,19 @@ mod tests {
 
         assert_eq!(env.response_details.status, 500);
         assert_eq!(
-            env.response_details.metadata.get("dicom_status").map(|s| s.as_str()),
+            env.response_details
+                .metadata
+                .get("dicom_status")
+                .map(|s| s.as_str()),
             Some("0xC000"),
         );
         // A sending Harmony reads the result from the body.
         let body = env.normalized_data.expect("the response has a JSON body");
         assert_eq!(body.get("success"), Some(&serde_json::json!(false)));
-        assert_eq!(body.get("error"), Some(&serde_json::json!("association failed")));
+        assert_eq!(
+            body.get("error"),
+            Some(&serde_json::json!("association failed"))
+        );
     }
 
     #[tokio::test]
@@ -1572,7 +1745,11 @@ mod tests {
             Err(e) => e,
         };
         let msg = format!("{:?}", err);
-        assert!(msg.contains("store"), "error must advertise 'store': {}", msg);
+        assert!(
+            msg.contains("store"),
+            "error must advertise 'store': {}",
+            msg
+        );
         assert!(msg.contains("find"));
         assert!(msg.contains("get"));
     }
@@ -1614,7 +1791,11 @@ mod tests {
             Err(e) => e,
         };
         let msg = format!("{:?}", err);
-        assert!(msg.contains("'delete'"), "error must name the rejected operation: {}", msg);
+        assert!(
+            msg.contains("'delete'"),
+            "error must name the rejected operation: {}",
+            msg
+        );
     }
 
     // ── resolve_streaming_op ─────────────────────────────────────────────────
@@ -1652,19 +1833,28 @@ mod tests {
     #[test]
     fn test_resolve_op_uses_command_before_header() {
         let env = op_envelope(Some(Command::new(Operation::Query)), Some("store"), &[]);
-        assert_eq!(DicomScuStreamingBackend::resolve_streaming_op(&env).unwrap(), "find");
+        assert_eq!(
+            DicomScuStreamingBackend::resolve_streaming_op(&env).unwrap(),
+            "find"
+        );
     }
 
     #[test]
     fn test_resolve_op_falls_back_to_header_without_command() {
         let env = op_envelope(None, Some("/FIND"), &[]);
-        assert_eq!(DicomScuStreamingBackend::resolve_streaming_op(&env).unwrap(), "find");
+        assert_eq!(
+            DicomScuStreamingBackend::resolve_streaming_op(&env).unwrap(),
+            "find"
+        );
     }
 
     #[test]
     fn test_resolve_op_defaults_to_get() {
         let env = op_envelope(None, None, &[]);
-        assert_eq!(DicomScuStreamingBackend::resolve_streaming_op(&env).unwrap(), "get");
+        assert_eq!(
+            DicomScuStreamingBackend::resolve_streaming_op(&env).unwrap(),
+            "get"
+        );
     }
 
     #[test]

@@ -168,8 +168,7 @@ impl MiddlewareFactory for DimseToJmixFactory {
         options: &HashMap<String, Value>,
         _config: Option<&Config>,
     ) -> Result<Box<dyn Middleware>, String> {
-        let cfg =
-            crate::models::middleware::types::dimse_to_jmix::parse_config(options)?;
+        let cfg = crate::models::middleware::types::dimse_to_jmix::parse_config(options)?;
         Ok(Box::new(
             crate::models::middleware::types::dimse_to_jmix::DimseToJmixMiddleware::new(cfg),
         ))

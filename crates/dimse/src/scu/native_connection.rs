@@ -1,8 +1,8 @@
 //! Native client association management for SCU operations
 
 use dicom_dictionary_std::uids;
-use dicom_ul::association::client::ClientAssociationOptions;
 use dicom_ul::association::client::AsyncClientAssociation;
+use dicom_ul::association::client::ClientAssociationOptions;
 use dicom_ul::association::Error as AssociationError;
 use tokio::net::TcpStream;
 use tracing::{info, warn};
@@ -41,7 +41,8 @@ pub async fn establish_association(
             // uids::EXPLICIT_VR_BIG_ENDIAN.into(),
         ];
         // Dereference &&str to &str
-        client_options = client_options.with_presentation_context(*sop_class_uid, transfer_syntaxes);
+        client_options =
+            client_options.with_presentation_context(*sop_class_uid, transfer_syntaxes);
     }
 
     // Establish the association (establish_async takes an address, not a stream)
@@ -201,15 +202,12 @@ pub async fn establish_retrieve_association(
             .with_role_selection(*sop_class_uid, false, true);
     }
 
-    let association = client_options
-        .establish_async(&addr)
-        .await
-        .map_err(|e| {
-            DimseError::association(format!(
-                "Failed to establish C-GET association with {}: {}",
-                addr, e
-            ))
-        })?;
+    let association = client_options.establish_async(&addr).await.map_err(|e| {
+        DimseError::association(format!(
+            "Failed to establish C-GET association with {}: {}",
+            addr, e
+        ))
+    })?;
 
     info!(
         "C-GET association established with {}@{} ({} presentation contexts accepted)",
@@ -223,9 +221,7 @@ pub async fn establish_retrieve_association(
 
 /// Release an association gracefully
 /// Note: This consumes the association since release() takes ownership
-pub async fn release_association(
-    association: AsyncClientAssociation<TcpStream>,
-) -> Result<()> {
+pub async fn release_association(association: AsyncClientAssociation<TcpStream>) -> Result<()> {
     association
         .release()
         .await
@@ -260,4 +256,3 @@ pub fn get_presentation_context_id(
         sop_class_uid
     )))
 }
-

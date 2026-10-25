@@ -40,11 +40,13 @@ impl PeerConfig {
 
         let protocol = self.get_protocol();
         if protocol.is_none() {
-             return Err("Protocol must be specified either in 'protocol' (or 'type') field or 'connection.protocol'".to_string());
+            return Err("Protocol must be specified either in 'protocol' (or 'type') field or 'connection.protocol'".to_string());
         }
         let protocol = protocol.unwrap();
 
-        let valid_types = ["http", "https", "dicom", "harmony", "fhir", "hl7v2", "custom"];
+        let valid_types = [
+            "http", "https", "dicom", "harmony", "fhir", "hl7v2", "custom",
+        ];
         if !valid_types.contains(&protocol.as_str()) {
             return Err(format!(
                 "Invalid protocol '{}'. Must be one of: {:?}",

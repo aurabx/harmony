@@ -20,9 +20,9 @@ pub async fn handle_move(
     external_store_scp: bool,
     incoming_store_port: u16,
 ) -> Result<ReceiverStream<Result<DatasetStream>>> {
+    use crate::common::query_utils;
     use tokio::process::Command;
     use uuid::Uuid;
-    use crate::common::query_utils;
 
     info!(
         "Sending C-MOVE to {}@{}:{} (level: {}, dest: {})",
@@ -37,7 +37,7 @@ pub async fn handle_move(
         "-d".into(), // Enable verbose output for diagnostics
         "-S".into(), // Use Study Root query model for C-MOVE
     ];
-    
+
     // Base arguments (AET)
     args.push("-aet".into());
     args.push(config.local_aet.clone());
@@ -104,7 +104,7 @@ pub async fn handle_move(
     let (tx, rx) = mpsc::channel(100);
 
     info!("Running movescu with args: {:?}", args);
-    
+
     let tx_clone = tx.clone();
     let out_dir_clone = out_dir_opt.clone();
     let _storage_dir = PathBuf::from(&config.storage_dir);
@@ -112,11 +112,10 @@ pub async fn handle_move(
         let mut cleanup_dir: Option<PathBuf> = None;
         match Command::new("movescu").args(&args).output().await {
             Ok(out) => {
-                
                 if !out.stderr.is_empty() {
                     let _stderr = String::from_utf8_lossy(&out.stderr);
                 }
-                
+
                 if out.status.success() {
                     info!("C-MOVE completed (movescu success)");
                     // Enumerate received files only when we used a transient out_dir

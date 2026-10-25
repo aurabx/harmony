@@ -1,7 +1,7 @@
-use regex::Regex;
-use std::env;
-use std::collections::HashMap;
 use once_cell::sync::Lazy;
+use regex::Regex;
+use std::collections::HashMap;
+use std::env;
 
 static ENV_VAR_REGEX: Lazy<Regex> = Lazy::new(|| {
     // Matches $VAR_NAME where VAR_NAME starts with letter or underscore
@@ -21,7 +21,12 @@ pub struct SubstitutionError {
 
 impl std::fmt::Display for SubstitutionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(f, "{}. Missing: {}", self.message, self.missing_vars.join(", "))
+        write!(
+            f,
+            "{}. Missing: {}",
+            self.message,
+            self.missing_vars.join(", ")
+        )
     }
 }
 
@@ -41,7 +46,7 @@ impl std::error::Error for SubstitutionError {}
 /// A tuple of (substituted_string, audit_info) with audit_info containing substituted and missing vars
 pub fn substitute_env_vars(input: &str) -> (String, SubstitutionAudit) {
     let mut audit = SubstitutionAudit::new();
-    
+
     // Handle escaped dollar signs ($$) first by temporarily replacing them
     let placeholder = "\x00ESCAPED_DOLLAR\x00";
     let escaped_replaced = input.replace("$$", placeholder);
@@ -68,7 +73,7 @@ pub fn substitute_env_vars(input: &str) -> (String, SubstitutionAudit) {
 
     // Restore escaped dollar signs
     let final_result = result.replace(placeholder, "$");
-    
+
     // Log audit information
     if !audit.substituted_vars.is_empty() {
         let var_names: Vec<&str> = audit.substituted_vars.keys().map(|s| s.as_str()).collect();
@@ -79,16 +84,20 @@ pub fn substitute_env_vars(input: &str) -> (String, SubstitutionAudit) {
             var_names.join(", ")
         );
     }
-    
+
     if !audit.missing_vars.is_empty() {
         tracing::warn!(
             "{} environment variable{} not found: {}",
             audit.missing_vars.len(),
-            if audit.missing_vars.len() == 1 { "" } else { "s" },
+            if audit.missing_vars.len() == 1 {
+                ""
+            } else {
+                "s"
+            },
             audit.missing_vars.join(", ")
         );
     }
-    
+
     (final_result, audit)
 }
 
@@ -379,7 +388,10 @@ mod tests {
         let (_result, audit) = substitute_env_vars(input);
         let warnings = validate_substituted_values(&audit);
         assert!(!warnings.warnings.is_empty());
-        assert!(warnings.warnings.iter().any(|w| w.contains("shell metacharacters")));
+        assert!(warnings
+            .warnings
+            .iter()
+            .any(|w| w.contains("shell metacharacters")));
     }
 
     #[test]

@@ -1,10 +1,10 @@
 //! Common types for DIMSE operations
 
 use bytes::Bytes;
-use futures::stream::BoxStream;
 use dicom_dictionary_std::uids;
 use dicom_object::meta::FileMetaTableBuilder;
 use dicom_object::InMemDicomObject;
+use futures::stream::BoxStream;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use uuid::Uuid;
@@ -253,19 +253,21 @@ impl DatasetStream {
                 // Serialize DICOM object to bytes using Explicit VR Little Endian
                 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
                 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
-                
+
                 let ts = TransferSyntaxRegistry
                     .get("1.2.840.10008.1.2.1") // Explicit VR Little Endian
-                    .ok_or_else(|| crate::error::DimseError::internal(
-                        "Transfer syntax not found"
-                    ))?;
-                
+                    .ok_or_else(|| {
+                        crate::error::DimseError::internal("Transfer syntax not found")
+                    })?;
+
                 let mut buffer = Vec::new();
-                object.write_dataset_with_ts(&mut buffer, ts)
-                    .map_err(|e| crate::error::DimseError::internal(
-                        format!("Failed to serialize DICOM object: {}", e)
-                    ))?;
-                
+                object.write_dataset_with_ts(&mut buffer, ts).map_err(|e| {
+                    crate::error::DimseError::internal(format!(
+                        "Failed to serialize DICOM object: {}",
+                        e
+                    ))
+                })?;
+
                 Ok(Bytes::from(buffer))
             }
         }
@@ -318,18 +320,25 @@ impl DatasetStream {
                 use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
                 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
                 use std::io::Cursor;
-                
+
                 let ts = TransferSyntaxRegistry
                     .get("1.2.840.10008.1.2.1")
-                    .ok_or_else(|| crate::error::DimseError::internal(
-                        "Transfer syntax not found"
-                    ))?;
-                
+                    .ok_or_else(|| {
+                        crate::error::DimseError::internal("Transfer syntax not found")
+                    })?;
+
                 let cursor = Cursor::new(data.as_ref());
-                InMemDicomObject::read_dataset_with_ts_cs(cursor, ts, SpecificCharacterSet::default())
-                    .map_err(|e| crate::error::DimseError::internal(
-                        format!("Failed to parse DICOM object: {}", e)
+                InMemDicomObject::read_dataset_with_ts_cs(
+                    cursor,
+                    ts,
+                    SpecificCharacterSet::default(),
+                )
+                .map_err(|e| {
+                    crate::error::DimseError::internal(format!(
+                        "Failed to parse DICOM object: {}",
+                        e
                     ))
+                })
             }
             Self::File { path, .. } => {
                 // Try to read as a complete DICOM file with preamble
@@ -341,22 +350,32 @@ impl DatasetStream {
                         use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
                         use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
                         use std::io::Cursor;
-                        
+
                         let bytes = std::fs::read(path).map_err(|e| {
-                            crate::error::DimseError::internal(format!("Failed to read file: {}", e))
+                            crate::error::DimseError::internal(format!(
+                                "Failed to read file: {}",
+                                e
+                            ))
                         })?;
-                        
+
                         let ts = TransferSyntaxRegistry
                             .get("1.2.840.10008.1.2.1")
-                            .ok_or_else(|| crate::error::DimseError::internal(
-                                "Transfer syntax not found"
-                            ))?;
-                        
+                            .ok_or_else(|| {
+                                crate::error::DimseError::internal("Transfer syntax not found")
+                            })?;
+
                         let cursor = Cursor::new(bytes);
-                        InMemDicomObject::read_dataset_with_ts_cs(cursor, ts, SpecificCharacterSet::default())
-                            .map_err(|e| crate::error::DimseError::internal(
-                                format!("Failed to parse DICOM file: {}", e)
+                        InMemDicomObject::read_dataset_with_ts_cs(
+                            cursor,
+                            ts,
+                            SpecificCharacterSet::default(),
+                        )
+                        .map_err(|e| {
+                            crate::error::DimseError::internal(format!(
+                                "Failed to parse DICOM file: {}",
+                                e
                             ))
+                        })
                     }
                 }
             }
@@ -651,7 +670,10 @@ mod tests {
 
         let bytes = dataset.to_part10_bytes().expect("encode Part 10");
         assert!(bytes.len() > 132);
-        assert!(bytes[..128].iter().all(|b| *b == 0), "preamble must be zeroed");
+        assert!(
+            bytes[..128].iter().all(|b| *b == 0),
+            "preamble must be zeroed"
+        );
         assert_eq!(&bytes[128..132], b"DICM");
 
         let dir = tempfile::tempdir().expect("temp dir");
@@ -699,8 +721,7 @@ mod tests {
     #[tokio::test]
     async fn to_temp_file_writes_a_readable_part10_file() {
         let mut dataset = DatasetStream::from_object(sample_object());
-        dataset.metadata_mut().transfer_syntax =
-            Some(uids::EXPLICIT_VR_LITTLE_ENDIAN.to_string());
+        dataset.metadata_mut().transfer_syntax = Some(uids::EXPLICIT_VR_LITTLE_ENDIAN.to_string());
 
         let dir = tempfile::tempdir().expect("temp dir");
         let path = dataset
@@ -709,7 +730,10 @@ mod tests {
             .expect("write temp file");
 
         let bytes = std::fs::read(&path).expect("read written file");
-        assert!(bytes.len() > 132, "file too short to hold preamble and magic");
+        assert!(
+            bytes.len() > 132,
+            "file too short to hold preamble and magic"
+        );
         assert!(
             bytes[..128].iter().all(|b| *b == 0),
             "preamble must be zeroed"

@@ -89,11 +89,10 @@ pub async fn handle_c_find(
         Ok(datasets) => datasets,
         Err(e) => {
             error!("C-FIND query failed: {}", e);
-            // Send failure response (status 0xC000)
             response_builder::send_find_response(
                 association,
                 message_id,
-                0xC000, // Failure
+                e.status_code().unwrap_or(0xC000),
                 None,
                 presentation_context_id,
             )
@@ -104,6 +103,7 @@ pub async fn handle_c_find(
 
     let mut sent = 0usize;
     let mut failed = 0usize;
+    let mut first_failure_status: Option<u16> = None;
     while let Some(item) = datasets.next().await {
         match item {
             Ok(dataset) => {
@@ -120,6 +120,9 @@ pub async fn handle_c_find(
             }
             Err(e) => {
                 error!("C-FIND result could not be produced: {}", e);
+                if failed == 0 {
+                    first_failure_status = Some(e.status_code().unwrap_or(0xC000));
+                }
                 failed += 1;
             }
         }
@@ -127,7 +130,8 @@ pub async fn handle_c_find(
 
     // A result that could not be produced makes the whole query a failure,
     // otherwise the client would take a partial answer for a complete one.
-    let status = if failed > 0 { 0xC000 } else { 0x0000 };
+    // The first failure decides the status.
+    let status = first_failure_status.unwrap_or(0x0000);
     response_builder::send_find_response(
         association,
         message_id,

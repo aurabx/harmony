@@ -198,7 +198,10 @@ mod tests {
 
         // Invalid config
         let mut invalid_opts = HashMap::new();
-        invalid_opts.insert("threshold".to_string(), Value::String("not_a_number".to_string()));
+        invalid_opts.insert(
+            "threshold".to_string(),
+            Value::String("not_a_number".to_string()),
+        );
         assert!(factory.validate(&invalid_opts).is_err());
     }
 

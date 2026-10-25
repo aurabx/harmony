@@ -199,7 +199,15 @@ mod tests {
         let headers = HeaderMap::new();
         let body = b"hello".to_vec();
 
-        let ctx = build_protocol_ctx(&method, &uri, &headers, body.clone(), "/api/v1", "http3", None);
+        let ctx = build_protocol_ctx(
+            &method,
+            &uri,
+            &headers,
+            body.clone(),
+            "/api/v1",
+            "http3",
+            None,
+        );
 
         assert_eq!(ctx.meta.get("protocol").unwrap(), "http3");
         assert_eq!(ctx.meta.get("path").unwrap(), "users");

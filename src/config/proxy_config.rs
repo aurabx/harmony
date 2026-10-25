@@ -205,35 +205,47 @@ mod tests {
 
     #[test]
     fn test_primary_provider_default() {
-        let config: ProxyConfig = toml::from_str(r#"
+        let config: ProxyConfig = toml::from_str(
+            r#"
             id = "test-proxy"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         assert_eq!(config.primary_provider, "runbeam");
     }
 
     #[test]
     fn test_primary_provider_custom() {
-        let config: ProxyConfig = toml::from_str(r#"
+        let config: ProxyConfig = toml::from_str(
+            r#"
             id = "test-proxy"
             primary_provider = "custom_provider"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         assert_eq!(config.primary_provider, "custom_provider");
     }
 
     #[test]
     fn test_primary_provider_local() {
-        let config: ProxyConfig = toml::from_str(r#"
+        let config: ProxyConfig = toml::from_str(
+            r#"
             id = "test-proxy"
             primary_provider = "local"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         assert_eq!(config.primary_provider, "local");
     }
 
     #[test]
     fn test_id_only() {
-        let config: ProxyConfig = toml::from_str(r#"
+        let config: ProxyConfig = toml::from_str(
+            r#"
             id = "my-proxy"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         assert!(config.validate().is_ok());
         assert_eq!(config.effective_id(), "my-proxy");
         assert_eq!(config.effective_name(), "my-proxy");
@@ -241,9 +253,12 @@ mod tests {
 
     #[test]
     fn test_name_only() {
-        let config: ProxyConfig = toml::from_str(r#"
+        let config: ProxyConfig = toml::from_str(
+            r#"
             name = "My Proxy"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         assert!(config.validate().is_ok());
         assert_eq!(config.effective_id(), "My Proxy");
         assert_eq!(config.effective_name(), "My Proxy");
@@ -251,10 +266,13 @@ mod tests {
 
     #[test]
     fn test_both_id_and_name() {
-        let config: ProxyConfig = toml::from_str(r#"
+        let config: ProxyConfig = toml::from_str(
+            r#"
             id = "my-proxy"
             name = "My Proxy"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         assert!(config.validate().is_ok());
         assert_eq!(config.effective_id(), "my-proxy");
         assert_eq!(config.effective_name(), "My Proxy");
@@ -262,9 +280,12 @@ mod tests {
 
     #[test]
     fn test_neither_id_nor_name() {
-        let config: ProxyConfig = toml::from_str(r#"
+        let config: ProxyConfig = toml::from_str(
+            r#"
             pipelines_path = "pipelines"
-        "#).unwrap();
+        "#,
+        )
+        .unwrap();
         assert!(config.validate().is_err());
     }
 }

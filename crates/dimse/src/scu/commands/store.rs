@@ -10,7 +10,7 @@ use dicom_encoding::transfer_syntax::TransferSyntaxIndex;
 use dicom_object::{InMemDicomObject, StandardDataDictionary};
 use dicom_transfer_syntax_registry::TransferSyntaxRegistry;
 use dicom_ul::association::client::AsyncClientAssociation;
-use dicom_ul::{Pdu};
+use dicom_ul::Pdu;
 use tokio::net::TcpStream;
 use tracing::{debug, info, warn};
 
@@ -206,11 +206,11 @@ async fn parse_dataset(dataset: &DatasetStream) -> Result<StoreInstance> {
                 .transfer_syntax
                 .as_deref()
                 .unwrap_or(uids::IMPLICIT_VR_LITTLE_ENDIAN);
-            
-            let ts = TransferSyntaxRegistry
-                .get(ts_uid)
-                .ok_or_else(|| DimseError::parse(format!("Transfer syntax not found: {}", ts_uid)))?;
-            
+
+            let ts = TransferSyntaxRegistry.get(ts_uid).ok_or_else(|| {
+                DimseError::parse(format!("Transfer syntax not found: {}", ts_uid))
+            })?;
+
             let cursor = std::io::Cursor::new(data.as_ref());
             let object = InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
                 cursor,
@@ -346,12 +346,18 @@ pub async fn handle_store(
         PrimitiveValue::from(sop_instance_uid.clone()),
     ));
 
-    debug!("Sending C-STORE request (message ID: {}, SOP Instance: {})", message_id, sop_instance_uid);
+    debug!(
+        "Sending C-STORE request (message ID: {}, SOP Instance: {})",
+        message_id, sop_instance_uid
+    );
 
     // The data set is encoded in the transfer syntax of the presentation context.
 
     // Send the request with dataset
-    if let Err(e) = command_builder::encode_and_send_request(&mut association, request, Some(&dicom_obj), pc_id).await {
+    if let Err(e) =
+        command_builder::encode_and_send_request(&mut association, request, Some(&dicom_obj), pc_id)
+            .await
+    {
         native_connection::abort_association(association).await;
         return Err(e);
     }
@@ -362,22 +368,24 @@ pub async fn handle_store(
         match association.receive().await {
             Ok(Pdu::PData { data }) => {
                 // Parse the response
-                let (response_obj, _dataset, _pc_id) = match command_builder::parse_response_command(data) {
-                    Ok(result) => result,
-                    Err(e) => {
-                        native_connection::abort_association(association).await;
-                        return Err(e);
-                    }
-                };
+                let (response_obj, _dataset, _pc_id) =
+                    match command_builder::parse_response_command(data) {
+                        Ok(result) => result,
+                        Err(e) => {
+                            native_connection::abort_association(association).await;
+                            return Err(e);
+                        }
+                    };
 
                 // Verify this is the response to our request
-                let responded_to = match command_builder::extract_message_id_being_responded_to(&response_obj) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        native_connection::abort_association(association).await;
-                        return Err(e);
-                    }
-                };
+                let responded_to =
+                    match command_builder::extract_message_id_being_responded_to(&response_obj) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            native_connection::abort_association(association).await;
+                            return Err(e);
+                        }
+                    };
 
                 if responded_to != message_id {
                     debug!(
@@ -429,7 +437,10 @@ pub async fn handle_store(
                 // Unexpected release
                 if let Err(e) = association.send(&Pdu::ReleaseRP).await {
                     native_connection::abort_association(association).await;
-                    return Err(DimseError::network(format!("Failed to send release response: {}", e)));
+                    return Err(DimseError::network(format!(
+                        "Failed to send release response: {}",
+                        e
+                    )));
                 }
                 return Err(DimseError::operation_failed(
                     "Association released unexpectedly during C-STORE",
@@ -535,10 +546,7 @@ mod tests {
     fn proposes_big_endian_then_implicit_vr_for_a_big_endian_instance() {
         assert_eq!(
             transfer_syntaxes_to_propose(Some(EXPLICIT_VR_BIG_ENDIAN)).unwrap(),
-            vec![
-                EXPLICIT_VR_BIG_ENDIAN,
-                uids::IMPLICIT_VR_LITTLE_ENDIAN
-            ]
+            vec![EXPLICIT_VR_BIG_ENDIAN, uids::IMPLICIT_VR_LITTLE_ENDIAN]
         );
     }
 
@@ -642,7 +650,11 @@ mod tests {
 
     #[test]
     fn an_instance_without_pixel_data_may_be_sent_in_any_syntax() {
-        for recorded in [Some(JPEG_LOSSLESS_SV1), Some(uids::EXPLICIT_VR_LITTLE_ENDIAN), None] {
+        for recorded in [
+            Some(JPEG_LOSSLESS_SV1),
+            Some(uids::EXPLICIT_VR_LITTLE_ENDIAN),
+            None,
+        ] {
             for negotiated in [
                 JPEG_LOSSLESS_SV1,
                 uids::EXPLICIT_VR_LITTLE_ENDIAN,

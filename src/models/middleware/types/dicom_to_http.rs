@@ -219,8 +219,14 @@ mod tests {
         assert_eq!(out.request_details.method, "POST");
         let headers = &out.request_details.headers;
         assert_eq!(headers.get("x-dimse-op").map(String::as_str), Some("find"));
-        assert_eq!(headers.get("x-query-level").map(String::as_str), Some("STUDY"));
-        assert_eq!(headers.get("accept").map(String::as_str), Some("application/x-ndjson"));
+        assert_eq!(
+            headers.get("x-query-level").map(String::as_str),
+            Some("STUDY")
+        );
+        assert_eq!(
+            headers.get("accept").map(String::as_str),
+            Some("application/x-ndjson")
+        );
     }
 
     fn store_envelope(body: Value) -> RequestEnvelope<Value> {
@@ -246,12 +252,21 @@ mod tests {
         let out = DicomToHttpMiddleware::new().left(env).await.expect("left");
 
         // The executor turns a lone `body_b64` into the raw request body.
-        assert_eq!(out.original_data, serde_json::json!({ "body_b64": "UGFydDEw" }));
+        assert_eq!(
+            out.original_data,
+            serde_json::json!({ "body_b64": "UGFydDEw" })
+        );
         let header = |name: &str| out.request_details.headers.get(name).map(String::as_str);
         assert_eq!(header("content-type"), Some("application/dicom"));
         assert_eq!(header("x-dimse-op"), Some("store"));
-        assert_eq!(header("x-dicom-transfer-syntax"), Some("1.2.840.10008.1.2.1"));
-        assert_eq!(header("x-dicom-sop-class-uid"), Some("1.2.840.10008.5.1.4.1.1.2"));
+        assert_eq!(
+            header("x-dicom-transfer-syntax"),
+            Some("1.2.840.10008.1.2.1")
+        );
+        assert_eq!(
+            header("x-dicom-sop-class-uid"),
+            Some("1.2.840.10008.5.1.4.1.1.2")
+        );
         assert_eq!(header("x-dicom-sop-instance-uid"), Some("1.2.3.4.5"));
     }
 
@@ -272,7 +287,10 @@ mod tests {
 
         assert_eq!(out.original_data, body);
         let headers = &out.request_details.headers;
-        assert_eq!(headers.get("content-type").map(String::as_str), Some("application/json"));
+        assert_eq!(
+            headers.get("content-type").map(String::as_str),
+            Some("application/json")
+        );
         assert_eq!(headers.get("x-dimse-op").map(String::as_str), Some("store"));
         assert!(!headers.contains_key("x-dicom-transfer-syntax"));
     }

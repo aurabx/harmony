@@ -360,11 +360,7 @@ impl HarmonyBuilder {
         for plugin in &self.plugins {
             if let Err(e) = plugin.on_post_start(&config, &registry) {
                 // Non-fatal, just log
-                tracing::warn!(
-                    "Plugin '{}' failed in on_post_start: {}",
-                    plugin.name(),
-                    e
-                );
+                tracing::warn!("Plugin '{}' failed in on_post_start: {}", plugin.name(), e);
             }
         }
 
@@ -595,7 +591,10 @@ mod tests {
     fn test_builder_with_config_path() {
         let config = Config::default();
         let builder = HarmonyBuilder::new(config).with_config_path("/path/to/config.toml");
-        assert_eq!(builder.config_path, Some("/path/to/config.toml".to_string()));
+        assert_eq!(
+            builder.config_path,
+            Some("/path/to/config.toml".to_string())
+        );
     }
 
     #[test]

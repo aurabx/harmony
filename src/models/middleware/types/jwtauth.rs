@@ -113,7 +113,10 @@ impl JwtAuthMiddleware {
                 .ok_or_else(|| {
                     "JWT: use_hs256 = true requires a non-empty hs256_secret".to_string()
                 })?;
-            (DecodingKey::from_secret(secret.as_bytes()), Algorithm::HS256)
+            (
+                DecodingKey::from_secret(secret.as_bytes()),
+                Algorithm::HS256,
+            )
         } else {
             // Strict RS256 path: must load a valid RSA public key
             let pem = std::fs::read_to_string(&config.public_key_path).map_err(|e| {
@@ -209,15 +212,21 @@ impl Middleware for JwtAuthMiddleware {
         match self.validate_token(&token).await {
             Ok(claims) => {
                 tracing::info!("JWT token validated successfully");
-                
+
                 // Inject claims into metadata
                 if let Some(sub) = claims.sub {
-                    envelope.request_details.metadata.insert("sub".to_string(), sub);
+                    envelope
+                        .request_details
+                        .metadata
+                        .insert("sub".to_string(), sub);
                 }
                 if let Some(iss) = claims.iss {
-                    envelope.request_details.metadata.insert("iss".to_string(), iss);
+                    envelope
+                        .request_details
+                        .metadata
+                        .insert("iss".to_string(), iss);
                 }
-                
+
                 // Inject custom claims
                 for (k, v) in claims.extra {
                     let val_str = match v {
@@ -226,7 +235,7 @@ impl Middleware for JwtAuthMiddleware {
                     };
                     envelope.request_details.metadata.insert(k, val_str);
                 }
-                
+
                 // Step 3: Pass through the envelope
                 Ok(envelope)
             }
@@ -699,7 +708,7 @@ mod tests {
         let now = get_current_timestamp();
         let mut extra = HashMap::new();
         extra.insert("tenant".to_string(), "my-tenant".to_string());
-        
+
         let claims = TestClaims {
             sub: Some("test-user".to_string()),
             iss: Some("test-issuer".to_string()),
@@ -724,7 +733,7 @@ mod tests {
         let returned_envelope = result.unwrap();
         assert_eq!(returned_envelope.request_details.method, "GET");
         assert_eq!(returned_envelope.request_details.uri, "/test");
-        
+
         // Verify metadata injection
         let meta = returned_envelope.request_details.metadata;
         assert_eq!(meta.get("sub"), Some(&"test-user".to_string()));

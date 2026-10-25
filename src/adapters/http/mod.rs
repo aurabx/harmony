@@ -39,25 +39,20 @@ pub struct TlsConfig {
 }
 
 /// Middleware to redirect HTTP requests to HTTPS
-async fn https_redirect_middleware(
-    req: Request,
-    _next: axum::middleware::Next,
-) -> Response {
+async fn https_redirect_middleware(req: Request, _next: axum::middleware::Next) -> Response {
     // Get the host header
     let host = req
         .headers()
         .get(http::header::HOST)
         .and_then(|h| h.to_str().ok())
         .unwrap_or("localhost");
-    
+
     // Build HTTPS URL
     let uri = req.uri();
-    let path_and_query = uri.path_and_query()
-        .map(|pq| pq.as_str())
-        .unwrap_or("/");
-    
+    let path_and_query = uri.path_and_query().map(|pq| pq.as_str()).unwrap_or("/");
+
     let https_url = format!("https://{}{}", host, path_and_query);
-    
+
     // Return 301 redirect
     Response::builder()
         .status(StatusCode::MOVED_PERMANENTLY)
@@ -72,7 +67,12 @@ async fn https_redirect_middleware(
 }
 
 impl HttpAdapter {
-    pub fn new(network_name: String, bind_addr: SocketAddr, tls_config: Option<TlsConfig>, force_https: bool) -> Self {
+    pub fn new(
+        network_name: String,
+        bind_addr: SocketAddr,
+        tls_config: Option<TlsConfig>,
+        force_https: bool,
+    ) -> Self {
         Self {
             network_name,
             bind_addr,
@@ -132,8 +132,8 @@ impl HttpAdapter {
 
         // Load certificate chain
         let mut cert_file = BufReader::new(File::open(&tls.cert_path)?);
-        let cert_chain: Vec<CertificateDer<'static>> = certs(&mut cert_file)
-            .collect::<Result<_, _>>()?;
+        let cert_chain: Vec<CertificateDer<'static>> =
+            certs(&mut cert_file).collect::<Result<_, _>>()?;
 
         if cert_chain.is_empty() {
             anyhow::bail!("no certificates found in {}", tls.cert_path);
@@ -223,7 +223,12 @@ impl ProtocolAdapter for HttpAdapter {
 
         let force_https = tcp.force_https;
 
-        Box::new(HttpAdapter::new(network_name, bind_addr, tls_config, force_https))
+        Box::new(HttpAdapter::new(
+            network_name,
+            bind_addr,
+            tls_config,
+            force_https,
+        ))
     }
 
     async fn start(
@@ -238,7 +243,7 @@ impl ProtocolAdapter for HttpAdapter {
 
         // Build the router using the router module
         let mut app = router::build_network_router(config.clone(), &network_name).await;
-        
+
         // Wrap app with HTTPS redirect layer if force_https is enabled and no TLS
         if force_https && tls_config.is_none() {
             app = app.layer(axum::middleware::from_fn(https_redirect_middleware));
@@ -267,7 +272,8 @@ impl ProtocolAdapter for HttpAdapter {
                 );
 
                 // Create axum-server RustlsConfig from rustls::ServerConfig
-                let axum_tls_config = axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(rustls_config));
+                let axum_tls_config =
+                    axum_server::tls_rustls::RustlsConfig::from_config(Arc::new(rustls_config));
 
                 let handle = axum_server::Handle::new();
                 let shutdown_handle = handle.clone();
@@ -320,8 +326,8 @@ impl ProtocolAdapter for HttpAdapter {
                     listener,
                     app.into_make_service_with_connect_info::<SocketAddr>(),
                 )
-                    .with_graceful_shutdown(graceful_shutdown)
-                    .await
+                .with_graceful_shutdown(graceful_shutdown)
+                .await
                 {
                     tracing::error!(
                         "HTTP adapter for network '{}' encountered error: {}",
@@ -336,7 +342,11 @@ impl ProtocolAdapter for HttpAdapter {
     }
 
     fn summary(&self) -> String {
-        let protocol = if self.tls_config.is_some() { "HTTPS" } else { "HTTP" };
+        let protocol = if self.tls_config.is_some() {
+            "HTTPS"
+        } else {
+            "HTTP"
+        };
         format!(
             "HttpAdapter(network={}, bind={}, protocol={})",
             self.network_name, self.bind_addr, protocol
@@ -374,8 +384,14 @@ mod adapter_tests {
             .await
             .expect("build ctx");
 
-        assert_eq!(ctx.meta.get("remote_addr").map(String::as_str), Some("198.51.100.7"));
-        assert_eq!(ctx.meta.get("remote_port").map(String::as_str), Some("34567"));
+        assert_eq!(
+            ctx.meta.get("remote_addr").map(String::as_str),
+            Some("198.51.100.7")
+        );
+        assert_eq!(
+            ctx.meta.get("remote_port").map(String::as_str),
+            Some("34567")
+        );
     }
 
     /// End-to-end assertion: an axum handler served with

@@ -2,8 +2,8 @@ use crate::config::config::ConfigError;
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::services::services::{ServiceHandler, ServiceType};
 use async_trait::async_trait;
-use axum::response::Response;
 use axum::body::Body;
+use axum::response::Response;
 use bytes::Bytes;
 use futures_util::{Stream, StreamExt};
 use serde::Deserialize;
@@ -39,10 +39,10 @@ const STREAM_ERROR_MESSAGE: &str = "upstream stream failed";
 pub struct HttpStreamingEndpoint {
     /// Default streaming format if not specified by Accept header
     pub default_format: Option<StreamFormat>,
-    
+
     /// Buffer size for the stream (number of envelopes to buffer)
     pub buffer_size: Option<usize>,
-    
+
     /// Enable compression (gzip) for the stream
     pub enable_compression: Option<bool>,
 }
@@ -74,14 +74,16 @@ impl StreamFormat {
             _ => Self::Ndjson, // Default
         }
     }
-    
+
     /// Detect format from Accept header
     pub fn from_accept_header(accept: &str) -> Self {
         let accept_lower = accept.to_lowercase();
-        
+
         if accept_lower.contains("text/event-stream") {
             Self::Sse
-        } else if accept_lower.contains("application/x-ndjson") || accept_lower.contains("application/ndjson") {
+        } else if accept_lower.contains("application/x-ndjson")
+            || accept_lower.contains("application/ndjson")
+        {
             Self::Ndjson
         } else if accept_lower.contains("multipart/") {
             Self::Multipart
@@ -90,7 +92,7 @@ impl StreamFormat {
             Self::Ndjson
         }
     }
-    
+
     /// Get content type for this format
     pub fn content_type(&self) -> &'static str {
         match self {
@@ -113,7 +115,7 @@ impl ServiceType for HttpStreamingEndpoint {
                 });
             }
         }
-        
+
         Ok(())
     }
 
@@ -250,7 +252,9 @@ impl HttpStreamingEndpoint {
     /// HTTP Response with streaming body
     pub fn build_streaming_response(
         &self,
-        envelope_stream: Pin<Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>>,
+        envelope_stream: Pin<
+            Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>,
+        >,
         format: StreamFormat,
         _request_headers: &HashMap<String, String>,
     ) -> Result<Response, Error> {
@@ -266,7 +270,9 @@ impl HttpStreamingEndpoint {
     /// Build Server-Sent Events response
     fn build_sse_response(
         &self,
-        envelope_stream: Pin<Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>>,
+        envelope_stream: Pin<
+            Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>,
+        >,
     ) -> Result<Response, Error> {
         let mut sequence = 0u64;
 
@@ -276,12 +282,13 @@ impl HttpStreamingEndpoint {
             match result {
                 Ok(envelope) => {
                     // Extract JSON data for SSE
-                    let json = envelope.normalized_data
-                        .unwrap_or(serde_json::Value::Null);
+                    let json = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
 
                     // Format as SSE event
                     // SSE format: "event: message\nid: N\ndata: {json}\n\n"
-                    let event_type = envelope.response_details.metadata
+                    let event_type = envelope
+                        .response_details
+                        .metadata
                         .get("event_type")
                         .map(|s| s.as_str())
                         .unwrap_or("message");
@@ -322,7 +329,9 @@ impl HttpStreamingEndpoint {
     /// Build Newline-Delimited JSON response
     fn build_ndjson_response(
         &self,
-        envelope_stream: Pin<Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>>,
+        envelope_stream: Pin<
+            Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>,
+        >,
     ) -> Result<Response, Error> {
         let mut sequence = 0u64;
 
@@ -332,16 +341,17 @@ impl HttpStreamingEndpoint {
             match result {
                 Ok(envelope) => {
                     // Extract JSON data
-                    let json = envelope.normalized_data
-                        .unwrap_or(serde_json::Value::Null);
+                    let json = envelope.normalized_data.unwrap_or(serde_json::Value::Null);
 
                     // Add metadata if available
                     let mut output = json.clone();
                     if let Some(obj) = output.as_object_mut() {
                         // Add stream metadata
                         obj.insert("_stream_sequence".to_string(), serde_json::json!(sequence));
-                        
-                        if let Some(sop_uid) = envelope.response_details.metadata.get("sop_instance_uid") {
+
+                        if let Some(sop_uid) =
+                            envelope.response_details.metadata.get("sop_instance_uid")
+                        {
                             obj.insert("_sop_instance_uid".to_string(), serde_json::json!(sop_uid));
                         }
                     }
@@ -380,7 +390,9 @@ impl HttpStreamingEndpoint {
     /// Build Multipart response
     fn build_multipart_response(
         &self,
-        envelope_stream: Pin<Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>>,
+        envelope_stream: Pin<
+            Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>,
+        >,
     ) -> Result<Response, Error> {
         // Generate unique boundary
         let boundary = format!("harmony-stream-{}", uuid::Uuid::new_v4());
@@ -403,15 +415,15 @@ impl HttpStreamingEndpoint {
 
                     // Build multipart section
                     let mut part = String::new();
-                    
+
                     // Add leading newline for all except first (sequence > 1)
                     if sequence > 1 {
                         part.push_str("\r\n");
                     }
-                    
+
                     part.push_str(&format!("--{}\r\n", boundary_for_parts));
                     part.push_str(&format!("Content-Type: {}\r\n", content_type));
-                    
+
                     // Add custom headers
                     if let Some(sop_uid) = envelope.response_details.metadata.get("sop_instance_uid") {
                         part.push_str(&format!("X-DICOM-SOP-Instance-UID: {}\r\n", sop_uid));
@@ -449,7 +461,10 @@ impl HttpStreamingEndpoint {
 
         Response::builder()
             .status(200)
-            .header("content-type", format!("multipart/x-mixed-replace; boundary={}", boundary))
+            .header(
+                "content-type",
+                format!("multipart/x-mixed-replace; boundary={}", boundary),
+            )
             .header("cache-control", "no-cache")
             .header("x-accel-buffering", "no")
             .body(body)
@@ -479,7 +494,10 @@ impl HttpStreamingEndpoint {
         }
 
         // Check Accept header
-        if let Some(accept) = request_headers.get("accept").or_else(|| request_headers.get("Accept")) {
+        if let Some(accept) = request_headers
+            .get("accept")
+            .or_else(|| request_headers.get("Accept"))
+        {
             return StreamFormat::from_accept_header(accept);
         }
 
@@ -495,17 +513,32 @@ mod tests {
 
     #[test]
     fn test_stream_format_from_accept() {
-        assert_eq!(StreamFormat::from_accept_header("text/event-stream"), StreamFormat::Sse);
-        assert_eq!(StreamFormat::from_accept_header("application/x-ndjson"), StreamFormat::Ndjson);
-        assert_eq!(StreamFormat::from_accept_header("multipart/mixed"), StreamFormat::Multipart);
-        assert_eq!(StreamFormat::from_accept_header("application/json"), StreamFormat::Ndjson);
+        assert_eq!(
+            StreamFormat::from_accept_header("text/event-stream"),
+            StreamFormat::Sse
+        );
+        assert_eq!(
+            StreamFormat::from_accept_header("application/x-ndjson"),
+            StreamFormat::Ndjson
+        );
+        assert_eq!(
+            StreamFormat::from_accept_header("multipart/mixed"),
+            StreamFormat::Multipart
+        );
+        assert_eq!(
+            StreamFormat::from_accept_header("application/json"),
+            StreamFormat::Ndjson
+        );
     }
 
     #[test]
     fn test_stream_format_content_type() {
         assert_eq!(StreamFormat::Sse.content_type(), "text/event-stream");
         assert_eq!(StreamFormat::Ndjson.content_type(), "application/x-ndjson");
-        assert_eq!(StreamFormat::Multipart.content_type(), "multipart/x-mixed-replace");
+        assert_eq!(
+            StreamFormat::Multipart.content_type(),
+            "multipart/x-mixed-replace"
+        );
     }
 
     #[test]
@@ -574,11 +607,19 @@ mod tests {
 
         assert_eq!(envelope.request_details.method, "POST");
         assert_eq!(
-            envelope.request_details.headers.get("x-dimse-op").map(String::as_str),
+            envelope
+                .request_details
+                .headers
+                .get("x-dimse-op")
+                .map(String::as_str),
             Some("get")
         );
         assert_eq!(
-            envelope.request_details.headers.get("x-query-level").map(String::as_str),
+            envelope
+                .request_details
+                .headers
+                .get("x-query-level")
+                .map(String::as_str),
             Some("STUDY")
         );
         assert_eq!(envelope.original_data, body_bytes);

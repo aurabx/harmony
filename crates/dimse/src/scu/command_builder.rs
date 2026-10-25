@@ -21,7 +21,7 @@ use crate::{DimseError, Result};
 pub use crate::common::{command_fields, priority, status};
 
 /// Build a command request object with common fields
-/// 
+///
 /// This is a convenience wrapper around the common build_request function.
 pub fn build_command_request(
     command_field: u16,
@@ -33,7 +33,7 @@ pub fn build_command_request(
 }
 
 /// Encode and send a command request with optional dataset
-/// 
+///
 /// This function properly fragments large datasets according to the negotiated
 /// maximum PDU size.
 pub async fn encode_and_send_request(
@@ -63,14 +63,16 @@ pub async fn encode_and_send_request(
             .find(|pc| pc.id == presentation_context_id)
             .map(|pc| pc.transfer_syntax.as_str())
             .ok_or_else(|| DimseError::operation_failed("Presentation context not found"))?;
-        
-        let ts = TransferSyntaxRegistry
-            .get(ts_uid)
-            .ok_or_else(|| DimseError::operation_failed(format!("Transfer syntax not found: {}", ts_uid)))?;
-        
+
+        let ts = TransferSyntaxRegistry.get(ts_uid).ok_or_else(|| {
+            DimseError::operation_failed(format!("Transfer syntax not found: {}", ts_uid))
+        })?;
+
         let mut dataset_bytes = Vec::new();
         ds.write_dataset_with_ts(&mut dataset_bytes, ts)
-            .map_err(|e| DimseError::operation_failed(format!("Failed to encode dataset: {}", e)))?;
+            .map_err(|e| {
+                DimseError::operation_failed(format!("Failed to encode dataset: {}", e))
+            })?;
 
         // Fragment dataset if larger than max PDU size
         // The max PDU size includes headers, so use a conservative data size
@@ -96,7 +98,14 @@ pub async fn encode_and_send_request(
                     data: vec![data_pdata],
                 })
                 .await
-                .map_err(|e| DimseError::network(format!("Failed to send dataset fragment {}/{}: {}", i + 1, num_chunks, e)))?;
+                .map_err(|e| {
+                    DimseError::network(format!(
+                        "Failed to send dataset fragment {}/{}: {}",
+                        i + 1,
+                        num_chunks,
+                        e
+                    ))
+                })?;
         }
     }
 
@@ -106,7 +115,11 @@ pub async fn encode_and_send_request(
 /// Receive a full DIMSE message (Command + optional Dataset) handling split PDUs
 pub async fn receive_dimse_message(
     association: &mut AsyncClientAssociation<TcpStream>,
-) -> Result<(InMemDicomObject<StandardDataDictionary>, Option<Vec<u8>>, u8)> {
+) -> Result<(
+    InMemDicomObject<StandardDataDictionary>,
+    Option<Vec<u8>>,
+    u8,
+)> {
     use dicom_encoding::text::SpecificCharacterSet;
     use dicom_object::InMemDicomObject;
 
@@ -119,9 +132,10 @@ pub async fn receive_dimse_message(
 
     // Loop to read Command PDVs
     while expect_more_command {
-        let pdu = association.receive().await.map_err(|e| {
-            DimseError::network(format!("Failed to receive PDU: {}", e))
-        })?;
+        let pdu = association
+            .receive()
+            .await
+            .map_err(|e| DimseError::network(format!("Failed to receive PDU: {}", e)))?;
 
         match pdu {
             Pdu::PData { data } => {
@@ -141,12 +155,18 @@ pub async fn receive_dimse_message(
                                 data_complete = true;
                             }
                         } else {
-                            return Err(DimseError::parse("Received Data PDV while waiting for Command PDV"));
+                            return Err(DimseError::parse(
+                                "Received Data PDV while waiting for Command PDV",
+                            ));
                         }
                     }
                 }
             }
-            Pdu::ReleaseRQ => return Err(DimseError::operation_failed("Association released unexpectedly")),
+            Pdu::ReleaseRQ => {
+                return Err(DimseError::operation_failed(
+                    "Association released unexpectedly",
+                ))
+            }
             Pdu::AbortRQ { .. } => return Err(DimseError::operation_failed("Association aborted")),
             _ => return Err(DimseError::parse("Unexpected PDU type")),
         }
@@ -167,12 +187,7 @@ pub async fn receive_dimse_message(
         ts,
         SpecificCharacterSet::default(),
     )
-    .map_err(|e| {
-        DimseError::parse(format!(
-            "Failed to parse response command dataset: {}",
-            e
-        ))
-    })?;
+    .map_err(|e| DimseError::parse(format!("Failed to parse response command dataset: {}", e)))?;
 
     // Check if Dataset is expected
     let data_set_type = command_obj
@@ -201,17 +216,25 @@ pub async fn receive_dimse_message(
                                     expect_more_data = false;
                                 }
                             } else {
-                                return Err(DimseError::parse("Received Command PDV while waiting for Data PDV"));
+                                return Err(DimseError::parse(
+                                    "Received Command PDV while waiting for Data PDV",
+                                ));
                             }
                         }
                     }
-                    Pdu::ReleaseRQ => return Err(DimseError::operation_failed("Association released unexpectedly")),
-                    Pdu::AbortRQ { .. } => return Err(DimseError::operation_failed("Association aborted")),
+                    Pdu::ReleaseRQ => {
+                        return Err(DimseError::operation_failed(
+                            "Association released unexpectedly",
+                        ))
+                    }
+                    Pdu::AbortRQ { .. } => {
+                        return Err(DimseError::operation_failed("Association aborted"))
+                    }
                     _ => return Err(DimseError::parse("Unexpected PDU type")),
                 }
             }
         }
-        
+
         Ok((command_obj, Some(dataset_data), presentation_context_id))
     } else {
         // No dataset expected
@@ -222,7 +245,11 @@ pub async fn receive_dimse_message(
 /// Parse a response command from received PDUs
 pub fn parse_response_command(
     pdata: Vec<dicom_ul::pdu::PDataValue>,
-) -> Result<(InMemDicomObject<StandardDataDictionary>, Option<Vec<u8>>, u8)> {
+) -> Result<(
+    InMemDicomObject<StandardDataDictionary>,
+    Option<Vec<u8>>,
+    u8,
+)> {
     use dicom_encoding::text::SpecificCharacterSet;
     use dicom_object::InMemDicomObject;
 
@@ -258,12 +285,7 @@ pub fn parse_response_command(
         ts,
         SpecificCharacterSet::default(),
     )
-    .map_err(|e| {
-        DimseError::parse(format!(
-            "Failed to parse response command dataset: {}",
-            e
-        ))
-    })?;
+    .map_err(|e| DimseError::parse(format!("Failed to parse response command dataset: {}", e)))?;
 
     let dataset = if dataset_data.is_empty() {
         None
@@ -275,9 +297,7 @@ pub fn parse_response_command(
 }
 
 /// Extract status code from a response command object
-pub fn extract_status(
-    response: &InMemDicomObject<StandardDataDictionary>,
-) -> Result<u16> {
+pub fn extract_status(response: &InMemDicomObject<StandardDataDictionary>) -> Result<u16> {
     response
         .element(tags::STATUS)
         .map_err(|_| DimseError::parse("Missing status field in response"))?
@@ -303,7 +323,7 @@ pub fn parse_dataset_bytes(
     association: &AsyncClientAssociation<TcpStream>,
 ) -> Result<InMemDicomObject<StandardDataDictionary>> {
     use dicom_encoding::text::SpecificCharacterSet;
-    
+
     // Get transfer syntax from presentation context
     let ts_uid = association
         .presentation_contexts()
@@ -311,11 +331,11 @@ pub fn parse_dataset_bytes(
         .find(|pc| pc.id == presentation_context_id)
         .map(|pc| &pc.transfer_syntax)
         .ok_or_else(|| DimseError::parse("Presentation context not found"))?;
-    
+
     let ts = TransferSyntaxRegistry
         .get(ts_uid)
         .ok_or_else(|| DimseError::parse(format!("Transfer syntax not found: {}", ts_uid)))?;
-    
+
     let cursor = std::io::Cursor::new(&dataset_bytes);
     InMemDicomObject::<StandardDataDictionary>::read_dataset_with_ts_cs(
         cursor,
@@ -331,7 +351,7 @@ pub fn build_identifier_dataset(
     parameters: &std::collections::HashMap<String, String>,
 ) -> Result<InMemDicomObject<StandardDataDictionary>> {
     let mut identifier = InMemDicomObject::new_empty();
-    
+
     // Add QueryRetrieveLevel (0008,0052)
     let level_str = query_utils::query_level_to_string(query_level);
     identifier.put(DataElement::new(
@@ -339,7 +359,7 @@ pub fn build_identifier_dataset(
         VR::CS,
         PrimitiveValue::from(level_str),
     ));
-    
+
     // Add query parameters
     // Map common tag strings to proper tags and VRs
     for (tag_str, value) in parameters {
@@ -375,17 +395,21 @@ pub fn build_identifier_dataset(
                 }
             }
         };
-        
+
         // Add the element - empty value means return key
         if value.is_empty() {
             // Return key - add with empty value
             identifier.put(DataElement::new(tag, vr, PrimitiveValue::Empty));
         } else {
             // Add with value
-            identifier.put(DataElement::new(tag, vr, PrimitiveValue::from(value.as_str())));
+            identifier.put(DataElement::new(
+                tag,
+                vr,
+                PrimitiveValue::from(value.as_str()),
+            ));
         }
     }
-    
+
     Ok(identifier)
 }
 
@@ -428,12 +452,8 @@ mod tests {
 
     #[test]
     fn test_build_command_request() {
-        let request = build_command_request(
-            command_fields::C_ECHO_RQ,
-            1,
-            false,
-            "1.2.840.10008.1.1",
-        );
+        let request =
+            build_command_request(command_fields::C_ECHO_RQ, 1, false, "1.2.840.10008.1.1");
 
         // Verify command field
         let cmd_field = request

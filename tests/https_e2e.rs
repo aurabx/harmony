@@ -10,13 +10,17 @@ use tokio::time::sleep;
 /// Generate a self-signed certificate for testing
 fn generate_test_certificate(temp_dir: &TempDir) -> (String, String) {
     let subject_alt_names = vec!["localhost".to_string(), "127.0.0.1".to_string()];
-    let cert = generate_simple_self_signed(subject_alt_names).expect("Failed to generate certificate");
+    let cert =
+        generate_simple_self_signed(subject_alt_names).expect("Failed to generate certificate");
 
     let cert_path = temp_dir.path().join("cert.pem");
     let key_path = temp_dir.path().join("key.pem");
 
-    fs::write(&cert_path, cert.serialize_pem().expect("Failed to serialize cert"))
-        .expect("Failed to write certificate");
+    fs::write(
+        &cert_path,
+        cert.serialize_pem().expect("Failed to serialize cert"),
+    )
+    .expect("Failed to write certificate");
     fs::write(&key_path, cert.serialize_private_key_pem()).expect("Failed to write key");
 
     (
@@ -101,7 +105,7 @@ module = ""
         .expect("Failed to make HTTPS request");
 
     assert_eq!(response.status(), 200);
-    
+
     // Cleanup
     server_handle.abort();
 }
@@ -178,7 +182,7 @@ module = ""
 
     // Should get 301 redirect
     assert_eq!(response.status(), 301);
-    
+
     // Check Location header points to HTTPS
     let location = response
         .headers()
@@ -186,10 +190,10 @@ module = ""
         .expect("No Location header")
         .to_str()
         .expect("Invalid Location header");
-    
+
     assert!(location.starts_with("https://"));
     assert!(location.contains("/test/path?query=value"));
-    
+
     // Cleanup
     server_handle.abort();
 }
@@ -259,7 +263,7 @@ module = ""
         .expect("Failed to make HTTP request");
 
     assert_eq!(response.status(), 200);
-    
+
     // Cleanup
     server_handle.abort();
 }

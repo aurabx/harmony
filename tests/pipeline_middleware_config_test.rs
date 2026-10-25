@@ -149,8 +149,14 @@ fn test_pipeline_with_list_middleware() {
     };
 
     assert_eq!(pipeline.middleware.len(), 2);
-    assert_eq!(pipeline.middleware.left_chain(), vec!["auth".to_string(), "transform".to_string()]);
-    assert_eq!(pipeline.middleware.right_chain(), vec!["auth".to_string(), "transform".to_string()]);
+    assert_eq!(
+        pipeline.middleware.left_chain(),
+        vec!["auth".to_string(), "transform".to_string()]
+    );
+    assert_eq!(
+        pipeline.middleware.right_chain(),
+        vec!["auth".to_string(), "transform".to_string()]
+    );
 }
 
 #[test]
@@ -178,8 +184,14 @@ fn test_pipeline_middleware_deserialization_list_format() {
     let json_str = r#"["auth", "transform"]"#;
     let middleware: PipelineMiddleware = serde_json::from_str(json_str).unwrap();
 
-    assert_eq!(middleware.left_chain(), vec!["auth".to_string(), "transform".to_string()]);
-    assert_eq!(middleware.right_chain(), vec!["auth".to_string(), "transform".to_string()]);
+    assert_eq!(
+        middleware.left_chain(),
+        vec!["auth".to_string(), "transform".to_string()]
+    );
+    assert_eq!(
+        middleware.right_chain(),
+        vec!["auth".to_string(), "transform".to_string()]
+    );
 }
 
 #[test]

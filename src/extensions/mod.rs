@@ -47,8 +47,8 @@
 //! ```
 
 mod auth;
-pub mod builtin;
 mod builder;
+pub mod builtin;
 mod config_extension;
 mod middleware;
 mod plugin;

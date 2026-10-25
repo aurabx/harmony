@@ -156,19 +156,13 @@ impl ServiceType for Http3Backend {
                 if !path.exists() {
                     return Err(ConfigError::InvalidBackend {
                         name: "http3".to_string(),
-                        reason: format!(
-                            "HTTP/3 backend ca_cert_path '{}' does not exist",
-                            ca_path
-                        ),
+                        reason: format!("HTTP/3 backend ca_cert_path '{}' does not exist", ca_path),
                     });
                 }
                 if !path.is_file() {
                     return Err(ConfigError::InvalidBackend {
                         name: "http3".to_string(),
-                        reason: format!(
-                            "HTTP/3 backend ca_cert_path '{}' is not a file",
-                            ca_path
-                        ),
+                        reason: format!("HTTP/3 backend ca_cert_path '{}' is not a file", ca_path),
                     });
                 }
             }
@@ -201,9 +195,8 @@ impl ServiceHandler<Value> for Http3Backend {
         mut envelope: RequestEnvelope<Vec<u8>>,
         options: &HashMap<String, Value>,
     ) -> Result<ResponseEnvelope<Vec<u8>>, Error> {
-        let conn = Self::extract_connection_config(options).ok_or_else(|| {
-            Error::from("HTTP/3 backend requires valid connection configuration")
-        })?;
+        let conn = Self::extract_connection_config(options)
+            .ok_or_else(|| Error::from("HTTP/3 backend requires valid connection configuration"))?;
 
         let base_url = Self::build_base_url(&conn);
 
@@ -256,10 +249,12 @@ impl ServiceHandler<Value> for Http3Backend {
 
         // Create HTTP/3 client
         let client = if let Some(ref ca_path) = conn.ca_cert_path {
-            let ca_pem = std::fs::read_to_string(ca_path)
-                .map_err(|e| Error::from(format!("Failed to read CA cert at {}: {}", ca_path, e)))?;
-            Http3Client::with_ca_cert(&ca_pem)
-                .map_err(|e| Error::from(format!("Failed to create HTTP/3 client with CA: {}", e)))?
+            let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
+                Error::from(format!("Failed to read CA cert at {}: {}", ca_path, e))
+            })?;
+            Http3Client::with_ca_cert(&ca_pem).map_err(|e| {
+                Error::from(format!("Failed to create HTTP/3 client with CA: {}", e))
+            })?
         } else {
             Http3Client::new()
                 .map_err(|e| Error::from(format!("Failed to create HTTP/3 client: {}", e)))?

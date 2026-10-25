@@ -38,7 +38,9 @@ const POLICIES_MIDDLEWARE_TYPE: &str = "policies";
 /// `policies` middleware instance lists a policy id that is not a key in
 /// `[policies]`. The middleware resolves these ids per request, so a bad id
 /// that passed the load would turn every request into a 500.
-pub fn resolve_references(config: &mut Config) -> Result<std::collections::HashSet<String>, String> {
+pub fn resolve_references(
+    config: &mut Config,
+) -> Result<std::collections::HashSet<String>, String> {
     // Run every check before failing, so one load reports every problem
     // instead of revealing them one category at a time.
     let errors: Vec<String> = [
@@ -432,20 +434,27 @@ fn unknown_authentication_message(
 
 fn resolve_endpoints(config: &mut Config) -> Result<(), String> {
     let peers = config.peers.clone();
-    
+
     for (name, endpoint) in config.endpoints.iter_mut() {
         if let Some(peer_ref) = &endpoint.peer_ref {
             let peer = peers.get(peer_ref).ok_or_else(|| {
-                format!("Endpoint '{}' references non-existent peer '{}'", name, peer_ref)
+                format!(
+                    "Endpoint '{}' references non-existent peer '{}'",
+                    name, peer_ref
+                )
             })?;
 
             if !peer.enabled {
-                 tracing::warn!("Endpoint '{}' references disabled peer '{}'", name, peer_ref);
+                tracing::warn!(
+                    "Endpoint '{}' references disabled peer '{}'",
+                    name,
+                    peer_ref
+                );
             }
 
             // Merge connection settings
             let mut resolved_connection = peer.connection.clone();
-            
+
             // Peer protocol (formerly type)
             if let Some(protocol) = peer.get_protocol() {
                 if resolved_connection.protocol.is_none() {
@@ -455,22 +464,22 @@ fn resolve_endpoints(config: &mut Config) -> Result<(), String> {
 
             // Override with endpoint connection settings if present
             if let Some(endpoint_conn) = &endpoint.connection {
-                 if !endpoint_conn.host.is_empty() {
-                     resolved_connection.host = endpoint_conn.host.clone();
-                 }
-                 if endpoint_conn.port.is_some() {
-                     resolved_connection.port = endpoint_conn.port;
-                 }
-                 if endpoint_conn.protocol.is_some() {
-                     resolved_connection.protocol = endpoint_conn.protocol.clone();
-                 }
-                 if endpoint_conn.base_path.is_some() {
-                     resolved_connection.base_path = endpoint_conn.base_path.clone();
-                 }
+                if !endpoint_conn.host.is_empty() {
+                    resolved_connection.host = endpoint_conn.host.clone();
+                }
+                if endpoint_conn.port.is_some() {
+                    resolved_connection.port = endpoint_conn.port;
+                }
+                if endpoint_conn.protocol.is_some() {
+                    resolved_connection.protocol = endpoint_conn.protocol.clone();
+                }
+                if endpoint_conn.base_path.is_some() {
+                    resolved_connection.base_path = endpoint_conn.base_path.clone();
+                }
             }
-            
+
             endpoint.connection = Some(resolved_connection);
-            
+
             // Merge authentication
             if endpoint.authentication.is_none() {
                 endpoint.authentication = peer.authentication.clone();
@@ -500,13 +509,17 @@ fn resolve_backends(config: &mut Config) -> Result<std::collections::HashSet<Str
             };
 
             if !target.enabled {
-                tracing::warn!("Backend '{}' references disabled target '{}'", name, target_ref);
+                tracing::warn!(
+                    "Backend '{}' references disabled target '{}'",
+                    name,
+                    target_ref
+                );
             }
 
             // Merge connection settings
             let mut resolved_connection = target.connection.clone();
 
-             // Target protocol (formerly type)
+            // Target protocol (formerly type)
             if let Some(protocol) = target.get_protocol() {
                 if resolved_connection.protocol.is_none() {
                     resolved_connection.protocol = Some(protocol);
@@ -515,18 +528,18 @@ fn resolve_backends(config: &mut Config) -> Result<std::collections::HashSet<Str
 
             // Override with backend connection settings
             if let Some(backend_conn) = &backend.connection {
-                 if !backend_conn.host.is_empty() {
-                     resolved_connection.host = backend_conn.host.clone();
-                 }
-                 if backend_conn.port.is_some() {
-                     resolved_connection.port = backend_conn.port;
-                 }
-                 if backend_conn.protocol.is_some() {
-                     resolved_connection.protocol = backend_conn.protocol.clone();
-                 }
-                 if backend_conn.base_path.is_some() {
-                     resolved_connection.base_path = backend_conn.base_path.clone();
-                 }
+                if !backend_conn.host.is_empty() {
+                    resolved_connection.host = backend_conn.host.clone();
+                }
+                if backend_conn.port.is_some() {
+                    resolved_connection.port = backend_conn.port;
+                }
+                if backend_conn.protocol.is_some() {
+                    resolved_connection.protocol = backend_conn.protocol.clone();
+                }
+                if backend_conn.base_path.is_some() {
+                    resolved_connection.base_path = backend_conn.base_path.clone();
+                }
             }
 
             backend.connection = Some(resolved_connection);
@@ -544,10 +557,10 @@ fn resolve_backends(config: &mut Config) -> Result<std::collections::HashSet<Str
                 backend.max_retries = Some(target.max_retries);
             }
         }
-        
+
         // Inject connection into options for services
         inject_connection_into_options(&mut backend.options, &backend.connection);
-        
+
         // Resolve and inject authentication definition into options.
         // validate_authentication_refs has already checked this reference; the
         // error path stays so a missing credential can never be skipped.
@@ -557,10 +570,11 @@ fn resolve_backends(config: &mut Config) -> Result<std::collections::HashSet<Str
             let options_map = backend.options.get_or_insert_with(HashMap::new);
             options_map.insert(
                 "authentication_def".to_string(),
-                serde_json::to_value(&auth_def).expect("Failed to serialize AuthenticationDefinition"),
+                serde_json::to_value(&auth_def)
+                    .expect("Failed to serialize AuthenticationDefinition"),
             );
         }
-        
+
         // Inject reliability
         if let Some(options) = &mut backend.options {
             if let Some(timeout) = backend.timeout_secs {
@@ -568,7 +582,7 @@ fn resolve_backends(config: &mut Config) -> Result<std::collections::HashSet<Str
                     options.insert("timeout_secs".to_string(), serde_json::json!(timeout));
                 }
             }
-             if let Some(retries) = backend.max_retries {
+            if let Some(retries) = backend.max_retries {
                 if !options.contains_key("max_retries") {
                     options.insert("max_retries".to_string(), serde_json::json!(retries));
                 }
@@ -580,15 +594,18 @@ fn resolve_backends(config: &mut Config) -> Result<std::collections::HashSet<Str
 
 fn inject_connection_into_options(
     options: &mut Option<HashMap<String, serde_json::Value>>,
-    connection: &Option<ConnectionConfig>
+    connection: &Option<ConnectionConfig>,
 ) {
     if let Some(conn) = connection {
         let options_map = options.get_or_insert_with(HashMap::new);
-        
+
         // Inject individual fields if not present (to support legacy lookups if we updated services)
         // But more importantly, inject the whole connection object
-        options_map.insert("connection".to_string(), serde_json::to_value(conn).unwrap());
-        
+        options_map.insert(
+            "connection".to_string(),
+            serde_json::to_value(conn).unwrap(),
+        );
+
         // Also polyfill common fields for backward compatibility if we want,
         // but strictly speaking we should update services to look at "connection" object.
         // For now, let's just inject the object.

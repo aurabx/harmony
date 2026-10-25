@@ -14,7 +14,9 @@ use std::collections::BTreeMap;
 pub struct DicomFlattenConfig {}
 
 /// Parses middleware configuration from options
-pub fn parse_config(_options: &std::collections::HashMap<String, Value>) -> Result<DicomFlattenConfig, String> {
+pub fn parse_config(
+    _options: &std::collections::HashMap<String, Value>,
+) -> Result<DicomFlattenConfig, String> {
     Ok(DicomFlattenConfig {})
 }
 
@@ -41,11 +43,14 @@ impl Middleware for DicomFlattenMiddleware {
                 envelope.normalized_snapshot = Some(data.clone());
             }
 
-            tracing::debug!("Flatten middleware (left) input: {}", crate::logging::json_shape(data));
+            tracing::debug!(
+                "Flatten middleware (left) input: {}",
+                crate::logging::json_shape(data)
+            );
 
             // Check for dataset field (C-STORE) or identifier field (C-FIND/etc)
             let dicom_data = data.get("dataset").or_else(|| data.get("identifier"));
-            
+
             if let Some(dicom_json) = dicom_data {
                 match flatten_dicom_json(dicom_json) {
                     Ok(flat) => {
@@ -85,7 +90,10 @@ impl Middleware for DicomFlattenMiddleware {
                 envelope.normalized_snapshot = Some(data.clone());
             }
 
-            tracing::debug!("Flatten middleware (right) input: {}", crate::logging::json_shape(data));
+            tracing::debug!(
+                "Flatten middleware (right) input: {}",
+                crate::logging::json_shape(data)
+            );
 
             // Handle both direct DICOM JSON and wrapped response with matches array
             let flattened = if let Some(matches) = data.get("matches").and_then(|m| m.as_array()) {
@@ -100,7 +108,7 @@ impl Middleware for DicomFlattenMiddleware {
                         }
                     }
                 }
-                
+
                 // Rebuild the response structure with flattened matches
                 let mut result = data.clone();
                 if let Some(obj) = result.as_object_mut() {
@@ -156,7 +164,9 @@ fn get_vr_for_tag(tag_hex: &str, vr_map: Option<&BTreeMap<String, String>>) -> S
 /// Flattens DICOM JSON to simple key-value pairs
 /// Stores VR metadata only for non-standard/unknown tags as a safety net
 fn flatten_dicom_json(data: &Value) -> Result<Value, String> {
-    let obj = data.as_object().ok_or("Expected DICOM JSON to be an object")?;
+    let obj = data
+        .as_object()
+        .ok_or("Expected DICOM JSON to be an object")?;
 
     let mut flat = BTreeMap::new();
     let mut vr_map: BTreeMap<String, String> = BTreeMap::new();
@@ -175,7 +185,7 @@ fn flatten_dicom_json(data: &Value) -> Result<Value, String> {
             } else {
                 false
             };
-            
+
             if is_private_tag || !can_lookup_in_dict(tag) {
                 vr_map.insert(tag.clone(), vr.clone());
             }
@@ -196,7 +206,8 @@ fn flatten_dicom_json(data: &Value) -> Result<Value, String> {
                 } else if vr == "PN" && value_array.len() == 1 {
                     // Person Name - extract Alphabetic field if present
                     if let Some(pn_obj) = value_array[0].as_object() {
-                        if let Some(alphabetic) = pn_obj.get("Alphabetic").and_then(|v| v.as_str()) {
+                        if let Some(alphabetic) = pn_obj.get("Alphabetic").and_then(|v| v.as_str())
+                        {
                             flat.insert(tag.clone(), Value::String(alphabetic.to_string()));
                         } else {
                             // Fallback: serialize PN object as string
@@ -249,7 +260,9 @@ fn can_lookup_in_dict(tag_hex: &str) -> bool {
 
 /// Unflattens DICOM JSON from flat key-value pairs back to standard format
 pub fn unflatten_dicom_json(data: &Value) -> Result<Value, String> {
-    let obj = data.as_object().ok_or("Expected flat DICOM JSON to be an object")?;
+    let obj = data
+        .as_object()
+        .ok_or("Expected flat DICOM JSON to be an object")?;
 
     // Extract VR metadata if present (fallback for non-standard tags)
     let vr_map: BTreeMap<String, String> = obj
@@ -266,7 +279,14 @@ pub fn unflatten_dicom_json(data: &Value) -> Result<Value, String> {
         }
 
         // Try to infer VR from dictionary first, then fall back to stored metadata
-        let vr = get_vr_for_tag(key, if vr_map.is_empty() { None } else { Some(&vr_map) });
+        let vr = get_vr_for_tag(
+            key,
+            if vr_map.is_empty() {
+                None
+            } else {
+                Some(&vr_map)
+            },
+        );
 
         if vr == "SQ" {
             // Sequence - reconstruct from array of flattened items
@@ -325,9 +345,9 @@ pub fn unflatten_dicom_json(data: &Value) -> Result<Value, String> {
         }
     }
 
-    Ok(Value::Object(
-        serde_json::Map::from_iter(result.into_iter()),
-    ))
+    Ok(Value::Object(serde_json::Map::from_iter(
+        result.into_iter(),
+    )))
 }
 
 #[cfg(test)]
@@ -468,8 +488,14 @@ mod tests {
         });
 
         let result = flatten_dicom_json(&input).expect("flatten failed");
-        assert_eq!(result.get("00100020"), Some(&Value::String("PID156695".to_string())));
-        assert_eq!(result.get("0020000D"), Some(&Value::String("1.2.826.0.1.3680043.8.498.123".to_string())));
+        assert_eq!(
+            result.get("00100020"),
+            Some(&Value::String("PID156695".to_string()))
+        );
+        assert_eq!(
+            result.get("0020000D"),
+            Some(&Value::String("1.2.826.0.1.3680043.8.498.123".to_string()))
+        );
     }
 
     #[test]
@@ -482,7 +508,10 @@ mod tests {
         });
 
         let result = flatten_dicom_json(&input).expect("flatten failed");
-        assert_eq!(result.get("00100010"), Some(&Value::String("Doe^John".to_string())));
+        assert_eq!(
+            result.get("00100010"),
+            Some(&Value::String("Doe^John".to_string()))
+        );
     }
 
     #[test]
@@ -578,8 +607,15 @@ mod tests {
         let unflat_obj = unflattened.as_object().expect("unflattened not object");
 
         for (key, original_value) in original_obj {
-            let unflat_value = unflat_obj.get(key).expect(&format!("key {} missing in unflattened", key));
-            assert_eq!(original_value.get("vr"), unflat_value.get("vr"), "VR mismatch for {}", key);
+            let unflat_value = unflat_obj
+                .get(key)
+                .expect(&format!("key {} missing in unflattened", key));
+            assert_eq!(
+                original_value.get("vr"),
+                unflat_value.get("vr"),
+                "VR mismatch for {}",
+                key
+            );
         }
     }
 }

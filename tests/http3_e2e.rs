@@ -46,7 +46,9 @@ fn create_http3_test_config(
     cert_path: &str,
     key_path: &str,
 ) -> String {
-    create_http3_test_config_with_middleware(dir, http_port, http3_port, cert_path, key_path, "", "")
+    create_http3_test_config_with_middleware(
+        dir, http_port, http3_port, cert_path, key_path, "", "",
+    )
 }
 
 /// Same as `create_http3_test_config`, but the echo pipeline runs the
@@ -146,7 +148,9 @@ fn build_client_config(cert_pem: &str) -> quinn::ClientConfig {
     // Create root cert store with our self-signed cert
     let mut roots = RootCertStore::empty();
     for cert in &certs {
-        roots.add(cert.clone()).expect("failed to add cert to roots");
+        roots
+            .add(cert.clone())
+            .expect("failed to add cert to roots");
     }
 
     // Build rustls client config with ALPN set to h3
@@ -178,7 +182,8 @@ async fn http3_get(
     let connection = endpoint.connect(addr, "localhost")?.await?;
 
     // Create HTTP/3 connection
-    let (mut driver, mut send_request) = h3::client::new(h3_quinn::Connection::new(connection)).await?;
+    let (mut driver, mut send_request) =
+        h3::client::new(h3_quinn::Connection::new(connection)).await?;
 
     // Spawn driver task - poll_close returns ConnectionError directly on close
     let driver_handle = tokio::spawn(async move {
@@ -233,7 +238,8 @@ async fn http3_post(
     let connection = endpoint.connect(addr, "localhost")?.await?;
 
     // Create HTTP/3 connection
-    let (mut driver, mut send_request) = h3::client::new(h3_quinn::Connection::new(connection)).await?;
+    let (mut driver, mut send_request) =
+        h3::client::new(h3_quinn::Connection::new(connection)).await?;
 
     // Spawn driver task - poll_close returns ConnectionError directly on close
     let driver_handle = tokio::spawn(async move {
@@ -393,7 +399,8 @@ async fn test_http3_post_request_with_body() {
     assert_eq!(status, 200, "Expected 200 OK");
 
     // Parse response body
-    let json: serde_json::Value = serde_json::from_slice(&resp_body).expect("response should be JSON");
+    let json: serde_json::Value =
+        serde_json::from_slice(&resp_body).expect("response should be JSON");
     assert_eq!(json["path"], "echo");
     assert_eq!(json["full_path"], "/api/echo");
     // The echo backend should return information about the request
@@ -537,7 +544,10 @@ async fn http3_status_behind_ip_gate(http_port: u16, http3_port: u16, cidr: &str
 #[serial_test::serial]
 async fn test_http3_ip_allow_admits_client_in_allowlist() {
     let status = http3_status_behind_ip_gate(19087, 19446, "127.0.0.1/32").await;
-    assert_eq!(status, 200, "loopback client should pass a 127.0.0.1/32 allowlist");
+    assert_eq!(
+        status, 200,
+        "loopback client should pass a 127.0.0.1/32 allowlist"
+    );
 }
 
 /// AURA-2417: the gate compares the real peer address, so a loopback client
@@ -546,7 +556,10 @@ async fn test_http3_ip_allow_admits_client_in_allowlist() {
 #[serial_test::serial]
 async fn test_http3_ip_allow_denies_client_outside_allowlist() {
     let status = http3_status_behind_ip_gate(19088, 19447, "10.0.0.0/8").await;
-    assert_eq!(status, 403, "loopback client should fail a 10.0.0.0/8 allowlist");
+    assert_eq!(
+        status, 403,
+        "loopback client should fail a 10.0.0.0/8 allowlist"
+    );
 }
 
 /// Send HTTP/3 GETs to `path` until one returns `expected` or `within`
@@ -611,6 +624,12 @@ async fn test_http3_reload_applies_policy_change() {
     if let Some(registry) = harmony::globals::get_adapter_registry() {
         registry.stop_all().await.ok();
     }
-    assert_eq!(before, 200, "127.0.0.1 should pass the 127.0.0.1/32 allowlist");
-    assert_eq!(after, 403, "after reload, 127.0.0.1 should fail the 10.0.0.0/8 allowlist");
+    assert_eq!(
+        before, 200,
+        "127.0.0.1 should pass the 127.0.0.1/32 allowlist"
+    );
+    assert_eq!(
+        after, 403,
+        "after reload, 127.0.0.1 should fail the 10.0.0.0/8 allowlist"
+    );
 }

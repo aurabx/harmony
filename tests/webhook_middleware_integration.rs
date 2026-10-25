@@ -3,6 +3,7 @@ use axum::extract::State;
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::routing::post;
 use axum::Router;
+use base64::Engine as _;
 use harmony::config::config::{Config, ConfigError};
 use serde_json::{json, Value};
 use std::collections::HashMap;
@@ -10,7 +11,6 @@ use std::sync::Arc;
 use tokio::net::TcpListener;
 use tokio::task::JoinHandle;
 use tower::ServiceExt;
-use base64::Engine as _;
 
 #[derive(Clone, Default)]
 struct WebhookStore {
@@ -139,7 +139,11 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     Ok(cfg)
 }
 
-async fn wait_for_posts(store: &WebhookStore, at_least: usize, timeout_ms: u64) -> Vec<(Value, HashMap<String, String>)> {
+async fn wait_for_posts(
+    store: &WebhookStore,
+    at_least: usize,
+    timeout_ms: u64,
+) -> Vec<(Value, HashMap<String, String>)> {
     let mut waited = 0u64;
     loop {
         {
@@ -148,7 +152,9 @@ async fn wait_for_posts(store: &WebhookStore, at_least: usize, timeout_ms: u64) 
                 return lock.clone();
             }
         }
-        if waited >= timeout_ms { break; }
+        if waited >= timeout_ms {
+            break;
+        }
         tokio::time::sleep(tokio::time::Duration::from_millis(20)).await;
         waited += 20;
     }
@@ -170,7 +176,8 @@ async fn test_webhook_left_posts_payload_with_redaction_and_auth() {
     let temp_spec = tempfile::NamedTempFile::new().unwrap();
     std::fs::write(temp_spec.path(), spec_text).unwrap();
 
-    let cfg_text = format!(r#"
+    let cfg_text = format!(
+        r#"
         [proxy]
         id = "webhook-left-test"
         log_level = "debug"
@@ -228,7 +235,9 @@ async fn test_webhook_left_posts_payload_with_redaction_and_auth() {
         module = ""
         [middleware_types.passthru]
         module = ""
-    "#, hook = hook_url);
+    "#,
+        hook = hook_url
+    );
 
     let cfg = load_config_from_str(&cfg_text).expect("valid config");
     let cfg = Arc::new(cfg);
@@ -252,8 +261,14 @@ async fn test_webhook_left_posts_payload_with_redaction_and_auth() {
         .expect("router handled request");
 
     if response.status() != StatusCode::OK {
-        let body = axum::body::to_bytes(response.into_body(), usize::MAX).await.unwrap();
-        panic!("unexpected status: {} body: {}", StatusCode::from_u16(500).unwrap(), String::from_utf8_lossy(&body));
+        let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+            .await
+            .unwrap();
+        panic!(
+            "unexpected status: {} body: {}",
+            StatusCode::from_u16(500).unwrap(),
+            String::from_utf8_lossy(&body)
+        );
     }
 
     // Webhook is fire-and-forget; wait briefly for delivery
@@ -263,14 +278,27 @@ async fn test_webhook_left_posts_payload_with_redaction_and_auth() {
     let (body, headers) = &posts[0];
 
     // Validate payload basics
-    assert_eq!(body.get("middleware").and_then(|v| v.as_str()), Some("webhook"));
+    assert_eq!(
+        body.get("middleware").and_then(|v| v.as_str()),
+        Some("webhook")
+    );
     assert_eq!(body.get("name").and_then(|v| v.as_str()), Some("hook_left"));
     assert_eq!(body.get("side").and_then(|v| v.as_str()), Some("left"));
 
     // Redaction checks
-    let req_headers = body.get("request").and_then(|r| r.get("headers")).and_then(|h| h.as_object()).expect("headers object");
-    assert_eq!(req_headers.get("authorization").and_then(|v| v.as_str()), Some("<redacted>"));
-    assert_eq!(req_headers.get("x-secret").and_then(|v| v.as_str()), Some("<redacted>"));
+    let req_headers = body
+        .get("request")
+        .and_then(|r| r.get("headers"))
+        .and_then(|h| h.as_object())
+        .expect("headers object");
+    assert_eq!(
+        req_headers.get("authorization").and_then(|v| v.as_str()),
+        Some("<redacted>")
+    );
+    assert_eq!(
+        req_headers.get("x-secret").and_then(|v| v.as_str()),
+        Some("<redacted>")
+    );
 
     // Extra should be null when no metadata is provided for this instance
     assert!(body.get("extra").is_some());
@@ -280,7 +308,10 @@ async fn test_webhook_left_posts_payload_with_redaction_and_auth() {
         "Basic {}",
         base64::engine::general_purpose::STANDARD.encode(b"whuser:whpass"),
     );
-    assert_eq!(headers.get("authorization").map(|s| s.as_str()), Some(expected_basic.as_str()));
+    assert_eq!(
+        headers.get("authorization").map(|s| s.as_str()),
+        Some(expected_basic.as_str())
+    );
 }
 
 #[tokio::test]
@@ -288,7 +319,8 @@ async fn test_webhook_left_posts_payload_with_redaction_and_auth() {
 async fn test_webhook_both_posts_twice() {
     let (hook_url, store, _handle) = build_webhook_receiver().await;
 
-    let cfg_text = format!(r#"
+    let cfg_text = format!(
+        r#"
         [proxy]
         id = "webhook-both-test"
         log_level = "info"
@@ -334,7 +366,9 @@ async fn test_webhook_both_posts_twice() {
         module = ""
         [middleware_types.passthru]
         module = ""
-    "#, hook = hook_url);
+    "#,
+        hook = hook_url
+    );
 
     let cfg = load_config_from_str(&cfg_text).expect("valid config");
     let cfg = Arc::new(cfg);
@@ -372,7 +406,8 @@ async fn test_webhook_with_global_sensitive_field_patterns() {
 
     // Configure global sensitive_field_patterns at the proxy level
     // These patterns should automatically redact matching fields in webhook payloads
-    let cfg_text = format!(r#"
+    let cfg_text = format!(
+        r#"
         [proxy]
         id = "webhook-sensitive-patterns-test"
         log_level = "debug"
@@ -424,14 +459,19 @@ async fn test_webhook_with_global_sensitive_field_patterns() {
         module = ""
         [middleware_types.passthru]
         module = ""
-    "#, hook = hook_url);
+    "#,
+        hook = hook_url
+    );
 
     let cfg = load_config_from_str(&cfg_text).expect("valid config");
-    
+
     // Verify the patterns are loaded in config
     assert_eq!(cfg.proxy.sensitive_field_patterns.len(), 3);
-    assert!(cfg.proxy.sensitive_field_patterns.contains(&".*patient.*name.*".to_string()));
-    
+    assert!(cfg
+        .proxy
+        .sensitive_field_patterns
+        .contains(&".*patient.*name.*".to_string()));
+
     let cfg = Arc::new(cfg);
     harmony::globals::set_config(cfg.clone());
     let app = harmony::router::build_network_router(cfg, "default").await;
@@ -443,10 +483,10 @@ async fn test_webhook_with_global_sensitive_field_patterns() {
                 .uri("/proxy/echo")
                 .method("POST")
                 .header("content-type", "application/json")
-                .header("X-Patient-Name", "John Doe")       // Should be redacted by pattern
-                .header("X-Patient-SSN", "123-45-6789")     // Should be redacted by pattern
-                .header("X-Api-Secret", "super-secret")     // Should be redacted by pattern
-                .header("X-Safe-Header", "visible-value")   // Should NOT be redacted
+                .header("X-Patient-Name", "John Doe") // Should be redacted by pattern
+                .header("X-Patient-SSN", "123-45-6789") // Should be redacted by pattern
+                .header("X-Api-Secret", "super-secret") // Should be redacted by pattern
+                .header("X-Safe-Header", "visible-value") // Should NOT be redacted
                 .body(Body::from(r#"{"hello":"world"}"#))
                 .unwrap(),
         )
@@ -484,7 +524,7 @@ async fn test_webhook_with_global_sensitive_field_patterns() {
         Some("<redacted>"),
         "X-Api-Secret should be redacted by .*secret.* pattern"
     );
-    
+
     // Safe header should NOT be redacted
     assert_eq!(
         req_headers.get("x-safe-header").and_then(|v| v.as_str()),
@@ -499,7 +539,8 @@ async fn test_webhook_combined_explicit_and_pattern_redaction() {
     let (hook_url, store, _handle) = build_webhook_receiver().await;
 
     // Test that both explicit redact_headers AND global patterns work together
-    let cfg_text = format!(r#"
+    let cfg_text = format!(
+        r#"
         [proxy]
         id = "webhook-combined-redaction-test"
         log_level = "debug"
@@ -547,7 +588,9 @@ async fn test_webhook_combined_explicit_and_pattern_redaction() {
         module = ""
         [middleware_types.passthru]
         module = ""
-    "#, hook = hook_url);
+    "#,
+        hook = hook_url
+    );
 
     let cfg = load_config_from_str(&cfg_text).expect("valid config");
     let cfg = Arc::new(cfg);
@@ -560,9 +603,9 @@ async fn test_webhook_combined_explicit_and_pattern_redaction() {
                 .uri("/proxy/echo")
                 .method("POST")
                 .header("content-type", "application/json")
-                .header("authorization", "Bearer token123")  // Explicit redaction
-                .header("x-api-secret", "secret-value")      // Pattern redaction
-                .header("x-other", "visible")                // Should NOT be redacted
+                .header("authorization", "Bearer token123") // Explicit redaction
+                .header("x-api-secret", "secret-value") // Pattern redaction
+                .header("x-other", "visible") // Should NOT be redacted
                 .body(Body::from(r#"{"test":"data"}"#))
                 .unwrap(),
         )

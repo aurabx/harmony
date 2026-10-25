@@ -11,7 +11,9 @@ use async_trait::async_trait;
 use dicom_json_tool as tool;
 use dimse::error::DimseError;
 use dimse::scp::PeerAdmission;
-use dimse::types::{dataset_stream_from_vec, BoxDatasetStream, DatasetStream, QueryLevel, RetrieveStream};
+use dimse::types::{
+    dataset_stream_from_vec, BoxDatasetStream, DatasetStream, QueryLevel, RetrieveStream,
+};
 use dimse::Result as DimseResult;
 use once_cell::sync::Lazy;
 use std::collections::HashMap;
@@ -304,15 +306,23 @@ impl PipelineQueryProvider {
             DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
         })?;
 
-        tracing::info!("Executing streaming pipeline for DIMSE operation: {}", operation);
+        tracing::info!(
+            "Executing streaming pipeline for DIMSE operation: {}",
+            operation
+        );
 
         // Execute streaming pipeline
-        let response_stream =
-            PipelineExecutor::execute_streaming(request_envelope, &self.pipeline, pipeline_cfg, config, &ctx)
-                .await
-                .map_err(|e| {
-                    DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
-                })?;
+        let response_stream = PipelineExecutor::execute_streaming(
+            request_envelope,
+            &self.pipeline,
+            pipeline_cfg,
+            config,
+            &ctx,
+        )
+        .await
+        .map_err(|e| {
+            DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
+        })?;
 
         // Each envelope becomes zero or more datasets as it arrives. Nothing is
         // collected here.
@@ -328,7 +338,8 @@ impl PipelineQueryProvider {
                             Err(e) => {
                                 tracing::error!(
                                     "Streamed instance #{} could not be converted: {}",
-                                    instance, e
+                                    instance,
+                                    e
                                 );
                                 vec![Err(e)]
                             }
@@ -395,14 +406,22 @@ impl PipelineQueryProvider {
             DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
         })?;
 
-        tracing::info!("Executing streaming pipeline for DIMSE operation: {} (single-envelope)", operation);
+        tracing::info!(
+            "Executing streaming pipeline for DIMSE operation: {} (single-envelope)",
+            operation
+        );
 
-        let mut response_stream =
-            PipelineExecutor::execute_streaming(request_envelope, &self.pipeline, pipeline_cfg, config, &ctx)
-                .await
-                .map_err(|e| {
-                    DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
-                })?;
+        let mut response_stream = PipelineExecutor::execute_streaming(
+            request_envelope,
+            &self.pipeline,
+            pipeline_cfg,
+            config,
+            &ctx,
+        )
+        .await
+        .map_err(|e| {
+            DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
+        })?;
 
         // Consume the stream and keep the last successful envelope. Middleware
         // (for example dicom_to_dicomweb) may set final response metadata such
@@ -455,7 +474,9 @@ impl PipelineQueryProvider {
         // A pipeline may name a `[middleware.<name>]` table, or a built-in
         // type with no table. The middleware builder accepts both, so this
         // must too, or the bridge would run without the instance.
-        backend.service.eq_ignore_ascii_case("http_streaming_backend")
+        backend
+            .service
+            .eq_ignore_ascii_case("http_streaming_backend")
             && pipeline.middleware.left_chain().iter().any(|name| {
                 let middleware_type = config
                     .middleware
@@ -628,7 +649,10 @@ impl PipelineQueryProvider {
         // Use envelope unwrapper to extract clean DICOM content
         match unwrap_response(&json_data) {
             UnwrappedContent::DicomJson(items) => {
-                tracing::debug!("response_to_datasets: unwrapped {} DICOM JSON objects", items.len());
+                tracing::debug!(
+                    "response_to_datasets: unwrapped {} DICOM JSON objects",
+                    items.len()
+                );
                 let mut datasets = Vec::new();
                 for item in items {
                     match Self::dicom_json_to_dataset(&item) {
@@ -641,12 +665,18 @@ impl PipelineQueryProvider {
                 Ok(datasets)
             }
             UnwrappedContent::Binary(bytes) => {
-                tracing::debug!("response_to_datasets: unwrapped binary DICOM data ({} bytes)", bytes.len());
+                tracing::debug!(
+                    "response_to_datasets: unwrapped binary DICOM data ({} bytes)",
+                    bytes.len()
+                );
                 let dataset = Self::binary_to_dataset(&bytes)?;
                 Ok(vec![dataset])
             }
             UnwrappedContent::FolderPath(folder_path) => {
-                tracing::debug!("response_to_datasets: reading DICOM files from folder: {:?}", folder_path);
+                tracing::debug!(
+                    "response_to_datasets: reading DICOM files from folder: {:?}",
+                    folder_path
+                );
                 Self::folder_to_datasets(&folder_path)
             }
             UnwrappedContent::Empty => {
@@ -697,7 +727,11 @@ impl PipelineQueryProvider {
             }
 
             // Check for .dcm extension or try to parse anyway
-            let ext = path.extension().and_then(|e| e.to_str()).unwrap_or("").to_lowercase();
+            let ext = path
+                .extension()
+                .and_then(|e| e.to_str())
+                .unwrap_or("")
+                .to_lowercase();
             if ext != "dcm" && ext != "dicom" {
                 // Try to detect DICOM by reading magic bytes
                 if let Ok(bytes) = std::fs::read(&path) {
@@ -719,7 +753,11 @@ impl PipelineQueryProvider {
             datasets.push(dataset);
         }
 
-        tracing::info!("folder_to_datasets: loaded {} DICOM files from {:?}", datasets.len(), folder_path);
+        tracing::info!(
+            "folder_to_datasets: loaded {} DICOM files from {:?}",
+            datasets.len(),
+            folder_path
+        );
         Ok(datasets)
     }
 }
@@ -936,7 +974,9 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             tracing::info!("Using streaming pipeline for C-GET");
             // The bridge does not know the instance count up front, so the SCP
             // sends no Pending responses for this retrieval.
-            Ok(RetrieveStream::new(self.run_streaming(&config, command, body, meta).await?))
+            Ok(RetrieveStream::new(
+                self.run_streaming(&config, command, body, meta).await?,
+            ))
         } else {
             let response_envelope = self.run(&config, command, body, meta, None).await?;
             let datasets = Self::response_to_datasets(response_envelope).await?;
@@ -1054,7 +1094,8 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
         } else {
             let local_instance = Self::store_attaches_local_instance(pipeline_cfg, &config)
                 .then(|| LocalInstanceFile::new(temp_file.to_path_buf()));
-            self.run(&config, command, body, meta, local_instance).await?
+            self.run(&config, command, body, meta, local_instance)
+                .await?
         };
 
         Self::check_store_response(&response)?;
@@ -1106,10 +1147,11 @@ impl MultiplexingQueryProvider {
     /// `enabled_ops` is derived from the endpoint's `DimseConfig` feature flags
     /// (enable_find, enable_store, etc.). The first endpoint to claim an
     /// operation wins; duplicates are logged as warnings.
-    pub fn new(
-        routes: Vec<(String, String, Vec<DimseOp>)>,
-    ) -> Self {
-        assert!(!routes.is_empty(), "MultiplexingQueryProvider requires at least one route");
+    pub fn new(routes: Vec<(String, String, Vec<DimseOp>)>) -> Self {
+        assert!(
+            !routes.is_empty(),
+            "MultiplexingQueryProvider requires at least one route"
+        );
 
         let mut op_routes: HashMap<DimseOp, Arc<PipelineQueryProvider>> = HashMap::new();
         let mut fallback: Option<Arc<PipelineQueryProvider>> = None;
@@ -1329,7 +1371,11 @@ type = "allow_all"
     fn peer_admission_applies_ip_deny_rules() {
         let config = admission_config();
         let reason = peer_admission(&config, "no_ten", ip("10.9.9.9")).unwrap_err();
-        assert!(reason.contains("ten_net"), "reason should name the rule: {}", reason);
+        assert!(
+            reason.contains("ten_net"),
+            "reason should name the rule: {}",
+            reason
+        );
         assert!(peer_admission(&config, "no_ten", ip("172.16.0.1")).is_ok());
     }
 
@@ -1376,9 +1422,15 @@ type = "allow_all"
         ]);
 
         // Outside the office allowlist, but no_ten admits it.
-        assert_eq!(provider.admission(&config, ip("172.16.0.1")), PeerAdmission::Admit);
+        assert_eq!(
+            provider.admission(&config, ip("172.16.0.1")),
+            PeerAdmission::Admit
+        );
         // Inside the office allowlist, though no_ten denies 10.0.0.0/8 only.
-        assert_eq!(provider.admission(&config, ip("192.168.1.20")), PeerAdmission::Admit);
+        assert_eq!(
+            provider.admission(&config, ip("192.168.1.20")),
+            PeerAdmission::Admit
+        );
     }
 
     /// An endpoint that enables only C-ECHO owns no operation route. Its
@@ -1392,7 +1444,10 @@ type = "allow_all"
             ("broken".into(), "scp".into(), vec![DimseOp::Find]),
             ("office".into(), "scp".into(), vec![]),
         ]);
-        assert_eq!(provider.admission(&config, ip("192.168.1.20")), PeerAdmission::Admit);
+        assert_eq!(
+            provider.admission(&config, ip("192.168.1.20")),
+            PeerAdmission::Admit
+        );
         assert!(is_rejected(&provider.admission(&config, ip("172.16.0.1"))));
     }
 
@@ -1424,7 +1479,11 @@ right = ["office_only"]
         let admission = provider.admission(&config, ip("10.0.0.1"));
         assert!(is_rejected(&admission));
         if let PeerAdmission::Reject { reason } = admission {
-            assert!(reason.contains("'office'") && reason.contains("'no_ten'"), "{}", reason);
+            assert!(
+                reason.contains("'office'") && reason.contains("'no_ten'"),
+                "{}",
+                reason
+            );
         }
     }
 
@@ -1628,7 +1687,10 @@ right = ["office_only"]
 
         let instance = InlineInstance::from_part10(&part10).expect("inline instance");
 
-        assert_eq!(instance.transfer_syntax_uid, source.meta().transfer_syntax());
+        assert_eq!(
+            instance.transfer_syntax_uid,
+            source.meta().transfer_syntax()
+        );
         let decoded = base64::engine::general_purpose::STANDARD
             .decode(&instance.part10_b64)
             .expect("part10_b64 is base64");
@@ -1673,7 +1735,10 @@ right = ["office_only"]
         BareType(&'a str),
     }
 
-    fn inline_config(backend_service: &str, middleware: MiddlewareRef) -> crate::config::config::Config {
+    fn inline_config(
+        backend_service: &str,
+        middleware: MiddlewareRef,
+    ) -> crate::config::config::Config {
         let (middleware_list, middleware_block) = match middleware {
             MiddlewareRef::Table(kind) => (
                 "\"mw\"".to_string(),
@@ -1739,18 +1804,36 @@ module = ""
             PipelineQueryProvider::store_needs_inline_instance(pipeline, &config)
         };
 
-        assert!(needs("dicom_scu", None), "single node: the backend takes the instance");
+        assert!(
+            needs("dicom_scu", None),
+            "single node: the backend takes the instance"
+        );
         assert!(needs("dicom", None), "the legacy name of dicom_scu");
-        assert!(needs("dicom_scu_streaming", None), "single node: the backend takes the instance");
-        assert!(needs("http_streaming_backend", Table("dicom_to_http")), "streaming bridge");
+        assert!(
+            needs("dicom_scu_streaming", None),
+            "single node: the backend takes the instance"
+        );
+        assert!(
+            needs("http_streaming_backend", Table("dicom_to_http")),
+            "streaming bridge"
+        );
         assert!(
             needs("http_streaming_backend", BareType("dicom_to_http")),
             "streaming bridge that names the built-in type with no table"
         );
-        assert!(!needs("http", Table("dicom_to_http")), "the http backend cannot carry the bridge headers");
-        assert!(!needs("http_streaming_backend", Table("dicom_flatten")), "no bridge middleware");
+        assert!(
+            !needs("http", Table("dicom_to_http")),
+            "the http backend cannot carry the bridge headers"
+        );
+        assert!(
+            !needs("http_streaming_backend", Table("dicom_flatten")),
+            "no bridge middleware"
+        );
         assert!(!needs("http_streaming_backend", None));
-        assert!(!needs("http", Table("dicom_to_dicomweb")), "reads the local file");
+        assert!(
+            !needs("http", Table("dicom_to_dicomweb")),
+            "reads the local file"
+        );
         assert!(!needs("http", None));
     }
 
@@ -1763,7 +1846,11 @@ module = ""
             if let Some(content) = content {
                 options.insert("content".to_string(), serde_json::json!(content));
             }
-            config.backends.get_mut("out").expect("backend present").options = Some(options);
+            config
+                .backends
+                .get_mut("out")
+                .expect("backend present")
+                .options = Some(options);
             let pipeline = config.pipelines.get("store").expect("pipeline present");
             (
                 PipelineQueryProvider::store_attaches_local_instance(pipeline, &config),
@@ -1771,8 +1858,16 @@ module = ""
             )
         };
 
-        assert_eq!(needs(Some("dicom_part10")), (true, false), "the backend streams the file");
-        assert_eq!(needs(None), (false, false), "the backend writes the request body");
+        assert_eq!(
+            needs(Some("dicom_part10")),
+            (true, false),
+            "the backend streams the file"
+        );
+        assert_eq!(
+            needs(None),
+            (false, false),
+            "the backend writes the request body"
+        );
     }
 
     #[test]
@@ -1788,7 +1883,10 @@ module = ""
         );
         assert_eq!(local["file"], "/var/harmony/dimse/instance.dcm");
         assert_eq!(local["dataset"], dataset);
-        assert_eq!(local["command"]["sop_class_uid"], "1.2.840.10008.5.1.4.1.1.2");
+        assert_eq!(
+            local["command"]["sop_class_uid"],
+            "1.2.840.10008.5.1.4.1.1.2"
+        );
         assert!(local.get("part10_b64").is_none());
         assert!(local.get("body_b64").is_none());
         assert!(local.get("transfer_syntax_uid").is_none());
@@ -1861,9 +1959,9 @@ module = ""
         // Harmony B: retrieved file → ResponseEnvelope
         let retrieved: std::pin::Pin<
             Box<dyn futures_util::Stream<Item = Result<DatasetStream, DimseError>> + Send>,
-        > = Box::pin(futures_util::stream::iter(vec![Ok(DatasetStream::from_file(
-            copy_path, false,
-        ))]));
+        > = Box::pin(futures_util::stream::iter(vec![Ok(
+            DatasetStream::from_file(copy_path, false),
+        )]));
         let envelopes = DicomScuStreamingBackend::convert_dimse_stream_to_envelopes(
             retrieved,
             bridge_request_details(),
@@ -1912,7 +2010,12 @@ module = ""
         let received = datasets[0].to_object().await.expect("dataset should parse");
 
         let source = dicom_object::open_file(&source_path).expect("open sample instance");
-        for name in ["SOPInstanceUID", "StudyInstanceUID", "SeriesInstanceUID", "SOPClassUID"] {
+        for name in [
+            "SOPInstanceUID",
+            "StudyInstanceUID",
+            "SeriesInstanceUID",
+            "SOPClassUID",
+        ] {
             assert_eq!(
                 element_text(&received, name),
                 element_text(&source, name),
@@ -1930,7 +2033,10 @@ module = ""
             .expect("received pixel data")
             .to_bytes()
             .expect("received pixel bytes");
-        assert_eq!(received_pixels, source_pixels, "pixel data changed in the round trip");
+        assert_eq!(
+            received_pixels, source_pixels,
+            "pixel data changed in the round trip"
+        );
     }
 
     /// A backend response after the executor's JSON round trip, as
@@ -2096,7 +2202,11 @@ module = ""
                 &HashMap::new(),
             )
             .expect("NDJSON response should build");
-        assert_eq!(response.status(), 200, "the receiver answers 200 for a failed store");
+        assert_eq!(
+            response.status(),
+            200,
+            "the receiver answers 200 for a failed store"
+        );
         let body = axum::body::to_bytes(response.into_body(), usize::MAX)
             .await
             .expect("read NDJSON body");
@@ -2160,7 +2270,11 @@ module = ""
 
         let error = PipelineQueryProvider::check_store_response(&response)
             .expect_err("dicom_status 0xC000 must fail the store");
-        assert!(error.to_string().contains("0xC000"), "unexpected error: {}", error);
+        assert!(
+            error.to_string().contains("0xC000"),
+            "unexpected error: {}",
+            error
+        );
     }
 
     #[test]
@@ -2185,7 +2299,11 @@ module = ""
         let error = PipelineQueryProvider::check_store_response(&response)
             .expect_err("success:false must fail the store")
             .to_string();
-        assert!(!error.contains('\n'), "the reason must not add a line: {}", error);
+        assert!(
+            !error.contains('\n'),
+            "the reason must not add a line: {}",
+            error
+        );
         assert!(
             error.len() < MAX_RECEIVER_REASON_CHARS + 256,
             "the reason must be cut, got {} bytes",

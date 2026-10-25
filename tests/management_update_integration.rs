@@ -2,12 +2,12 @@ use harmony::adapters::registry::AdapterRegistry;
 use harmony::config::config::Config;
 use harmony::globals;
 use runbeam_sdk::MachineToken;
+use serial_test::serial;
 use std::fs;
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
 use tokio::time::{sleep, Duration};
-use serial_test::serial;
 
 /// Helper to create a minimal test config file
 fn create_test_config(dir: &TempDir, port: u16) -> PathBuf {
@@ -177,7 +177,7 @@ module = ""
 #[serial]
 async fn test_update_endpoint_without_machine_token() {
     use tokio::time::timeout;
-    
+
     let test_result = timeout(Duration::from_secs(10), async {
         // Create test config
         let temp_dir = TempDir::new().unwrap();
@@ -186,7 +186,9 @@ async fn test_update_endpoint_without_machine_token() {
         // Load config
         let contents = std::fs::read_to_string(config_path.as_path()).expect("read config");
         let mut config: Config = toml::from_str(&contents).expect("parse config");
-        config.inject_management_service().expect("inject management");
+        config
+            .inject_management_service()
+            .expect("inject management");
         config.validate().expect("validate config");
 
         // Set global config for the test
@@ -230,8 +232,9 @@ async fn test_update_endpoint_without_machine_token() {
                 println!("Server not running (expected in unit test): {}", e);
             }
         }
-    }).await;
-    
+    })
+    .await;
+
     assert!(test_result.is_ok(), "Test timed out after 10 seconds");
 }
 
@@ -239,7 +242,7 @@ async fn test_update_endpoint_without_machine_token() {
 #[serial]
 async fn test_update_endpoint_with_runbeam_disabled() {
     use tokio::time::timeout;
-    
+
     let test_result = timeout(Duration::from_secs(10), async {
         // Create test config with runbeam disabled
         let temp_dir = TempDir::new().unwrap();
@@ -248,7 +251,9 @@ async fn test_update_endpoint_with_runbeam_disabled() {
         // Load config
         let contents = std::fs::read_to_string(config_path.as_path()).expect("read config");
         let mut config: Config = toml::from_str(&contents).expect("parse config");
-        config.inject_management_service().expect("inject management");
+        config
+            .inject_management_service()
+            .expect("inject management");
         config.validate().expect("validate config");
 
         // Set global config for the test
@@ -290,8 +295,9 @@ async fn test_update_endpoint_with_runbeam_disabled() {
                 println!("Server not running (expected in unit test): {}", e);
             }
         }
-    }).await;
-    
+    })
+    .await;
+
     assert!(test_result.is_ok(), "Test timed out after 10 seconds");
 }
 
@@ -299,7 +305,7 @@ async fn test_update_endpoint_with_runbeam_disabled() {
 #[serial]
 async fn test_update_endpoint_with_missing_proxy_id() {
     use tokio::time::timeout;
-    
+
     let test_result = timeout(Duration::from_secs(10), async {
         // Create test config without proxy.id
         let temp_dir = TempDir::new().unwrap();
@@ -308,7 +314,7 @@ async fn test_update_endpoint_with_missing_proxy_id() {
         // Load config - this should actually fail during Config::from_args validation
         // but we test the update handler's validation as well
         let contents = std::fs::read_to_string(config_path.as_path()).expect("read config");
-        
+
         // Note: Config validation may catch this before we even get to the update handler
         // This test verifies the defense-in-depth approach
         match toml::from_str::<Config>(&contents) {
@@ -320,19 +326,19 @@ async fn test_update_endpoint_with_missing_proxy_id() {
                         globals::set_config_path(config_path.to_string_lossy().to_string());
 
                         let registry = Arc::new(AdapterRegistry::new());
-                globals::set_adapter_registry(registry);
+                        globals::set_adapter_registry(registry);
 
-                sleep(Duration::from_millis(100)).await;
+                        sleep(Duration::from_millis(100)).await;
 
-                // If config loads, the update endpoint should catch the missing ID
-                let client = reqwest::Client::builder()
-                    .timeout(Duration::from_secs(2))
-                    .build()
-                    .unwrap();
-                let response = client
-                    .post("http://127.0.0.1:9093/admin/update")
-                    .send()
-                    .await;
+                        // If config loads, the update endpoint should catch the missing ID
+                        let client = reqwest::Client::builder()
+                            .timeout(Duration::from_secs(2))
+                            .build()
+                            .unwrap();
+                        let response = client
+                            .post("http://127.0.0.1:9093/admin/update")
+                            .send()
+                            .await;
 
                         match response {
                             Ok(resp) => {
@@ -358,8 +364,9 @@ async fn test_update_endpoint_with_missing_proxy_id() {
                 println!("Config validation correctly rejected config without proxy.id");
             }
         }
-    }).await;
-    
+    })
+    .await;
+
     assert!(test_result.is_ok(), "Test timed out after 10 seconds");
 }
 

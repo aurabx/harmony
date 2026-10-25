@@ -59,6 +59,12 @@ pub enum DimseError {
 
     #[error("Operation not supported: {0}")]
     NotSupported(String),
+
+    /// A failure with a known DIMSE status code. It carries no text, because
+    /// an SCP sends the code to its client and the reason belongs in the
+    /// server log only.
+    #[error("DIMSE failure status 0x{0:04X}")]
+    Status(u16),
 }
 
 impl DimseError {
@@ -70,6 +76,21 @@ impl DimseError {
     /// Create a new operation failed error
     pub fn operation_failed(msg: impl Into<String>) -> Self {
         Self::OperationFailed(msg.into())
+    }
+
+    /// Create a failure that an SCP answers with `code`.
+    pub fn status(code: u16) -> Self {
+        Self::Status(code)
+    }
+
+    /// The DIMSE status code an SCP should send for this error, when the
+    /// error carries one. Other errors have no code, and SCP handlers fall
+    /// back to 0xC000.
+    pub fn status_code(&self) -> Option<u16> {
+        match self {
+            DimseError::Status(code) => Some(*code),
+            _ => None,
+        }
     }
 
     /// Create a new internal error
@@ -147,6 +168,25 @@ mod tests {
             DimseError::parse("bad identifier"),
         ] {
             assert!(!error.is_connection_failure(), "{:?}", error);
+        }
+    }
+
+    #[test]
+    fn status_error_carries_its_code() {
+        let error = DimseError::status(0xA701);
+        assert_eq!(error.status_code(), Some(0xA701));
+        assert_eq!(error.to_string(), "DIMSE failure status 0xA701");
+        assert!(!error.is_connection_failure());
+    }
+
+    #[test]
+    fn errors_without_a_status_have_no_code() {
+        for error in [
+            DimseError::operation_failed("C-FIND failed with status: 0xC000"),
+            DimseError::network("connection refused"),
+            DimseError::internal("bug"),
+        ] {
+            assert_eq!(error.status_code(), None, "{:?}", error);
         }
     }
 }

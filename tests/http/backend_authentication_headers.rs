@@ -12,11 +12,11 @@ use tower::ServiceExt;
 fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
     let mut config: Config = toml::from_str(toml).expect("TOML parse error");
     config.validate()?;
-    
+
     // Resolve references (including authentication)
     harmony::config::resolution::resolve_references(&mut config)
         .expect("Failed to resolve references");
-    
+
     Ok(config)
 }
 
@@ -24,20 +24,22 @@ fn load_config_from_str(toml: &str) -> Result<Config, ConfigError> {
 async fn build_mock_echo_server() -> (String, tokio::task::JoinHandle<()>) {
     let app = Router::new().route(
         "/echo",
-        post(|headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
-            let body_json: serde_json::Value =
-                serde_json::from_slice(&body).unwrap_or(json!({}));
-            let mut header_map = std::collections::HashMap::new();
-            for (key, value) in headers.iter() {
-                if let Ok(v) = value.to_str() {
-                    header_map.insert(key.to_string(), v.to_string());
+        post(
+            |headers: axum::http::HeaderMap, body: axum::body::Bytes| async move {
+                let body_json: serde_json::Value =
+                    serde_json::from_slice(&body).unwrap_or(json!({}));
+                let mut header_map = std::collections::HashMap::new();
+                for (key, value) in headers.iter() {
+                    if let Ok(v) = value.to_str() {
+                        header_map.insert(key.to_string(), v.to_string());
+                    }
                 }
-            }
-            axum::Json(json!({
-                "body": body_json,
-                "headers": header_map
-            }))
-        }),
+                axum::Json(json!({
+                    "body": body_json,
+                    "headers": header_map
+                }))
+            },
+        ),
     );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -238,8 +240,17 @@ async fn test_backend_basic_auth_header() {
         .expect("Authorization header should be present");
 
     // Basic auth should be base64-encoded "testuser:testpass"
-    let expected = format!("Basic {}", base64::Engine::encode(&base64::engine::general_purpose::STANDARD, b"testuser:testpass"));
-    assert_eq!(auth_header, expected, "Backend should add Basic authorization header");
+    let expected = format!(
+        "Basic {}",
+        base64::Engine::encode(
+            &base64::engine::general_purpose::STANDARD,
+            b"testuser:testpass"
+        )
+    );
+    assert_eq!(
+        auth_header, expected,
+        "Backend should add Basic authorization header"
+    );
 }
 
 #[tokio::test]
@@ -593,7 +604,9 @@ module = ""
                 .uri("/proxy/echo")
                 .method("POST")
                 .header("content-type", "application/json")
-                .body(Body::from(serde_json::to_vec(&json!({"test": "data"})).unwrap()))
+                .body(Body::from(
+                    serde_json::to_vec(&json!({"test": "data"})).unwrap(),
+                ))
                 .unwrap(),
         )
         .await

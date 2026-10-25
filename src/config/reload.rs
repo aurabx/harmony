@@ -64,19 +64,13 @@ pub fn compute_diff(old: &Config, new: &Config) -> ConfigDiff {
     }
 
     // Check for changes in existing networks
-        for network_name in old_networks.intersection(&new_networks) {
+    for network_name in old_networks.intersection(&new_networks) {
         let old_net = &old.network[*network_name];
         let new_net = &new.network[*network_name];
 
         // Check if bind address or port changed (treat missing tcp_config as default)
-        let old_tcp = old_net
-            .tcp_config
-            .clone()
-            .unwrap_or_default();
-        let new_tcp = new_net
-            .tcp_config
-            .clone()
-            .unwrap_or_default();
+        let old_tcp = old_net.tcp_config.clone().unwrap_or_default();
+        let new_tcp = new_net.tcp_config.clone().unwrap_or_default();
         if old_tcp.bind_address != new_tcp.bind_address || old_tcp.bind_port != new_tcp.bind_port {
             diff.adapter_restarts_required.push((*network_name).clone());
             continue;

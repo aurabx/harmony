@@ -19,23 +19,26 @@ async fn wait_for_server_ready(port: u16, max_attempts: u32) -> Result<(), Strin
         .timeout(Duration::from_millis(500))
         .build()
         .unwrap();
-    
+
     for attempt in 1..=max_attempts {
         let result = client
             .get(format!("http://127.0.0.1:{}/admin/health", port))
             .send()
             .await;
-        
+
         if result.is_ok() {
             return Ok(());
         }
-        
+
         if attempt < max_attempts {
             sleep(Duration::from_millis(100)).await;
         }
     }
-    
-    Err(format!("Server on port {} did not become ready after {} attempts", port, max_attempts))
+
+    Err(format!(
+        "Server on port {} did not become ready after {} attempts",
+        port, max_attempts
+    ))
 }
 
 /// Helper to create a complete test config with pipelines and endpoints
@@ -201,9 +204,18 @@ async fn test_run_with_reload_full_lifecycle() {
         // Load config and spawn run_with_reload
         let contents = std::fs::read_to_string(&config_path_str).expect("read config");
         let mut config: Config = toml::from_str(&contents).expect("parse config");
-        config.resolved_transforms_path = Some(temp_dir.path().join("transforms").to_string_lossy().to_string());
-        config.resolved_mesh_path = Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
-        config.inject_management_service().expect("inject management");
+        config.resolved_transforms_path = Some(
+            temp_dir
+                .path()
+                .join("transforms")
+                .to_string_lossy()
+                .to_string(),
+        );
+        config.resolved_mesh_path =
+            Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
+        config
+            .inject_management_service()
+            .expect("inject management");
         config.validate().expect("validate config");
 
         let config_path_clone = config_path_str.clone();
@@ -216,55 +228,55 @@ async fn test_run_with_reload_full_lifecycle() {
             .await
             .expect("Server should start within timeout");
 
-    // Test 1: Verify server is running and responds to requests
-    let client = reqwest::Client::new();
-    let response = timeout(
-        Duration::from_secs(5),
-        client.get("http://127.0.0.1:19200/test/hello").send(),
-    )
-    .await;
+        // Test 1: Verify server is running and responds to requests
+        let client = reqwest::Client::new();
+        let response = timeout(
+            Duration::from_secs(5),
+            client.get("http://127.0.0.1:19200/test/hello").send(),
+        )
+        .await;
 
-    assert!(
-        response.is_ok(),
-        "Server should start and respond to requests"
-    );
-    assert!(
-        response.unwrap().is_ok(),
-        "HTTP request should succeed after startup"
-    );
+        assert!(
+            response.is_ok(),
+            "Server should start and respond to requests"
+        );
+        assert!(
+            response.unwrap().is_ok(),
+            "HTTP request should succeed after startup"
+        );
 
-    // Test 2: Verify management API is accessible
-    let mgmt_response = timeout(
-        Duration::from_secs(5),
-        client.get("http://127.0.0.1:19200/admin/health").send(),
-    )
-    .await;
+        // Test 2: Verify management API is accessible
+        let mgmt_response = timeout(
+            Duration::from_secs(5),
+            client.get("http://127.0.0.1:19200/admin/health").send(),
+        )
+        .await;
 
-    assert!(mgmt_response.is_ok(), "Management API should be accessible");
+        assert!(mgmt_response.is_ok(), "Management API should be accessible");
 
-    // Test 3: Hot reload - update config with middleware
-    let new_config = create_config_with_middleware(&temp_dir, 19200);
-    fs::write(&config_path, new_config).expect("Failed to update config");
+        // Test 3: Hot reload - update config with middleware
+        let new_config = create_config_with_middleware(&temp_dir, 19200);
+        fs::write(&config_path, new_config).expect("Failed to update config");
 
-    // Wait for file watcher to detect and apply changes (debounce + processing)
-    sleep(Duration::from_secs(2)).await;
+        // Wait for file watcher to detect and apply changes (debounce + processing)
+        sleep(Duration::from_secs(2)).await;
 
-    // Verify server still responds after config reload
-    let post_reload_response = timeout(
-        Duration::from_secs(5),
-        client.get("http://127.0.0.1:19200/test/world").send(),
-    )
-    .await;
+        // Verify server still responds after config reload
+        let post_reload_response = timeout(
+            Duration::from_secs(5),
+            client.get("http://127.0.0.1:19200/test/world").send(),
+        )
+        .await;
 
-    assert!(
-        post_reload_response.is_ok(),
-        "Server should continue responding after config reload"
-    );
-    assert_eq!(
-        post_reload_response.unwrap().unwrap().status(),
-        200,
-        "Requests should succeed after hot reload"
-    );
+        assert!(
+            post_reload_response.is_ok(),
+            "Server should continue responding after config reload"
+        );
+        assert_eq!(
+            post_reload_response.unwrap().unwrap().status(),
+            200,
+            "Requests should succeed after hot reload"
+        );
 
         // Test 4: Cleanup
         // Note: abort() doesn't trigger graceful shutdown - it just kills the task.
@@ -283,7 +295,7 @@ async fn test_run_with_reload_full_lifecycle() {
         println!("✓ Full run_with_reload lifecycle test passed!");
     })
     .await;
-    
+
     assert!(test_result.is_ok(), "Test timed out after 60 seconds");
 }
 
@@ -374,22 +386,31 @@ module = ""
 module = ""
 "#;
 
-    let config_path = temp_dir.path().join("multi-net-config.toml");
-    fs::write(&config_path, config_content).expect("Failed to write config");
+        let config_path = temp_dir.path().join("multi-net-config.toml");
+        fs::write(&config_path, config_content).expect("Failed to write config");
 
-    // Create required directories
-    fs::create_dir_all(temp_dir.path().join("pipelines")).ok();
-    fs::create_dir_all(temp_dir.path().join("transforms")).ok();
+        // Create required directories
+        fs::create_dir_all(temp_dir.path().join("pipelines")).ok();
+        fs::create_dir_all(temp_dir.path().join("transforms")).ok();
 
-    let config_path_str = config_path.to_string_lossy().to_string();
+        let config_path_str = config_path.to_string_lossy().to_string();
 
-    // Load config and spawn server
-    let contents = std::fs::read_to_string(&config_path_str).expect("read config");
-    let mut config: Config = toml::from_str(&contents).expect("parse config");
-    config.resolved_transforms_path = Some(temp_dir.path().join("transforms").to_string_lossy().to_string());
-    config.resolved_mesh_path = Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
-    config.inject_management_service().expect("inject management");
-    config.validate().expect("validate config");
+        // Load config and spawn server
+        let contents = std::fs::read_to_string(&config_path_str).expect("read config");
+        let mut config: Config = toml::from_str(&contents).expect("parse config");
+        config.resolved_transforms_path = Some(
+            temp_dir
+                .path()
+                .join("transforms")
+                .to_string_lossy()
+                .to_string(),
+        );
+        config.resolved_mesh_path =
+            Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
+        config
+            .inject_management_service()
+            .expect("inject management");
+        config.validate().expect("validate config");
 
         let server_handle = tokio::spawn(async move {
             harmony::run_with_reload(config, Some(config_path_str)).await;
@@ -400,56 +421,56 @@ module = ""
             .await
             .expect("Server should start within timeout");
 
-    let client = reqwest::Client::new();
+        let client = reqwest::Client::new();
 
-    // Test network 1
-    let net1_response = timeout(
-        Duration::from_secs(5),
-        client.get("http://127.0.0.1:19201/api1/test").send(),
-    )
-    .await;
+        // Test network 1
+        let net1_response = timeout(
+            Duration::from_secs(5),
+            client.get("http://127.0.0.1:19201/api1/test").send(),
+        )
+        .await;
 
-    assert!(
-        net1_response.is_ok() && net1_response.unwrap().is_ok(),
-        "Network 1 should be accessible"
-    );
+        assert!(
+            net1_response.is_ok() && net1_response.unwrap().is_ok(),
+            "Network 1 should be accessible"
+        );
 
-    // Test network 2
-    let net2_response = timeout(
-        Duration::from_secs(5),
-        client.get("http://127.0.0.1:19202/api2/test").send(),
-    )
-    .await;
+        // Test network 2
+        let net2_response = timeout(
+            Duration::from_secs(5),
+            client.get("http://127.0.0.1:19202/api2/test").send(),
+        )
+        .await;
 
-    assert!(
-        net2_response.is_ok() && net2_response.unwrap().is_ok(),
-        "Network 2 should be accessible"
-    );
+        assert!(
+            net2_response.is_ok() && net2_response.unwrap().is_ok(),
+            "Network 2 should be accessible"
+        );
 
-    // Test management API on network 1
-    let mgmt_response = timeout(
-        Duration::from_secs(5),
-        client.get("http://127.0.0.1:19201/admin/health").send(),
-    )
-    .await;
+        // Test management API on network 1
+        let mgmt_response = timeout(
+            Duration::from_secs(5),
+            client.get("http://127.0.0.1:19201/admin/health").send(),
+        )
+        .await;
 
-    assert!(
-        mgmt_response.is_ok() && mgmt_response.unwrap().is_ok(),
-        "Management API should be accessible on net1"
-    );
+        assert!(
+            mgmt_response.is_ok() && mgmt_response.unwrap().is_ok(),
+            "Management API should be accessible on net1"
+        );
 
-    // Verify network isolation: management API should NOT be on network 2
-    let mgmt_net2 = timeout(
-        Duration::from_millis(500),
-        client.get("http://127.0.0.1:19202/admin/health").send(),
-    )
-    .await;
+        // Verify network isolation: management API should NOT be on network 2
+        let mgmt_net2 = timeout(
+            Duration::from_millis(500),
+            client.get("http://127.0.0.1:19202/admin/health").send(),
+        )
+        .await;
 
-    // This should either timeout or return 404
-    assert!(
-        mgmt_net2.is_err() || mgmt_net2.unwrap().unwrap().status() == 404,
-        "Management API should not be accessible on net2"
-    );
+        // This should either timeout or return 404
+        assert!(
+            mgmt_net2.is_err() || mgmt_net2.unwrap().unwrap().status() == 404,
+            "Management API should not be accessible on net2"
+        );
 
         // Cleanup
         server_handle.abort();
@@ -464,7 +485,7 @@ module = ""
         println!("✓ Multiple networks test passed!");
     })
     .await;
-    
+
     assert!(test_result.is_ok(), "Test timed out after 60 seconds");
 }
 
@@ -479,9 +500,18 @@ async fn test_run_with_reload_adapter_restart() {
         // Load config and spawn server
         let contents = std::fs::read_to_string(&config_path_str).expect("read config");
         let mut config: Config = toml::from_str(&contents).expect("parse config");
-        config.resolved_transforms_path = Some(temp_dir.path().join("transforms").to_string_lossy().to_string());
-        config.resolved_mesh_path = Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
-        config.inject_management_service().expect("inject management");
+        config.resolved_transforms_path = Some(
+            temp_dir
+                .path()
+                .join("transforms")
+                .to_string_lossy()
+                .to_string(),
+        );
+        config.resolved_mesh_path =
+            Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
+        config
+            .inject_management_service()
+            .expect("inject management");
         config.validate().expect("validate config");
 
         let config_path_clone = config_path_str.clone();
@@ -494,18 +524,18 @@ async fn test_run_with_reload_adapter_restart() {
             .await
             .expect("Server should start within timeout");
 
-    let client = reqwest::Client::new();
+        let client = reqwest::Client::new();
 
-    // Verify initial server is running
-    let initial_response = client
-        .get("http://127.0.0.1:19203/test/initial")
-        .send()
-        .await;
-    assert!(initial_response.is_ok(), "Initial server should respond");
+        // Verify initial server is running
+        let initial_response = client
+            .get("http://127.0.0.1:19203/test/initial")
+            .send()
+            .await;
+        assert!(initial_response.is_ok(), "Initial server should respond");
 
-    // Change port (requires adapter restart)
-    let new_config = format!(
-        r#"
+        // Change port (requires adapter restart)
+        let new_config = format!(
+            r#"
 [proxy]
 id = "e2e-test-proxy"
 pipelines_path = "pipelines"
@@ -560,46 +590,46 @@ module = ""
 [services.echo]
 module = ""
 "#
-    );
+        );
 
-    fs::write(&config_path, new_config).expect("Failed to update config");
+        fs::write(&config_path, new_config).expect("Failed to update config");
 
-    // Wait for file watcher to detect and apply (adapter restart takes longer)
-    // Give extra time for the old adapter to fully shut down and release the port
-    sleep(Duration::from_secs(4)).await;
+        // Wait for file watcher to detect and apply (adapter restart takes longer)
+        // Give extra time for the old adapter to fully shut down and release the port
+        sleep(Duration::from_secs(4)).await;
 
-    // Old port should no longer respond - retry a few times to handle timing variations
-    let mut old_port_stopped = false;
-    for _ in 0..5 {
-        let old_port_response = timeout(
-            Duration::from_millis(500),
-            client.get("http://127.0.0.1:19203/test/old").send(),
+        // Old port should no longer respond - retry a few times to handle timing variations
+        let mut old_port_stopped = false;
+        for _ in 0..5 {
+            let old_port_response = timeout(
+                Duration::from_millis(500),
+                client.get("http://127.0.0.1:19203/test/old").send(),
+            )
+            .await;
+
+            if old_port_response.is_err() || old_port_response.unwrap().is_err() {
+                old_port_stopped = true;
+                break;
+            }
+            sleep(Duration::from_millis(500)).await;
+        }
+
+        assert!(
+            old_port_stopped,
+            "Old port should not respond after adapter restart"
+        );
+
+        // New port should respond
+        let new_port_response = timeout(
+            Duration::from_secs(5),
+            client.get("http://127.0.0.1:19204/test/new").send(),
         )
         .await;
 
-        if old_port_response.is_err() || old_port_response.unwrap().is_err() {
-            old_port_stopped = true;
-            break;
-        }
-        sleep(Duration::from_millis(500)).await;
-    }
-
-    assert!(
-        old_port_stopped,
-        "Old port should not respond after adapter restart"
-    );
-
-    // New port should respond
-    let new_port_response = timeout(
-        Duration::from_secs(5),
-        client.get("http://127.0.0.1:19204/test/new").send(),
-    )
-    .await;
-
-    assert!(
-        new_port_response.is_ok() && new_port_response.unwrap().is_ok(),
-        "New port should respond after adapter restart"
-    );
+        assert!(
+            new_port_response.is_ok() && new_port_response.unwrap().is_ok(),
+            "New port should respond after adapter restart"
+        );
 
         // Cleanup
         server_handle.abort();
@@ -614,7 +644,7 @@ module = ""
         println!("✓ Adapter restart test passed!");
     })
     .await;
-    
+
     assert!(test_result.is_ok(), "Test timed out after 90 seconds");
 }
 
@@ -629,9 +659,18 @@ async fn test_run_with_reload_invalid_config_rejected() {
         // Load config and spawn server
         let contents = std::fs::read_to_string(&config_path_str).expect("read config");
         let mut config: Config = toml::from_str(&contents).expect("parse config");
-        config.resolved_transforms_path = Some(temp_dir.path().join("transforms").to_string_lossy().to_string());
-        config.resolved_mesh_path = Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
-        config.inject_management_service().expect("inject management");
+        config.resolved_transforms_path = Some(
+            temp_dir
+                .path()
+                .join("transforms")
+                .to_string_lossy()
+                .to_string(),
+        );
+        config.resolved_mesh_path =
+            Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
+        config
+            .inject_management_service()
+            .expect("inject management");
         config.validate().expect("validate config");
 
         let config_path_clone = config_path_str.clone();
@@ -644,17 +683,17 @@ async fn test_run_with_reload_invalid_config_rejected() {
             .await
             .expect("Server should start within timeout");
 
-    let client = reqwest::Client::new();
+        let client = reqwest::Client::new();
 
-    // Verify server is running
-    let initial_response = client
-        .get("http://127.0.0.1:19205/test/before")
-        .send()
-        .await;
-    assert!(initial_response.is_ok(), "Server should be running");
+        // Verify server is running
+        let initial_response = client
+            .get("http://127.0.0.1:19205/test/before")
+            .send()
+            .await;
+        assert!(initial_response.is_ok(), "Server should be running");
 
-    // Write invalid config (empty proxy.id)
-    let invalid_config = r#"
+        // Write invalid config (empty proxy.id)
+        let invalid_config = r#"
 [proxy]
 id = ""
 log_level = "info"
@@ -663,22 +702,22 @@ log_level = "info"
 interface = "lo0"
 "#;
 
-    fs::write(&config_path, invalid_config).expect("Failed to write invalid config");
+        fs::write(&config_path, invalid_config).expect("Failed to write invalid config");
 
-    // Wait for file watcher to attempt reload
-    sleep(Duration::from_secs(2)).await;
+        // Wait for file watcher to attempt reload
+        sleep(Duration::from_secs(2)).await;
 
-    // Server should still be running with old config
-    let post_invalid_response = timeout(
-        Duration::from_secs(5),
-        client.get("http://127.0.0.1:19205/test/after").send(),
-    )
-    .await;
+        // Server should still be running with old config
+        let post_invalid_response = timeout(
+            Duration::from_secs(5),
+            client.get("http://127.0.0.1:19205/test/after").send(),
+        )
+        .await;
 
-    assert!(
-        post_invalid_response.is_ok() && post_invalid_response.unwrap().is_ok(),
-        "Server should continue running with old config after invalid config rejected"
-    );
+        assert!(
+            post_invalid_response.is_ok() && post_invalid_response.unwrap().is_ok(),
+            "Server should continue running with old config after invalid config rejected"
+        );
 
         // Cleanup
         server_handle.abort();
@@ -693,7 +732,7 @@ interface = "lo0"
         println!("✓ Invalid config rejection test passed!");
     })
     .await;
-    
+
     assert!(test_result.is_ok(), "Test timed out after 60 seconds");
 }
 
@@ -792,10 +831,17 @@ async fn start_reloading_server(
     fs::create_dir_all(temp_dir.path().join("transforms")).ok();
 
     let mut config: Config = toml::from_str(contents).expect("parse config");
-    config.resolved_transforms_path =
-        Some(temp_dir.path().join("transforms").to_string_lossy().to_string());
+    config.resolved_transforms_path = Some(
+        temp_dir
+            .path()
+            .join("transforms")
+            .to_string_lossy()
+            .to_string(),
+    );
     config.resolved_mesh_path = Some(temp_dir.path().join("mesh").to_string_lossy().to_string());
-    config.inject_management_service().expect("inject management");
+    config
+        .inject_management_service()
+        .expect("inject management");
     config.validate().expect("validate config");
 
     let path_str = config_path.to_string_lossy().to_string();
@@ -841,9 +887,12 @@ async fn stop_reloading_server(handle: tokio::task::JoinHandle<()>) {
 async fn test_reload_applies_policy_change_to_http_requests() {
     let port = 19210;
     let temp_dir = TempDir::new().unwrap();
-    let (config_path, handle) =
-        start_reloading_server(&temp_dir, &ip_gated_config(port, "127.0.0.1/32", "/gated"), port)
-            .await;
+    let (config_path, handle) = start_reloading_server(
+        &temp_dir,
+        &ip_gated_config(port, "127.0.0.1/32", "/gated"),
+        port,
+    )
+    .await;
     let client = reqwest::Client::new();
     let url = format!("http://127.0.0.1:{}/gated/ping", port);
 
@@ -853,8 +902,14 @@ async fn test_reload_applies_policy_change_to_http_requests() {
     let after = poll_status(&client, &url, 403, Duration::from_secs(10)).await;
 
     stop_reloading_server(handle).await;
-    assert_eq!(before, 200, "127.0.0.1 should pass the 127.0.0.1/32 allowlist");
-    assert_eq!(after, 403, "after reload, 127.0.0.1 should fail the 10.0.0.0/8 allowlist");
+    assert_eq!(
+        before, 200,
+        "127.0.0.1 should pass the 127.0.0.1/32 allowlist"
+    );
+    assert_eq!(
+        after, 403,
+        "after reload, 127.0.0.1 should fail the 10.0.0.0/8 allowlist"
+    );
 }
 
 /// A reload that changes only an endpoint path needs no adapter restart, so
@@ -864,9 +919,12 @@ async fn test_reload_applies_policy_change_to_http_requests() {
 async fn test_reload_applies_endpoint_path_change_to_http_routes() {
     let port = 19211;
     let temp_dir = TempDir::new().unwrap();
-    let (config_path, handle) =
-        start_reloading_server(&temp_dir, &ip_gated_config(port, "127.0.0.1/32", "/old"), port)
-            .await;
+    let (config_path, handle) = start_reloading_server(
+        &temp_dir,
+        &ip_gated_config(port, "127.0.0.1/32", "/old"),
+        port,
+    )
+    .await;
     let client = reqwest::Client::new();
     let old_url = format!("http://127.0.0.1:{}/old/ping", port);
     let new_url = format!("http://127.0.0.1:{}/new/ping", port);

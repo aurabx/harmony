@@ -14,8 +14,8 @@ use std::sync::Arc;
 
 use async_trait::async_trait;
 use futures::StreamExt;
-use tokio::net::TcpListener;
 use std::sync::atomic::{AtomicU32, Ordering};
+use tokio::net::TcpListener;
 use tracing::{debug, error, info, warn};
 
 use crate::config::DimseConfig;
@@ -239,7 +239,12 @@ impl DimseScp {
 
                 match self
                     .query_provider
-                    .find(peer_addr, query.query_level, &query.parameters, query.max_results)
+                    .find(
+                        peer_addr,
+                        query.query_level,
+                        &query.parameters,
+                        query.max_results,
+                    )
                     .await
                 {
                     Ok(mut datasets) => {
@@ -266,7 +271,10 @@ impl DimseScp {
                                 }
                             }
                         }
-                        debug!("Found {} matching datasets", count + usize::from(held.is_some()));
+                        debug!(
+                            "Found {} matching datasets",
+                            count + usize::from(held.is_some())
+                        );
 
                         match held {
                             Some(last) => {

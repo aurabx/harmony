@@ -77,14 +77,17 @@ async fn perform_find(
         crate::types::QueryLevel::Patient => vec![FIND_SOP_CLASS_PATIENT],
         _ => vec![FIND_SOP_CLASS_STUDY, FIND_SOP_CLASS_PATIENT], // Study/Series/Image prefer Study Root
     };
-    
-    let mut association = native_connection::establish_association(config, node, &sop_class_uids)
-        .await?;
+
+    let mut association =
+        native_connection::establish_association(config, node, &sop_class_uids).await?;
 
     // Get presentation context ID - prefer the model that matches the query level
     let pc_id = match query.query_level {
         crate::types::QueryLevel::Patient => {
-            match native_connection::get_presentation_context_id(&association, FIND_SOP_CLASS_PATIENT) {
+            match native_connection::get_presentation_context_id(
+                &association,
+                FIND_SOP_CLASS_PATIENT,
+            ) {
                 Ok(id) => (id, FIND_SOP_CLASS_PATIENT),
                 Err(e) => {
                     native_connection::abort_association(association).await;
@@ -94,15 +97,19 @@ async fn perform_find(
         }
         _ => {
             // Prefer Study Root, fall back to Patient Root
-            match native_connection::get_presentation_context_id(&association, FIND_SOP_CLASS_STUDY) {
+            match native_connection::get_presentation_context_id(&association, FIND_SOP_CLASS_STUDY)
+            {
                 Ok(id) => (id, FIND_SOP_CLASS_STUDY),
-                Err(_) => match native_connection::get_presentation_context_id(&association, FIND_SOP_CLASS_PATIENT) {
+                Err(_) => match native_connection::get_presentation_context_id(
+                    &association,
+                    FIND_SOP_CLASS_PATIENT,
+                ) {
                     Ok(id) => (id, FIND_SOP_CLASS_PATIENT),
                     Err(e) => {
                         native_connection::abort_association(association).await;
                         return Err(e);
                     }
-                }
+                },
             }
         }
     };
@@ -110,7 +117,8 @@ async fn perform_find(
     let message_id = next_message_id();
 
     // Build identifier dataset from query parameters
-    let identifier = command_builder::build_identifier_dataset(query.query_level, &query.parameters)?;
+    let identifier =
+        command_builder::build_identifier_dataset(query.query_level, &query.parameters)?;
 
     // Build C-FIND request with the accepted SOP class
     let (pc_id, accepted_sop_class) = pc_id;
@@ -124,7 +132,14 @@ async fn perform_find(
     debug!("Sending C-FIND request (message ID: {})", message_id);
 
     // Send the request with identifier dataset
-    if let Err(e) = command_builder::encode_and_send_request(&mut association, request, Some(&identifier), pc_id).await {
+    if let Err(e) = command_builder::encode_and_send_request(
+        &mut association,
+        request,
+        Some(&identifier),
+        pc_id,
+    )
+    .await
+    {
         native_connection::abort_association(association).await;
         let _ = tx.send(Err(e)).await;
         return Ok(()); // Channel is closed
@@ -143,14 +158,15 @@ async fn perform_find(
         match command_builder::receive_dimse_message(&mut association).await {
             Ok((response_obj, dataset_data, _pc_id)) => {
                 // Verify this is the response to our request
-                let responded_to = match command_builder::extract_message_id_being_responded_to(&response_obj) {
-                    Ok(id) => id,
-                    Err(e) => {
-                        native_connection::abort_association(association).await;
-                        let _ = tx.send(Err(e)).await;
-                        break;
-                    }
-                };
+                let responded_to =
+                    match command_builder::extract_message_id_being_responded_to(&response_obj) {
+                        Ok(id) => id,
+                        Err(e) => {
+                            native_connection::abort_association(association).await;
+                            let _ = tx.send(Err(e)).await;
+                            break;
+                        }
+                    };
 
                 if responded_to != message_id {
                     debug!(
@@ -169,10 +185,12 @@ async fn perform_find(
 
                 if command_field != 0x8020 {
                     native_connection::abort_association(association).await;
-                    let _ = tx.send(Err(DimseError::operation_failed(format!(
-                        "Unexpected command field in response: 0x{:04X}",
-                        command_field
-                    )))).await;
+                    let _ = tx
+                        .send(Err(DimseError::operation_failed(format!(
+                            "Unexpected command field in response: 0x{:04X}",
+                            command_field
+                        ))))
+                        .await;
                     break;
                 }
 
@@ -190,7 +208,10 @@ async fn perform_find(
                 match status {
                     0x0000 => {
                         // Success - no more results
-                        debug!("C-FIND completed successfully (received {} results)", results_count);
+                        debug!(
+                            "C-FIND completed successfully (received {} results)",
+                            results_count
+                        );
                         // Release association
                         let _ = native_connection::release_association(association).await;
                         break;
@@ -206,7 +227,11 @@ async fn perform_find(
                             }
 
                             // Parse dataset bytes to DICOM object
-                            match command_builder::parse_dataset_bytes(dataset_bytes, pc_id, &association) {
+                            match command_builder::parse_dataset_bytes(
+                                dataset_bytes,
+                                pc_id,
+                                &association,
+                            ) {
                                 Ok(dicom_obj) => {
                                     // Convert to DatasetStream
                                     let dataset = DatasetStream::from_object(dicom_obj);
@@ -227,20 +252,24 @@ async fn perform_find(
                     _ => {
                         // Failure or cancellation
                         native_connection::abort_association(association).await;
-                        let _ = tx.send(Err(DimseError::operation_failed(format!(
-                            "C-FIND failed with status: 0x{:04X}",
-                            status
-                        )))).await;
+                        let _ = tx
+                            .send(Err(DimseError::operation_failed(format!(
+                                "C-FIND failed with status: 0x{:04X}",
+                                status
+                            ))))
+                            .await;
                         break;
                     }
                 }
             }
             Err(e) => {
                 native_connection::abort_association(association).await;
-                let _ = tx.send(Err(DimseError::network(format!(
-                    "Error receiving C-FIND response: {}",
-                    e
-                )))).await;
+                let _ = tx
+                    .send(Err(DimseError::network(format!(
+                        "Error receiving C-FIND response: {}",
+                        e
+                    ))))
+                    .await;
                 break;
             }
         }
@@ -249,4 +278,3 @@ async fn perform_find(
     info!("C-FIND completed ({} results)", results_count);
     Ok(())
 }
-

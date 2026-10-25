@@ -106,7 +106,9 @@ impl ParsedReference {
                 let resource_type = parts[2];
 
                 // Validate resource type
-                let valid_types = ["ingress", "egress", "pipeline", "endpoint", "backend", "mesh"];
+                let valid_types = [
+                    "ingress", "egress", "pipeline", "endpoint", "backend", "mesh",
+                ];
                 if !valid_types.contains(&resource_type) {
                     return Err(format!("Invalid resource type: {}", resource_type));
                 }
@@ -236,7 +238,9 @@ mod tests {
 
     #[test]
     fn test_all_valid_resource_types() {
-        for resource_type in ["ingress", "egress", "pipeline", "endpoint", "backend", "mesh"] {
+        for resource_type in [
+            "ingress", "egress", "pipeline", "endpoint", "backend", "mesh",
+        ] {
             let ref_str = format!("runbeam.acme.{}.name.test", resource_type);
             let r = ParsedReference::parse(&ref_str).unwrap();
             assert_eq!(r.resource_type, Some(resource_type.to_string()));

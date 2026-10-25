@@ -9,8 +9,7 @@ use std::sync::{Arc, Mutex};
 
 use dimse::scp::{PeerAdmission, QueryProvider};
 use dimse::types::{
-    dataset_stream_from_vec, BoxDatasetStream, DatasetStream, FindQuery, QueryLevel,
-    RetrieveStream,
+    dataset_stream_from_vec, BoxDatasetStream, DatasetStream, FindQuery, QueryLevel, RetrieveStream,
 };
 use dimse::{DimseConfig, DimseError, DimseScp, DimseScu, RemoteNode};
 use futures::StreamExt;
@@ -174,10 +173,17 @@ async fn rejected_peer_gets_no_c_echo_reply() {
     assert_association_rejected(scu().echo(&node(port)).await);
 
     let admitted = provider.admitted_calls.lock().unwrap().clone();
-    assert!(!admitted.is_empty(), "the SCP should have asked the provider");
+    assert!(
+        !admitted.is_empty(),
+        "the SCP should have asked the provider"
+    );
     for peer in admitted {
         assert_eq!(peer.ip(), IpAddr::V4(Ipv4Addr::LOCALHOST));
-        assert_ne!(peer.port(), port, "the provider should see the client's port");
+        assert_ne!(
+            peer.port(),
+            port,
+            "the provider should see the client's port"
+        );
     }
 }
 

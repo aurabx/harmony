@@ -240,9 +240,7 @@ pub fn build_response(
 ///
 /// This function prepends the mandatory CommandGroupLength (0000,0000) tag
 /// as required by DICOM PS3.7 for all DIMSE command sets.
-pub fn encode_command(
-    command: &InMemDicomObject<StandardDataDictionary>,
-) -> Result<Vec<u8>> {
+pub fn encode_command(command: &InMemDicomObject<StandardDataDictionary>) -> Result<Vec<u8>> {
     let ts = TransferSyntaxRegistry
         .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
         .ok_or_else(|| DimseError::operation_failed("Implicit VR Little Endian TS not found"))?;
@@ -255,21 +253,21 @@ pub fn encode_command(
 
     // DICOM PS3.7 requires CommandGroupLength (0000,0000) to be present.
     // It specifies the byte length of all remaining elements in group 0000.
-    // 
+    //
     // In Implicit VR Little Endian format:
     // - Tag: 4 bytes (0000,0000)
     // - Value Length: 4 bytes (always 4 for UL)
     // - Value: 4 bytes (the group length value)
     // Total: 12 bytes for the CommandGroupLength element
     let group_length_value = command_bytes.len() as u32;
-    
+
     let mut result = Vec::with_capacity(12 + command_bytes.len());
-    
+
     // Write CommandGroupLength (0000,0000) element
     result.extend_from_slice(&[0x00, 0x00, 0x00, 0x00]); // Tag (0000,0000) in Little Endian
-    result.extend_from_slice(&4u32.to_le_bytes());       // Value Length = 4 (UL is always 4 bytes)
+    result.extend_from_slice(&4u32.to_le_bytes()); // Value Length = 4 (UL is always 4 bytes)
     result.extend_from_slice(&group_length_value.to_le_bytes()); // Value = length of following elements
-    
+
     // Append the rest of the command elements
     result.extend_from_slice(&command_bytes);
 
@@ -277,9 +275,7 @@ pub fn encode_command(
 }
 
 /// Encode a dataset object to bytes using Implicit VR Little Endian
-pub fn encode_dataset(
-    dataset: &InMemDicomObject<StandardDataDictionary>,
-) -> Result<Vec<u8>> {
+pub fn encode_dataset(dataset: &InMemDicomObject<StandardDataDictionary>) -> Result<Vec<u8>> {
     let ts = TransferSyntaxRegistry
         .get(uids::IMPLICIT_VR_LITTLE_ENDIAN)
         .ok_or_else(|| DimseError::operation_failed("Implicit VR Little Endian TS not found"))?;
@@ -326,12 +322,7 @@ mod tests {
 
     #[test]
     fn test_build_request() {
-        let request = build_request(
-            command_fields::C_ECHO_RQ,
-            1,
-            false,
-            "1.2.840.10008.1.1",
-        );
+        let request = build_request(command_fields::C_ECHO_RQ, 1, false, "1.2.840.10008.1.1");
 
         let cmd_field = request
             .element(tags::COMMAND_FIELD)
@@ -340,11 +331,7 @@ mod tests {
             .unwrap();
         assert_eq!(cmd_field, command_fields::C_ECHO_RQ);
 
-        let msg_id = request
-            .element(tags::MESSAGE_ID)
-            .unwrap()
-            .uint16()
-            .unwrap();
+        let msg_id = request.element(tags::MESSAGE_ID).unwrap().uint16().unwrap();
         assert_eq!(msg_id, 1);
     }
 
@@ -372,11 +359,7 @@ mod tests {
             .unwrap();
         assert_eq!(msg_id, 1);
 
-        let status_val = response
-            .element(tags::STATUS)
-            .unwrap()
-            .uint16()
-            .unwrap();
+        let status_val = response.element(tags::STATUS).unwrap().uint16().unwrap();
         assert_eq!(status_val, status::SUCCESS);
     }
 
@@ -408,12 +391,7 @@ mod tests {
 
     #[test]
     fn test_encode_command() {
-        let request = build_request(
-            command_fields::C_ECHO_RQ,
-            1,
-            false,
-            "1.2.840.10008.1.1",
-        );
+        let request = build_request(command_fields::C_ECHO_RQ, 1, false, "1.2.840.10008.1.1");
 
         let bytes = encode_command(&request).unwrap();
         assert!(!bytes.is_empty());
@@ -431,18 +409,33 @@ mod tests {
         );
 
         let bytes = encode_command(&response).unwrap();
-        
+
         // Verify the CommandGroupLength tag (0000,0000) is at the start
         // In Little Endian: 00 00 00 00
-        assert!(bytes.len() >= 12, "Encoded command should be at least 12 bytes");
-        assert_eq!(&bytes[0..4], &[0x00, 0x00, 0x00, 0x00], "First 4 bytes should be CommandGroupLength tag");
-        
+        assert!(
+            bytes.len() >= 12,
+            "Encoded command should be at least 12 bytes"
+        );
+        assert_eq!(
+            &bytes[0..4],
+            &[0x00, 0x00, 0x00, 0x00],
+            "First 4 bytes should be CommandGroupLength tag"
+        );
+
         // Next 4 bytes should be the value length (4 for UL)
-        assert_eq!(&bytes[4..8], &[0x04, 0x00, 0x00, 0x00], "Value length should be 4");
-        
+        assert_eq!(
+            &bytes[4..8],
+            &[0x04, 0x00, 0x00, 0x00],
+            "Value length should be 4"
+        );
+
         // Next 4 bytes should be the group length value (length of remaining elements)
         let group_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
-        assert_eq!(group_length as usize, bytes.len() - 12, "Group length value should equal remaining bytes");
+        assert_eq!(
+            group_length as usize,
+            bytes.len() - 12,
+            "Group length value should equal remaining bytes"
+        );
     }
 
     #[test]
@@ -457,10 +450,14 @@ mod tests {
         );
 
         let bytes = encode_command(&response).unwrap();
-        
+
         // Verify CommandGroupLength is present
-        assert_eq!(&bytes[0..4], &[0x00, 0x00, 0x00, 0x00], "CommandGroupLength tag should be first");
-        
+        assert_eq!(
+            &bytes[0..4],
+            &[0x00, 0x00, 0x00, 0x00],
+            "CommandGroupLength tag should be first"
+        );
+
         // Verify the group length value matches the actual content
         let group_length = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
         assert_eq!(group_length as usize, bytes.len() - 12);

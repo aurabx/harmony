@@ -8,7 +8,7 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use object_store::buffered::BufWriter;
 use object_store::local::LocalFileSystem;
-use object_store::{ObjectStore, PutMode, PutOptions, path::Path as ObjectStorePath};
+use object_store::{path::Path as ObjectStorePath, ObjectStore, PutMode, PutOptions};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -76,7 +76,7 @@ impl StorageBackend {
 
         if root.starts_with("s3://") {
             use object_store::aws::AmazonS3Builder;
-            
+
             // Parse bucket from s3://bucket/prefix or options
             let bucket = if let Some(rest) = root.strip_prefix("s3://") {
                 rest.split('/').next().unwrap_or("").to_string()
@@ -84,16 +84,25 @@ impl StorageBackend {
                 self.bucket.clone().unwrap_or_default()
             };
 
-            let region = options.get("region").and_then(|v| v.as_str())
-                .or(self.region.as_deref()).unwrap_or("us-east-1");
-            
-            let access_key = options.get("access_key_id").and_then(|v| v.as_str())
+            let region = options
+                .get("region")
+                .and_then(|v| v.as_str())
+                .or(self.region.as_deref())
+                .unwrap_or("us-east-1");
+
+            let access_key = options
+                .get("access_key_id")
+                .and_then(|v| v.as_str())
                 .or(self.access_key_id.as_deref());
-                
-            let secret_key = options.get("secret_access_key").and_then(|v| v.as_str())
+
+            let secret_key = options
+                .get("secret_access_key")
+                .and_then(|v| v.as_str())
                 .or(self.secret_access_key.as_deref());
 
-            let endpoint = options.get("endpoint").and_then(|v| v.as_str())
+            let endpoint = options
+                .get("endpoint")
+                .and_then(|v| v.as_str())
                 .or(self.endpoint.as_deref());
 
             let mut builder = AmazonS3Builder::new()
@@ -103,12 +112,14 @@ impl StorageBackend {
             if let (Some(k), Some(s)) = (access_key, secret_key) {
                 builder = builder.with_access_key_id(k).with_secret_access_key(s);
             }
-            
+
             if let Some(ep) = endpoint {
                 builder = builder.with_endpoint(ep);
             }
 
-            let store = builder.build().map_err(|e| Error::from(format!("Failed to build S3 store: {}", e)))?;
+            let store = builder
+                .build()
+                .map_err(|e| Error::from(format!("Failed to build S3 store: {}", e)))?;
             Ok(Arc::new(store))
         } else {
             // Local filesystem
@@ -117,7 +128,8 @@ impl StorageBackend {
             if !path.exists() {
                 std::fs::create_dir_all(path).map_err(|e| Error::from(e.to_string()))?;
             }
-            let store = LocalFileSystem::new_with_prefix(path).map_err(|e| Error::from(e.to_string()))?;
+            let store =
+                LocalFileSystem::new_with_prefix(path).map_err(|e| Error::from(e.to_string()))?;
             Ok(Arc::new(store))
         }
     }
@@ -138,25 +150,26 @@ impl StorageBackend {
         // 2. Replacements from normalized_data (JMIX fields)
         if let Some(nd) = &envelope.normalized_data {
             if let Some(obj) = nd.as_object() {
-                 for (key, value) in obj {
+                for (key, value) in obj {
                     if let Some(s) = value.as_str() {
                         path_str = path_str.replace(&format!("{{{}}}", key), s);
                     }
-                 }
+                }
             }
         }
 
         // 3. Special tokens
         if path_str.contains("{uuid}") {
-             path_str = path_str.replace("{uuid}", &Uuid::new_v4().to_string());
+            path_str = path_str.replace("{uuid}", &Uuid::new_v4().to_string());
         }
         if path_str.contains("{timestamp}") {
             path_str = path_str.replace("{timestamp}", &Utc::now().to_rfc3339());
         }
-        
+
         // ObjectStore paths must not be absolute (no leading /) and handle URL encoding safely
         let clean_path = path_str.trim_start_matches('/');
-        Ok(ObjectStorePath::parse(clean_path).map_err(|e| Error::from(format!("Invalid path: {}", e)))?)
+        Ok(ObjectStorePath::parse(clean_path)
+            .map_err(|e| Error::from(format!("Invalid path: {}", e)))?)
     }
 
     /// Read the `content` option. An option value overrides the struct field.
@@ -234,11 +247,10 @@ impl StorageBackend {
         resolved.push_str(rest);
 
         let clean_path = resolved.trim_start_matches('/');
-        ObjectStorePath::parse(clean_path)
-            .map_err(|e| {
-                tracing::debug!("Invalid storage write path: {}", e);
-                Error::from("the resolved write path has a segment that is not allowed")
-            })
+        ObjectStorePath::parse(clean_path).map_err(|e| {
+            tracing::debug!("Invalid storage write path: {}", e);
+            Error::from("the resolved write path has a segment that is not allowed")
+        })
     }
 
     /// Write a DICOM instance without replacing a different one.
@@ -311,7 +323,10 @@ impl StorageBackend {
 
         let published = Self::publish_staged(store.as_ref(), &staging, path, local).await;
         if let Err(e) = store.delete(&staging).await {
-            tracing::warn!("Failed to delete a staged storage upload: {}", Self::write_error(e));
+            tracing::warn!(
+                "Failed to delete a staged storage upload: {}",
+                Self::write_error(e)
+            );
         }
         published
     }
@@ -341,8 +356,8 @@ impl StorageBackend {
         staging: &ObjectStorePath,
         file: &mut tokio::fs::File,
     ) -> Result<(), Error> {
-        let mut writer = BufWriter::new(store, staging.clone())
-            .with_max_concurrency(UPLOAD_MAX_CONCURRENCY);
+        let mut writer =
+            BufWriter::new(store, staging.clone()).with_max_concurrency(UPLOAD_MAX_CONCURRENCY);
         if let Err(e) = tokio::io::copy(file, &mut writer).await {
             if let Err(abort) = writer.abort().await {
                 tracing::debug!("Failed to abort a storage upload: {}", abort);
@@ -392,8 +407,7 @@ impl StorageBackend {
         path: &ObjectStorePath,
         local: &std::path::Path,
     ) -> Result<(), Error> {
-        let different =
-            || Error::from("a different instance is already stored at the write path");
+        let different = || Error::from("a different instance is already stored at the write path");
         let existing = store.get(path).await.map_err(Self::write_error)?;
         let local_len = tokio::fs::metadata(local)
             .await
@@ -493,7 +507,10 @@ impl ServiceType for StorageBackend {
             })
     }
 
-    fn build_router(&self, _options: &HashMap<String, Value>) -> Vec<crate::router::route_config::RouteConfig> {
+    fn build_router(
+        &self,
+        _options: &HashMap<String, Value>,
+    ) -> Vec<crate::router::route_config::RouteConfig> {
         vec![]
     }
 }
@@ -527,129 +544,130 @@ impl ServiceHandler<Value> for StorageBackend {
             Some(Operation::Delete) => false, // treat as write-side for now
             _ => method == "GET",             // fallback to HTTP method
         };
-        
+
         if is_read {
-             // Read operation
-             let pattern = options
+            // Read operation
+            let pattern = options
                 .get("read_pattern")
                 .and_then(|v| v.as_str())
                 .or(self.read_pattern.as_deref())
                 .unwrap_or("{storedPath}");
 
-             // Check if 'path' query param is provided (e.g. disk://root?path=...)
-             // The envelope.target_details.uri might contain it if we parsed it?
-             // Actually, envelope.request_details.query_params might have it if not consumed.
-             // But we rely on metadata injection or pattern resolution.
-             // If pattern is just "{storedPath}", we expect "storedPath" in metadata.
-             
-             let path = self.resolve_path(pattern, &envelope, options)?;
-             
-             match store.get(&path).await {
-                 Ok(result) => {
-                     let stream = result.into_stream();
-                     // Collect stream into bytes
-                     let bytes = stream.map(|chunk| chunk.unwrap_or_default()) // simplified error handling
+            // Check if 'path' query param is provided (e.g. disk://root?path=...)
+            // The envelope.target_details.uri might contain it if we parsed it?
+            // Actually, envelope.request_details.query_params might have it if not consumed.
+            // But we rely on metadata injection or pattern resolution.
+            // If pattern is just "{storedPath}", we expect "storedPath" in metadata.
+
+            let path = self.resolve_path(pattern, &envelope, options)?;
+
+            match store.get(&path).await {
+                Ok(result) => {
+                    let stream = result.into_stream();
+                    // Collect stream into bytes
+                    let bytes = stream
+                        .map(|chunk| chunk.unwrap_or_default()) // simplified error handling
                         .collect::<Vec<_>>()
                         .await
                         .concat(); // TODO: handle Bytes properly
 
-                     // Try to guess content type
-                     let mut headers = HashMap::new();
-                     if let Some(ext) = path.extension() {
-                         let ct = match ext {
-                             "json" => "application/json",
-                             "xml" => "application/xml",
-                             "dcm" => "application/dicom",
-                             _ => "application/octet-stream",
-                         };
-                         headers.insert("content-type".to_string(), ct.to_string());
-                     }
+                    // Try to guess content type
+                    let mut headers = HashMap::new();
+                    if let Some(ext) = path.extension() {
+                        let ct = match ext {
+                            "json" => "application/json",
+                            "xml" => "application/xml",
+                            "dcm" => "application/dicom",
+                            _ => "application/octet-stream",
+                        };
+                        headers.insert("content-type".to_string(), ct.to_string());
+                    }
 
-                     Ok(ResponseEnvelope::from_backend_with_command(
-                         envelope.request_details.clone(),
-                         200,
-                         headers,
-                         bytes,
-                         None,
-                         envelope.command.clone(),
-                     ))
-                 },
-                 Err(object_store::Error::NotFound { .. }) => {
-                     Ok(ResponseEnvelope::from_backend_with_command(
-                         envelope.request_details.clone(),
-                         404,
-                         HashMap::new(),
-                         b"File not found".to_vec(),
-                         None,
-                         envelope.command.clone(),
-                     ))
-                 },
-                 Err(e) => Err(Error::from(format!("Storage error: {}", e)))
-             }
-
+                    Ok(ResponseEnvelope::from_backend_with_command(
+                        envelope.request_details.clone(),
+                        200,
+                        headers,
+                        bytes,
+                        None,
+                        envelope.command.clone(),
+                    ))
+                }
+                Err(object_store::Error::NotFound { .. }) => {
+                    Ok(ResponseEnvelope::from_backend_with_command(
+                        envelope.request_details.clone(),
+                        404,
+                        HashMap::new(),
+                        b"File not found".to_vec(),
+                        None,
+                        envelope.command.clone(),
+                    ))
+                }
+                Err(e) => Err(Error::from(format!("Storage error: {}", e))),
+            }
         } else {
             // Write operation (POST, PUT, etc)
-             let pattern = options
+            let pattern = options
                 .get("write_pattern")
                 .and_then(|v| v.as_str())
                 .or(self.write_pattern.as_deref())
                 .ok_or(Error::from("Missing write_pattern for storage backend"))?;
 
-             let content = self.write_content(options).map_err(Error::from)?;
-             let path = self.resolve_write_path(pattern, &envelope)?;
+            let content = self.write_content(options).map_err(Error::from)?;
+            let path = self.resolve_write_path(pattern, &envelope)?;
 
-             match (content, envelope.local_instance.as_ref()) {
-                 (WriteContent::DicomPart10, Some(local)) => {
-                     Self::copy_local_instance(Arc::clone(&store), &path, local.path()).await?;
-                 }
-                 (WriteContent::DicomPart10, None) => {
-                     let bytes = self.write_bytes(options, &envelope.original_data)?;
-                     Self::put_dicom_instance(store.as_ref(), &path, bytes::Bytes::from(bytes)).await?;
-                 }
-                 (WriteContent::Body, _) => {
-                     store
-                         .put(&path, envelope.original_data.clone().into())
-                         .await
-                         .map_err(Self::write_error)?;
-                 }
-             }
-             
-             // Return location
-             let mut headers = HashMap::new();
-             let root = options
+            match (content, envelope.local_instance.as_ref()) {
+                (WriteContent::DicomPart10, Some(local)) => {
+                    Self::copy_local_instance(Arc::clone(&store), &path, local.path()).await?;
+                }
+                (WriteContent::DicomPart10, None) => {
+                    let bytes = self.write_bytes(options, &envelope.original_data)?;
+                    Self::put_dicom_instance(store.as_ref(), &path, bytes::Bytes::from(bytes))
+                        .await?;
+                }
+                (WriteContent::Body, _) => {
+                    store
+                        .put(&path, envelope.original_data.clone().into())
+                        .await
+                        .map_err(Self::write_error)?;
+                }
+            }
+
+            // Return location
+            let mut headers = HashMap::new();
+            let root = options
                 .get("root")
                 .and_then(|v| v.as_str())
                 .or(self.root.as_deref())
                 .unwrap_or("./tmp/disk");
-             
-             // Location: scheme://root/path
-             // If root is s3://bucket, path is key.
-             // If root is ./tmp/disk, path is relative to it?
-             // LocalFileSystem from object_store treats prefix as root. So path is relative.
-             // We construct location as root + / + path
-             let separator = if root.ends_with('/') { "" } else { "/" };
-             let location = format!("{}{}{}", root, separator, path);
-             
-             headers.insert("Location".to_string(), location.clone());
-             
-             // Response body
-             let body_json = serde_json::json!({
-                 "location": location,
-                 "path": path.to_string(),
-                 "status": "stored"
-             });
-             
-             let body = serde_json::to_vec(&body_json).unwrap();
-             headers.insert("content-type".to_string(), "application/json".to_string());
 
-             Ok(ResponseEnvelope::from_backend_with_command(
-                 envelope.request_details.clone(),
-                 201, // Created
-                 headers,
-                 body,
-                 None,
-                 envelope.command.clone(),
-             ))
+            // Location: scheme://root/path
+            // If root is s3://bucket, path is key.
+            // If root is ./tmp/disk, path is relative to it?
+            // LocalFileSystem from object_store treats prefix as root. So path is relative.
+            // We construct location as root + / + path
+            let separator = if root.ends_with('/') { "" } else { "/" };
+            let location = format!("{}{}{}", root, separator, path);
+
+            headers.insert("Location".to_string(), location.clone());
+
+            // Response body
+            let body_json = serde_json::json!({
+                "location": location,
+                "path": path.to_string(),
+                "status": "stored"
+            });
+
+            let body = serde_json::to_vec(&body_json).unwrap();
+            headers.insert("content-type".to_string(), "application/json".to_string());
+
+            Ok(ResponseEnvelope::from_backend_with_command(
+                envelope.request_details.clone(),
+                201, // Created
+                headers,
+                body,
+                None,
+                envelope.command.clone(),
+            ))
         }
     }
 
@@ -658,7 +676,7 @@ impl ServiceHandler<Value> for StorageBackend {
         envelope: ResponseEnvelope<Vec<u8>>,
         _options: &HashMap<String, Value>,
     ) -> Result<Response, Error> {
-         let status = http::StatusCode::from_u16(envelope.response_details.status)
+        let status = http::StatusCode::from_u16(envelope.response_details.status)
             .unwrap_or(http::StatusCode::OK);
 
         let mut builder = Response::builder().status(status);
@@ -701,7 +719,9 @@ mod tests {
         options.insert("root".to_string(), Value::String("/tmp".to_string()));
         let envelope = create_test_envelope();
 
-        let path = backend.resolve_path("test.txt", &envelope, &options).unwrap();
+        let path = backend
+            .resolve_path("test.txt", &envelope, &options)
+            .unwrap();
         assert_eq!(path.as_ref(), "test.txt");
     }
 
@@ -711,9 +731,14 @@ mod tests {
         let mut options = HashMap::new();
         options.insert("root".to_string(), Value::String("/tmp".to_string()));
         let mut envelope = create_test_envelope();
-        envelope.request_details.metadata.insert("tenant".to_string(), "acme".to_string());
+        envelope
+            .request_details
+            .metadata
+            .insert("tenant".to_string(), "acme".to_string());
 
-        let path = backend.resolve_path("{tenant}/file.txt", &envelope, &options).unwrap();
+        let path = backend
+            .resolve_path("{tenant}/file.txt", &envelope, &options)
+            .unwrap();
         assert_eq!(path.as_ref(), "acme/file.txt");
     }
 
@@ -727,7 +752,9 @@ mod tests {
             "PatientID": "12345"
         }));
 
-        let path = backend.resolve_path("{PatientID}.dcm", &envelope, &options).unwrap();
+        let path = backend
+            .resolve_path("{PatientID}.dcm", &envelope, &options)
+            .unwrap();
         assert_eq!(path.as_ref(), "12345.dcm");
     }
 
@@ -738,7 +765,9 @@ mod tests {
         options.insert("root".to_string(), Value::String("/tmp".to_string()));
         let envelope = create_test_envelope();
 
-        let path = backend.resolve_path("{uuid}_{timestamp}.txt", &envelope, &options).unwrap();
+        let path = backend
+            .resolve_path("{uuid}_{timestamp}.txt", &envelope, &options)
+            .unwrap();
         let path_str = path.to_string();
         // Simple check for UUID structure (not exhaustive regex)
         assert!(!path_str.contains("{uuid}"));
@@ -749,22 +778,34 @@ mod tests {
     async fn test_write_read_cycle() {
         let dir = tempdir().unwrap();
         let root = dir.path().to_string_lossy().to_string();
-        
+
         let backend = StorageBackend::default();
         let mut options = HashMap::new();
         options.insert("root".to_string(), Value::String(root.clone()));
-        options.insert("write_pattern".to_string(), Value::String("{filename}".to_string()));
-        options.insert("read_pattern".to_string(), Value::String("{filename}".to_string()));
+        options.insert(
+            "write_pattern".to_string(),
+            Value::String("{filename}".to_string()),
+        );
+        options.insert(
+            "read_pattern".to_string(),
+            Value::String("{filename}".to_string()),
+        );
 
         // Write
         let mut write_env = create_test_envelope();
         write_env.request_details.method = "POST".to_string();
-        write_env.request_details.metadata.insert("filename".to_string(), "test.txt".to_string());
+        write_env
+            .request_details
+            .metadata
+            .insert("filename".to_string(), "test.txt".to_string());
         write_env.original_data = b"Hello World".to_vec();
 
-        let write_resp = backend.backend_outgoing_request(write_env, &options).await.unwrap();
+        let write_resp = backend
+            .backend_outgoing_request(write_env, &options)
+            .await
+            .unwrap();
         assert_eq!(write_resp.response_details.status, 201);
-        
+
         // Check file exists (LocalFileSystem should put it relative to root)
         let file_path = dir.path().join("test.txt");
         assert!(file_path.exists());
@@ -773,27 +814,39 @@ mod tests {
         // Read
         let mut read_env = create_test_envelope();
         read_env.request_details.method = "GET".to_string();
-        read_env.request_details.metadata.insert("filename".to_string(), "test.txt".to_string());
+        read_env
+            .request_details
+            .metadata
+            .insert("filename".to_string(), "test.txt".to_string());
 
-        let read_resp = backend.backend_outgoing_request(read_env, &options).await.unwrap();
+        let read_resp = backend
+            .backend_outgoing_request(read_env, &options)
+            .await
+            .unwrap();
         assert_eq!(read_resp.response_details.status, 200);
         assert_eq!(read_resp.original_data, b"Hello World");
     }
-    
+
     #[tokio::test]
     async fn test_read_not_found() {
         let dir = tempdir().unwrap();
         let root = dir.path().to_string_lossy().to_string();
-        
+
         let backend = StorageBackend::default();
         let mut options = HashMap::new();
         options.insert("root".to_string(), Value::String(root));
-        options.insert("read_pattern".to_string(), Value::String("missing.txt".to_string()));
+        options.insert(
+            "read_pattern".to_string(),
+            Value::String("missing.txt".to_string()),
+        );
 
         let mut read_env = create_test_envelope();
         read_env.request_details.method = "GET".to_string();
 
-        let read_resp = backend.backend_outgoing_request(read_env, &options).await.unwrap();
+        let read_resp = backend
+            .backend_outgoing_request(read_env, &options)
+            .await
+            .unwrap();
         assert_eq!(read_resp.response_details.status, 404);
     }
 
@@ -807,7 +860,10 @@ mod tests {
     fn part10_options(root: &str) -> HashMap<String, Value> {
         let mut options = HashMap::new();
         options.insert("root".to_string(), Value::String(root.to_string()));
-        options.insert("content".to_string(), Value::String("dicom_part10".to_string()));
+        options.insert(
+            "content".to_string(),
+            Value::String("dicom_part10".to_string()),
+        );
         options.insert(
             "write_pattern".to_string(),
             Value::String("{StudyInstanceUID}/{SOPInstanceUID}.dcm".to_string()),
@@ -862,7 +918,11 @@ mod tests {
             .err()
             .expect("a body with no instance fails the write");
 
-        assert!(err.to_string().contains("'file'"), "unexpected error: {}", err);
+        assert!(
+            err.to_string().contains("'file'"),
+            "unexpected error: {}",
+            err
+        );
         assert!(!dir.path().join("1.2.3").exists(), "nothing is written");
     }
 
@@ -883,14 +943,21 @@ mod tests {
 
     fn write_path_with(key: &str, value: &str, pattern: &str) -> Result<ObjectStorePath, Error> {
         let mut envelope = create_test_envelope();
-        envelope.request_details.metadata.insert(key.to_string(), value.to_string());
+        envelope
+            .request_details
+            .metadata
+            .insert(key.to_string(), value.to_string());
         StorageBackend::default().resolve_write_path(pattern, &envelope)
     }
 
     #[test]
     fn test_write_path_fills_placeholders_once() {
         let path = write_path_with("PatientID", "{uuid}", "{PatientID}.dcm").unwrap();
-        assert_eq!(path.as_ref(), "{uuid}.dcm", "a value is not scanned for placeholders");
+        assert_eq!(
+            path.as_ref(),
+            "{uuid}.dcm",
+            "a value is not scanned for placeholders"
+        );
 
         let path = write_path_with("tenant", "acme", "/{tenant}/a-{uuid}.bin").unwrap();
         assert!(path.as_ref().starts_with("acme/a-"));
@@ -910,17 +977,34 @@ mod tests {
             let err = write_path_with("PatientID", value, "{PatientID}/x.dcm")
                 .err()
                 .unwrap_or_else(|| panic!("value {:?} must be rejected", value));
-            assert!(err.to_string().contains(reason), "{:?}: unexpected error: {}", value, err);
+            assert!(
+                err.to_string().contains(reason),
+                "{:?}: unexpected error: {}",
+                value,
+                err
+            );
         }
     }
 
     #[test]
     fn test_write_path_rejects_a_placeholder_with_no_value() {
-        let err = write_path_with("tenant", "acme", "{SOPInstanceUID}.dcm").err().unwrap();
-        assert!(err.to_string().contains("{SOPInstanceUID}"), "unexpected error: {}", err);
+        let err = write_path_with("tenant", "acme", "{SOPInstanceUID}.dcm")
+            .err()
+            .unwrap();
+        assert!(
+            err.to_string().contains("{SOPInstanceUID}"),
+            "unexpected error: {}",
+            err
+        );
 
-        let err = write_path_with("tenant", "acme", "{tenant.dcm").err().unwrap();
-        assert!(err.to_string().contains("no closing"), "unexpected error: {}", err);
+        let err = write_path_with("tenant", "acme", "{tenant.dcm")
+            .err()
+            .unwrap();
+        assert!(
+            err.to_string().contains("no closing"),
+            "unexpected error: {}",
+            err
+        );
     }
 
     #[tokio::test]
@@ -936,7 +1020,10 @@ mod tests {
         let backend = StorageBackend::default();
         let original = fake_part10();
 
-        backend.backend_outgoing_request(body(&original), &options).await.unwrap();
+        backend
+            .backend_outgoing_request(body(&original), &options)
+            .await
+            .unwrap();
         backend
             .backend_outgoing_request(body(&original), &options)
             .await
@@ -949,7 +1036,11 @@ mod tests {
             .await
             .err()
             .expect("different bytes at the same path are refused");
-        assert!(err.to_string().contains("already stored"), "unexpected error: {}", err);
+        assert!(
+            err.to_string().contains("already stored"),
+            "unexpected error: {}",
+            err
+        );
         let stored = std::fs::read(dir.path().join("1.2.3").join("1.2.3.4.dcm")).unwrap();
         assert_eq!(stored, original);
     }
@@ -957,7 +1048,10 @@ mod tests {
     #[test]
     fn test_write_path_uuid_cannot_be_set_by_the_request() {
         let mut envelope = create_test_envelope();
-        envelope.request_details.metadata.insert("uuid".to_string(), "victim".to_string());
+        envelope
+            .request_details
+            .metadata
+            .insert("uuid".to_string(), "victim".to_string());
         envelope.normalized_data = Some(serde_json::json!({ "uuid": "victim" }));
 
         let path = StorageBackend::default()
@@ -965,14 +1059,19 @@ mod tests {
             .unwrap();
 
         assert_ne!(path.as_ref(), "files/victim.bin");
-        assert!(Uuid::parse_str(path.as_ref().trim_start_matches("files/").trim_end_matches(".bin")).is_ok());
+        assert!(Uuid::parse_str(
+            path.as_ref()
+                .trim_start_matches("files/")
+                .trim_end_matches(".bin")
+        )
+        .is_ok());
     }
 
     fn local_instance_envelope(file: &std::path::Path) -> RequestEnvelope<Vec<u8>> {
         let mut envelope = store_envelope(serde_json::json!({ "file": "/etc/passwd" }));
-        envelope.local_instance = Some(
-            crate::models::envelope::envelope::LocalInstanceFile::new(file.to_path_buf()),
-        );
+        envelope.local_instance = Some(crate::models::envelope::envelope::LocalInstanceFile::new(
+            file.to_path_buf(),
+        ));
         envelope
     }
 
@@ -999,7 +1098,10 @@ mod tests {
 
         assert_eq!(response.response_details.status, 201);
         let study_dir = root.path().join("1.2.3");
-        assert_eq!(std::fs::read(study_dir.join("1.2.3.4.dcm")).unwrap(), instance);
+        assert_eq!(
+            std::fs::read(study_dir.join("1.2.3.4.dcm")).unwrap(),
+            instance
+        );
         let names: Vec<_> = std::fs::read_dir(&study_dir)
             .unwrap()
             .map(|e| e.unwrap().file_name())
@@ -1037,10 +1139,19 @@ mod tests {
             .err()
             .expect("different bytes at the same path are refused");
 
-        assert!(err.to_string().contains("already stored"), "unexpected error: {}", err);
+        assert!(
+            err.to_string().contains("already stored"),
+            "unexpected error: {}",
+            err
+        );
         let stored = std::fs::read(root.path().join("1.2.3").join("1.2.3.4.dcm")).unwrap();
         assert_eq!(stored, std::fs::read(&original).unwrap());
-        assert_eq!(std::fs::read_dir(root.path().join("1.2.3")).unwrap().count(), 1);
+        assert_eq!(
+            std::fs::read_dir(root.path().join("1.2.3"))
+                .unwrap()
+                .count(),
+            1
+        );
     }
 
     #[tokio::test]
@@ -1057,7 +1168,11 @@ mod tests {
             .err()
             .expect("a file that is not Part 10 is refused");
 
-        assert!(err.to_string().contains("not a DICOM Part 10 file"), "unexpected error: {}", err);
+        assert!(
+            err.to_string().contains("not a DICOM Part 10 file"),
+            "unexpected error: {}",
+            err
+        );
         assert!(!root.path().join("1.2.3").exists());
     }
 
@@ -1145,7 +1260,11 @@ mod tests {
             self.inner.list_with_delimiter(prefix).await
         }
 
-        async fn copy(&self, from: &ObjectStorePath, to: &ObjectStorePath) -> object_store::Result<()> {
+        async fn copy(
+            &self,
+            from: &ObjectStorePath,
+            to: &ObjectStorePath,
+        ) -> object_store::Result<()> {
             self.inner.copy(from, to).await
         }
 
@@ -1189,7 +1308,11 @@ mod tests {
                 .err()
                 .expect("a refused upload fails the write");
 
-            assert!(err.to_string().contains("upload the received instance"), "unexpected error: {}", err);
+            assert!(
+                err.to_string().contains("upload the received instance"),
+                "unexpected error: {}",
+                err
+            );
             assert!(stored_keys(&store).await.is_empty());
         }
     }
@@ -1218,7 +1341,11 @@ mod tests {
             .await
             .err()
             .expect("an instance of another size is refused");
-        assert!(err.to_string().contains("already stored"), "unexpected error: {}", err);
+        assert!(
+            err.to_string().contains("already stored"),
+            "unexpected error: {}",
+            err
+        );
         let stored = store.get(&path).await.unwrap().bytes().await.unwrap();
         assert_eq!(stored.as_ref(), fake_part10().as_slice());
     }

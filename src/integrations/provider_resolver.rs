@@ -66,8 +66,8 @@ impl ProviderResolver {
 
     /// Resolve a resource reference string
     pub async fn resolve(&self, reference: &str) -> Result<ResolvedResource, ResolutionError> {
-        let parsed = ParsedReference::parse(reference)
-            .map_err(|e| ResolutionError::InvalidReference(e))?;
+        let parsed =
+            ParsedReference::parse(reference).map_err(|e| ResolutionError::InvalidReference(e))?;
 
         self.resolve_parsed(&parsed).await
     }
@@ -165,9 +165,9 @@ impl ProviderResolver {
         let response_body: serde_json::Value = response.json().await?;
 
         // Extract the data field
-        let data = response_body
-            .get("data")
-            .ok_or_else(|| ResolutionError::ApiError("Missing 'data' field in response".to_string()))?;
+        let data = response_body.get("data").ok_or_else(|| {
+            ResolutionError::ApiError("Missing 'data' field in response".to_string())
+        })?;
 
         // Parse into ResolvedResource
         let resolved: ResolvedResource = serde_json::from_value(data.clone())

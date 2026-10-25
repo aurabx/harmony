@@ -9,7 +9,10 @@ use std::collections::HashMap;
 #[derive(Debug, Clone, PartialEq, Serialize)]
 pub enum PipelineMiddleware {
     List(Vec<String>),
-    Split { left: Vec<String>, right: Vec<String> },
+    Split {
+        left: Vec<String>,
+        right: Vec<String>,
+    },
 }
 
 impl PipelineMiddleware {
@@ -127,7 +130,8 @@ impl<'de> Deserialize<'de> for PipelineMiddleware {
 
                 if map.len() == 2 && map.contains_key("left") && map.contains_key("right") {
                     Ok(PipelineMiddleware::Split { left, right })
-                } else if map.len() <= 2 && (map.contains_key("left") || map.contains_key("right")) {
+                } else if map.len() <= 2 && (map.contains_key("left") || map.contains_key("right"))
+                {
                     Ok(PipelineMiddleware::Split { left, right })
                 } else {
                     Err(de::Error::custom(

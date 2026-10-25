@@ -1,10 +1,10 @@
 //! Service Class User (SCU) implementation for outbound DIMSE operations
 
+pub mod command_builder;
 pub mod commands;
 pub mod connection;
 pub mod native_connection;
 pub mod storage_sop_classes;
-pub mod command_builder;
 
 use tokio_stream::wrappers::ReceiverStream;
 
@@ -147,7 +147,7 @@ mod tests {
             ..Default::default()
         };
         let scu = DimseScu::new(config);
-        
+
         // Test that SCU was created successfully
         let node = RemoteNode::new("TEST_AET", "localhost", 11112);
         assert_eq!(

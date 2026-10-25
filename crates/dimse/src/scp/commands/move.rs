@@ -116,7 +116,7 @@ pub async fn handle_c_move(
             response_builder::send_move_response(
                 association,
                 message_id,
-                0xC000, // Unable to process
+                e.status_code().unwrap_or(0xC000),
                 SubOperationCounts::default(),
                 presentation_context_id,
             )
@@ -137,6 +137,9 @@ pub async fn handle_c_move(
         ..SubOperationCounts::default()
     };
     let mut sub_operation: u16 = 0;
+    // Status of the first stream item that carried no dataset because the
+    // retrieval itself failed, when the error states one.
+    let mut first_item_failure_status: Option<u16> = None;
 
     // Initialize SCU
     let scu = crate::DimseScu::new(scp.config.clone());
@@ -175,6 +178,9 @@ pub async fn handle_c_move(
                     "C-MOVE sub-operation {} has no dataset: {}",
                     sub_operation, e
                 );
+                if first_item_failure_status.is_none() {
+                    first_item_failure_status = e.status_code();
+                }
             }
         }
         counts.remaining = expected_total
@@ -183,10 +189,12 @@ pub async fn handle_c_move(
 
     // The final response never carries a remaining count.
     counts.remaining = None;
-    let status = if counts.failed > 0 {
-        0xB000 // Warning (one or more failures)
-    } else {
-        0x0000 // Success
+    let status = match first_item_failure_status {
+        // Nothing reached the destination because the retrieval failed, so
+        // the retrieval's own status is the answer.
+        Some(code) if counts.completed == 0 && counts.warning == 0 => code,
+        _ if counts.failed > 0 => 0xB000, // Warning (one or more failures)
+        _ => 0x0000,                      // Success
     };
 
     info!(

@@ -108,7 +108,7 @@ fn find_mesh_for_ingress(config: &Config, ingress_ref: &str) -> Option<String> {
 
 impl MeshRegistry {
     /// Build a new MeshRegistry from configuration.
-    /// 
+    ///
     /// This synchronous version only indexes local ingress definitions.
     /// Use `from_config_with_resolver` to also resolve remote references.
     pub fn from_config(config: &Config) -> Self {
@@ -140,7 +140,9 @@ impl MeshRegistry {
                         Err(e) => {
                             tracing::warn!(
                                 "Mesh '{}': Failed to parse ingress reference '{}': {}",
-                                mesh_name, ingress_ref, e
+                                mesh_name,
+                                ingress_ref,
+                                e
                             );
                             continue;
                         }
@@ -160,7 +162,8 @@ impl MeshRegistry {
                     // Resolve remote reference
                     tracing::debug!(
                         "Mesh '{}': Resolving remote ingress reference '{}'",
-                        mesh_name, ingress_ref
+                        mesh_name,
+                        ingress_ref
                     );
 
                     match resolver.resolve_parsed(&parsed).await {
@@ -177,14 +180,17 @@ impl MeshRegistry {
                             if resolved.urls.is_empty() {
                                 tracing::warn!(
                                     "Mesh '{}': Resolved ingress '{}' has no URLs",
-                                    mesh_name, ingress_ref
+                                    mesh_name,
+                                    ingress_ref
                                 );
                                 continue;
                             }
 
                             tracing::info!(
                                 "Mesh '{}': Resolved remote ingress '{}' -> {} URLs",
-                                mesh_name, ingress_ref, resolved.urls.len()
+                                mesh_name,
+                                ingress_ref,
+                                resolved.urls.len()
                             );
 
                             resolved_remote.insert(
@@ -197,7 +203,9 @@ impl MeshRegistry {
                         Err(e) => {
                             tracing::warn!(
                                 "Mesh '{}': Failed to resolve ingress reference '{}': {}",
-                                mesh_name, ingress_ref, e
+                                mesh_name,
+                                ingress_ref,
+                                e
                             );
                         }
                     }
@@ -254,7 +262,9 @@ impl MeshRegistry {
                 if let Some(pattern) = UrlPattern::from_url_str(url_str) {
                     tracing::debug!(
                         "Indexed remote ingress URL '{}' -> '{}' (mesh {:?})",
-                        url_str, ingress_name, mesh_name
+                        url_str,
+                        ingress_name,
+                        mesh_name
                     );
                     url_index.push((pattern, ingress_name.clone(), mesh_name.clone()));
                 }
@@ -271,7 +281,9 @@ impl MeshRegistry {
                 if let Some(pattern) = UrlPattern::from_url_str(url_str) {
                     tracing::debug!(
                         "Indexed resolved remote URL '{}' -> '{}' (mesh {:?})",
-                        url_str, key, mesh_name
+                        url_str,
+                        key,
+                        mesh_name
                     );
                     url_index.push((pattern, key.clone(), mesh_name.clone()));
                 }
@@ -296,7 +308,13 @@ impl MeshRegistry {
     ///
     /// Returns the routing information if matched, None otherwise.
     /// Ingress can work without mesh membership for simple URL→pipeline binding.
-    pub fn resolve(&self, scheme: &str, host: &str, port: Option<u16>, path: &str) -> Option<MeshRouteMatch> {
+    pub fn resolve(
+        &self,
+        scheme: &str,
+        host: &str,
+        port: Option<u16>,
+        path: &str,
+    ) -> Option<MeshRouteMatch> {
         self.resolve_with_config(scheme, host, port, path, None)
     }
 
@@ -328,9 +346,7 @@ impl MeshRegistry {
                 };
 
                 // Get mesh context if ingress belongs to a mesh
-                let mesh = mesh_name_opt
-                    .as_ref()
-                    .and_then(|mn| self.mesh.get(mn));
+                let mesh = mesh_name_opt.as_ref().and_then(|mn| self.mesh.get(mn));
 
                 tracing::debug!(
                     "Ingress route match: {}://{}{}  -> ingress '{}' -> endpoint '{}' (pipeline '{}')",
