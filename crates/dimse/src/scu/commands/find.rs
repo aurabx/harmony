@@ -48,9 +48,13 @@ pub async fn handle_find(
     let tx_clone = tx.clone();
 
     tokio::spawn(async move {
-        let result = perform_find(&config_clone, &node_clone, &query_clone, tx_clone).await;
+        let result = perform_find(&config_clone, &node_clone, &query_clone, tx_clone.clone()).await;
         if let Err(e) = result {
             tracing::error!("C-FIND operation failed: {}", e);
+            // perform_find returns Err only before it has sent anything, for
+            // example when the association cannot be opened. Without this the
+            // caller sees an empty stream and takes it for "no matches".
+            let _ = tx_clone.send(Err(e)).await;
         }
     });
 

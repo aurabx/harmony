@@ -13,7 +13,13 @@ use std::pin::Pin;
 
 use crate::router::route_config::{standard_methods, RouteConfig};
 use crate::utils::Error;
-use tracing::{debug, info};
+use tracing::{debug, error, info};
+
+/// Error text sent to streaming clients when the upstream stream fails.
+///
+/// The real error often names internal hosts, ports and AE titles, so it goes
+/// to the server log and the client gets only this fixed text.
+const STREAM_ERROR_MESSAGE: &str = "upstream stream failed";
 
 /// HTTP streaming endpoint configuration
 ///
@@ -291,11 +297,10 @@ impl HttpStreamingEndpoint {
                     Ok::<_, Error>(Bytes::from(sse_event))
                 }
                 Err(e) => {
-                    // Send error as SSE event
+                    error!("SSE stream item #{} failed: {}", sequence, e);
                     let error_event = format!(
                         "event: error\nid: {}\ndata: {{\"error\": \"{}\"}}\n\n",
-                        sequence,
-                        e.to_string().replace('"', "\\\"")
+                        sequence, STREAM_ERROR_MESSAGE
                     );
                     Ok(Bytes::from(error_event))
                 }
@@ -351,11 +356,10 @@ impl HttpStreamingEndpoint {
                     Ok::<_, Error>(Bytes::from(line))
                 }
                 Err(e) => {
-                    // Send error as NDJSON line
+                    error!("NDJSON stream item #{} failed: {}", sequence, e);
                     let error_line = format!(
                         "{{\"_error\": \"{}\", \"_stream_sequence\": {}}}\n",
-                        e.to_string().replace('"', "\\\""),
-                        sequence
+                        STREAM_ERROR_MESSAGE, sequence
                     );
                     Ok(Bytes::from(error_line))
                 }
@@ -426,11 +430,10 @@ impl HttpStreamingEndpoint {
                     Ok::<_, Error>(Bytes::from(bytes))
                 }
                 Err(e) => {
-                    // Send error as text part
+                    error!("Multipart stream item #{} failed: {}", sequence, e);
                     let error_part = format!(
                         "\r\n--{}\r\nContent-Type: application/json\r\n\r\n{{\"error\": \"{}\"}}\r\n",
-                        boundary_for_parts,
-                        e.to_string().replace('"', "\\\"")
+                        boundary_for_parts, STREAM_ERROR_MESSAGE
                     );
                     Ok(Bytes::from(error_part))
                 }
@@ -597,5 +600,43 @@ mod tests {
             .await;
 
         assert!(result.is_err(), "only HTTP contexts are supported");
+    }
+
+    #[tokio::test]
+    async fn test_stream_errors_do_not_reach_the_client() {
+        let endpoint = HttpStreamingEndpoint {
+            default_format: None,
+            buffer_size: None,
+            enable_compression: None,
+        };
+        for format in [
+            StreamFormat::Sse,
+            StreamFormat::Ndjson,
+            StreamFormat::Multipart,
+        ] {
+            let failing: Pin<
+                Box<dyn Stream<Item = Result<ResponseEnvelope<Vec<u8>>, Error>> + Send>,
+            > = Box::pin(futures_util::stream::once(async {
+                Err(Error::from(
+                    "DIMSE stream error: association to PACS_AET at 10.1.2.3:104 refused",
+                ))
+            }));
+            let response = endpoint
+                .build_streaming_response(failing, format, &HashMap::new())
+                .unwrap();
+            let body = axum::body::to_bytes(response.into_body(), usize::MAX)
+                .await
+                .unwrap();
+            let body = String::from_utf8_lossy(&body);
+
+            assert!(
+                body.contains(STREAM_ERROR_MESSAGE),
+                "{:?}: {}",
+                format,
+                body
+            );
+            assert!(!body.contains("10.1.2.3"), "{:?} leaked: {}", format, body);
+            assert!(!body.contains("PACS_AET"), "{:?} leaked: {}", format, body);
+        }
     }
 }

@@ -48,8 +48,22 @@ pub async fn establish_association(
     let association = client_options
         .establish_async(&addr)
         .await
-        .map_err(|e| {
-            DimseError::association(format!("Failed to establish association with {}: {}", addr, e))
+        .map_err(|e| match e {
+            // The node is up and talking DICOM but supports none of the
+            // proposed SOP classes. Callers can tell this apart from a
+            // connection failure, for example to try another operation.
+            AssociationError::NoAcceptedPresentationContexts { .. } => {
+                DimseError::NotSupported(format!(
+                    "{}@{} accepted none of the proposed SOP classes [{}]",
+                    node.ae_title,
+                    addr,
+                    sop_class_uids.join(", ")
+                ))
+            }
+            other => DimseError::association(format!(
+                "Failed to establish association with {}: {}",
+                addr, other
+            )),
         })?;
 
     info!(
@@ -241,7 +255,7 @@ pub fn get_presentation_context_id(
         }
     }
 
-    Err(DimseError::association(format!(
+    Err(DimseError::NotSupported(format!(
         "No presentation context found for SOP class: {}",
         sop_class_uid
     )))

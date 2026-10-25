@@ -2,7 +2,7 @@
 title: Transform Middleware
 description: Reference for middleware that transforms or converts request and response data.
 status: active
-updated: 2026-10-24
+updated: 2026-10-25
 type: Configuration
 related:
   - configuration/middleware.md
@@ -116,11 +116,30 @@ type = "dicomweb_bridge"
 **Right side behavior (DICOM → DICOMweb):**
 - **QIDO responses**: Converts DICOM find results to DICOMweb JSON arrays
 - **WADO metadata**: Returns filtered JSON metadata based on includefield
-- **WADO instances**: Creates multipart/related responses with DICOM files
+- **WADO-RS retrieve**: Creates a `multipart/related; type="application/dicom"` response over every retrieved file. This applies to study, series and instance retrieves.
 - **WADO frames**: Decodes DICOM pixel data to JPEG/PNG images
 - Handles both single-frame and multi-frame responses
 - Supports content negotiation (Accept: image/jpeg, image/png)
 - Provides proper error responses for unsupported transfer syntaxes
+
+**Backend failures:**
+
+A `dicom_scu` backend reports a failed C-FIND, C-GET or C-MOVE with `"success": false` in its response. This covers a PACS that cannot be reached, an association that is rejected, and a failure part way through. Any results received before the failure are dropped, because they are incomplete. The response's `error` field holds a fixed message such as `C-FIND failed`. The backend writes the real error to the server log.
+
+When the bridge sees such a failure, it stops the request with an upstream failure error.
+
+- An HTTP client gets `502 Bad Gateway` with an empty body. This includes frame requests.
+- The backend's error text stays in the server log. It often names hosts, ports and AE titles, so the client never sees it.
+- If the bridge runs in a pipeline with a DIMSE endpoint, the DIMSE client gets status `0xC000`. The DIMSE adapter sends this for every pipeline error.
+
+Other retrieve outcomes:
+
+- WADO-RS study, series and instance retrieves through `dicom_scu` need filesystem storage. The backend then returns a `folder_path` that holds the retrieved files. Without it, the response is `500 Internal Server Error`.
+- A retrieve that succeeds but matches no instances returns `404 Not Found` with an empty body. This applies to study, series, instance and frame requests.
+- If the retrieved instances cannot be read, the client gets `500 Internal Server Error` with an empty body.
+- A DIMSE retrieve that the bridge cannot turn into a DICOMweb response returns `500 Internal Server Error` with an empty body. This covers rendered and thumbnail requests, because server-side rendering is not implemented. It also covers bulkdata requests.
+
+A DICOMweb HTTP backend sends no `operation` or `success` field. Its responses pass through unchanged, including rendered and thumbnail images. For such a backend, a frame retrieval failure returns `406 Not Acceptable` with a fixed message and no backend detail. STOW-RS keeps its own PS3.18 failure response.
 
 **Features:**
 - Full DICOMweb QIDO-RS and WADO-RS compliance

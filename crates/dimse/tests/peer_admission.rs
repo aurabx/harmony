@@ -185,13 +185,17 @@ async fn rejected_peer_gets_no_c_echo_reply() {
 async fn rejected_peer_never_reaches_the_query_methods() {
     let (port, provider, _storage_dir) = start_scp(Verdict::Reject).await;
 
-    // The SCU's C-FIND opens the association in a background task and only
-    // logs a failure, so the stream ends with no results. The C-ECHO test
-    // above checks that the failure is an A-ASSOCIATE-RJ.
+    // The SCU's C-FIND opens the association in a background task. The
+    // rejection arrives as the only item on the result stream.
     let mut results = scu()
         .find(&node(port), FindQuery::patient(Some("GATE-1".to_string())))
         .await
         .expect("the SCU starts the C-FIND before it connects");
+    let first = results
+        .next()
+        .await
+        .expect("the rejection should arrive on the C-FIND stream");
+    assert_association_rejected(first);
     assert!(
         results.next().await.is_none(),
         "a rejected peer should get no C-FIND results"

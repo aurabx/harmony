@@ -2,8 +2,8 @@ use super::HttpAdapter;
 use crate::config::config::Config;
 use crate::models::mesh::registry::{MeshContext, MeshRegistry};
 use crate::models::middleware::{
-    AccessDenied, AuthFailure, AuthUnavailable, ContentTypeDenied, MethodDenied, PathDenied,
-    RateLimitExceeded,
+    AccessDenied, AuthFailure, AuthUnavailable, ContentTypeDenied, DicomObjectNotFound,
+    MethodDenied, PathDenied, RateLimitExceeded, UpstreamFailure,
 };
 use crate::pipeline::{PipelineError, PipelineExecutor};
 use crate::router::route_table::{method_list, RouteLookup, RouteTable};
@@ -688,6 +688,13 @@ pub(crate) fn map_pipeline_error_to_status(err: &PipelineError) -> StatusCode {
                 StatusCode::TOO_MANY_REQUESTS
             } else if middleware_err.downcast_ref::<AccessDenied>().is_some() {
                 StatusCode::FORBIDDEN
+            } else if middleware_err.downcast_ref::<UpstreamFailure>().is_some() {
+                StatusCode::BAD_GATEWAY
+            } else if middleware_err
+                .downcast_ref::<DicomObjectNotFound>()
+                .is_some()
+            {
+                StatusCode::NOT_FOUND
             } else {
                 StatusCode::INTERNAL_SERVER_ERROR
             }
@@ -807,6 +814,29 @@ mod tests {
         let status = map_pipeline_error_to_status(&pipeline_error);
 
         assert_eq!(status, StatusCode::INTERNAL_SERVER_ERROR);
+    }
+
+    #[test]
+    fn test_map_upstream_failure_to_bad_gateway() {
+        let pipeline_error = PipelineError::MiddlewareError(Box::new(UpstreamFailure {
+            operation: "get".to_string(),
+            detail: "association rejected by PACS_AET".to_string(),
+        }));
+
+        let status = map_pipeline_error_to_status(&pipeline_error);
+
+        assert_eq!(status, StatusCode::BAD_GATEWAY);
+    }
+
+    #[test]
+    fn test_map_dicom_object_not_found_to_not_found() {
+        let pipeline_error = PipelineError::MiddlewareError(Box::new(DicomObjectNotFound(
+            "C-GET matched no instances".to_string(),
+        )));
+
+        let status = map_pipeline_error_to_status(&pipeline_error);
+
+        assert_eq!(status, StatusCode::NOT_FOUND);
     }
 
     #[test]
