@@ -9,7 +9,7 @@ use tracing::{debug, info, warn};
 
 use crate::config::{DimseConfig, RemoteNode};
 use crate::types::{DatasetStream, MoveQuery};
-use crate::Result;
+use crate::{DimseError, Result};
 
 /// Handle C-MOVE request using DCMTK movescu
 pub async fn handle_move(
@@ -153,11 +153,26 @@ pub async fn handle_move(
                         stdout,
                         stderr
                     );
+                    // The caller must see the failure on the stream. An empty
+                    // stream reads as a move that found nothing. The full
+                    // movescu output stays in the log above.
+                    let _ = tx_clone
+                        .send(Err(DimseError::operation_failed(format!(
+                            "movescu exited with status {:?}",
+                            out.status.code()
+                        ))))
+                        .await;
                     cleanup_dir = out_dir_clone.clone();
                 }
             }
             Err(e) => {
                 warn!("Failed to spawn movescu: {}", e);
+                let _ = tx_clone
+                    .send(Err(DimseError::operation_failed(format!(
+                        "could not run movescu: {}",
+                        e
+                    ))))
+                    .await;
                 cleanup_dir = out_dir_clone.clone();
             }
         }

@@ -168,17 +168,72 @@ mod tests {
         assert!(result.unwrap());
     }
 
+    /// A local port with nothing listening on it.
+    fn closed_port() -> u16 {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind a free port");
+        let port = listener.local_addr().expect("local address").port();
+        drop(listener);
+        port
+    }
+
+    /// An unreachable node must show up as an error on the stream. An empty
+    /// stream would read as "no matches".
     #[tokio::test]
-    async fn test_find_stub() {
+    async fn test_find_unreachable_node_yields_error() {
         let scu = DimseScu::new(DimseConfig::default());
-        let node = RemoteNode::new("TEST_AET", "localhost", 11112);
+        let node = RemoteNode::new("TEST_AET", "127.0.0.1", closed_port());
         let query = FindQuery::patient(Some("12345".to_string()));
 
         let mut stream = scu.find(&node, query).await.unwrap();
 
-        // The stub implementation should return an empty stream
-        let first_result = stream.next().await;
-        assert!(first_result.is_none());
+        match stream.next().await {
+            Some(Err(_)) => {}
+            Some(Ok(_)) => panic!("expected an error, got a dataset"),
+            None => panic!("expected an error, got an empty stream"),
+        }
+        assert!(
+            stream.next().await.is_none(),
+            "the error must end the stream"
+        );
+    }
+
+    #[tokio::test]
+    async fn test_get_unreachable_node_yields_error() {
+        let scu = DimseScu::new(DimseConfig::default());
+        let node = RemoteNode::new("TEST_AET", "127.0.0.1", closed_port());
+        let query = GetQuery::new(crate::types::QueryLevel::Study)
+            .with_parameter("0020000D".to_string(), "1.2.3".to_string());
+
+        let mut stream = scu.get_request(&node, query, None).await.unwrap();
+
+        assert!(
+            matches!(stream.next().await, Some(Err(_))),
+            "expected an error on the stream"
+        );
+    }
+
+    /// Covers both a missing movescu binary and a movescu run that cannot
+    /// connect. Either way the caller must see an error.
+    #[tokio::test]
+    async fn test_move_unreachable_node_yields_error() {
+        let storage_dir = std::env::temp_dir().join(format!("dimse-move-{}", uuid::Uuid::new_v4()));
+        let scu = DimseScu::new(DimseConfig {
+            storage_dir: storage_dir.clone(),
+            incoming_store_port: closed_port(),
+            ..Default::default()
+        });
+        let node = RemoteNode::new("TEST_AET", "127.0.0.1", closed_port());
+        let query = MoveQuery::new(crate::types::QueryLevel::Study, "TEST_DEST")
+            .with_parameter("0020000D".to_string(), "1.2.3".to_string());
+
+        let mut stream = scu.move_request(&node, query, None).await.unwrap();
+        let first = stream.next().await;
+        let _ = std::fs::remove_dir_all(&storage_dir);
+
+        assert!(
+            matches!(first, Some(Err(_))),
+            "expected an error on the stream"
+        );
     }
 
     #[tokio::test]

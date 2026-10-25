@@ -508,7 +508,16 @@ impl DicomScuBackend {
                                     }
                                 }
                                 Err(e) => {
-                                    warn!("Error in dataset stream: {}", e);
+                                    // The SCU ends the stream after an error, so the
+                                    // matches so far are incomplete. A partial list must
+                                    // not be reported as a complete answer.
+                                    warn!("C-FIND stream error: {}", e);
+                                    envelope.normalized_data = Some(serde_json::json!({
+                                        "operation": "find",
+                                        "success": false,
+                                        "error": e.to_string()
+                                    }));
+                                    return Ok(envelope.clone());
                                 }
                             }
                         }
@@ -587,10 +596,21 @@ impl DicomScuBackend {
                         find_q = find_q.with_parameter("0020000D".to_string(), uid.clone());
                         if let Ok(mut stream) = scu.find(&remote_node, find_q).await {
                             use futures_util::StreamExt;
-                            let mut any = false;
-                            if let Some(_first) = stream.next().await {
-                                any = true;
-                            }
+                            let any = match stream.next().await {
+                                Some(Ok(_)) => true,
+                                Some(Err(e)) => {
+                                    // An unreachable PACS is a failed move, not a
+                                    // found study.
+                                    warn!("C-MOVE preflight C-FIND failed: {}", e);
+                                    envelope.normalized_data = Some(serde_json::json!({
+                                        "operation": "move",
+                                        "success": false,
+                                        "error": e.to_string()
+                                    }));
+                                    return Ok(envelope.clone());
+                                }
+                                None => false,
+                            };
                             if !any {
                                 // Study not found - set error in normalized_data
                                 envelope.normalized_data =
@@ -658,7 +678,19 @@ impl DicomScuBackend {
                         let mut file_count = 0usize;
 
                         while let Some(item) = stream.next().await {
-                            if let Ok(dimse::types::DatasetStream::File { ref path, .. }) = item {
+                            let item = match item {
+                                Ok(item) => item,
+                                Err(e) => {
+                                    warn!("C-MOVE stream error: {}", e);
+                                    envelope.normalized_data = Some(serde_json::json!({
+                                        "operation": "move",
+                                        "success": false,
+                                        "error": e.to_string()
+                                    }));
+                                    return Ok(envelope.clone());
+                                }
+                            };
+                            if let dimse::types::DatasetStream::File { ref path, .. } = item {
                                 // For filesystem backend, files are already in folder_path.
                                 // For non-filesystem, stream and persist via storage backend.
                                 if !is_fs_backend {
@@ -823,13 +855,25 @@ impl DicomScuBackend {
                                         use futures_util::StreamExt;
                                         let mut produced = 0usize;
                                         while let Some(item2) = stream2.next().await {
-                                            if let Ok(dimse::types::DatasetStream::File {
-                                                ref path,
-                                                ..
-                                            }) = item2
-                                            {
-                                                if path.is_file() {
-                                                    produced += 1;
+                                            match item2 {
+                                                Ok(dimse::types::DatasetStream::File {
+                                                    ref path,
+                                                    ..
+                                                }) => {
+                                                    if path.is_file() {
+                                                        produced += 1;
+                                                    }
+                                                }
+                                                Ok(_) => {}
+                                                Err(e) => {
+                                                    warn!("C-MOVE fallback C-GET failed: {}", e);
+                                                    envelope.normalized_data =
+                                                        Some(serde_json::json!({
+                                                            "operation": "move",
+                                                            "success": false,
+                                                            "error": e.to_string()
+                                                        }));
+                                                    return Ok(envelope.clone());
                                                 }
                                             }
                                         }
@@ -1003,7 +1047,16 @@ impl DicomScuBackend {
                                 }
                                 Ok(_) => {}
                                 Err(e) => {
+                                    // A transport or association failure. The SCU ends
+                                    // the stream after it, so any instances so far are
+                                    // incomplete and the retrieve has failed.
                                     tracing::warn!("C-GET stream error: {}", e);
+                                    envelope.normalized_data = Some(serde_json::json!({
+                                        "operation": "get",
+                                        "success": false,
+                                        "error": e.to_string()
+                                    }));
+                                    return Ok(envelope.clone());
                                 }
                             }
                         }
