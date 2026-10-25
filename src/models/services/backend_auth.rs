@@ -5,27 +5,233 @@
 use crate::models::connection::AuthenticationDefinition;
 use base64::{engine::general_purpose, Engine as _};
 use std::collections::HashMap;
+use std::fmt;
 
-/// Return true when the backend options carry an authentication method of their own.
+/// Methods whose credential a backend can send as a request header.
+pub const HEADER_CREDENTIAL_METHODS: &[&str] = &["basic", "bearer", "api_key"];
+
+/// Method that sends no credential.
+pub const NO_CREDENTIAL_METHOD: &str = "none";
+
+/// Method for definitions that hold JWT validation settings. Only middleware
+/// (jwt_auth) can use it; a backend has no way to send it.
+pub const JWT_METHOD: &str = "jwt";
+
+/// Headers that control how a request is framed or delivered, compared in
+/// lowercase. An `api_key` credential sent under one of these names would
+/// corrupt the request. `Proxy-Authorization` is not here: sending a
+/// credential to an authenticating upstream proxy under it is a valid setup.
+const RESERVED_API_KEY_HEADERS: &[&str] = &[
+    "host",
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+];
+
+/// Header used by `api_key` when the definition sets no `header_name`.
+const DEFAULT_API_KEY_HEADER: &str = "X-API-Key";
+
+/// Why an authentication definition cannot produce credential headers.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum CredentialError {
+    /// A required option is absent, not a string, or an empty string.
+    MissingOption {
+        method: String,
+        option: &'static str,
+    },
+    /// `api_key` names a `header_name` that is not a valid HTTP header name.
+    InvalidHeaderName { header_name: String },
+    /// `api_key` names a header the upstream filter controls, such as
+    /// `Host` or `Content-Length`. Sending a credential there would corrupt
+    /// the request framing.
+    ReservedHeaderName { header_name: String },
+    /// An option's value cannot go into an HTTP header, for example a token
+    /// read from a file with a trailing newline. The value is never stored,
+    /// so it cannot reach an error message or a log.
+    InvalidOptionValue {
+        method: String,
+        option: &'static str,
+        reason: &'static str,
+    },
+    /// The method is not one a backend can send.
+    UnsupportedMethod { method: String },
+}
+
+impl fmt::Display for CredentialError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            CredentialError::MissingOption { method, option } => write!(
+                f,
+                "method '{}' requires a non-empty '{}' option",
+                method.escape_default(),
+                option
+            ),
+            CredentialError::InvalidHeaderName { header_name } => write!(
+                f,
+                "'header_name' value '{}' is not a valid HTTP header name",
+                header_name.escape_default()
+            ),
+            CredentialError::ReservedHeaderName { header_name } => write!(
+                f,
+                "'header_name' value '{}' is reserved for request framing and cannot carry a credential",
+                header_name.escape_default()
+            ),
+            CredentialError::InvalidOptionValue {
+                method,
+                option,
+                reason,
+            } => write!(
+                f,
+                "method '{}' option '{}' {}",
+                method.escape_default(),
+                option,
+                reason
+            ),
+            CredentialError::UnsupportedMethod { method } => write!(
+                f,
+                "method '{}' cannot be sent by a backend. Use one of: {}, {}",
+                method.escape_default(),
+                HEADER_CREDENTIAL_METHODS.join(", "),
+                NO_CREDENTIAL_METHOD
+            ),
+        }
+    }
+}
+
+/// Build the credential headers a definition sends upstream.
 ///
-/// This mirrors what [`apply_backend_authentication`] reads: an
-/// `authentication_def` that parses and names a method other than `none` or
-/// an empty string. The upstream header filter uses it so the target's
-/// credential wins over one the client sent.
+/// This is the single rule set for backend credentials. Config load calls it
+/// to reject a definition that could not send a credential, and request
+/// handling calls it to build the headers, so the two cannot disagree.
+///
+/// Returns an empty list for `none`. Returns an error for a missing or empty
+/// required option, a value that cannot go into a header, an invalid or
+/// reserved `api_key` header name, or a method a backend cannot send. Never
+/// logs, so it is safe to call on every request.
+pub fn credential_headers(
+    auth_def: &AuthenticationDefinition,
+) -> Result<Vec<(String, String)>, CredentialError> {
+    match auth_def.method.as_str() {
+        "basic" => {
+            let username = required_option(auth_def, "username")?;
+            let password = required_option(auth_def, "password")?;
+            // RFC 7617: the user-id cannot contain a colon, because the
+            // server splits user-id and password at the first one.
+            if username.contains(':') {
+                return Err(CredentialError::InvalidOptionValue {
+                    method: auth_def.method.clone(),
+                    option: "username",
+                    reason: "must not contain ':'",
+                });
+            }
+            let encoded =
+                general_purpose::STANDARD.encode(format!("{}:{}", username, password).as_bytes());
+            Ok(vec![(
+                "Authorization".to_string(),
+                format!("Basic {}", encoded),
+            )])
+        }
+        "bearer" => {
+            let token = header_safe_option(auth_def, "token")?;
+            Ok(vec![(
+                "Authorization".to_string(),
+                format!("Bearer {}", token),
+            )])
+        }
+        "api_key" => {
+            let api_key = header_safe_option(auth_def, "api_key")?;
+            let header_name = match auth_def.options.get("header_name") {
+                None => DEFAULT_API_KEY_HEADER.to_string(),
+                Some(value) => {
+                    let name = value.as_str().unwrap_or_default();
+                    if http::HeaderName::from_bytes(name.as_bytes()).is_err() {
+                        return Err(CredentialError::InvalidHeaderName {
+                            header_name: value
+                                .as_str()
+                                .map(str::to_string)
+                                .unwrap_or_else(|| value.to_string()),
+                        });
+                    }
+                    if RESERVED_API_KEY_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
+                        return Err(CredentialError::ReservedHeaderName {
+                            header_name: name.to_string(),
+                        });
+                    }
+                    name.to_string()
+                }
+            };
+            Ok(vec![(header_name, api_key.to_string())])
+        }
+        NO_CREDENTIAL_METHOD => Ok(Vec::new()),
+        other => Err(CredentialError::UnsupportedMethod {
+            method: other.to_string(),
+        }),
+    }
+}
+
+/// Read a string option that must be present and not blank.
+///
+/// A whitespace-only value counts as missing. It usually means an unset
+/// environment variable next to a stray space, such as `"$TOKEN "`.
+fn required_option<'a>(
+    auth_def: &'a AuthenticationDefinition,
+    option: &'static str,
+) -> Result<&'a str, CredentialError> {
+    auth_def
+        .options
+        .get(option)
+        .and_then(|value| value.as_str())
+        .filter(|value| !value.trim().is_empty())
+        .ok_or_else(|| CredentialError::MissingOption {
+            method: auth_def.method.clone(),
+            option,
+        })
+}
+
+/// Read a required option that is sent as a header value as-is.
+///
+/// Rejects control characters such as a trailing newline. Load accepting
+/// such a value would make every request fail at send time with an error
+/// that does not name the cause.
+fn header_safe_option<'a>(
+    auth_def: &'a AuthenticationDefinition,
+    option: &'static str,
+) -> Result<&'a str, CredentialError> {
+    let value = required_option(auth_def, option)?;
+    if http::HeaderValue::from_str(value).is_err() || value.chars().any(char::is_control) {
+        return Err(CredentialError::InvalidOptionValue {
+            method: auth_def.method.clone(),
+            option,
+            reason: "contains characters that are not allowed in an HTTP header value, such as a newline",
+        });
+    }
+    Ok(value)
+}
+
+/// Return true when the backend options carry a credential Harmony will send.
+///
+/// The upstream header filter uses it so the target's credential wins over
+/// one the client sent. It uses [`credential_headers`], so a definition that
+/// builds no header never causes the client's credential to be dropped.
 pub fn has_backend_authentication(options: &HashMap<String, serde_json::Value>) -> bool {
     options
         .get("authentication_def")
         .and_then(|value| serde_json::from_value::<AuthenticationDefinition>(value.clone()).ok())
-        .is_some_and(|auth_def| !matches!(auth_def.method.as_str(), "none" | ""))
+        .and_then(|auth_def| credential_headers(&auth_def).ok())
+        .is_some_and(|headers| !headers.is_empty())
 }
 
 /// Build the credential headers a backend's target authentication adds to a request.
 ///
-/// Supports the following authentication methods:
-/// - `basic`: Base64-encoded username:password in Authorization header
-/// - `bearer`: Bearer token in Authorization header
-/// - `api_key`: Custom header (default X-API-Key) with API key value
-/// - `none` or empty: No authentication
+/// See [`credential_headers`] for the supported methods and rules. Config load
+/// rejects definitions that cannot build a credential, so the error branches
+/// here mean a definition bypassed load-time checks. They log at `error`
+/// because the request then goes upstream without the credential.
 ///
 /// Transports that do not use reqwest (HTTP/3) call this directly. The reqwest
 /// path goes through [`apply_backend_authentication`], so both read the same rules.
@@ -41,69 +247,44 @@ pub fn backend_authentication_headers(
     options: &HashMap<String, serde_json::Value>,
     service_name: &str,
 ) -> Vec<(String, String)> {
-    let mut headers = Vec::new();
     let Some(auth_def_json) = options.get("authentication_def") else {
-        return headers;
+        return Vec::new();
     };
-    let Ok(auth_def) = serde_json::from_value::<AuthenticationDefinition>(auth_def_json.clone())
-    else {
-        return headers;
+    let auth_def = match serde_json::from_value::<AuthenticationDefinition>(auth_def_json.clone()) {
+        Ok(auth_def) => auth_def,
+        Err(e) => {
+            tracing::error!(
+                "{} backend: authentication definition could not be read, sending no credential: {}",
+                service_name,
+                e
+            );
+            return Vec::new();
+        }
     };
 
-    match auth_def.method.as_str() {
-        "basic" => {
-            // Basic Auth: username:password in base64
-            if let (Some(username), Some(password)) = (
-                auth_def.options.get("username").and_then(|v| v.as_str()),
-                auth_def.options.get("password").and_then(|v| v.as_str()),
-            ) {
-                let credentials = format!("{}:{}", username, password);
-                let encoded = general_purpose::STANDARD.encode(credentials.as_bytes());
-                headers.push(("Authorization".to_string(), format!("Basic {}", encoded)));
-                tracing::debug!(
-                    "Applied Basic authentication for {} backend request",
-                    service_name
-                );
-            }
-        }
-        "bearer" => {
-            if let Some(token) = auth_def.options.get("token").and_then(|v| v.as_str()) {
-                headers.push(("Authorization".to_string(), format!("Bearer {}", token)));
-                tracing::debug!(
-                    "Applied Bearer authentication for {} backend request",
-                    service_name
-                );
-            }
-        }
-        "api_key" => {
-            // API Key in custom header
-            let header_name = auth_def
-                .options
-                .get("header_name")
-                .and_then(|v| v.as_str())
-                .unwrap_or("X-API-Key");
-            if let Some(api_key) = auth_def.options.get("api_key").and_then(|v| v.as_str()) {
-                headers.push((header_name.to_string(), api_key.to_string()));
-                tracing::debug!(
-                    "Applied API Key authentication ({}) for {} backend request",
-                    header_name,
-                    service_name
-                );
-            }
-        }
-        "none" | "" => {
+    match credential_headers(&auth_def) {
+        Ok(headers) if headers.is_empty() => {
             tracing::debug!("No authentication configured for {} backend", service_name);
+            headers
         }
-        other => {
-            tracing::warn!(
-                "Unsupported authentication method for {} backend: {}",
-                service_name,
-                other
+        Ok(headers) => {
+            tracing::debug!(
+                "Applied {} authentication for {} backend request",
+                auth_def.method,
+                service_name
             );
+            headers
+        }
+        Err(e) => {
+            tracing::error!(
+                "{} backend: authentication '{}' is unusable, sending no credential: {}",
+                service_name,
+                auth_def.id.escape_default(),
+                e
+            );
+            Vec::new()
         }
     }
-
-    headers
 }
 
 /// Apply the target's authentication headers to a reqwest RequestBuilder.
@@ -222,5 +403,175 @@ mod tests {
             Some("Bearer target")
         );
         assert_eq!(headers.get("x-keep").map(String::as_str), Some("1"));
+    }
+
+    fn definition(method: &str, auth_options: serde_json::Value) -> AuthenticationDefinition {
+        serde_json::from_value(
+            json!({ "id": "test-auth", "method": method, "options": auth_options }),
+        )
+        .expect("valid definition")
+    }
+
+    #[test]
+    fn credential_headers_reports_each_missing_or_empty_option() {
+        let cases = [
+            ("bearer", json!({}), "token"),
+            ("bearer", json!({ "token": "" }), "token"),
+            ("bearer", json!({ "token": 5 }), "token"),
+            ("bearer", json!({ "token": "  " }), "token"),
+            ("basic", json!({ "password": "pw" }), "username"),
+            ("basic", json!({ "username": "svc" }), "password"),
+            (
+                "basic",
+                json!({ "username": "svc", "password": "" }),
+                "password",
+            ),
+            ("api_key", json!({ "header_name": "X-Token" }), "api_key"),
+        ];
+        for (method, auth_options, option) in cases {
+            assert_eq!(
+                credential_headers(&definition(method, auth_options.clone())),
+                Err(CredentialError::MissingOption {
+                    method: method.to_string(),
+                    option
+                }),
+                "{} with {}",
+                method,
+                auth_options
+            );
+        }
+    }
+
+    #[test]
+    fn credential_headers_rejects_invalid_api_key_header_name() {
+        for header_name in [json!("X Token"), json!(""), json!("X-Token\n"), json!(7)] {
+            let result = credential_headers(&definition(
+                "api_key",
+                json!({ "api_key": "k", "header_name": header_name }),
+            ));
+            assert!(
+                matches!(result, Err(CredentialError::InvalidHeaderName { .. })),
+                "{:?}",
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn credential_headers_rejects_methods_a_backend_cannot_send() {
+        for method in ["jwt", "digest", ""] {
+            assert_eq!(
+                credential_headers(&definition(method, json!({}))),
+                Err(CredentialError::UnsupportedMethod {
+                    method: method.to_string()
+                })
+            );
+        }
+        assert_eq!(
+            credential_headers(&definition("none", json!({}))),
+            Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn credential_error_escapes_control_characters() {
+        let message = CredentialError::UnsupportedMethod {
+            method: "x\nERROR: forged \u{1b}[31m".to_string(),
+        }
+        .to_string();
+        assert!(!message.chars().any(char::is_control), "{:?}", message);
+    }
+
+    #[test]
+    fn has_backend_authentication_requires_a_buildable_credential() {
+        assert!(has_backend_authentication(&options_with(
+            "bearer",
+            json!({ "token": "t" })
+        )));
+        assert!(!has_backend_authentication(&options_with(
+            "bearer",
+            json!({})
+        )));
+        assert!(!has_backend_authentication(&options_with("jwt", json!({}))));
+        assert!(!has_backend_authentication(&options_with(
+            "none",
+            json!({})
+        )));
+        assert!(!has_backend_authentication(&HashMap::new()));
+    }
+
+    #[test]
+    fn credential_headers_rejects_values_that_cannot_be_header_values() {
+        let cases = [
+            ("bearer", json!({ "token": "abc\n" }), "token"),
+            ("bearer", json!({ "token": "a\tb" }), "token"),
+            (
+                "api_key",
+                json!({ "api_key": "k\r\nX-Injected: 1" }),
+                "api_key",
+            ),
+            (
+                "basic",
+                json!({ "username": "a:b", "password": "pw" }),
+                "username",
+            ),
+        ];
+        for (method, auth_options, option) in cases {
+            let result = credential_headers(&definition(method, auth_options.clone()));
+            match result {
+                Err(CredentialError::InvalidOptionValue {
+                    option: reported, ..
+                }) => assert_eq!(reported, option, "{}", auth_options),
+                other => panic!("{} with {}: {:?}", method, auth_options, other),
+            }
+        }
+    }
+
+    #[test]
+    fn invalid_value_error_never_contains_the_value() {
+        let error = credential_headers(&definition("bearer", json!({ "token": "s3cret\n" })))
+            .expect_err("token has a newline");
+        assert!(!error.to_string().contains("s3cret"), "{}", error);
+    }
+
+    #[test]
+    fn credential_headers_rejects_reserved_api_key_header_names() {
+        for header_name in [
+            "Host",
+            "content-length",
+            "Transfer-Encoding",
+            "Connection",
+            "Keep-Alive",
+            "TE",
+            "Trailer",
+            "Upgrade",
+            "Proxy-Connection",
+        ] {
+            let result = credential_headers(&definition(
+                "api_key",
+                json!({ "api_key": "k", "header_name": header_name }),
+            ));
+            assert!(
+                matches!(result, Err(CredentialError::ReservedHeaderName { .. })),
+                "{}: {:?}",
+                header_name,
+                result
+            );
+        }
+    }
+
+    #[test]
+    fn api_key_may_be_sent_as_proxy_authorization() {
+        let result = credential_headers(&definition(
+            "api_key",
+            json!({ "api_key": "Basic cHJveHk6cHc=", "header_name": "Proxy-Authorization" }),
+        ));
+        assert_eq!(
+            result,
+            Ok(vec![(
+                "Proxy-Authorization".to_string(),
+                "Basic cHJveHk6cHc=".to_string()
+            )])
+        );
     }
 }
