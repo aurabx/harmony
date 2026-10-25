@@ -213,7 +213,7 @@ impl ServiceHandler<Value> for DicomScuBackend {
         envelope = self
             .handle_backend_request(&mut envelope, options)
             .await
-            .expect("DICOM response failed");
+            .map_err(|e| Error::from(format!("dicom_scu backend request failed: {}", e)))?;
 
         // Detect error conditions and set appropriate HTTP status
         let status = if let Some(ref normalized) = envelope.normalized_data {
@@ -1709,6 +1709,29 @@ mod tests {
             .expect_err("dimse_op metadata must be rejected");
 
         let msg = format!("{:?}", err);
+        assert!(msg.contains("dicom_scu: target_details.metadata.dimse_op"), "{}", msg);
+    }
+
+    #[tokio::test]
+    async fn test_backend_outgoing_request_returns_error_when_handler_fails() {
+        // A failing handle_backend_request must surface as an Err, not a panic.
+        let backend = DicomScuBackend {
+            local_aet: None,
+            aet: Some("REMOTE".to_string()),
+            host: Some("127.0.0.1".to_string()),
+            port: Some(9),
+            use_tls: None,
+        };
+        let mut env = make_envelope("/find");
+        env.set_target_metadata("dimse_op", "find");
+
+        let err = backend
+            .backend_outgoing_request(env, &opts())
+            .await
+            .expect_err("a handler failure must be returned as an error");
+
+        let msg = err.to_string();
+        assert!(msg.starts_with("dicom_scu backend request failed: "), "{}", msg);
         assert!(msg.contains("dicom_scu: target_details.metadata.dimse_op"), "{}", msg);
     }
 
