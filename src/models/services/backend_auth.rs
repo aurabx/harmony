@@ -3,7 +3,6 @@
 //! This module provides common authentication functionality for HTTP and FHIR backends.
 
 use crate::models::connection::AuthenticationDefinition;
-use crate::models::services::upstream_headers::ALWAYS_STRIPPED;
 use base64::{engine::general_purpose, Engine as _};
 use std::collections::HashMap;
 use std::fmt;
@@ -17,6 +16,22 @@ pub const NO_CREDENTIAL_METHOD: &str = "none";
 /// Method for definitions that hold JWT validation settings. Only middleware
 /// (jwt_auth) can use it; a backend has no way to send it.
 pub const JWT_METHOD: &str = "jwt";
+
+/// Headers that control how a request is framed or delivered, compared in
+/// lowercase. An `api_key` credential sent under one of these names would
+/// corrupt the request. `Proxy-Authorization` is not here: sending a
+/// credential to an authenticating upstream proxy under it is a valid setup.
+const RESERVED_API_KEY_HEADERS: &[&str] = &[
+    "host",
+    "connection",
+    "keep-alive",
+    "proxy-connection",
+    "te",
+    "trailer",
+    "transfer-encoding",
+    "upgrade",
+    "content-length",
+];
 
 /// Header used by `api_key` when the definition sets no `header_name`.
 const DEFAULT_API_KEY_HEADER: &str = "X-API-Key";
@@ -142,7 +157,7 @@ pub fn credential_headers(
                                 .unwrap_or_else(|| value.to_string()),
                         });
                     }
-                    if ALWAYS_STRIPPED.contains(&name.to_ascii_lowercase().as_str()) {
+                    if RESERVED_API_KEY_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
                         return Err(CredentialError::ReservedHeaderName {
                             header_name: name.to_string(),
                         });
@@ -521,7 +536,17 @@ mod tests {
 
     #[test]
     fn credential_headers_rejects_reserved_api_key_header_names() {
-        for header_name in ["Host", "content-length", "Transfer-Encoding", "Connection"] {
+        for header_name in [
+            "Host",
+            "content-length",
+            "Transfer-Encoding",
+            "Connection",
+            "Keep-Alive",
+            "TE",
+            "Trailer",
+            "Upgrade",
+            "Proxy-Connection",
+        ] {
             let result = credential_headers(&definition(
                 "api_key",
                 json!({ "api_key": "k", "header_name": header_name }),
@@ -533,5 +558,20 @@ mod tests {
                 result
             );
         }
+    }
+
+    #[test]
+    fn api_key_may_be_sent_as_proxy_authorization() {
+        let result = credential_headers(&definition(
+            "api_key",
+            json!({ "api_key": "Basic cHJveHk6cHc=", "header_name": "Proxy-Authorization" }),
+        ));
+        assert_eq!(
+            result,
+            Ok(vec![(
+                "Proxy-Authorization".to_string(),
+                "Basic cHJveHk6cHc=".to_string()
+            )])
+        );
     }
 }
