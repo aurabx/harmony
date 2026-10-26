@@ -40,7 +40,34 @@ fn closed_port() -> u16 {
     port
 }
 
-fn failing_backend_config(pacs_port: u16) -> Config {
+/// The `pacs` backend: `dicom_scu` pointing at `pacs_port`.
+fn dicom_scu_backend(pacs_port: u16) -> String {
+    format!(
+        r#"
+[backends.pacs]
+service = "dicom_scu"
+[backends.pacs.options]
+aet = "UNREACHABLE_PACS"
+host = "127.0.0.1"
+port = {pacs_port}
+local_aet = "BRIDGE_SCU"
+"#
+    )
+}
+
+/// The `pacs` backend: `http` sending to `base_url`.
+fn http_backend(base_url: &str) -> String {
+    format!(
+        r#"
+[backends.pacs]
+service = "http"
+[backends.pacs.options]
+base_url = "{base_url}"
+"#
+    )
+}
+
+fn failing_backend_config(backend: &str) -> Config {
     let toml = format!(
         r#"
 [proxy]
@@ -70,14 +97,10 @@ enable_find = true
 enable_get = true
 enable_move = true
 
-[backends.pacs]
-service = "dicom_scu"
-[backends.pacs.options]
-aet = "UNREACHABLE_PACS"
-host = "127.0.0.1"
-port = {pacs_port}
-local_aet = "BRIDGE_SCU"
+{backend}
 
+[services.http]
+module = ""
 [services.dicom_scp]
 module = ""
 [services.dicom_scu]
@@ -266,7 +289,9 @@ async fn c_move_final_status(port: u16) -> u16 {
 #[tokio::test(flavor = "multi_thread")]
 #[serial_test::serial]
 async fn failed_backend_gives_the_dimse_client_a_failure_status() {
-    harmony::globals::set_config(Arc::new(failing_backend_config(closed_port())));
+    harmony::globals::set_config(Arc::new(failing_backend_config(&dicom_scu_backend(
+        closed_port(),
+    ))));
     let shutdown = CancellationToken::new();
     let port = start_scp(&shutdown).await;
 
@@ -306,6 +331,68 @@ async fn failed_backend_gives_the_dimse_client_a_failure_status() {
         "C-MOVE final status was 0x{:04X}",
         status
     );
+
+    shutdown.cancel();
+}
+
+/// Serve `body` with HTTP 200 for every request, the way a receiving Harmony
+/// reports a DIMSE failure from its own PACS. Returns the base URL.
+async fn serve_200(body: &'static str, shutdown: &CancellationToken) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+        .await
+        .expect("bind a free port");
+    let port = listener.local_addr().expect("local address").port();
+    let app = axum::Router::new()
+        .fallback(move || async move { ([("content-type", "application/json")], body) });
+    let shutdown = shutdown.clone();
+    tokio::spawn(async move {
+        axum::serve(listener, app)
+            .with_graceful_shutdown(async move { shutdown.cancelled().await })
+            .await
+            .expect("serve the stub backend");
+    });
+    format!("http://127.0.0.1:{port}")
+}
+
+/// The ticket's symptom: a backend answers HTTP 200 and reports the failure
+/// only in its body. The unwrapper reads that body as zero matches, so the
+/// client used to get Success.
+#[tokio::test(flavor = "multi_thread")]
+#[serial_test::serial]
+async fn failure_reported_in_a_200_body_gives_the_dimse_client_a_failure_status() {
+    let shutdown = CancellationToken::new();
+    let base_url = serve_200(
+        r#"{"operation":"find","success":false,"error":"C-FIND failed"}"#,
+        &shutdown,
+    )
+    .await;
+    harmony::globals::set_config(Arc::new(failing_backend_config(&http_backend(&base_url))));
+    let port = start_scp(&shutdown).await;
+
+    let (matches, error) = c_find_outcome(port).await;
+    let error = error.unwrap_or_else(|| {
+        panic!(
+            "C-FIND against a failed backend reported success with {} matches",
+            matches
+        )
+    });
+    assert_eq!(
+        status_in(&error),
+        Some(PROCESSING_FAILURE),
+        "C-FIND error: {}",
+        error
+    );
+
+    let (_, error) = c_get_outcome(port).await;
+    let error = error.expect("C-GET against a failed backend must fail");
+    assert_eq!(
+        status_in(&error),
+        Some(PROCESSING_FAILURE),
+        "C-GET error: {}",
+        error
+    );
+
+    assert_eq!(c_move_final_status(port).await, PROCESSING_FAILURE);
 
     shutdown.cancel();
 }

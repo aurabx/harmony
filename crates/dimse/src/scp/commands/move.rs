@@ -193,8 +193,14 @@ pub async fn handle_c_move(
         // Nothing reached the destination because the retrieval failed, so
         // the retrieval's own status is the answer.
         Some(code) if counts.completed == 0 && counts.warning == 0 => code,
-        _ if counts.failed > 0 => 0xB000, // Warning (one or more failures)
-        _ => 0x0000,                      // Success
+        _ if counts.failed > 0 => {
+            if counts.completed > 0 || counts.warning > 0 {
+                0xB000 // One or more failures (Warning)
+            } else {
+                0xA702 // Unable to perform sub-operations (Refused)
+            }
+        }
+        _ => 0x0000, // Success
     };
 
     info!(

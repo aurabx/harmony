@@ -119,16 +119,22 @@ When the pipeline fails, the SCP answers with a failure status. A failure never 
 | Cause | C-FIND | C-GET and C-MOVE |
 |-------|--------|------------------|
 | Backend answers HTTP 500, for example a `dicom_scu` backend that cannot reach its PACS | `0x0110` Processing failure | `0x0110` |
-| Backend answers HTTP 502 to 504, or the bridge middleware reports an upstream failure | `0xA700` Refused: Out of resources | `0xA701` Refused: Out of resources, unable to calculate matches |
+| Backend answers HTTP 408 or 502 to 504, a timeout, or the bridge middleware reports an upstream failure | `0xA700` Refused: Out of resources | `0xA701` Refused: Out of resources, unable to calculate matches |
 | Backend answers HTTP 429, or a `policies` rate limit refuses the request | `0xA700` | `0xA702` Refused: Out of resources, unable to perform sub-operations |
 | Backend answers HTTP 401 or 403, or a `policies` rule denies the client | `0x0124` Refused: Not authorized | `0x0124` |
 | Backend answers HTTP 2xx, but the body has `"success": false` at the top level | `0x0110` | `0x0110` |
-| Nothing matched (HTTP 404 or 410, or a "not found" pipeline error) | `0x0000` Success, no matches | `0x0000` Success, zero sub-operations |
+| Middleware raises `DicomObjectNotFound` | `0x0000` Success, no matches | `0x0000` Success, zero sub-operations |
+| Backend answers HTTP 404 or 410 to the whole request | `0xC000` (a query with no matches answers 2xx, so a 404 is a routing error or a denial) | `0x0000` Success, zero sub-operations |
+| A streamed result fails or answers 404 after it started | Failure. Matches already sent stay sent, and the final status is the failure | Failure for that sub-operation |
 | Any other error with no status, such as a missing pipeline | `0xC000` | `0xC000` |
 
-`src/adapters/dimse/status_mapper.rs` maps HTTP statuses and pipeline errors to DIMSE statuses. The DIMSE adapter then adjusts the result for the operation. PS3.4 defines `0xA701` and `0xA702` only for C-GET and C-MOVE, so a C-FIND gets `0xA700` instead. The mapper gives `0xA801` for "not found". The adapter treats that as an empty result instead, because `0xA801` means "Move Destination unknown" and is defined only for C-MOVE. Any other path that would send `0xA801` gets `0xC000`.
+`src/adapters/dimse/status_mapper.rs` maps HTTP statuses and pipeline errors to DIMSE statuses. The DIMSE adapter then adjusts the result for the operation. PS3.4 defines `0xA701` and `0xA702` only for C-GET and C-MOVE, so a C-FIND gets `0xA700` instead. C-GET and C-MOVE have no `0xA700`, so they get `0xA701` in its place. `0xA801` means "Move Destination unknown" and is defined only for C-MOVE, so a pipeline failure never sends it. It gets `0xC000`.
 
-The SCP sends C-MOVE requests to the pipeline as retrievals, so C-GET and C-MOVE share their codes. A C-MOVE to a destination AE title that is not in the SCP's AE table still gets `0xA801` before the pipeline runs.
+Only typed signals make an empty result: `DicomObjectNotFound`, or an HTTP 404 or 410 on a whole C-GET or C-MOVE response. Error text is never read for this, because it can hold remote status codes, ports and instance counts.
+
+The SCP sends C-MOVE requests to the pipeline as retrievals, so C-GET and C-MOVE share their codes. A C-MOVE to a destination AE title that is not in the SCP's AE table still gets `0xA801` before the pipeline runs. When every sub-operation fails, C-GET and C-MOVE answer `0xA702`. When some succeed and some fail, they answer `0xB000`.
+
+**C-STORE acknowledgement**: the SCP acknowledges a store only when the pipeline's final HTTP status is 2xx, `dicom_status` (when set) is `0x0000` or a warning, and the body does not have `"success": false`. Any other result is a failure, because a sender may delete its copy once a store is acknowledged.
 
 **HTTP→DICOM bridge**: Use an HTTP endpoint with a DICOM backend (SCU) in the same pipeline (see below).
 
