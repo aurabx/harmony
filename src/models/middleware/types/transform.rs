@@ -1,5 +1,6 @@
 use crate::models::envelope::envelope::{RequestEnvelope, ResponseEnvelope};
 use crate::models::middleware::middleware::Middleware;
+use crate::models::services::types::dicom::STUDY_NOT_FOUND_METADATA_KEY;
 use crate::utils::Error;
 use async_trait::async_trait;
 use harmony_transform::{JoltTransformEngine, TransformConfig};
@@ -327,6 +328,17 @@ impl Middleware for JoltTransformMiddleware {
                                 rd_out.get("metadata").and_then(|m| m.as_object())
                             {
                                 for (k, v) in meta_out {
+                                    // Only the dicom_scu backend may set this
+                                    // mark. A spec that copied a remote field
+                                    // into it would turn a failed DIMSE
+                                    // retrieve into an empty Success.
+                                    if k == STUDY_NOT_FOUND_METADATA_KEY {
+                                        tracing::warn!(
+                                            "transform: ignoring reserved response metadata key {}",
+                                            STUDY_NOT_FOUND_METADATA_KEY
+                                        );
+                                        continue;
+                                    }
                                     if let Some(s) = v.as_str() {
                                         envelope
                                             .response_details
@@ -574,6 +586,48 @@ mod tests {
         let right_result = middleware.right(response_envelope).await.unwrap();
         assert_eq!(right_result.normalized_data, Some(input.clone())); // Identity transform
         assert_eq!(right_result.normalized_snapshot, Some(input)); // Snapshot created on right
+    }
+
+    #[tokio::test]
+    async fn test_right_transform_cannot_set_the_study_not_found_mark() {
+        let spec = json!([
+            {
+                "operation": "shift",
+                "spec": { "data": { "*": "data.&" } }
+            },
+            {
+                "operation": "default",
+                "spec": {
+                    "context": {
+                        "response_details": {
+                            "metadata": {
+                                STUDY_NOT_FOUND_METADATA_KEY: "true",
+                                "note": "kept"
+                            }
+                        }
+                    }
+                }
+            }
+        ]);
+        let temp_file = NamedTempFile::new().unwrap();
+        fs::write(&temp_file, serde_json::to_string_pretty(&spec).unwrap()).unwrap();
+        let middleware = JoltTransformMiddleware::new(JoltTransformMiddlewareConfig {
+            spec_path: temp_file.path().to_string_lossy().to_string(),
+            apply: "right".to_string(),
+            fail_on_error: true,
+            debug: false,
+        })
+        .unwrap();
+
+        let response = request_to_response(create_test_envelope(json!({"test": "value"})));
+        let result = middleware.right(response).await.unwrap();
+
+        let metadata = &result.response_details.metadata;
+        assert_eq!(metadata.get("note").map(String::as_str), Some("kept"));
+        assert!(
+            !metadata.contains_key(STUDY_NOT_FOUND_METADATA_KEY),
+            "{metadata:?}"
+        );
     }
 
     #[tokio::test]
