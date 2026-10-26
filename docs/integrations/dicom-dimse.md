@@ -2,7 +2,7 @@
 title: DIMSE Integration
 description: How to use DICOM DIMSE SCU and SCP services, including C-ECHO, C-FIND, C-MOVE, and C-GET.
 status: active
-updated: 2026-09-16
+updated: 2026-10-26
 type: Integration
 ---
 
@@ -111,6 +111,24 @@ local_aet = "HARMONY_SCP"
 2. Inbound DIMSE requests (C-FIND, C-STORE, etc.) are converted to `RequestEnvelope`
 3. **PipelineExecutor** processes the envelope through middleware and backends
 4. Response is converted back to DIMSE and sent to the calling AET
+
+**Failure statuses (C-FIND, C-GET, C-MOVE)**:
+
+When the pipeline fails, the SCP answers with a failure status. A failure never reaches the client as Success with zero matches. A request that matched nothing is not a failure: PS3.4 answers it with Success and zero results or sub-operations, so the client can tell an empty result from an outage. The response carries only the status code, never error text. The full error goes to the server log at error level, because it often names hosts, ports and AE titles.
+
+| Cause | C-FIND | C-GET and C-MOVE |
+|-------|--------|------------------|
+| Backend answers HTTP 500, for example a `dicom_scu` backend that cannot reach its PACS | `0x0110` Processing failure | `0x0110` |
+| Backend answers HTTP 502 to 504, or the bridge middleware reports an upstream failure | `0xA700` Refused: Out of resources | `0xA701` Refused: Out of resources, unable to calculate matches |
+| Backend answers HTTP 429, or a `policies` rate limit refuses the request | `0xA700` | `0xA702` Refused: Out of resources, unable to perform sub-operations |
+| Backend answers HTTP 401 or 403, or a `policies` rule denies the client | `0x0124` Refused: Not authorized | `0x0124` |
+| Backend answers HTTP 2xx, but the body has `"success": false` at the top level | `0x0110` | `0x0110` |
+| Nothing matched (HTTP 404 or 410, or a "not found" pipeline error) | `0x0000` Success, no matches | `0x0000` Success, zero sub-operations |
+| Any other error with no status, such as a missing pipeline | `0xC000` | `0xC000` |
+
+`src/adapters/dimse/status_mapper.rs` maps HTTP statuses and pipeline errors to DIMSE statuses. The DIMSE adapter then adjusts the result for the operation. PS3.4 defines `0xA701` and `0xA702` only for C-GET and C-MOVE, so a C-FIND gets `0xA700` instead. The mapper gives `0xA801` for "not found". The adapter treats that as an empty result instead, because `0xA801` means "Move Destination unknown" and is defined only for C-MOVE. Any other path that would send `0xA801` gets `0xC000`.
+
+The SCP sends C-MOVE requests to the pipeline as retrievals, so C-GET and C-MOVE share their codes. A C-MOVE to a destination AE title that is not in the SCP's AE table still gets `0xA801` before the pipeline runs.
 
 **HTTP→DICOM bridge**: Use an HTTP endpoint with a DICOM backend (SCU) in the same pipeline (see below).
 

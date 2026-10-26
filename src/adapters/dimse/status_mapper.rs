@@ -36,7 +36,9 @@
 //! }
 //! ```
 
-use crate::models::middleware::{DicomObjectNotFound, UpstreamFailure};
+use crate::models::middleware::{
+    AccessDenied, DicomObjectNotFound, RateLimitExceeded, UpstreamFailure,
+};
 use crate::pipeline::executor::PipelineError;
 use dimse::types::DimseStatus;
 
@@ -81,7 +83,6 @@ pub fn http_status_to_dimse(http_status: u16) -> DimseStatus {
 }
 
 /// Maps PipelineError to DIMSE status codes
-#[allow(dead_code)]
 pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
     match error {
         PipelineError::ServiceError(msg) => {
@@ -103,6 +104,10 @@ pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
                 DimseStatus::Failure(0xA701) // Out of resources: unable to process
             } else if e.downcast_ref::<DicomObjectNotFound>().is_some() {
                 DimseStatus::Failure(0xA801) // No such object instance
+            } else if e.downcast_ref::<AccessDenied>().is_some() {
+                DimseStatus::Failure(0x0124) // Refused: Not authorized
+            } else if e.downcast_ref::<RateLimitExceeded>().is_some() {
+                DimseStatus::Failure(0xA702) // Resource limitation, as HTTP 429
             } else {
                 DimseStatus::Failure(0x0110) // Processing failure
             }
@@ -248,6 +253,27 @@ mod tests {
         assert_eq!(
             pipeline_error_to_dimse(&error),
             DimseStatus::Failure(0xA801)
+        );
+    }
+
+    #[test]
+    fn test_middleware_access_denied_maps_to_0124() {
+        let error = PipelineError::MiddlewareError(Box::new(AccessDenied(
+            "Client IP is not in the IP allowlist".to_string(),
+        )));
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0x0124)
+        );
+    }
+
+    #[test]
+    fn test_middleware_rate_limit_maps_to_a702() {
+        let error =
+            PipelineError::MiddlewareError(Box::new(RateLimitExceeded("per_ip".to_string())));
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0xA702)
         );
     }
 

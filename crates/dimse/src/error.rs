@@ -60,11 +60,11 @@ pub enum DimseError {
     #[error("Operation not supported: {0}")]
     NotSupported(String),
 
-    /// A failure with a known DIMSE status code. It carries no text, because
-    /// an SCP sends the code to its client and the reason belongs in the
-    /// server log only.
-    #[error("DIMSE failure status 0x{0:04X}")]
-    Status(u16),
+    /// A failure with a known DIMSE status code. An SCP sends only `code` to
+    /// its client. `detail` is for the server log: it often names hosts,
+    /// ports and AE titles, so it must never go on the wire.
+    #[error("DIMSE failure status 0x{code:04X}: {detail}")]
+    Status { code: u16, detail: String },
 }
 
 impl DimseError {
@@ -78,9 +78,13 @@ impl DimseError {
         Self::OperationFailed(msg.into())
     }
 
-    /// Create a failure that an SCP answers with `code`.
-    pub fn status(code: u16) -> Self {
-        Self::Status(code)
+    /// Create a failure that an SCP answers with `code`. `detail` is for
+    /// the server log only.
+    pub fn status(code: u16, detail: impl Into<String>) -> Self {
+        Self::Status {
+            code,
+            detail: detail.into(),
+        }
     }
 
     /// The DIMSE status code an SCP should send for this error, when the
@@ -88,7 +92,7 @@ impl DimseError {
     /// back to 0xC000.
     pub fn status_code(&self) -> Option<u16> {
         match self {
-            DimseError::Status(code) => Some(*code),
+            DimseError::Status { code, .. } => Some(*code),
             _ => None,
         }
     }
@@ -173,9 +177,12 @@ mod tests {
 
     #[test]
     fn status_error_carries_its_code() {
-        let error = DimseError::status(0xA701);
+        let error = DimseError::status(0xA701, "PACS unreachable");
         assert_eq!(error.status_code(), Some(0xA701));
-        assert_eq!(error.to_string(), "DIMSE failure status 0xA701");
+        assert_eq!(
+            error.to_string(),
+            "DIMSE failure status 0xA701: PACS unreachable"
+        );
         assert!(!error.is_connection_failure());
     }
 

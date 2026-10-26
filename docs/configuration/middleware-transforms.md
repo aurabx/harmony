@@ -2,7 +2,7 @@
 title: Transform Middleware
 description: Reference for middleware that transforms or converts request and response data.
 status: active
-updated: 2026-10-25
+updated: 2026-10-26
 type: Configuration
 related:
   - configuration/middleware.md
@@ -130,7 +130,7 @@ When the bridge sees such a failure, it stops the request with an upstream failu
 
 - An HTTP client gets `502 Bad Gateway` with an empty body. This includes frame requests.
 - The backend's error text stays in the server log. It often names hosts, ports and AE titles, so the client never sees it.
-- If the bridge runs in a pipeline with a DIMSE endpoint, the DIMSE client gets status `0xC000`. The DIMSE adapter sends this for every pipeline error.
+- If the bridge runs in a pipeline with a DIMSE endpoint, a C-FIND client gets status `0xA700` and a C-GET or C-MOVE client gets `0xA701`. See [DIMSE failure statuses](../integrations/dicom-dimse.md).
 
 Other retrieve outcomes:
 
