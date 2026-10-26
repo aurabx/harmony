@@ -7,6 +7,7 @@ use crate::models::envelope::envelope::{LocalInstanceFile, ResponseEnvelope};
 use crate::models::middleware::types::policies::IpAccessRules;
 use crate::models::middleware::DicomObjectNotFound;
 use crate::models::protocol::{Protocol, ProtocolCtx};
+use crate::models::services::types::dicom::STUDY_NOT_FOUND_METADATA_KEY;
 use crate::pipeline::executor::{PipelineError, PipelineExecutor};
 use async_trait::async_trait;
 use dicom_json_tool as tool;
@@ -55,7 +56,7 @@ const UNABLE_TO_PROCESS: u16 = 0xC000;
 /// own destination check may send it, so a pipeline failure that maps to it
 /// gets 0xC000. The C-GET and C-MOVE tables have no 0xA700, so those get
 /// 0xA701 in its place. A request that matched nothing never gets here (see
-/// `is_no_match_error` and `is_no_match_http`). A status that is not a
+/// `is_no_match_error` and `is_no_match_response`). A status that is not a
 /// failure also becomes 0xC000, because an error must never reach the client
 /// as a success.
 fn failure_status_for_operation(operation: Operation, status: DimseStatus) -> u16 {
@@ -110,15 +111,20 @@ fn is_no_match_error(operation: Operation, error: &PipelineError) -> bool {
         )
 }
 
-/// True when the HTTP status of a whole, unstreamed response says the
-/// request matched nothing.
+/// True when a whole, unstreamed C-GET or C-MOVE response says the request
+/// matched nothing.
 ///
-/// Only C-GET and C-MOVE. The `dicom_scu` backend answers 404 for a retrieve
-/// whose study is not found, and WADO-RS answers 404 for a missing study. A
-/// query that matches nothing answers 2xx with an empty list (`dicom_scu`,
-/// QIDO-RS), so a 404 for a C-FIND is a routing error or a denial.
-fn is_no_match_http(operation: Operation, http_status: u16) -> bool {
-    matches!(operation, Operation::Retrieve | Operation::Move) && matches!(http_status, 404 | 410)
+/// Only the `dicom_scu` backend's typed mark counts (see
+/// `STUDY_NOT_FOUND_METADATA_KEY`). A bare HTTP 404 or 410 is a failure,
+/// because it can also mean a denial (`path_filter` answers 404) or a wrong
+/// route. A query that matches nothing answers 2xx with an empty list.
+fn is_no_match_response(operation: Operation, response: &ResponseEnvelope<Vec<u8>>) -> bool {
+    matches!(operation, Operation::Retrieve | Operation::Move)
+        && response
+            .response_details
+            .metadata
+            .get(STUDY_NOT_FOUND_METADATA_KEY)
+            .is_some_and(|value| value == "true")
 }
 
 /// How the SCP answers a failed pipeline run.
@@ -818,8 +824,8 @@ impl PipelineQueryProvider {
     ///
     /// A failed response becomes an error that carries the DIMSE status for
     /// `operation`. A non-2xx HTTP status is mapped by the status mapper. A
-    /// whole response whose status means "matched nothing" is an empty result
-    /// (see `is_no_match_http`). A `streamed` envelope never is, because
+    /// whole response marked as "matched nothing" is an empty result (see
+    /// `is_no_match_response`). A `streamed` envelope never is, because
     /// earlier envelopes already reached the client. A
     /// 2xx response whose body has `"success": false` gets 0x0110, because
     /// the unwrapper would read that body as zero matches and the client
@@ -832,7 +838,7 @@ impl PipelineQueryProvider {
         let http_status = response.response_details.status;
         if !(200..300).contains(&http_status) {
             let status = status_mapper::http_status_to_dimse(http_status);
-            if !streamed && is_no_match_http(operation, http_status) {
+            if !streamed && is_no_match_response(operation, &response) {
                 tracing::info!(
                     "DIMSE {} pipeline returned HTTP status {}, answering with an empty result",
                     operation,
@@ -2509,22 +2515,74 @@ module = ""
         }
     }
 
+    /// A whole C-MOVE response from the `dicom_scu` backend for a study it
+    /// did not find.
+    fn study_not_found_response() -> ResponseEnvelope<Vec<u8>> {
+        let mut envelope = backend_response_after_round_trip(
+            404,
+            Some("application/json"),
+            br#"{"error":"Study not found"}"#,
+        );
+        envelope
+            .response_details
+            .metadata
+            .insert(STUDY_NOT_FOUND_METADATA_KEY.to_string(), "true".to_string());
+        envelope
+    }
+
     #[tokio::test]
-    async fn response_to_datasets_gives_an_empty_retrieve_result_when_nothing_matched() {
+    async fn response_to_datasets_gives_an_empty_retrieve_result_for_a_study_not_found() {
         // PS3.4: a retrieve that matches nothing is Success with zero
-        // sub-operations. dicom_scu answers 404 for a study it cannot find.
-        let body = br#"{"operation":"move","success":false,"error":"Study not found"}"#;
+        // sub-operations.
+        for operation in [Operation::Retrieve, Operation::Move] {
+            let datasets = PipelineQueryProvider::response_to_datasets(
+                study_not_found_response(),
+                operation,
+                false,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{operation}: {e}"));
+            assert!(datasets.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_fails_on_a_bare_404_or_410() {
+        // A 404 without the mark can be a path_filter denial or a wrong
+        // route, so it is never an empty result.
         for http_status in [404, 410] {
-            for operation in [Operation::Retrieve, Operation::Move] {
+            for operation in [Operation::Query, Operation::Retrieve, Operation::Move] {
                 let envelope =
-                    backend_response_after_round_trip(http_status, Some("application/json"), body);
-                let datasets =
-                    PipelineQueryProvider::response_to_datasets(envelope, operation, false)
-                        .await
-                        .unwrap_or_else(|e| panic!("HTTP {http_status} for {operation}: {e}"));
-                assert!(datasets.is_empty());
+                    backend_response_after_round_trip(http_status, Some("application/json"), b"{}");
+                assert_eq!(
+                    failure_status(envelope, operation).await,
+                    0xC000,
+                    "HTTP {http_status} for {operation}"
+                );
             }
         }
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_fails_on_a_study_not_found_mark_for_a_query_or_a_stream() {
+        let error = PipelineQueryProvider::response_to_datasets(
+            study_not_found_response(),
+            Operation::Query,
+            false,
+        )
+        .await
+        .err()
+        .expect("the mark is only for retrieves");
+        assert_eq!(error.status_code(), Some(0xC000));
+        let error = PipelineQueryProvider::response_to_datasets(
+            study_not_found_response(),
+            Operation::Move,
+            true,
+        )
+        .await
+        .err()
+        .expect("a streamed envelope is never an empty result");
+        assert_eq!(error.status_code(), Some(0xC000));
     }
 
     #[tokio::test]

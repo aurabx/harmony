@@ -124,13 +124,14 @@ When the pipeline fails, the SCP answers with a failure status. A failure never 
 | Backend answers HTTP 401 or 403, or a `policies` rule denies the client | `0x0124` Refused: Not authorized | `0x0124` |
 | Backend answers HTTP 2xx, but the body has `"success": false` at the top level | `0x0110` | `0x0110` |
 | Middleware raises `DicomObjectNotFound` | `0x0000` Success, no matches | `0x0000` Success, zero sub-operations |
-| Backend answers HTTP 404 or 410 to the whole request | `0xC000` (a query with no matches answers 2xx, so a 404 is a routing error or a denial) | `0x0000` Success, zero sub-operations |
+| The `dicom_scu` backend finds no study for a C-MOVE | Not applicable | `0x0000` Success, zero sub-operations |
+| Backend answers HTTP 404 or 410 for any other reason | `0xC000` | `0xC000` |
 | A streamed result fails or answers 404 after it started | Failure. Matches already sent stay sent, and the final status is the failure | Failure for that sub-operation |
 | Any other error with no status, such as a missing pipeline | `0xC000` | `0xC000` |
 
 `src/adapters/dimse/status_mapper.rs` maps HTTP statuses and pipeline errors to DIMSE statuses. The DIMSE adapter then adjusts the result for the operation. PS3.4 defines `0xA701` and `0xA702` only for C-GET and C-MOVE, so a C-FIND gets `0xA700` instead. C-GET and C-MOVE have no `0xA700`, so they get `0xA701` in its place. `0xA801` means "Move Destination unknown" and is defined only for C-MOVE, so a pipeline failure never sends it. It gets `0xC000`.
 
-Only typed signals make an empty result: `DicomObjectNotFound`, or an HTTP 404 or 410 on a whole C-GET or C-MOVE response. Error text is never read for this, because it can hold remote status codes, ports and instance counts.
+Only typed signals make an empty result: `DicomObjectNotFound`, or the `dicom_study_not_found` response metadata the `dicom_scu` backend sets when it finds no study to move. A bare HTTP 404 is a failure, because it can also mean a denial (`path_filter` answers 404) or a wrong `base_url`. A query that matches nothing answers 2xx with an empty list. Error text is never read for this, because it can hold remote status codes, ports and instance counts.
 
 The SCP sends C-MOVE requests to the pipeline as retrievals, so C-GET and C-MOVE share their codes. A C-MOVE to a destination AE title that is not in the SCP's AE table still gets `0xA801` before the pipeline runs. When every sub-operation fails, C-GET and C-MOVE answer `0xA702`. When some succeed and some fail, they answer `0xB000`.
 
