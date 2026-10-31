@@ -269,7 +269,11 @@ async fn pipeline_jmix_builder_returns_jmix_ids_and_manifest() {
     let mut manifest_content = String::new();
     for i in 0..archive.len() {
         let mut file = archive.by_index(i).expect("ZIP entry");
-        if file.name().ends_with("manifest.json") {
+        if file
+            .name()
+            .expect("zip entry name")
+            .ends_with("manifest.json")
+        {
             use std::io::Read;
             file.read_to_string(&mut manifest_content)
                 .expect("Read manifest");
