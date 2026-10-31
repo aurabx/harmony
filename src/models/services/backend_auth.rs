@@ -33,6 +33,9 @@ const RESERVED_API_KEY_HEADERS: &[&str] = &[
     "content-length",
 ];
 
+/// Matches the limit of reqwest's default redirect policy.
+const MAX_REDIRECTS: usize = 10;
+
 /// Header used by `api_key` when the definition sets no `header_name`.
 const DEFAULT_API_KEY_HEADER: &str = "X-API-Key";
 
@@ -226,6 +229,33 @@ pub fn has_backend_authentication(options: &HashMap<String, serde_json::Value>) 
         .is_some_and(|headers| !headers.is_empty())
 }
 
+/// Redirect policy for a reqwest client that sends a request upstream.
+///
+/// On a redirect, reqwest removes `Authorization` when the host or port changes,
+/// but it always keeps an `api_key` header. No client follows a move from https
+/// to http, because that would send the request and any credential in clear
+/// text. When Harmony sends a target credential, a redirect to another origin
+/// is not followed either. The 3xx response then goes back to the caller.
+pub fn upstream_redirect_policy(
+    options: &HashMap<String, serde_json::Value>,
+) -> reqwest::redirect::Policy {
+    let credentialed = has_backend_authentication(options);
+    reqwest::redirect::Policy::custom(move |attempt| {
+        let Some(first) = attempt.previous().first() else {
+            return attempt.stop();
+        };
+        let downgrade = first.scheme() == "https" && attempt.url().scheme() != "https";
+        let other_origin = first.origin() != attempt.url().origin();
+        if downgrade || (credentialed && other_origin) {
+            return attempt.stop();
+        }
+        if attempt.previous().len() > MAX_REDIRECTS {
+            return attempt.stop();
+        }
+        attempt.follow()
+    })
+}
+
 /// Build the credential headers a backend's target authentication adds to a request.
 ///
 /// See [`credential_headers`] for the supported methods and rules. Config load
@@ -233,8 +263,9 @@ pub fn has_backend_authentication(options: &HashMap<String, serde_json::Value>) 
 /// here mean a definition bypassed load-time checks. They log at `error`
 /// because the request then goes upstream without the credential.
 ///
-/// Transports that do not use reqwest (HTTP/3) call this directly. The reqwest
-/// path goes through [`apply_backend_authentication`], so both read the same rules.
+/// Backends that forward client headers go through
+/// [`apply_backend_authentication_to_headers`]. Requests that carry no client
+/// headers go through [`apply_backend_authentication`]. Both read the same rules.
 ///
 /// # Arguments
 /// * `options` - Backend options that may contain `authentication_def`
@@ -289,6 +320,11 @@ pub fn backend_authentication_headers(
 
 /// Apply the target's authentication headers to a reqwest RequestBuilder.
 ///
+/// `RequestBuilder::header` appends, so this suits only a request that carries
+/// no client headers. A backend that forwards client headers must use
+/// [`apply_backend_authentication_to_headers`], or a client could send a second
+/// value for the credential header.
+///
 /// See [`backend_authentication_headers`] for the supported methods.
 pub fn apply_backend_authentication(
     mut request_builder: reqwest::RequestBuilder,
@@ -301,20 +337,31 @@ pub fn apply_backend_authentication(
     request_builder
 }
 
-/// Add the target's credential to an HTTP/3 request's header map.
+/// Add the target's credential to the header map a backend sends upstream.
 ///
 /// A header the client sent under the same name, in any letter case, is
 /// replaced. The map holds names as the client wrote them, so a plain insert
 /// could leave two entries that differ only by case and send both upstream.
+/// A name that differs only by `_` for `-` is replaced too, because CGI-style
+/// upstreams read `X_API_KEY` and `X-API-Key` as one header.
 pub fn apply_backend_authentication_to_headers(
     headers: &mut HashMap<String, String>,
     options: &HashMap<String, serde_json::Value>,
     service_name: &str,
 ) {
     for (name, value) in backend_authentication_headers(options, service_name) {
-        headers.retain(|existing, _| !existing.eq_ignore_ascii_case(&name));
+        headers.retain(|existing, _| !names_same_header(existing, &name));
         headers.insert(name, value);
     }
+}
+
+/// Compare header names, ignoring letter case and treating `_` as `-`.
+fn names_same_header(left: &str, right: &str) -> bool {
+    left.len() == right.len()
+        && left.bytes().zip(right.bytes()).all(|(a, b)| {
+            let canonical = |byte: u8| if byte == b'_' { b'-' } else { byte };
+            canonical(a).eq_ignore_ascii_case(&canonical(b))
+        })
 }
 
 #[cfg(test)]
@@ -403,6 +450,20 @@ mod tests {
             Some("Bearer target")
         );
         assert_eq!(headers.get("x-keep").map(String::as_str), Some("1"));
+    }
+
+    #[test]
+    fn target_credential_replaces_underscore_variant() {
+        let options = options_with("api_key", json!({ "api_key": "target" }));
+        let mut headers = HashMap::new();
+        headers.insert("x_api_key".to_string(), "client".to_string());
+        headers.insert("x-apikey".to_string(), "kept".to_string());
+
+        apply_backend_authentication_to_headers(&mut headers, &options, "TEST");
+
+        assert_eq!(headers.len(), 2);
+        assert_eq!(headers.get("X-API-Key").map(String::as_str), Some("target"));
+        assert_eq!(headers.get("x-apikey").map(String::as_str), Some("kept"));
     }
 
     fn definition(method: &str, auth_options: serde_json::Value) -> AuthenticationDefinition {

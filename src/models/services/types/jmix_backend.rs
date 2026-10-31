@@ -324,6 +324,7 @@ impl JmixBackend {
     ) -> Result<(u16, HashMap<String, String>, Vec<u8>), Error> {
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(30))
+            .redirect(crate::models::services::backend_auth::upstream_redirect_policy(options))
             .build()
             .map_err(|e| Error::from(format!("Failed to create HTTP client: {}", e)))?;
 
@@ -341,20 +342,20 @@ impl JmixBackend {
             }
         };
 
-        // Apply authentication if present in backend options
-        request_builder = crate::models::services::backend_auth::apply_backend_authentication(
-            request_builder,
+        let mut headers = upstream_request_headers(
+            &target_details.headers,
+            &envelope.request_details.headers,
+            InboundAuthorizationPolicy::from_backend_options(options)?,
+            "JMIX",
+        );
+        // RequestBuilder::header appends, so the target's credential must go
+        // into the map, where it replaces a same-named header in any letter case.
+        crate::models::services::backend_auth::apply_backend_authentication_to_headers(
+            &mut headers,
             options,
             "JMIX",
         );
-
-        let auth_policy = InboundAuthorizationPolicy::from_backend_options(options)?;
-        for (key, value) in upstream_request_headers(
-            &target_details.headers,
-            &envelope.request_details.headers,
-            auth_policy,
-            "JMIX",
-        ) {
+        for (key, value) in headers {
             request_builder = request_builder.header(key, value);
         }
 

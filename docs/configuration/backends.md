@@ -86,7 +86,7 @@ HTTP-based backends (`http`, `http3`, `fhir`, `dicomweb`, `jmix_backend`, `http_
 **Always removed**:
 - `Host`. The HTTP client sets it from the backend URL.
 - Hop-by-hop headers (RFC 9110 §7.6.1): `Connection`, `Keep-Alive`, `Proxy-Authenticate`, `Proxy-Authorization`, `Proxy-Connection`, `TE`, `Trailer`, `Transfer-Encoding`, `Upgrade`.
-- Any header named in the client's `Connection` header.
+- Any client header named in the client's `Connection` header. A header Harmony set stays, so a client cannot remove the mesh JWT.
 - `Content-Length`. The HTTP client sets it from the body it sends.
 
 **Client `Authorization`**: removed by default. The client's credential is for Harmony (for example `basic_auth`, `jwt_auth` or a mesh JWT on ingress), not for the upstream.
@@ -105,9 +105,19 @@ Harmony never sends two `Authorization` headers. When Harmony sends its own cred
 - the backend's authentication (`authentication`, or the `authentication` of its `target_ref`), or
 - an `Authorization` header set by middleware, such as the mesh egress JWT.
 
+If a backend has `bearer` or `basic` authentication and middleware also sets `Authorization`, the backend's authentication wins and the middleware header is not sent. Such a mesh egress backend sends its own credential, not the mesh JWT. With `api_key` authentication under another header name, the upstream receives both the key and the mesh JWT.
+
 `forward_authorization` must be a boolean. Any other value fails the request with an error that names the option. Dropping a client `Authorization` header is logged at `debug` level. The header value is never logged.
 
+**Client copy of the target's credential header**: replaced. The backend's authentication replaces any header with the same name, in any letter case, and treats `_` as `-`. A client that sends its own `X-API-Key` to a backend whose `api_key` authentication uses that `header_name` does not reach the upstream with it, and the upstream receives one value. `http_streaming_backend` sends the backend's authentication in the same way as the other backends.
+
 **Everything else** passes through unchanged. This includes `Accept`, `Content-Type` and custom `X-` headers.
+
+## Request Paths and Redirects
+
+A request path with a `.` or `..` segment gets 400 and never reaches middleware or a backend. This includes percent-encoded forms such as `%2e%2e`. It applies to HTTP and HTTP/3, on every endpoint and mesh ingress.
+
+A backend with `authentication` follows a redirect only to the same origin (scheme, host and port), for up to 10 redirects. A redirect to another origin is not followed, so the credential stays with the configured upstream. The `http`, `fhir` and `jmix_backend` backends return the 3xx response to the client, and `http_streaming_backend` fails the request. A backend with no `authentication` follows redirects to any origin. No backend follows a redirect from https to http. The `webhook` middleware uses the same rules.
 
 ## Backend Types
 

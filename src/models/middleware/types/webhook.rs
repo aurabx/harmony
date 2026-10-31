@@ -110,22 +110,35 @@ impl WebhookMiddleware {
         Value::Null
     }
 
-    fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+    fn auth_options(&self) -> HashMap<String, Value> {
+        let mut opts = HashMap::new();
         if let Some(auth) = &self.cfg.auth_def {
-            let mut opts = HashMap::new();
             if let Ok(val) = serde_json::to_value(auth) {
                 opts.insert("authentication_def".to_string(), val);
             }
-            return crate::models::services::backend_auth::apply_backend_authentication(
-                builder, &opts, "WEBHOOK",
-            );
         }
-        builder
+        opts
+    }
+
+    fn apply_auth(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
+        if self.cfg.auth_def.is_none() {
+            return builder;
+        }
+        crate::models::services::backend_auth::apply_backend_authentication(
+            builder,
+            &self.auth_options(),
+            "WEBHOOK",
+        )
     }
 
     fn client(&self) -> Result<reqwest::Client, Error> {
         reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(self.cfg.timeout_secs))
+            .redirect(
+                crate::models::services::backend_auth::upstream_redirect_policy(
+                    &self.auth_options(),
+                ),
+            )
             .build()
             .map_err(|e| Error::from(format!("Failed to create HTTP client: {}", e)))
     }

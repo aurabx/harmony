@@ -3,7 +3,7 @@ use crate::models::middleware::middleware::Middleware;
 use crate::utils::Error;
 use async_trait::async_trait;
 use base64::Engine;
-use serde_json::Value;
+use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::PathBuf;
 use tracing::{debug, warn};
@@ -246,24 +246,9 @@ impl DicomToDicomwebMiddleware {
 
         if let Some(ident) = identifier {
             // Extract UIDs
-            let study_uid = ident
-                .get("0020000D")
-                .and_then(|v| v.get("Value"))
-                .and_then(|a| a.get(0))
-                .and_then(|s| s.as_str())
-                .unwrap_or("");
-            let series_uid = ident
-                .get("0020000E")
-                .and_then(|v| v.get("Value"))
-                .and_then(|a| a.get(0))
-                .and_then(|s| s.as_str())
-                .unwrap_or("");
-            let instance_uid = ident
-                .get("00080018")
-                .and_then(|v| v.get("Value"))
-                .and_then(|a| a.get(0))
-                .and_then(|s| s.as_str())
-                .unwrap_or("");
+            let study_uid = path_safe_uid(ident, "0020000D")?;
+            let series_uid = path_safe_uid(ident, "0020000E")?;
+            let instance_uid = path_safe_uid(ident, "00080018")?;
 
             let uri = if !instance_uid.is_empty() && !series_uid.is_empty() && !study_uid.is_empty()
             {
@@ -742,6 +727,35 @@ impl DicomToDicomwebMiddleware {
     }
 }
 
+/// Read a UID from a C-GET or C-MOVE identifier for use in a WADO-RS path.
+///
+/// Returns an empty string when the UID is absent. A present value must follow
+/// the PS3.5 UID syntax of dot-separated digit groups. The value comes from the
+/// client and goes into the backend's URL, so a value such as `../admin` could
+/// otherwise leave `/studies` with Harmony's credential. The error omits the
+/// value, because identifiers can hold patient data.
+fn path_safe_uid<'a>(identifier: &'a Map<String, Value>, tag: &str) -> Result<&'a str, Error> {
+    let uid = identifier
+        .get(tag)
+        .and_then(|v| v.get("Value"))
+        .and_then(|a| a.get(0))
+        .and_then(|s| s.as_str())
+        .unwrap_or("")
+        .trim_end_matches(['\0', ' ']);
+    let valid = uid.is_empty()
+        || uid
+            .split('.')
+            .all(|group| !group.is_empty() && group.bytes().all(|byte| byte.is_ascii_digit()));
+    if valid {
+        Ok(uid)
+    } else {
+        Err(Error::from(format!(
+            "DICOM identifier tag {} does not hold a valid UID",
+            tag
+        )))
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -750,6 +764,40 @@ mod tests {
 
     /// Runs a backend response through the same conversions the executor
     /// applies, then through the middleware's response side.
+    #[test]
+    fn path_safe_uid_accepts_uids_and_absent_values() {
+        let identifier = serde_json::json!({
+            "0020000D": { "Value": ["1.2.840.10008 \0"] },
+        });
+        let identifier = identifier.as_object().unwrap();
+        assert_eq!(
+            path_safe_uid(identifier, "0020000D").unwrap(),
+            "1.2.840.10008"
+        );
+        assert_eq!(path_safe_uid(identifier, "0020000E").unwrap(), "");
+    }
+
+    #[test]
+    fn path_safe_uid_rejects_path_syntax() {
+        for value in [
+            "..",
+            "../../admin",
+            "%2e%2e",
+            "1.2/../3",
+            "1..2",
+            ".1",
+            "1.",
+            "1.2?x=1",
+        ] {
+            let identifier = serde_json::json!({ "0020000D": { "Value": [value] } });
+            assert!(
+                path_safe_uid(identifier.as_object().unwrap(), "0020000D").is_err(),
+                "{}",
+                value
+            );
+        }
+    }
+
     async fn qido_response_after_right(
         status: u16,
         content_type: &str,
