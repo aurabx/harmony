@@ -36,7 +36,9 @@
 //! }
 //! ```
 
-use crate::models::middleware::{DicomObjectNotFound, UpstreamFailure};
+use crate::models::middleware::{
+    AccessDenied, DicomObjectNotFound, RateLimitExceeded, UpstreamFailure,
+};
 use crate::pipeline::executor::PipelineError;
 use dimse::types::DimseStatus;
 
@@ -60,17 +62,17 @@ pub fn http_status_to_dimse(http_status: u16) -> DimseStatus {
         400 => DimseStatus::Failure(0xC000), // Cannot understand
         401 | 403 => DimseStatus::Failure(0x0124), // Not authorized
         404 => DimseStatus::Failure(0xA801), // No such object instance
-        405 => DimseStatus::Failure(0x0111), // Duplicate invocation
-        408 => DimseStatus::Failure(0x0122), // SOP class not supported
-        409 => DimseStatus::Failure(0x0119), // Class-instance conflict
-        410 => DimseStatus::Failure(0xA801), // No such object instance (gone)
-        413 => DimseStatus::Failure(0xA700), // Out of resources
-        415 => DimseStatus::Failure(0xA900), // Dataset does not match SOP class
-        429 => DimseStatus::Failure(0xA702), // Resource limitation
+        // 405 and 409 have no DIMSE meaning for query or retrieve.
+        405 | 409 => DimseStatus::Failure(0x0110), // Processing failure
+        408 => DimseStatus::Failure(0xA701),       // Unable to process (timeout)
+        410 => DimseStatus::Failure(0xA801),       // No such object instance (gone)
+        413 => DimseStatus::Failure(0xA700),       // Out of resources
+        415 => DimseStatus::Failure(0xA900),       // Dataset does not match SOP class
+        429 => DimseStatus::Failure(0xA702),       // Resource limitation
 
         // 5xx Server Errors
         500 => DimseStatus::Failure(0x0110), // Processing failure
-        501 => DimseStatus::Failure(0x0112), // Unrecognized operation
+        501 => DimseStatus::Failure(0x0110), // Processing failure
         502..=504 => DimseStatus::Failure(0xA701), // Out of resources/unable to process
         507 => DimseStatus::Failure(0xA700), // Out of resources
 
@@ -81,7 +83,6 @@ pub fn http_status_to_dimse(http_status: u16) -> DimseStatus {
 }
 
 /// Maps PipelineError to DIMSE status codes
-#[allow(dead_code)]
 pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
     match error {
         PipelineError::ServiceError(msg) => {
@@ -92,7 +93,7 @@ pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
             } else if msg_lower.contains("unauthorized") || msg_lower.contains("forbidden") {
                 DimseStatus::Failure(0x0124) // Not authorized
             } else if msg_lower.contains("timeout") {
-                DimseStatus::Failure(0x0122) // SOP class not supported (timeout)
+                DimseStatus::Failure(0xA701) // Unable to process (timeout)
             } else {
                 DimseStatus::Failure(0x0110) // Processing failure
             }
@@ -103,6 +104,10 @@ pub fn pipeline_error_to_dimse(error: &PipelineError) -> DimseStatus {
                 DimseStatus::Failure(0xA701) // Out of resources: unable to process
             } else if e.downcast_ref::<DicomObjectNotFound>().is_some() {
                 DimseStatus::Failure(0xA801) // No such object instance
+            } else if e.downcast_ref::<AccessDenied>().is_some() {
+                DimseStatus::Failure(0x0124) // Refused: Not authorized
+            } else if e.downcast_ref::<RateLimitExceeded>().is_some() {
+                DimseStatus::Failure(0xA702) // Resource limitation, as HTTP 429
             } else {
                 DimseStatus::Failure(0x0110) // Processing failure
             }
@@ -162,8 +167,7 @@ pub fn is_retriable_status(status: &DimseStatus) -> bool {
                 *code,
                 0xA701 | // Unable to process (temporary)
                 0xA702 | // Resource limitation
-                0xA700 | // Out of resources
-                0x0122 // Timeout-related
+                0xA700 // Out of resources
             )
         }
         _ => false,
@@ -194,6 +198,23 @@ mod tests {
     #[test]
     fn test_http_status_500_server_error() {
         assert_eq!(http_status_to_dimse(500), DimseStatus::Failure(0x0110));
+    }
+
+    #[test]
+    fn test_http_statuses_with_no_dimse_meaning_map_to_processing_failure() {
+        for status in [405, 409, 501] {
+            assert_eq!(http_status_to_dimse(status), DimseStatus::Failure(0x0110));
+        }
+    }
+
+    #[test]
+    fn test_timeouts_map_to_unable_to_process() {
+        assert_eq!(http_status_to_dimse(408), DimseStatus::Failure(0xA701));
+        let error = PipelineError::ServiceError("request timeout".to_string());
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0xA701)
+        );
     }
 
     #[test]
@@ -248,6 +269,27 @@ mod tests {
         assert_eq!(
             pipeline_error_to_dimse(&error),
             DimseStatus::Failure(0xA801)
+        );
+    }
+
+    #[test]
+    fn test_middleware_access_denied_maps_to_0124() {
+        let error = PipelineError::MiddlewareError(Box::new(AccessDenied(
+            "Client IP is not in the IP allowlist".to_string(),
+        )));
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0x0124)
+        );
+    }
+
+    #[test]
+    fn test_middleware_rate_limit_maps_to_a702() {
+        let error =
+            PipelineError::MiddlewareError(Box::new(RateLimitExceeded("per_ip".to_string())));
+        assert_eq!(
+            pipeline_error_to_dimse(&error),
+            DimseStatus::Failure(0xA702)
         );
     }
 

@@ -5,14 +5,17 @@ use crate::globals::{get_config, get_storage};
 use crate::models::envelope::command::{Command, Operation};
 use crate::models::envelope::envelope::{LocalInstanceFile, ResponseEnvelope};
 use crate::models::middleware::types::policies::IpAccessRules;
+use crate::models::middleware::DicomObjectNotFound;
 use crate::models::protocol::{Protocol, ProtocolCtx};
-use crate::pipeline::executor::PipelineExecutor;
+use crate::models::services::types::dicom::STUDY_NOT_FOUND_METADATA_KEY;
+use crate::pipeline::executor::{PipelineError, PipelineExecutor};
 use async_trait::async_trait;
 use dicom_json_tool as tool;
 use dimse::error::DimseError;
 use dimse::scp::PeerAdmission;
 use dimse::types::{
-    dataset_stream_from_vec, BoxDatasetStream, DatasetStream, QueryLevel, RetrieveStream,
+    dataset_stream_from_vec, BoxDatasetStream, DatasetStream, DimseStatus, QueryLevel,
+    RetrieveStream,
 };
 use dimse::Result as DimseResult;
 use once_cell::sync::Lazy;
@@ -35,6 +38,161 @@ fn get_current_store_dir() -> Option<PathBuf> {
 /// Longest part of a receiver's failure reason that is kept in the error for
 /// a failed C-STORE. The text comes from another host and ends up in the log.
 const MAX_RECEIVER_REASON_CHARS: usize = 512;
+
+/// Processing failure. PS3.7 defines it as a general failure status, so it
+/// is valid for C-FIND, C-GET and C-MOVE.
+const PROCESSING_FAILURE: u16 = 0x0110;
+
+/// Unable to process. Also what SCP handlers send for an error with no
+/// status code.
+const UNABLE_TO_PROCESS: u16 = 0xC000;
+
+/// The status code to send for a failed `operation`, from the status mapper's
+/// answer.
+///
+/// PS3.4 defines 0xA701 and 0xA702 only for C-GET and C-MOVE, so a C-FIND
+/// gets 0xA700 (Refused: Out of resources) in their place. 0xA801 means
+/// "Move Destination unknown" and is defined only for C-MOVE. Only the SCP's
+/// own destination check may send it, so a pipeline failure that maps to it
+/// gets 0xC000. The C-GET and C-MOVE tables have no 0xA700, so those get
+/// 0xA701 in its place. A request that matched nothing never gets here (see
+/// `is_no_match_error` and `is_no_match_response`). A status that is not a
+/// failure also becomes 0xC000, because an error must never reach the client
+/// as a success.
+fn failure_status_for_operation(operation: Operation, status: DimseStatus) -> u16 {
+    let code = match status {
+        DimseStatus::Failure(code) => code,
+        other => {
+            tracing::warn!(
+                "DIMSE {} failed but the status mapper gave {:?}; answering 0x{:04X}",
+                operation,
+                other,
+                UNABLE_TO_PROCESS
+            );
+            return UNABLE_TO_PROCESS;
+        }
+    };
+    match (operation, code) {
+        (_, 0xA801) => UNABLE_TO_PROCESS,
+        (Operation::Query, 0xA701 | 0xA702) => 0xA700,
+        (Operation::Retrieve | Operation::Move, 0xA700) => 0xA701,
+        _ => code,
+    }
+}
+
+/// True when `code` is a C-STORE warning: Coercion of data elements
+/// (0xB000), Elements discarded (0xB006), Data set does not match SOP class
+/// (0xB007), and the rest of the 0xBxxx range, plus the PS3.7 general
+/// warnings 0x0001, 0x0107 and 0x0116. The instance was stored.
+fn is_store_warning(code: u16) -> bool {
+    matches!(code, 0x0001 | 0x0107 | 0x0116 | 0xB000..=0xBFFF)
+}
+
+/// True for the operations that PS3.4 answers with Success and zero results
+/// or sub-operations when nothing matches.
+fn has_empty_result(operation: Operation) -> bool {
+    matches!(
+        operation,
+        Operation::Query | Operation::Retrieve | Operation::Move
+    )
+}
+
+/// True when a failed pipeline run says the request matched nothing.
+///
+/// Only the typed `DicomObjectNotFound` counts. Error text is never read for
+/// this. It can hold remote status codes, ports and instance counts, so
+/// reading "404" or "not found" in it would show an outage as an empty
+/// result.
+fn is_no_match_error(operation: Operation, error: &PipelineError) -> bool {
+    has_empty_result(operation)
+        && matches!(
+            error,
+            PipelineError::MiddlewareError(e) if e.downcast_ref::<DicomObjectNotFound>().is_some()
+        )
+}
+
+/// True when a whole, unstreamed C-GET or C-MOVE response says the request
+/// matched nothing.
+///
+/// Only the `dicom_scu` backend's typed mark counts (see
+/// `STUDY_NOT_FOUND_METADATA_KEY`). A bare HTTP 404 or 410 is a failure,
+/// because it can also mean a denial (`path_filter` answers 404) or a wrong
+/// route. A query that matches nothing answers 2xx with an empty list.
+fn is_no_match_response(operation: Operation, response: &ResponseEnvelope<Vec<u8>>) -> bool {
+    matches!(operation, Operation::Retrieve | Operation::Move)
+        && response
+            .response_details
+            .metadata
+            .get(STUDY_NOT_FOUND_METADATA_KEY)
+            .is_some_and(|value| value == "true")
+}
+
+/// How the SCP answers a failed pipeline run.
+#[derive(Debug)]
+enum PipelineFailure {
+    /// The request matched nothing. The client gets Success and no results.
+    NoMatches,
+    /// The request failed. The SCP sends the error's status code and logs
+    /// its detail.
+    Failed(DimseError),
+}
+
+/// Decide how the SCP answers a failed pipeline run.
+///
+/// A failure carries the pipeline error as its detail. The SCP logs the
+/// detail and sends only the status code, because the pipeline error often
+/// names hosts, ports and AE titles.
+fn pipeline_failure(operation: Operation, error: &PipelineError) -> PipelineFailure {
+    if is_no_match_error(operation, error) {
+        tracing::info!(
+            "DIMSE {} matched nothing, answering with an empty result: {:?}",
+            operation,
+            error.to_string()
+        );
+        return PipelineFailure::NoMatches;
+    }
+    let code =
+        failure_status_for_operation(operation, status_mapper::pipeline_error_to_dimse(error));
+    PipelineFailure::Failed(DimseError::status(
+        code,
+        format!("DIMSE {} pipeline failed: {}", operation, error),
+    ))
+}
+
+impl PipelineFailure {
+    /// The error for an operation that has no empty result, such as C-STORE.
+    /// `is_no_match_error` never gives `NoMatches` for those, so this is a
+    /// guard.
+    fn into_error(self) -> DimseError {
+        match self {
+            PipelineFailure::NoMatches => {
+                DimseError::status(UNABLE_TO_PROCESS, "the pipeline found no matching object")
+            }
+            PipelineFailure::Failed(error) => error,
+        }
+    }
+}
+
+/// The failure reason in a JSON response body that has `"success": false` at
+/// the top level. `None` when the body does not report a failure, including
+/// a body with no `success` key.
+///
+/// The reason is text from another host. It is cut to a fixed length so a
+/// caller can log it with `{:?}`, which escapes control characters, without
+/// letting it add lines to the log.
+fn body_failure_reason(body: &serde_json::Value) -> Option<String> {
+    if body.get("success") != Some(&serde_json::Value::Bool(false)) {
+        return None;
+    }
+    Some(
+        body.get("error")
+            .and_then(|error| error.as_str())
+            .unwrap_or("no reason given")
+            .chars()
+            .take(MAX_RECEIVER_REASON_CHARS)
+            .collect(),
+    )
+}
 
 /// A DICOM Part 10 file encoded for a JSON pipeline body.
 struct InlineInstance {
@@ -204,6 +362,8 @@ impl PipelineQueryProvider {
     /// `local_instance` is the adapter's copy of a received C-STORE
     /// instance. It is set only for a backend that reads it (see
     /// `store_attaches_local_instance`).
+    ///
+    /// Returns `None` when the request matched nothing (see `is_no_match`).
     async fn run(
         &self,
         config: &Config,
@@ -211,7 +371,7 @@ impl PipelineQueryProvider {
         body: serde_json::Value,
         mut meta: HashMap<String, String>,
         local_instance: Option<LocalInstanceFile>,
-    ) -> DimseResult<ResponseEnvelope<Vec<u8>>> {
+    ) -> DimseResult<Option<ResponseEnvelope<Vec<u8>>>> {
         // Resolve endpoint service and options
         let endpoint = config.endpoints.get(&self.endpoint).ok_or_else(|| {
             DimseError::operation_failed(format!("Unknown endpoint '{}'", self.endpoint))
@@ -226,6 +386,7 @@ impl PipelineQueryProvider {
         // Build ProtocolCtx for DIMSE with typed Command.
         // The Command is the single source of truth for the operation.
         meta.insert("protocol".into(), "dimse".into());
+        let operation = command.operation;
         let ctx = ProtocolCtx {
             protocol: Protocol::Dimse,
             payload: serde_json::to_vec(&body).unwrap_or_default(),
@@ -246,15 +407,21 @@ impl PipelineQueryProvider {
             DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
         })?;
 
-        // Execute pipeline using PipelineExecutor
-        let response_envelope =
-            PipelineExecutor::execute(request_envelope, &self.pipeline, pipeline_cfg, config, &ctx)
-                .await
-                .map_err(|e| {
-                    DimseError::operation_failed(format!("Pipeline execution failed: {}", e))
-                })?;
-
-        Ok(response_envelope)
+        match PipelineExecutor::execute(
+            request_envelope,
+            &self.pipeline,
+            pipeline_cfg,
+            config,
+            &ctx,
+        )
+        .await
+        {
+            Ok(response_envelope) => Ok(Some(response_envelope)),
+            Err(e) => match pipeline_failure(operation, &e) {
+                PipelineFailure::NoMatches => Ok(None),
+                PipelineFailure::Failed(error) => Err(error),
+            },
+        }
     }
 
     /// Execute a DIMSE operation through the pipeline with streaming support
@@ -312,7 +479,7 @@ impl PipelineQueryProvider {
         );
 
         // Execute streaming pipeline
-        let response_stream = PipelineExecutor::execute_streaming(
+        let response_stream = match PipelineExecutor::execute_streaming(
             request_envelope,
             &self.pipeline,
             pipeline_cfg,
@@ -320,20 +487,24 @@ impl PipelineQueryProvider {
             &ctx,
         )
         .await
-        .map_err(|e| {
-            DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
-        })?;
+        {
+            Ok(response_stream) => response_stream,
+            Err(e) => match pipeline_failure(operation, &e) {
+                PipelineFailure::NoMatches => return Ok(dataset_stream_from_vec(vec![])),
+                PipelineFailure::Failed(error) => return Err(error),
+            },
+        };
 
         // Each envelope becomes zero or more datasets as it arrives. Nothing is
         // collected here.
         let datasets = response_stream
             .enumerate()
-            .then(|(index, result)| async move {
+            .then(move |(index, result)| async move {
                 let instance = index as u64 + 1;
                 match result {
                     Ok(response_envelope) => {
                         tracing::debug!("Processing streamed instance #{}", instance);
-                        match Self::response_to_datasets(response_envelope).await {
+                        match Self::response_to_datasets(response_envelope, operation, true).await {
                             Ok(datasets) => datasets.into_iter().map(Ok).collect::<Vec<_>>(),
                             Err(e) => {
                                 tracing::error!(
@@ -345,12 +516,17 @@ impl PipelineQueryProvider {
                             }
                         }
                     }
+                    // The streaming executor reports a failed backend as a
+                    // backend error, so a failed stream item is mapped as one.
+                    // A stream that started and then failed is never an empty
+                    // result, or the client would take a partial answer for a
+                    // complete one.
                     Err(e) => {
-                        tracing::error!("Stream error on instance #{}: {}", instance, e);
-                        vec![Err(DimseError::operation_failed(format!(
-                            "Stream failed after {} instances: {}",
-                            index, e
-                        )))]
+                        let error = PipelineError::BackendError(format!(
+                            "Stream failed on instance #{} after {} instances: {}",
+                            instance, index, e
+                        ));
+                        vec![Err(pipeline_failure(operation, &error).into_error())]
                     }
                 }
             })
@@ -419,9 +595,7 @@ impl PipelineQueryProvider {
             &ctx,
         )
         .await
-        .map_err(|e| {
-            DimseError::operation_failed(format!("Streaming pipeline execution failed: {}", e))
-        })?;
+        .map_err(|e| pipeline_failure(operation, &e).into_error())?;
 
         // Consume the stream and keep the last successful envelope. Middleware
         // (for example dicom_to_dicomweb) may set final response metadata such
@@ -431,10 +605,11 @@ impl PipelineQueryProvider {
             match item {
                 Ok(envelope) => last = Some(envelope),
                 Err(e) => {
-                    return Err(DimseError::operation_failed(format!(
+                    let error = PipelineError::BackendError(format!(
                         "Streaming pipeline yielded error: {}",
                         e
-                    )));
+                    ));
+                    return Err(pipeline_failure(operation, &error).into_error());
                 }
             }
         }
@@ -558,33 +733,56 @@ impl PipelineQueryProvider {
     ///   only in the body, because response metadata does not cross the HTTP
     ///   hop.
     fn check_store_response(response: &ResponseEnvelope<Vec<u8>>) -> DimseResult<()> {
+        // The status and body checks name the receiver's reason, so they run
+        // before the bare HTTP status check.
         Self::check_store_dicom_status(response)?;
-        Self::check_store_body(response)
+        Self::check_store_body(response)?;
+        Self::check_store_http_status(response)
     }
 
-    /// Fail the store when `dicom_status` in the response metadata is a
-    /// failure status. The value has the form `0xC000`.
-    fn check_store_dicom_status(response: &ResponseEnvelope<Vec<u8>>) -> DimseResult<()> {
-        if let Some(status_str) = response.response_details.metadata.get("dicom_status") {
-            // Parse "0x0000" or "0xC000" format
-            if let Some(hex) = status_str.strip_prefix("0x") {
-                if let Ok(status) = u16::from_str_radix(hex, 16) {
-                    // Check for failure status (0xC000 range indicates failure)
-                    if status >= 0xC000 {
-                        return Err(DimseError::operation_failed(format!(
-                            "C-STORE failed with DICOM status: {}",
-                            status_str
-                        )));
-                    }
-                    // Warning status (0xB000 range) - log but don't fail
-                    if status >= 0xB000 && status < 0xC000 {
-                        tracing::warn!("C-STORE completed with warning status: {}", status_str);
-                    }
-                }
-            }
+    /// Fail the store when the pipeline's final HTTP status is not 2xx. A
+    /// backend such as `http` can answer 500 or 403 with a body that has no
+    /// `success` key, and that store did not happen.
+    fn check_store_http_status(response: &ResponseEnvelope<Vec<u8>>) -> DimseResult<()> {
+        let http_status = response.response_details.status;
+        if (200..300).contains(&http_status) {
+            return Ok(());
         }
+        Err(DimseError::operation_failed(format!(
+            "C-STORE failed: the pipeline answered HTTP status {}",
+            http_status
+        )))
+    }
 
-        Ok(())
+    /// Fail the store when `dicom_status` in the response metadata is not
+    /// Success or a warning. The value has the form `0xC000`.
+    ///
+    /// C-STORE failure codes include 0xA7xx, 0xA9xx and the PS3.7 general
+    /// failures such as 0x0110 and 0x0124, so every code that is not Success
+    /// or a warning is a failure. A value that cannot be read is a failure
+    /// too, because an acknowledged store lets the sender delete its copy.
+    fn check_store_dicom_status(response: &ResponseEnvelope<Vec<u8>>) -> DimseResult<()> {
+        let Some(status_str) = response.response_details.metadata.get("dicom_status") else {
+            return Ok(());
+        };
+        let status = status_str
+            .strip_prefix("0x")
+            .and_then(|hex| u16::from_str_radix(hex, 16).ok());
+        match status {
+            Some(0x0000) => Ok(()),
+            Some(code) if is_store_warning(code) => {
+                tracing::warn!("C-STORE completed with warning status: 0x{:04X}", code);
+                Ok(())
+            }
+            Some(code) => Err(DimseError::operation_failed(format!(
+                "C-STORE failed with DICOM status: 0x{:04X}",
+                code
+            ))),
+            None => Err(DimseError::operation_failed(format!(
+                "C-STORE failed: unreadable DICOM status {:?}",
+                status_str
+            ))),
+        }
     }
 
     /// Fail the store when the JSON response body has `"success": false` at
@@ -595,44 +793,66 @@ impl PipelineQueryProvider {
     /// A body with no `success` key says nothing about the store, so it is not
     /// a failure here.
     fn check_store_body(response: &ResponseEnvelope<Vec<u8>>) -> DimseResult<()> {
-        let Some(body) = response.normalized_data.as_ref() else {
+        let Some(reason) = response
+            .normalized_data
+            .as_ref()
+            .and_then(body_failure_reason)
+        else {
             return Ok(());
         };
-        if body.get("success") != Some(&serde_json::Value::Bool(false)) {
-            return Ok(());
-        }
-
-        // The reason is text from another host. It is cut to a fixed length
-        // and written with `{:?}`, which escapes control characters, so it
-        // cannot add lines to the log.
-        let reason: String = body
-            .get("error")
-            .and_then(|error| error.as_str())
-            .unwrap_or("no reason given")
-            .chars()
-            .take(MAX_RECEIVER_REASON_CHARS)
-            .collect();
         Err(DimseError::operation_failed(format!(
             "C-STORE failed: the receiver reported that the instance was not stored: {:?}",
             reason
         )))
     }
 
+    /// The datasets for a `run` result. A run that matched nothing has none.
+    async fn run_result_to_datasets(
+        response: Option<ResponseEnvelope<Vec<u8>>>,
+        operation: Operation,
+    ) -> DimseResult<Vec<DatasetStream>> {
+        match response {
+            Some(response) => Self::response_to_datasets(response, operation, false).await,
+            None => Ok(vec![]),
+        }
+    }
+
     /// Convert ResponseEnvelope to Vec<DatasetStream>
     ///
     /// Parses the response data and converts it to DICOM datasets.
     /// Uses the envelope_unwrapper module to handle various response formats.
+    ///
+    /// A failed response becomes an error that carries the DIMSE status for
+    /// `operation`. A non-2xx HTTP status is mapped by the status mapper. A
+    /// whole response marked as "matched nothing" is an empty result (see
+    /// `is_no_match_response`). A `streamed` envelope never is, because
+    /// earlier envelopes already reached the client. A
+    /// 2xx response whose body has `"success": false` gets 0x0110, because
+    /// the unwrapper would read that body as zero matches and the client
+    /// would get Success.
     async fn response_to_datasets(
         response: ResponseEnvelope<Vec<u8>>,
+        operation: Operation,
+        streamed: bool,
     ) -> DimseResult<Vec<DatasetStream>> {
-        // Check HTTP status and map errors
         let http_status = response.response_details.status;
         if !(200..300).contains(&http_status) {
             let status = status_mapper::http_status_to_dimse(http_status);
-            return Err(DimseError::operation_failed(format!(
-                "Pipeline returned non-success status {}: {:?}",
-                http_status, status
-            )));
+            if !streamed && is_no_match_response(operation, &response) {
+                tracing::info!(
+                    "DIMSE {} pipeline returned HTTP status {}, answering with an empty result",
+                    operation,
+                    http_status
+                );
+                return Ok(vec![]);
+            }
+            return Err(DimseError::status(
+                failure_status_for_operation(operation, status),
+                format!(
+                    "DIMSE {} pipeline returned HTTP status {}",
+                    operation, http_status
+                ),
+            ));
         }
 
         // Try to parse response body as JSON
@@ -645,6 +865,19 @@ impl PipelineQueryProvider {
         } else {
             return Ok(vec![]);
         };
+
+        // A response that crossed a Harmony HTTP hop, or passed middleware
+        // that set its status, can be a 2xx that reports the failure only in
+        // its body.
+        if let Some(reason) = body_failure_reason(&json_data) {
+            return Err(DimseError::status(
+                PROCESSING_FAILURE,
+                format!(
+                    "DIMSE {} pipeline reported a failure in its response body: {:?}",
+                    operation, reason
+                ),
+            ));
+        }
 
         // Use envelope unwrapper to extract clean DICOM content
         match unwrap_response(&json_data) {
@@ -884,13 +1117,14 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
         })?;
 
-        let command = Command::new(Operation::Query).with_source("dimse_adapter");
+        let operation = Operation::Query;
+        let command = Command::new(operation).with_source("dimse_adapter");
         if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
             tracing::info!("Using streaming pipeline for C-FIND");
             self.run_streaming(&config, command, body, meta).await
         } else {
             let response_envelope = self.run(&config, command, body, meta, None).await?;
-            let datasets = Self::response_to_datasets(response_envelope).await?;
+            let datasets = Self::run_result_to_datasets(response_envelope, operation).await?;
             Ok(dataset_stream_from_vec(datasets))
         }
     }
@@ -932,8 +1166,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             )
             .await?;
 
-        // Convert response envelope to datasets
-        let datasets = Self::response_to_datasets(response_envelope).await?;
+        let datasets = Self::run_result_to_datasets(response_envelope, Operation::Move).await?;
         Ok(dataset_stream_from_vec(datasets))
     }
 
@@ -969,7 +1202,8 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             DimseError::operation_failed(format!("Pipeline '{}' not found", self.pipeline))
         })?;
 
-        let command = Command::new(Operation::Retrieve).with_source("dimse_adapter");
+        let operation = Operation::Retrieve;
+        let command = Command::new(operation).with_source("dimse_adapter");
         if PipelineExecutor::is_streaming_pipeline(pipeline_cfg, &config) {
             tracing::info!("Using streaming pipeline for C-GET");
             // The bridge does not know the instance count up front, so the SCP
@@ -979,7 +1213,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
             ))
         } else {
             let response_envelope = self.run(&config, command, body, meta, None).await?;
-            let datasets = Self::response_to_datasets(response_envelope).await?;
+            let datasets = Self::run_result_to_datasets(response_envelope, operation).await?;
             Ok(RetrieveStream::from_vec(datasets))
         }
     }
@@ -1096,6 +1330,7 @@ impl dimse::scp::QueryProvider for PipelineQueryProvider {
                 .then(|| LocalInstanceFile::new(temp_file.to_path_buf()));
             self.run(&config, command, body, meta, local_instance)
                 .await?
+                .ok_or_else(|| PipelineFailure::NoMatches.into_error())?
         };
 
         Self::check_store_response(&response)?;
@@ -2003,9 +2238,10 @@ module = ""
             .expect("NDJSON line should parse");
 
         // Harmony A SCP: envelope → dataset
-        let datasets = PipelineQueryProvider::response_to_datasets(envelope)
-            .await
-            .expect("envelope should convert to a dataset");
+        let datasets =
+            PipelineQueryProvider::response_to_datasets(envelope, Operation::Retrieve, false)
+                .await
+                .expect("envelope should convert to a dataset");
         assert_eq!(datasets.len(), 1, "one envelope in, one dataset out");
         let received = datasets[0].to_object().await.expect("dataset should parse");
 
@@ -2071,10 +2307,13 @@ module = ""
             Some("text/html"),
             b"<html><body>Please sign in</body></html>",
         );
-        let error = match PipelineQueryProvider::response_to_datasets(envelope).await {
-            Ok(datasets) => panic!("expected an error, got {} datasets", datasets.len()),
-            Err(error) => error,
-        };
+        let error =
+            match PipelineQueryProvider::response_to_datasets(envelope, Operation::Query, false)
+                .await
+            {
+                Ok(datasets) => panic!("expected an error, got {} datasets", datasets.len()),
+                Err(error) => error,
+            };
         assert!(
             error
                 .to_string()
@@ -2090,17 +2329,20 @@ module = ""
             Some("application/json"),
             b"<html>502 Bad Gateway</html>",
         );
-        assert!(PipelineQueryProvider::response_to_datasets(envelope)
-            .await
-            .is_err());
+        assert!(
+            PipelineQueryProvider::response_to_datasets(envelope, Operation::Query, false)
+                .await
+                .is_err()
+        );
     }
 
     #[tokio::test]
     async fn response_to_datasets_returns_nothing_for_an_empty_200_response() {
         let envelope = backend_response_after_round_trip(200, Some("text/plain"), b"");
-        let datasets = PipelineQueryProvider::response_to_datasets(envelope)
-            .await
-            .expect("an empty body is an empty result");
+        let datasets =
+            PipelineQueryProvider::response_to_datasets(envelope, Operation::Query, false)
+                .await
+                .expect("an empty body is an empty result");
         assert!(datasets.is_empty());
     }
 
@@ -2111,10 +2353,381 @@ module = ""
             None,
             br#"[{"00100020":{"vr":"LO","Value":["PATIENT1"]}}]"#,
         );
-        let datasets = PipelineQueryProvider::response_to_datasets(envelope)
-            .await
-            .expect("JSON without a content type is still JSON");
+        let datasets =
+            PipelineQueryProvider::response_to_datasets(envelope, Operation::Query, false)
+                .await
+                .expect("JSON without a content type is still JSON");
         assert_eq!(datasets.len(), 1);
+    }
+
+    /// The status code a failed `response_to_datasets` carries for
+    /// `operation`.
+    async fn failure_status(envelope: ResponseEnvelope<Vec<u8>>, operation: Operation) -> u16 {
+        match PipelineQueryProvider::response_to_datasets(envelope, operation, false).await {
+            Ok(datasets) => panic!("expected a failure, got {} datasets", datasets.len()),
+            Err(error) => error
+                .status_code()
+                .unwrap_or_else(|| panic!("the error carries no status code: {error}")),
+        }
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_fails_on_a_200_body_with_success_false() {
+        // The unwrapper reads this body as zero matches, which the client
+        // would take as Success.
+        let body = br#"{"operation":"find","success":false,"error":"C-FIND failed"}"#;
+        for operation in [Operation::Query, Operation::Retrieve, Operation::Move] {
+            let envelope = backend_response_after_round_trip(200, Some("application/json"), body);
+            assert_eq!(
+                failure_status(envelope, operation).await,
+                0x0110,
+                "{operation}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_keeps_the_body_reason_for_the_log() {
+        let body = br#"{"success":false,"error":"connect to 10.0.0.5:104\nforged line"}"#;
+        let envelope = backend_response_after_round_trip(200, Some("application/json"), body);
+        let error = PipelineQueryProvider::response_to_datasets(envelope, Operation::Query, false)
+            .await
+            .err()
+            .expect("a failure");
+        assert_eq!(error.status_code(), Some(0x0110));
+        let detail = error.to_string();
+        assert!(detail.contains("10.0.0.5:104"), "{detail}");
+        assert!(
+            !detail.contains('\n'),
+            "the reason must be escaped: {detail}"
+        );
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_accepts_a_body_with_success_true_or_no_success_key() {
+        for body in [
+            br#"{"success":true,"matches":[]}"#.as_slice(),
+            br#"{"matches":[]}"#.as_slice(),
+        ] {
+            let envelope = backend_response_after_round_trip(200, Some("application/json"), body);
+            let datasets =
+                PipelineQueryProvider::response_to_datasets(envelope, Operation::Query, false)
+                    .await
+                    .expect("not a failure");
+            assert!(datasets.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_maps_the_http_status_for_the_operation() {
+        let body = br#"{"success":false,"error":"C-FIND failed"}"#;
+        let cases = [
+            (500, Operation::Query, 0x0110),
+            (500, Operation::Retrieve, 0x0110),
+            (503, Operation::Query, 0xA700),
+            (503, Operation::Retrieve, 0xA701),
+            (503, Operation::Move, 0xA701),
+            (429, Operation::Query, 0xA700),
+            (429, Operation::Retrieve, 0xA702),
+            (413, Operation::Query, 0xA700),
+            (413, Operation::Retrieve, 0xA701),
+            (413, Operation::Move, 0xA701),
+            // A query that matches nothing answers 2xx, so a 404 is a
+            // routing error or a denial.
+            (404, Operation::Query, 0xC000),
+            (410, Operation::Query, 0xC000),
+        ];
+        for (http_status, operation, expected) in cases {
+            let envelope =
+                backend_response_after_round_trip(http_status, Some("application/json"), body);
+            assert_eq!(
+                failure_status(envelope, operation).await,
+                expected,
+                "HTTP {http_status} for {operation}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_find_gets_a700_in_place_of_the_retrieve_only_codes() {
+        for code in [0xA701, 0xA702] {
+            assert_eq!(
+                failure_status_for_operation(Operation::Query, DimseStatus::Failure(code)),
+                0xA700
+            );
+            for operation in [Operation::Retrieve, Operation::Move] {
+                assert_eq!(
+                    failure_status_for_operation(operation, DimseStatus::Failure(code)),
+                    code
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_move_destination_unknown_is_never_sent_for_a_pipeline_failure() {
+        for operation in [Operation::Query, Operation::Retrieve, Operation::Move] {
+            assert_eq!(
+                failure_status_for_operation(operation, DimseStatus::Failure(0xA801)),
+                0xC000
+            );
+        }
+    }
+
+    #[test]
+    fn test_retrieves_get_a701_in_place_of_the_find_only_code() {
+        for operation in [Operation::Retrieve, Operation::Move] {
+            assert_eq!(
+                failure_status_for_operation(operation, DimseStatus::Failure(0xA700)),
+                0xA701
+            );
+        }
+        assert_eq!(
+            failure_status_for_operation(Operation::Query, DimseStatus::Failure(0xA700)),
+            0xA700
+        );
+    }
+
+    #[test]
+    fn test_other_failure_codes_pass_through() {
+        for operation in [Operation::Query, Operation::Retrieve, Operation::Move] {
+            for code in [0x0110, 0x0124, 0xA900, 0xC000] {
+                assert_eq!(
+                    failure_status_for_operation(operation, DimseStatus::Failure(code)),
+                    code
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn test_a_non_failure_status_never_reaches_the_client_for_an_error() {
+        for status in [
+            DimseStatus::Success,
+            DimseStatus::Pending,
+            DimseStatus::Cancel,
+            DimseStatus::Warning(0xB000),
+        ] {
+            assert_eq!(
+                failure_status_for_operation(Operation::Query, status),
+                0xC000
+            );
+        }
+    }
+
+    /// A whole C-MOVE response from the `dicom_scu` backend for a study it
+    /// did not find.
+    fn study_not_found_response() -> ResponseEnvelope<Vec<u8>> {
+        let mut envelope = backend_response_after_round_trip(
+            404,
+            Some("application/json"),
+            br#"{"error":"Study not found"}"#,
+        );
+        envelope
+            .response_details
+            .metadata
+            .insert(STUDY_NOT_FOUND_METADATA_KEY.to_string(), "true".to_string());
+        envelope
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_gives_an_empty_retrieve_result_for_a_study_not_found() {
+        // PS3.4: a retrieve that matches nothing is Success with zero
+        // sub-operations.
+        for operation in [Operation::Retrieve, Operation::Move] {
+            let datasets = PipelineQueryProvider::response_to_datasets(
+                study_not_found_response(),
+                operation,
+                false,
+            )
+            .await
+            .unwrap_or_else(|e| panic!("{operation}: {e}"));
+            assert!(datasets.is_empty());
+        }
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_fails_on_a_bare_404_or_410() {
+        // A 404 without the mark can be a path_filter denial or a wrong
+        // route, so it is never an empty result.
+        for http_status in [404, 410] {
+            for operation in [Operation::Query, Operation::Retrieve, Operation::Move] {
+                let envelope =
+                    backend_response_after_round_trip(http_status, Some("application/json"), b"{}");
+                assert_eq!(
+                    failure_status(envelope, operation).await,
+                    0xC000,
+                    "HTTP {http_status} for {operation}"
+                );
+            }
+        }
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_fails_on_a_study_not_found_mark_for_a_query_or_a_stream() {
+        let error = PipelineQueryProvider::response_to_datasets(
+            study_not_found_response(),
+            Operation::Query,
+            false,
+        )
+        .await
+        .err()
+        .expect("the mark is only for retrieves");
+        assert_eq!(error.status_code(), Some(0xC000));
+        let error = PipelineQueryProvider::response_to_datasets(
+            study_not_found_response(),
+            Operation::Move,
+            true,
+        )
+        .await
+        .err()
+        .expect("a streamed envelope is never an empty result");
+        assert_eq!(error.status_code(), Some(0xC000));
+    }
+
+    #[tokio::test]
+    async fn response_to_datasets_fails_on_a_streamed_404() {
+        // Earlier envelopes already reached the client, so a later 404
+        // cannot make the answer complete.
+        for operation in [Operation::Query, Operation::Retrieve, Operation::Move] {
+            let envelope = backend_response_after_round_trip(404, Some("application/json"), b"{}");
+            let error = PipelineQueryProvider::response_to_datasets(envelope, operation, true)
+                .await
+                .err()
+                .unwrap_or_else(|| panic!("a streamed 404 for {operation} must fail"));
+            assert_eq!(error.status_code(), Some(0xC000), "{operation}");
+        }
+    }
+
+    #[tokio::test]
+    async fn run_result_with_no_matches_has_no_datasets() {
+        let datasets = PipelineQueryProvider::run_result_to_datasets(None, Operation::Query)
+            .await
+            .expect("no matches is not a failure");
+        assert!(datasets.is_empty());
+    }
+
+    #[test]
+    fn test_object_not_found_is_an_empty_result_for_find_get_and_move() {
+        let error = PipelineError::MiddlewareError(Box::new(DicomObjectNotFound(
+            "C-GET matched no instances".to_string(),
+        )));
+        for operation in [Operation::Query, Operation::Retrieve, Operation::Move] {
+            assert!(
+                matches!(
+                    pipeline_failure(operation, &error),
+                    PipelineFailure::NoMatches
+                ),
+                "{operation}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_error_text_never_makes_an_empty_result() {
+        // Text can hold instance counts, ports and remote status codes. None
+        // of it may turn a failure into Success.
+        let errors = [
+            PipelineError::BackendError(
+                "Stream failed on instance #405 after 404 instances: reset".to_string(),
+            ),
+            PipelineError::BackendError("Backend returned 404".to_string()),
+            PipelineError::BackendError(
+                "Backend request failed: http://pacs:4042/: connection refused".to_string(),
+            ),
+            PipelineError::BackendError(
+                "DIMSE C-FIND failed: C-FIND failed with status: 0xC404".to_string(),
+            ),
+            PipelineError::ServiceError("Resource not found".to_string()),
+            PipelineError::MiddlewareError(Box::new(std::io::Error::other(
+                "Path not found: /studies",
+            ))),
+        ];
+        for error in &errors {
+            for operation in [Operation::Query, Operation::Retrieve, Operation::Move] {
+                let PipelineFailure::Failed(failure) = pipeline_failure(operation, error) else {
+                    panic!("{operation}: {error} became an empty result");
+                };
+                let code = failure.status_code().expect("a status code");
+                assert_ne!(code, 0xA801, "{operation}: {error}");
+            }
+        }
+    }
+
+    #[test]
+    fn test_object_not_found_is_still_a_failure_for_a_store() {
+        let error = PipelineError::MiddlewareError(Box::new(DicomObjectNotFound(
+            "no instance".to_string(),
+        )));
+        assert!(!is_no_match_error(Operation::Store, &error));
+        match pipeline_failure(Operation::Store, &error) {
+            PipelineFailure::Failed(error) => assert_eq!(error.status_code(), Some(0xC000)),
+            PipelineFailure::NoMatches => panic!("a store has no empty result"),
+        }
+    }
+
+    #[test]
+    fn test_store_fails_on_a_non_2xx_http_status() {
+        for http_status in [403, 500, 502] {
+            let mut response = store_response(None, None);
+            response.response_details.status = http_status;
+            assert!(
+                PipelineQueryProvider::check_store_response(&response).is_err(),
+                "HTTP {http_status}"
+            );
+        }
+    }
+
+    #[test]
+    fn test_store_fails_on_any_dicom_status_that_is_not_success_or_a_warning() {
+        for status in [
+            "0xA700", "0xA900", "0x0110", "0x0124", "0xC000", "0xFF00", "junk",
+        ] {
+            assert!(
+                PipelineQueryProvider::check_store_response(&store_response(Some(status), None))
+                    .is_err(),
+                "{status}"
+            );
+        }
+        for status in ["0x0000", "0xB000", "0xB006", "0xB007", "0x0107"] {
+            assert!(
+                PipelineQueryProvider::check_store_response(&store_response(Some(status), None))
+                    .is_ok(),
+                "{status}"
+            );
+        }
+    }
+
+    /// The status code of a failed `pipeline_failure` answer.
+    fn failed_status(failure: PipelineFailure) -> u16 {
+        match failure {
+            PipelineFailure::Failed(error) => error
+                .status_code()
+                .unwrap_or_else(|| panic!("the error carries no status code: {error}")),
+            PipelineFailure::NoMatches => panic!("expected a failure, got no matches"),
+        }
+    }
+
+    #[test]
+    fn test_pipeline_failure_carries_the_mapped_status() {
+        let error =
+            PipelineError::MiddlewareError(Box::new(crate::models::middleware::UpstreamFailure {
+                operation: "find".to_string(),
+                detail: "connection refused to 10.0.0.5:104".to_string(),
+            }));
+        let PipelineFailure::Failed(find) = pipeline_failure(Operation::Query, &error) else {
+            panic!("an upstream failure is a failure");
+        };
+        assert_eq!(find.status_code(), Some(0xA700));
+        assert_eq!(
+            failed_status(pipeline_failure(Operation::Retrieve, &error)),
+            0xA701
+        );
+        let generic = PipelineError::ConfigError("no backend".to_string());
+        assert_eq!(
+            failed_status(pipeline_failure(Operation::Move, &generic)),
+            0x0110
+        );
     }
 
     /// The final response of a store pipeline, as `store` sees it.

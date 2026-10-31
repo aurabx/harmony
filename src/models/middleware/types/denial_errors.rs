@@ -40,8 +40,9 @@ pub struct AccessDenied(pub String);
 /// A backend reported that the requested operation failed, for example a
 /// DIMSE C-FIND, C-GET or C-MOVE that could not reach the remote PACS.
 /// The HTTP adapters answer with 502 Bad Gateway.
-/// `status_mapper::pipeline_error_to_dimse` maps it to 0xA701, but the DIMSE
-/// adapter does not call that function yet and sends 0xC000.
+/// `status_mapper::pipeline_error_to_dimse` maps it to 0xA701. The DIMSE
+/// adapter sends that to a C-GET or C-MOVE client, and 0xA700 to a C-FIND
+/// client, because PS3.4 defines 0xA701 only for C-GET and C-MOVE.
 ///
 /// The message names the operation and carries the raw backend error, which
 /// often includes hosts, ports and AE titles. It is for server logs only.

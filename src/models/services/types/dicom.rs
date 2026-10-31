@@ -215,26 +215,7 @@ impl ServiceHandler<Value> for DicomScuBackend {
             .await
             .map_err(|e| Error::from(format!("dicom_scu backend request failed: {}", e)))?;
 
-        // Detect error conditions and set appropriate HTTP status
-        let status = if let Some(ref normalized) = envelope.normalized_data {
-            if let Some(error) = normalized.get("error") {
-                if error.as_str() == Some("Study not found") {
-                    404
-                } else {
-                    500
-                }
-            } else if let Some(success) = normalized.get("success") {
-                if success.as_bool() == Some(false) {
-                    500 // DICOM operation failed
-                } else {
-                    200
-                }
-            } else {
-                200
-            }
-        } else {
-            200
-        };
+        let (status, metadata) = backend_response_status(envelope.normalized_data.as_ref());
 
         let mut headers = HashMap::new();
         headers.insert("content-type".to_string(), "application/json".to_string());
@@ -250,7 +231,7 @@ impl ServiceHandler<Value> for DicomScuBackend {
             status,
             headers,
             body,
-            None,
+            metadata,
             envelope.command.clone(),
         );
 
@@ -1513,6 +1494,36 @@ pub(crate) fn resolve_dimse_op(
         .unwrap_or_else(|| "get".to_string())
 }
 
+/// Response metadata key the `dicom_scu` backend sets to `"true"` when a
+/// C-MOVE found no study to move. Its HTTP status is then 404. The DIMSE
+/// adapter answers this with Success and zero sub-operations, as PS3.4 does
+/// for a retrieve that matches nothing.
+pub const STUDY_NOT_FOUND_METADATA_KEY: &str = "dicom_study_not_found";
+
+/// The HTTP status and response metadata for a `dicom_scu` result body.
+///
+/// "Study not found" is 404, `"success": false` or any other error is 500,
+/// and everything else is 200. A 404 alone can also mean a denial or a wrong
+/// route, so a study that was not found also gets the
+/// `STUDY_NOT_FOUND_METADATA_KEY` mark.
+fn backend_response_status(normalized: Option<&Value>) -> (u16, Option<HashMap<String, String>>) {
+    let Some(normalized) = normalized else {
+        return (200, None);
+    };
+    if let Some(error) = normalized.get("error") {
+        if error.as_str() == Some("Study not found") {
+            let metadata =
+                HashMap::from([(STUDY_NOT_FOUND_METADATA_KEY.to_string(), "true".to_string())]);
+            return (404, Some(metadata));
+        }
+        return (500, None);
+    }
+    if normalized.get("success").and_then(Value::as_bool) == Some(false) {
+        return (500, None);
+    }
+    (200, None)
+}
+
 /// The backend response for a failed C-FIND, C-GET or C-MOVE.
 ///
 /// Any endpoint may send this JSON to its client, so `error` holds a fixed
@@ -1636,6 +1647,40 @@ mod tests {
     }
 
     // ── 1. Command takes priority ─────────────────────────────────────────────
+
+    #[test]
+    fn study_not_found_is_404_with_the_typed_mark() {
+        let (status, metadata) =
+            backend_response_status(Some(&serde_json::json!({"error": "Study not found"})));
+        assert_eq!(status, 404);
+        assert_eq!(
+            metadata
+                .as_ref()
+                .and_then(|m| m.get(STUDY_NOT_FOUND_METADATA_KEY))
+                .map(String::as_str),
+            Some("true")
+        );
+    }
+
+    #[test]
+    fn other_results_carry_no_study_not_found_mark() {
+        for (body, expected) in [
+            (Some(serde_json::json!({"error": "C-MOVE failed"})), 500),
+            (
+                Some(serde_json::json!({"operation": "find", "success": false})),
+                500,
+            ),
+            (
+                Some(serde_json::json!({"operation": "find", "success": true})),
+                200,
+            ),
+            (None, 200),
+        ] {
+            let (status, metadata) = backend_response_status(body.as_ref());
+            assert_eq!(status, expected, "{body:?}");
+            assert!(metadata.is_none(), "{body:?}");
+        }
+    }
 
     #[test]
     fn test_command_query_maps_to_find() {

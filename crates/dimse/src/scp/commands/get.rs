@@ -162,7 +162,7 @@ pub async fn handle_c_get(
         // retrieval's own status is the answer.
         Some(code) if counts.completed == 0 && counts.warning == 0 => code,
         _ if counts.failed > 0 => {
-            if counts.completed > 0 {
+            if counts.completed > 0 || counts.warning > 0 {
                 0xB000 // One or more failures (Warning)
             } else {
                 0xA702 // Unable to perform sub-operations (Refused)
