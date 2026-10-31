@@ -138,8 +138,8 @@ impl TargetDetails {
     /// The HTTP adapters reject these on the client's path, but middleware can
     /// write `uri` later, for example a JOLT spec that copies a client value.
     /// The HTTP client would resolve the segment and leave the backend's base
-    /// path with the target credential. Every send path calls this, including
-    /// those that do not use [`Self::full_url`].
+    /// path with the target credential. Every backend that reads `target_details`
+    /// calls this, including its HTTP/3 send paths, which skip [`Self::full_url`].
     pub fn reject_dot_segment_uri(&self) -> Result<(), crate::utils::Error> {
         if crate::adapters::http::common::has_dot_segment(&self.uri) {
             return Err("target uri holds a dot segment".into());
