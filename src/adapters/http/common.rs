@@ -8,6 +8,20 @@ use http::{HeaderMap, Method, Uri};
 use std::collections::HashMap;
 use std::net::SocketAddr;
 
+/// Return true when a request path holds a `.` or `..` segment, percent-encoded
+/// or not.
+///
+/// The HTTP client resolves these segments when it parses the upstream URL, but
+/// routing and `path_filter` see them unresolved. A client could use one to
+/// leave the backend's base path, with Harmony's credential, or to pass an allow
+/// rule. The URL parser also treats `\\` as `/`, so it splits segments here too.
+pub fn has_dot_segment(path: &str) -> bool {
+    path.split(['/', '\\']).any(|segment| {
+        let decoded = segment.to_ascii_lowercase().replace("%2e", ".");
+        decoded == "." || decoded == ".."
+    })
+}
+
 /// Build a `ProtocolCtx` from HTTP request components.
 ///
 /// This is a shared helper that can be used by both HTTP/1 (Axum) and HTTP/3 (h3)
@@ -173,6 +187,37 @@ pub fn get_path_prefix(options: &HashMap<String, serde_json::Value>) -> &str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn has_dot_segment_finds_plain_and_encoded_forms() {
+        for path in [
+            "/a/../b",
+            "/a/./b",
+            "/a/..",
+            "/a/%2e%2e/b",
+            "/a/%2E%2E/b",
+            "/a/.%2e/b",
+            "/a/%2e./b",
+            "/a/%2e/b",
+            "/a\\..\\b",
+        ] {
+            assert!(has_dot_segment(path), "{}", path);
+        }
+    }
+
+    #[test]
+    fn has_dot_segment_ignores_ordinary_paths() {
+        for path in [
+            "/",
+            "/a/b",
+            "/a/..b/c",
+            "/a/b../c",
+            "/file.json",
+            "/a/%252e%252e/b",
+        ] {
+            assert!(!has_dot_segment(path), "{}", path);
+        }
+    }
     use http::header::COOKIE;
 
     #[test]

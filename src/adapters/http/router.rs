@@ -250,6 +250,10 @@ fn mesh_tables_match(built_from: &Arc<Config>, live: &Arc<Config>) -> bool {
 /// The config is read once, so route lookup and the pipeline run see the
 /// same config even if a reload lands mid-request.
 async fn dispatch_request(mut req: Request, routes: Arc<LiveRouteTable>) -> Response<Body> {
+    if super::common::has_dot_segment(req.uri().path()) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
+
     let config = match live_config() {
         Ok(config) => config,
         Err(status) => return status.into_response(),
@@ -287,6 +291,10 @@ async fn mesh_routing_layer(
     mesh_source: Arc<MeshSource>,
 ) -> Response<Body> {
     use crate::models::mesh::config::IngressEgressMode;
+
+    if super::common::has_dot_segment(req.uri().path()) {
+        return StatusCode::BAD_REQUEST.into_response();
+    }
 
     // Extract URL components for mesh matching
     let (scheme, host, port, path) = extract_request_url_parts(&req);

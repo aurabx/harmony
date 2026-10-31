@@ -4,10 +4,11 @@
 //! headers through [`upstream_request_headers`]. The filter enforces one rule
 //! set for all backends:
 //!
-//! - `Host`, the RFC 9110 §7.6.1 hop-by-hop headers, any header named in the
-//!   inbound `Connection` header, and `Content-Length` are always removed. The
-//!   HTTP client sets `Host` from the URL and `Content-Length` from the body it
-//!   actually sends.
+//! - `Host`, the RFC 9110 §7.6.1 hop-by-hop headers and `Content-Length` are
+//!   always removed. The HTTP client sets `Host` from the URL and
+//!   `Content-Length` from the body it actually sends.
+//! - A client header named in the `Connection` header is removed. A header
+//!   Harmony set is kept, so a client cannot remove the mesh JWT this way.
 //! - The client's `Authorization` header is removed unless the backend sets
 //!   `forward_authorization = true`. Even then it is removed when Harmony sends
 //!   its own credential (target authentication or a middleware-set header such
@@ -110,7 +111,12 @@ pub fn upstream_request_headers(
     let mut forwarded = HashMap::with_capacity(outgoing.len());
     for (name, value) in outgoing {
         let lower = name.to_ascii_lowercase();
-        if ALWAYS_STRIPPED.contains(&lower.as_str()) || connection_named.contains(&lower) {
+        if ALWAYS_STRIPPED.contains(&lower.as_str()) {
+            continue;
+        }
+        if connection_named.contains(&lower)
+            && header_values(inbound, &lower).any(|inbound_value| inbound_value == value)
+        {
             continue;
         }
 
@@ -202,6 +208,27 @@ mod tests {
         assert_eq!(
             out,
             headers(&[("accept", "application/json"), ("x-request-id", "abc")])
+        );
+    }
+
+    #[test]
+    fn connection_header_cannot_remove_a_header_harmony_set() {
+        let inbound = headers(&[
+            ("connection", "authorization, x-identity"),
+            ("x-identity", "client"),
+        ]);
+        let outgoing = headers(&[
+            ("connection", "authorization, x-identity"),
+            ("x-identity", "harmony"),
+            ("Authorization", "Bearer mesh-jwt"),
+        ]);
+        let out = upstream_request_headers(&outgoing, &inbound, policy(false, false), "test");
+        assert_eq!(
+            out,
+            headers(&[
+                ("x-identity", "harmony"),
+                ("Authorization", "Bearer mesh-jwt")
+            ])
         );
     }
 

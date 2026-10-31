@@ -1,4 +1,4 @@
-use crate::adapters::http::common::{build_protocol_ctx, get_path_prefix};
+use crate::adapters::http::common::{build_protocol_ctx, get_path_prefix, has_dot_segment};
 use crate::adapters::http::router::map_pipeline_error_to_status;
 use crate::adapters::ProtocolAdapter;
 use crate::config::config::Config;
@@ -292,6 +292,14 @@ pub async fn handle_connection(
                 let headers = parts.headers;
 
                 let path = uri.path().to_string();
+                if has_dot_segment(&path) {
+                    let resp = HttpResponse::builder()
+                        .status(http::StatusCode::BAD_REQUEST)
+                        .body(())?;
+                    stream.send_response(resp).await?;
+                    stream.finish().await?;
+                    continue;
+                }
                 let normalized_path = if path != "/" && path.ends_with('/') {
                     path.trim_end_matches('/').to_string()
                 } else {

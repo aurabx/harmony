@@ -221,6 +221,7 @@ impl StreamingBackend for HttpStreamingBackend {
         // Build HTTP client
         let client = reqwest::Client::builder()
             .timeout(std::time::Duration::from_secs(300)) // 5 minute total timeout
+            .redirect(crate::models::services::backend_auth::upstream_redirect_policy(options))
             .build()
             .map_err(|e| Error::from(format!("Failed to create HTTP client: {}", e)))?;
 
