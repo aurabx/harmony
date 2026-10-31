@@ -564,6 +564,59 @@ async fn dot_segment_paths_are_rejected_before_the_backend() {
     assert!(upstream.recorded.lock().unwrap().is_empty());
 }
 
+/// A `metadata_transform` copies the client's `x-next` header into
+/// `target_details.uri`, then the request goes to a credentialed backend.
+async fn send_with_client_chosen_target_uri(upstream: &Upstream, value: &str) -> StatusCode {
+    let dir = tempfile::tempdir().unwrap();
+    let spec_path = dir.path().join("spec.json");
+    std::fs::write(
+        &spec_path,
+        r#"[{ "operation": "shift", "spec": { "headers": { "x-next": "uri" } } }]"#,
+    )
+    .unwrap();
+    let extra = format!(
+        r#"
+        [middleware.copy_next]
+        type = "metadata_transform"
+        [middleware.copy_next.options]
+        spec_path = "{}"
+    "#,
+        spec_path.display()
+    );
+    let toml = proxy_config(
+        "http",
+        &upstream.base_url,
+        r#"authentication = "target-key""#,
+        "",
+        &extra,
+    )
+    .replace("middleware = []", r#"middleware = ["copy_next"]"#);
+
+    send(load_config(&toml), &[("x-next", value)]).await
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn transform_cannot_send_a_dot_segment_uri_to_the_upstream() {
+    let upstream = start_recording_upstream().await;
+
+    let status = send_with_client_chosen_target_uri(&upstream, "/../admin").await;
+
+    assert_eq!(status, StatusCode::BAD_GATEWAY);
+    assert!(upstream.recorded.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn transform_can_send_an_ordinary_uri_to_the_upstream() {
+    let upstream = start_recording_upstream().await;
+
+    let status = send_with_client_chosen_target_uri(&upstream, "/allowed").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(upstream.has(&API_KEY_HEADER.to_ascii_lowercase()));
+}
+
 /// An upstream that answers every request with a redirect to `location`.
 async fn start_redirecting_upstream(location: String) -> String {
     let app = Router::new().route(
@@ -696,6 +749,25 @@ async fn http_streaming_does_not_follow_cross_origin_redirect_with_credential() 
     assert!(other_origin.recorded.lock().unwrap().is_empty());
 }
 
+#[tokio::test]
+#[serial_test::serial]
+async fn http_streaming_rejects_dot_segment_set_by_middleware() {
+    let upstream = start_recording_upstream().await;
+    let mut options = streaming_auth_option(target_key_definition());
+    options.insert(
+        "base_url".to_string(),
+        serde_json::Value::String(upstream.base_url.clone()),
+    );
+
+    let error = open_stream_to_path(options, HashMap::new(), "x/../admin")
+        .await
+        .err()
+        .expect("dot segment rejected");
+
+    assert!(error.contains("dot segment"), "{}", error);
+    assert!(upstream.recorded.lock().unwrap().is_empty());
+}
+
 fn streaming_auth_option(auth_definition: serde_json::Value) -> HashMap<String, serde_json::Value> {
     HashMap::from([("authentication_def".to_string(), auth_definition)])
 }
@@ -789,14 +861,19 @@ async fn open_stream(
     options: HashMap<String, serde_json::Value>,
     headers: HashMap<String, String>,
 ) -> Result<harmony::models::services::streaming::ResponseStream, String> {
+    open_stream_to_path(options, headers, "resource").await
+}
+
+async fn open_stream_to_path(
+    options: HashMap<String, serde_json::Value>,
+    headers: HashMap<String, String>,
+    path: &str,
+) -> Result<harmony::models::services::streaming::ResponseStream, String> {
     let envelope = RequestEnvelope::<Vec<u8>>::builder()
         .method("GET")
         .uri("/proxy/resource")
         .headers(headers)
-        .metadata(HashMap::from([(
-            "path".to_string(),
-            "resource".to_string(),
-        )]))
+        .metadata(HashMap::from([("path".to_string(), path.to_string())]))
         .original_data(Vec::new())
         .build()
         .unwrap();

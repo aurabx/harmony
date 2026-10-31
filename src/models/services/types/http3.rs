@@ -247,6 +247,8 @@ impl ServiceHandler<Value> for Http3Backend {
 
         envelope.target_details = Some(target_details.clone());
 
+        target_details.reject_dot_segment_uri()?;
+
         // Create HTTP/3 client
         let client = if let Some(ref ca_path) = conn.ca_cert_path {
             let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
@@ -384,6 +386,31 @@ impl ServiceHandler<Value> for Http3Backend {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[tokio::test]
+    async fn outgoing_request_rejects_dot_segment_uri_before_connecting() {
+        let mut envelope = RequestEnvelope::<Vec<u8>>::builder()
+            .method("GET")
+            .uri("/resource")
+            .original_data(Vec::new())
+            .build()
+            .unwrap();
+        envelope.target_details = Some(TargetDetails {
+            uri: "/../admin".to_string(),
+            ..TargetDetails::default()
+        });
+        let options = HashMap::from([
+            ("host".to_string(), serde_json::json!("127.0.0.1")),
+            ("port".to_string(), serde_json::json!(1)),
+        ]);
+
+        let error = Http3Backend::default()
+            .backend_outgoing_request(envelope, &options)
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("dot segment"), "{}", error);
+    }
 
     #[test]
     fn test_validate_with_host() {

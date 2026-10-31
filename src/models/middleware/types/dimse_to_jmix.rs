@@ -544,6 +544,17 @@ async fn build_jmix_package(
     Ok((zip_path, jmix_id))
 }
 
+/// Client settings for the JMIX upload.
+///
+/// The redirect policy stops a move from https to http, which would resend the
+/// study ZIP in clear text. The 3xx response then fails the upload. The options
+/// are empty because this middleware has no `authentication` definition.
+fn upload_client_builder() -> reqwest::ClientBuilder {
+    reqwest::Client::builder()
+        .timeout(Duration::from_secs(60))
+        .redirect(crate::models::services::backend_auth::upstream_redirect_policy(&HashMap::new()))
+}
+
 async fn post_zip_upstream(zip_path: &Path, state: &StudyState) -> Result<(), String> {
     let base = state.upstream_base_url.trim_end_matches('/');
     let path = if state.upstream_path.starts_with('/') {
@@ -557,8 +568,7 @@ async fn post_zip_upstream(zip_path: &Path, state: &StudyState) -> Result<(), St
         .await
         .map_err(|e| format!("read zip {}: {}", zip_path.display(), e))?;
 
-    let client = reqwest::Client::builder()
-        .timeout(Duration::from_secs(60))
+    let client = upload_client_builder()
         .build()
         .map_err(|e| format!("build reqwest client: {}", e))?;
 
@@ -628,6 +638,64 @@ mod tests {
     use crate::storage::{FilesystemStorage, StorageBackend};
     use serial_test::serial;
     use std::sync::Arc;
+
+    #[tokio::test]
+    async fn upload_client_does_not_follow_https_to_http_redirect() {
+        use axum::http::StatusCode;
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        // Both rustls providers are linked, so the test chooses the one the
+        // binary installs at startup. Another test may have installed it first.
+        let _ = rustls::crypto::aws_lc_rs::default_provider().install_default();
+
+        let plain_hits = Arc::new(AtomicUsize::new(0));
+        let counter = plain_hits.clone();
+        let plain_app = axum::Router::new().fallback(move || {
+            counter.fetch_add(1, Ordering::SeqCst);
+            async { StatusCode::OK }
+        });
+        let plain_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let location = format!("http://{}/api/jmix", plain_listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(plain_listener, plain_app).await.unwrap();
+        });
+
+        let cert = rcgen::generate_simple_self_signed(vec!["localhost".to_string()]).unwrap();
+        let tls = axum_server::tls_rustls::RustlsConfig::from_pem(
+            cert.serialize_pem().unwrap().into_bytes(),
+            cert.serialize_private_key_pem().into_bytes(),
+        )
+        .await
+        .unwrap();
+        let tls_listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let tls_port = tls_listener.local_addr().unwrap().port();
+        let tls_app = axum::Router::new().fallback(move || {
+            let location = location.clone();
+            async move { (StatusCode::TEMPORARY_REDIRECT, [("location", location)]) }
+        });
+        tokio::spawn(async move {
+            axum_server::from_tcp_rustls(tls_listener, tls)
+                .serve(tls_app.into_make_service())
+                .await
+                .unwrap();
+        });
+
+        // The server's certificate is self-signed. Trusting it changes nothing
+        // else in the builder under test.
+        let client = upload_client_builder()
+            .danger_accept_invalid_certs(true)
+            .build()
+            .unwrap();
+        let response = client
+            .post(format!("https://localhost:{}/api/jmix", tls_port))
+            .body("zip")
+            .send()
+            .await
+            .unwrap();
+
+        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        assert_eq!(plain_hits.load(Ordering::SeqCst), 0);
+    }
 
     fn create_test_storage(prefix: &str) -> Arc<FilesystemStorage> {
         let id = uuid::Uuid::new_v4();
