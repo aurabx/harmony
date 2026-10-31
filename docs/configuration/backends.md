@@ -117,7 +117,7 @@ If a backend has `bearer` or `basic` authentication and middleware also sets `Au
 
 A request path with a `.` or `..` segment gets 400 and never reaches middleware or a backend. This includes percent-encoded forms such as `%2e%2e`. It applies to HTTP and HTTP/3, on every endpoint and mesh ingress.
 
-A backend applies the same check to the path it sends, because middleware can change that path after the first check. A `transform` that writes such a value to `target_details.uri` fails the request before anything reaches the upstream. See [Transform Middleware](middleware-transforms.md#transform-jolt).
+The `http`, `http3`, `fhir`, `jmix_backend` and `http_streaming_backend` backends apply the same check to the path they send, because middleware can change that path after the first check. A `transform` that writes such a value to `target_details.uri` fails the request before anything reaches the upstream. See [Transform Middleware](middleware-transforms.md#transform-jolt).
 
 A backend with `authentication` follows a redirect only to the same origin (scheme, host and port), for up to 10 redirects. A redirect to another origin is not followed, so the credential stays with the configured upstream. The `http`, `fhir` and `jmix_backend` backends return the 3xx response to the client, and `http_streaming_backend` fails the request. A backend with no `authentication` follows redirects to any origin. No backend follows a redirect from https to http. The `webhook` middleware uses the same rules. The `dimse_to_jmix` upload does not follow a redirect from https to http either, and the upload then fails.
 

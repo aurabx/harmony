@@ -27,6 +27,9 @@ const CLIENT_API_KEY_HEADER: &str = "X-HARMONY-KEY";
 const TARGET_API_KEY: &str = "target-api-key-456";
 const CLIENT_API_KEY: &str = "client-api-key-789";
 
+/// Recorded beside the headers. The colon keeps it apart from any header name.
+const REQUEST_PATH: &str = ":path";
+
 /// Every header the upstream received, lowercased name first, in arrival order.
 type Recorded = Arc<Mutex<Vec<(String, String)>>>;
 
@@ -61,24 +64,27 @@ async fn start_recording_upstream() -> Upstream {
     let sink = recorded.clone();
     let app = Router::new().route(
         "/{*path}",
-        any(move |headers: axum::http::HeaderMap| {
-            let sink = sink.clone();
-            async move {
-                let mut all = sink.lock().unwrap();
-                all.clear();
-                for (name, value) in headers.iter() {
-                    all.push((
-                        name.as_str().to_string(),
-                        value.to_str().unwrap_or("<non-utf8>").to_string(),
-                    ));
+        any(
+            move |uri: axum::http::Uri, headers: axum::http::HeaderMap| {
+                let sink = sink.clone();
+                async move {
+                    let mut all = sink.lock().unwrap();
+                    all.clear();
+                    all.push((REQUEST_PATH.to_string(), uri.path().to_string()));
+                    for (name, value) in headers.iter() {
+                        all.push((
+                            name.as_str().to_string(),
+                            value.to_str().unwrap_or("<non-utf8>").to_string(),
+                        ));
+                    }
+                    // NDJSON so the same upstream also serves the streaming backend.
+                    (
+                        [("content-type", "application/x-ndjson")],
+                        "{\"ok\":true}\n",
+                    )
                 }
-                // NDJSON so the same upstream also serves the streaming backend.
-                (
-                    [("content-type", "application/x-ndjson")],
-                    "{\"ok\":true}\n",
-                )
-            }
-        }),
+            },
+        ),
     );
 
     let listener = TcpListener::bind("127.0.0.1:0").await.unwrap();
@@ -597,10 +603,92 @@ async fn send_with_client_chosen_target_uri(upstream: &Upstream, value: &str) ->
 
 #[tokio::test]
 #[serial_test::serial]
+async fn metadata_transform_cannot_send_a_dot_segment_uri_to_the_upstream() {
+    let upstream = start_recording_upstream().await;
+
+    for value in ["/../admin", "/.\t./admin", "/x/%2e%2e/admin"] {
+        let status = send_with_client_chosen_target_uri(&upstream, value).await;
+        assert_eq!(status, StatusCode::BAD_GATEWAY, "{:?}", value);
+    }
+    assert!(upstream.recorded.lock().unwrap().is_empty());
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn metadata_transform_can_send_an_ordinary_uri_to_the_upstream() {
+    let upstream = start_recording_upstream().await;
+
+    let status = send_with_client_chosen_target_uri(&upstream, "/allowed").await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(upstream.values(REQUEST_PATH), vec!["/allowed".to_string()]);
+    assert!(upstream.has(&API_KEY_HEADER.to_ascii_lowercase()));
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn relative_target_uri_cannot_move_the_credential_to_another_host() {
+    let upstream = start_recording_upstream().await;
+    let other_host = start_recording_upstream().await;
+    let value = format!("@{}/steal", other_host.authority());
+
+    let status = send_with_client_chosen_target_uri(&upstream, &value).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert!(other_host.recorded.lock().unwrap().is_empty());
+    assert_eq!(upstream.values(REQUEST_PATH), vec![format!("/{}", value)]);
+}
+
+/// A `transform` copies `next` from the JSON body into `target_details.uri`,
+/// then the request goes to a credentialed backend.
+async fn post_with_client_chosen_target_uri(upstream: &Upstream, value: &str) -> StatusCode {
+    let dir = tempfile::tempdir().unwrap();
+    let spec_path = dir.path().join("spec.json");
+    std::fs::write(
+        &spec_path,
+        r#"[{ "operation": "shift", "spec": { "data": { "next": "context.target_details.uri" } } }]"#,
+    )
+    .unwrap();
+    let extra = format!(
+        r#"
+        [middleware.copy_next]
+        type = "transform"
+        [middleware.copy_next.options]
+        spec_path = "{}"
+    "#,
+        spec_path.display()
+    );
+    let toml = proxy_config(
+        "http",
+        &upstream.base_url,
+        r#"authentication = "target-key""#,
+        "",
+        &extra,
+    )
+    .replace("middleware = []", r#"middleware = ["copy_next"]"#);
+
+    let config = Arc::new(load_config(&toml));
+    harmony::globals::set_config(config.clone());
+    let app = harmony::router::build_network_router(config, "default").await;
+    let body = serde_json::json!({ "next": value }).to_string();
+    let request = Request::builder()
+        .uri("/proxy/resource")
+        .method("POST")
+        .header("content-type", "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    app.oneshot(request)
+        .await
+        .expect("router handled request")
+        .status()
+}
+
+#[tokio::test]
+#[serial_test::serial]
 async fn transform_cannot_send_a_dot_segment_uri_to_the_upstream() {
     let upstream = start_recording_upstream().await;
 
-    let status = send_with_client_chosen_target_uri(&upstream, "/../admin").await;
+    let status = post_with_client_chosen_target_uri(&upstream, "/../admin").await;
 
     assert_eq!(status, StatusCode::BAD_GATEWAY);
     assert!(upstream.recorded.lock().unwrap().is_empty());
@@ -611,10 +699,10 @@ async fn transform_cannot_send_a_dot_segment_uri_to_the_upstream() {
 async fn transform_can_send_an_ordinary_uri_to_the_upstream() {
     let upstream = start_recording_upstream().await;
 
-    let status = send_with_client_chosen_target_uri(&upstream, "/allowed").await;
+    let status = post_with_client_chosen_target_uri(&upstream, "/allowed").await;
 
     assert_eq!(status, StatusCode::OK);
-    assert!(upstream.has(&API_KEY_HEADER.to_ascii_lowercase()));
+    assert_eq!(upstream.values(REQUEST_PATH), vec!["/allowed".to_string()]);
 }
 
 /// An upstream that answers every request with a redirect to `location`.

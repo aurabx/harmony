@@ -556,6 +556,17 @@ fn upload_client_builder() -> reqwest::ClientBuilder {
 }
 
 async fn post_zip_upstream(zip_path: &Path, state: &StudyState) -> Result<(), String> {
+    let client = upload_client_builder()
+        .build()
+        .map_err(|e| format!("build reqwest client: {}", e))?;
+    send_zip(&client, zip_path, state).await
+}
+
+async fn send_zip(
+    client: &reqwest::Client,
+    zip_path: &Path,
+    state: &StudyState,
+) -> Result<(), String> {
     let base = state.upstream_base_url.trim_end_matches('/');
     let path = if state.upstream_path.starts_with('/') {
         state.upstream_path.clone()
@@ -567,10 +578,6 @@ async fn post_zip_upstream(zip_path: &Path, state: &StudyState) -> Result<(), St
     let bytes = tokio::fs::read(zip_path)
         .await
         .map_err(|e| format!("read zip {}: {}", zip_path.display(), e))?;
-
-    let client = upload_client_builder()
-        .build()
-        .map_err(|e| format!("build reqwest client: {}", e))?;
 
     let mut req = client.post(&url).body(bytes);
     for (k, v) in &state.upstream_headers {
@@ -686,14 +693,22 @@ mod tests {
             .danger_accept_invalid_certs(true)
             .build()
             .unwrap();
-        let response = client
-            .post(format!("https://localhost:{}/api/jmix", tls_port))
-            .body("zip")
-            .send()
-            .await
-            .unwrap();
+        let zip_dir = tempfile::tempdir().unwrap();
+        let zip_path = zip_dir.path().join("package.zip");
+        std::fs::write(&zip_path, "zip").unwrap();
+        let state = StudyState {
+            staging_dir: PathBuf::new(),
+            last_touch: Instant::now(),
+            upstream_base_url: format!("https://localhost:{}", tls_port),
+            upstream_path: "/api/jmix".to_string(),
+            upstream_headers: HashMap::new(),
+            skip_hashing: false,
+            skip_listing: false,
+        };
 
-        assert_eq!(response.status(), StatusCode::TEMPORARY_REDIRECT);
+        let error = send_zip(&client, &zip_path, &state).await.unwrap_err();
+
+        assert!(error.contains("307"), "{}", error);
         assert_eq!(plain_hits.load(Ordering::SeqCst), 0);
     }
 
