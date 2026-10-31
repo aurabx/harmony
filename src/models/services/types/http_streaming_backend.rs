@@ -237,12 +237,20 @@ impl StreamingBackend for HttpStreamingBackend {
 
         // This backend sends the client's headers (it does not read
         // target_details), so every candidate header is an inbound one.
-        for (key, value) in upstream_request_headers(
+        let mut headers = upstream_request_headers(
             &envelope.request_details.headers,
             &envelope.request_details.headers,
             InboundAuthorizationPolicy::from_backend_options(options)?,
             "HTTP streaming",
-        ) {
+        );
+        // RequestBuilder::header appends, so the target's credential must go
+        // into the map, where it replaces a same-named header in any letter case.
+        crate::models::services::backend_auth::apply_backend_authentication_to_headers(
+            &mut headers,
+            options,
+            "HTTP streaming",
+        );
+        for (key, value) in headers {
             request = request.header(key, value);
         }
 

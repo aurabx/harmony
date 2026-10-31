@@ -3,7 +3,7 @@
 //! A recording upstream captures every header it receives, including repeated
 //! ones, so the tests can prove that the upstream gets exactly one
 //! `Authorization` header and never the client's credential by default.
-//! Linear: AURA-2433, AURA-2411, AURA-2427.
+//! Linear: AURA-2433, AURA-2411, AURA-2427, AURA-2584.
 
 use axum::body::Body;
 use axum::http::{Request, StatusCode};
@@ -22,6 +22,10 @@ use tower::ServiceExt;
 const CLIENT_AUTH: &str = "Basic Y2xpZW50OmNsaWVudC1wYXNzd29yZA==";
 const TARGET_TOKEN: &str = "target-token-123";
 const MESH_SECRET: &str = "backend-header-forwarding-mesh-secret";
+const API_KEY_HEADER: &str = "X-Harmony-Key";
+const CLIENT_API_KEY_HEADER: &str = "X-HARMONY-KEY";
+const TARGET_API_KEY: &str = "target-api-key-456";
+const CLIENT_API_KEY: &str = "client-api-key-789";
 
 /// Every header the upstream received, lowercased name first, in arrival order.
 type Recorded = Arc<Mutex<Vec<(String, String)>>>;
@@ -125,6 +129,13 @@ fn proxy_config(
         [authentications.target-bearer.options]
         token = "{token}"
 
+        [authentications.target-key]
+        id = "target-key"
+        method = "api_key"
+        [authentications.target-key.options]
+        api_key = "{api_key}"
+        header_name = "{api_key_header}"
+
         [pipelines.core]
         networks = ["default"]
         endpoints = ["http_in"]
@@ -152,6 +163,8 @@ fn proxy_config(
         {extra}
     "#,
         token = TARGET_TOKEN,
+        api_key = TARGET_API_KEY,
+        api_key_header = API_KEY_HEADER,
     )
 }
 
@@ -386,6 +399,138 @@ async fn mesh_egress_jwt_wins_over_forwarded_client_auth() {
     assert_mesh_egress_sends_only_mesh_jwt("forward_authorization = true").await;
 }
 
+async fn assert_client_api_key_is_replaced(service: &str, extra: &str) {
+    let upstream = start_recording_upstream().await;
+    let config = load_config(&proxy_config(
+        service,
+        &upstream.base_url,
+        r#"authentication = "target-key""#,
+        "",
+        extra,
+    ));
+
+    let status = send(
+        config,
+        &[
+            (CLIENT_API_KEY_HEADER, CLIENT_API_KEY),
+            ("x-correlation-id", "corr-42"),
+        ],
+    )
+    .await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        upstream.values(&API_KEY_HEADER.to_ascii_lowercase()),
+        vec![TARGET_API_KEY.to_string()]
+    );
+    assert_eq!(
+        upstream.values("x-correlation-id"),
+        vec!["corr-42".to_string()]
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn http_client_api_key_never_reaches_the_upstream() {
+    assert_client_api_key_is_replaced("http", "").await;
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn fhir_client_api_key_never_reaches_the_upstream() {
+    assert_client_api_key_is_replaced("fhir", "").await;
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn jmix_client_api_key_never_reaches_the_upstream() {
+    assert_client_api_key_is_replaced(
+        "jmix_backend",
+        r#"
+        [services.jmix_backend]
+        module = ""
+        "#,
+    )
+    .await;
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn target_bearer_replaces_mesh_jwt_so_one_authorization_is_sent() {
+    let upstream = start_recording_upstream().await;
+    let config = load_config(&proxy_config(
+        "http",
+        &upstream.base_url,
+        r#"authentication = "target-bearer""#,
+        "",
+        &mesh_egress_extra(&upstream.base_url),
+    ));
+
+    let status = send(config, &[("authorization", CLIENT_AUTH)]).await;
+
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        upstream.values("authorization"),
+        vec![format!("Bearer {}", TARGET_TOKEN)]
+    );
+}
+
+fn streaming_auth_option(auth_definition: serde_json::Value) -> HashMap<String, serde_json::Value> {
+    HashMap::from([("authentication_def".to_string(), auth_definition)])
+}
+
+fn target_key_definition() -> serde_json::Value {
+    serde_json::json!({
+        "id": "target-key",
+        "method": "api_key",
+        "options": { "api_key": TARGET_API_KEY, "header_name": API_KEY_HEADER },
+    })
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn http_streaming_client_api_key_never_reaches_the_upstream() {
+    let upstream = start_recording_upstream().await;
+    let headers = HashMap::from([(
+        CLIENT_API_KEY_HEADER.to_string(),
+        CLIENT_API_KEY.to_string(),
+    )]);
+
+    stream_headers_through_backend(
+        &upstream,
+        streaming_auth_option(target_key_definition()),
+        headers,
+    )
+    .await;
+
+    assert_eq!(
+        upstream.values(&API_KEY_HEADER.to_ascii_lowercase()),
+        vec![TARGET_API_KEY.to_string()]
+    );
+}
+
+#[tokio::test]
+#[serial_test::serial]
+async fn http_streaming_backend_sends_target_auth_exactly_once() {
+    let upstream = start_recording_upstream().await;
+    let mut options = streaming_auth_option(serde_json::json!({
+        "id": "target-bearer",
+        "method": "bearer",
+        "options": { "token": TARGET_TOKEN },
+    }));
+    options.insert(
+        "forward_authorization".to_string(),
+        serde_json::Value::Bool(true),
+    );
+
+    stream_through_backend(&upstream, options).await;
+
+    assert_eq!(
+        upstream.values("authorization"),
+        vec![format!("Bearer {}", TARGET_TOKEN)]
+    );
+}
+
 async fn stream_through_backend(
     upstream: &Upstream,
     options: HashMap<String, serde_json::Value>,
@@ -400,6 +545,14 @@ async fn stream_through_backend(
         ),
         ("x-correlation-id".to_string(), "corr-42".to_string()),
     ]);
+    stream_headers_through_backend(upstream, options, headers).await
+}
+
+async fn stream_headers_through_backend(
+    upstream: &Upstream,
+    options: HashMap<String, serde_json::Value>,
+    headers: HashMap<String, String>,
+) -> usize {
     let envelope = RequestEnvelope::<Vec<u8>>::builder()
         .method("GET")
         .uri("/proxy/resource")

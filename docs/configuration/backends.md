@@ -105,7 +105,11 @@ Harmony never sends two `Authorization` headers. When Harmony sends its own cred
 - the backend's authentication (`authentication`, or the `authentication` of its `target_ref`), or
 - an `Authorization` header set by middleware, such as the mesh egress JWT.
 
+If a backend has both, the backend's authentication wins and the middleware header is not sent. A mesh egress backend with `bearer` or `basic` authentication therefore sends that credential, not the mesh JWT.
+
 `forward_authorization` must be a boolean. Any other value fails the request with an error that names the option. Dropping a client `Authorization` header is logged at `debug` level. The header value is never logged.
+
+**Client copy of the target's credential header**: replaced. The backend's authentication replaces any header with the same name, in any letter case. A client that sends its own `X-API-Key` to a backend whose `api_key` authentication uses that `header_name` does not reach the upstream with it, and the upstream receives one value. `http_streaming_backend` sends the backend's authentication in the same way as the other backends.
 
 **Everything else** passes through unchanged. This includes `Accept`, `Content-Type` and custom `X-` headers.
 

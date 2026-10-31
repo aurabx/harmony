@@ -590,20 +590,20 @@ impl HttpEndpoint {
             }
         };
 
-        // Apply authentication if present in backend options
-        request_builder = crate::models::services::backend_auth::apply_backend_authentication(
-            request_builder,
+        let mut headers = upstream_request_headers(
+            &target_details.headers,
+            &envelope.request_details.headers,
+            InboundAuthorizationPolicy::from_backend_options(options)?,
+            "HTTP",
+        );
+        // RequestBuilder::header appends, so the target's credential must go
+        // into the map, where it replaces a same-named header in any letter case.
+        crate::models::services::backend_auth::apply_backend_authentication_to_headers(
+            &mut headers,
             options,
             "HTTP",
         );
-
-        let auth_policy = InboundAuthorizationPolicy::from_backend_options(options)?;
-        for (key, value) in upstream_request_headers(
-            &target_details.headers,
-            &envelope.request_details.headers,
-            auth_policy,
-            "HTTP",
-        ) {
+        for (key, value) in headers {
             request_builder = request_builder.header(key, value);
         }
 

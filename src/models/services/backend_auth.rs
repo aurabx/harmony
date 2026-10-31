@@ -233,8 +233,9 @@ pub fn has_backend_authentication(options: &HashMap<String, serde_json::Value>) 
 /// here mean a definition bypassed load-time checks. They log at `error`
 /// because the request then goes upstream without the credential.
 ///
-/// Transports that do not use reqwest (HTTP/3) call this directly. The reqwest
-/// path goes through [`apply_backend_authentication`], so both read the same rules.
+/// Backends that forward client headers go through
+/// [`apply_backend_authentication_to_headers`]. Requests that carry no client
+/// headers go through [`apply_backend_authentication`]. Both read the same rules.
 ///
 /// # Arguments
 /// * `options` - Backend options that may contain `authentication_def`
@@ -289,6 +290,11 @@ pub fn backend_authentication_headers(
 
 /// Apply the target's authentication headers to a reqwest RequestBuilder.
 ///
+/// `RequestBuilder::header` appends, so this suits only a request that carries
+/// no client headers. A backend that forwards client headers must use
+/// [`apply_backend_authentication_to_headers`], or a client could send a second
+/// value for the credential header.
+///
 /// See [`backend_authentication_headers`] for the supported methods.
 pub fn apply_backend_authentication(
     mut request_builder: reqwest::RequestBuilder,
@@ -301,7 +307,7 @@ pub fn apply_backend_authentication(
     request_builder
 }
 
-/// Add the target's credential to an HTTP/3 request's header map.
+/// Add the target's credential to the header map a backend sends upstream.
 ///
 /// A header the client sent under the same name, in any letter case, is
 /// replaced. The map holds names as the client wrote them, so a plain insert

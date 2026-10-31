@@ -16,6 +16,12 @@
 //! - An `Authorization` header that Harmony set (for example the mesh egress
 //!   JWT) is kept.
 //! - Every other header passes through unchanged.
+//!
+//! The filter does not add the target's credential. Each backend applies it to
+//! the filtered map with
+//! [`apply_backend_authentication_to_headers`](crate::models::services::backend_auth::apply_backend_authentication_to_headers),
+//! which replaces any header of the same name. That covers a client copy of an
+//! `api_key` header and an `Authorization` header set by middleware.
 
 use crate::utils::Error;
 use serde_json::Value;
