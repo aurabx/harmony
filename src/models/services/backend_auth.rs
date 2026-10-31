@@ -34,7 +34,7 @@ const RESERVED_API_KEY_HEADERS: &[&str] = &[
 ];
 
 /// Matches the limit of reqwest's default redirect policy.
-const MAX_CREDENTIALED_REDIRECTS: usize = 10;
+const MAX_REDIRECTS: usize = 10;
 
 /// Header used by `api_key` when the definition sets no `header_name`.
 const DEFAULT_API_KEY_HEADER: &str = "X-API-Key";
@@ -229,28 +229,30 @@ pub fn has_backend_authentication(options: &HashMap<String, serde_json::Value>) 
         .is_some_and(|headers| !headers.is_empty())
 }
 
-/// Redirect policy for a backend's reqwest client.
+/// Redirect policy for a reqwest client that sends a request upstream.
 ///
-/// reqwest removes `Authorization` on a cross-host redirect, but keeps an
-/// `api_key` header and keeps every header when a redirect moves from https to
-/// http. When Harmony sends a credential, a redirect to another origin is not
-/// followed, and the 3xx response goes back to the caller.
+/// On a redirect, reqwest removes `Authorization` when the host or port changes,
+/// but it always keeps an `api_key` header. No client follows a move from https
+/// to http, because that would send the request and any credential in clear
+/// text. When Harmony sends a target credential, a redirect to another origin
+/// is not followed either. The 3xx response then goes back to the caller.
 pub fn upstream_redirect_policy(
     options: &HashMap<String, serde_json::Value>,
 ) -> reqwest::redirect::Policy {
-    if !has_backend_authentication(options) {
-        return reqwest::redirect::Policy::default();
-    }
-    reqwest::redirect::Policy::custom(|attempt| {
-        let same_origin = attempt
-            .previous()
-            .first()
-            .is_some_and(|first| first.origin() == attempt.url().origin());
-        if same_origin && attempt.previous().len() < MAX_CREDENTIALED_REDIRECTS {
-            attempt.follow()
-        } else {
-            attempt.stop()
+    let credentialed = has_backend_authentication(options);
+    reqwest::redirect::Policy::custom(move |attempt| {
+        let Some(first) = attempt.previous().first() else {
+            return attempt.stop();
+        };
+        let downgrade = first.scheme() == "https" && attempt.url().scheme() != "https";
+        let other_origin = first.origin() != attempt.url().origin();
+        if downgrade || (credentialed && other_origin) {
+            return attempt.stop();
         }
+        if attempt.previous().len() > MAX_REDIRECTS {
+            return attempt.stop();
+        }
+        attempt.follow()
     })
 }
 
