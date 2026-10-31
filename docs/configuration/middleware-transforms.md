@@ -21,7 +21,7 @@ The transform works on JSON bodies only. A response with a text body, such as `t
 
 **Do not copy client data into `target_details.base_url`.** This applies to `transform` and `metadata_transform`. Harmony sends the target credential to whatever `base_url` holds, so a client that controls any part of it can receive that credential. No check in Harmony can tell a bad host from a good one. Use fixed values for `base_url`.
 
-Client data in `target_details.uri` is safer, but it can still reach any path on the upstream. Harmony fails the request with an error, which the client sees as 502, when the path of `uri` holds a `.` or `..` segment. The check also covers percent-encoded forms such as `%2e%2e`. It does not limit the other paths on that host, so check client values in your own spec or with `path_filter`.
+Client data in `target_details.uri` is safer, but it can still reach any path on the upstream. Harmony treats `uri` as a path on `base_url`, so it adds a leading `/` when one is missing. Harmony fails the request with an error, which the client sees as 502, when the path of `uri` holds a `.` or `..` segment. The check also covers percent-encoded forms such as `%2e%2e`, and forms the URL parser would turn into a dot segment. It does not limit the other paths on that host, so check client values in your own spec or with `path_filter`.
 
 **Cloud Integration**: When configurations are sourced from Runbeam Cloud, transform specifications (JOLT files) are automatically downloaded before the configuration is applied. The gateway:
 - Extracts transform IDs from middleware `spec_path` fields

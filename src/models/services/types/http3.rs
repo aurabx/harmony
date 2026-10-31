@@ -219,6 +219,7 @@ impl ServiceHandler<Value> for Http3Backend {
             target_details.method,
             target_details
                 .full_url()
+                .map(|url| crate::logging::without_query(&url).to_string())
                 .unwrap_or_else(|_| "<invalid-url>".to_string())
         );
 

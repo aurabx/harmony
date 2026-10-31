@@ -139,11 +139,9 @@ impl TargetDetails {
     /// write `uri` later, for example a JOLT spec that copies a client value.
     /// The HTTP client would resolve the segment and leave the backend's base
     /// path with the target credential. Every send path calls this, including
-    /// those that do not use [`Self::full_url`]. The query and fragment are not
-    /// checked, because the HTTP client does not resolve them.
+    /// those that do not use [`Self::full_url`].
     pub fn reject_dot_segment_uri(&self) -> Result<(), crate::utils::Error> {
-        let path = self.uri.split(['?', '#']).next().unwrap_or_default();
-        if crate::adapters::http::common::has_dot_segment(path) {
+        if crate::adapters::http::common::has_dot_segment(&self.uri) {
             return Err("target uri holds a dot segment".into());
         }
         Ok(())
@@ -156,8 +154,15 @@ impl TargetDetails {
         // Handle double-slash case: if base_url ends with / and uri starts with /, remove one
         let mut url = if self.base_url.ends_with('/') && self.uri.starts_with('/') {
             format!("{}{}", self.base_url.trim_end_matches('/'), self.uri)
-        } else {
+        } else if self.base_url.ends_with('/')
+            || self.uri.is_empty()
+            || self.uri.starts_with(['/', '?', '#'])
+        {
             format!("{}{}", self.base_url, self.uri)
+        } else {
+            // Without the slash, `@evil.com/x` would become the host part of
+            // the URL and the target credential would go to that host.
+            format!("{}/{}", self.base_url, self.uri)
         };
 
         // Add query parameters if any exist
@@ -1050,6 +1055,8 @@ mod tests {
             "/a\\..\\b",
             "/../admin?x=1",
             "..",
+            "/.\t./admin",
+            "/a/.. ",
         ] {
             assert!(target_with_uri(uri).full_url().is_err(), "{}", uri);
         }
@@ -1068,6 +1075,31 @@ mod tests {
             let url = target_with_uri(uri).full_url().expect(uri);
             assert_eq!(url, format!("https://api.example.com/fhir{}", uri));
         }
+    }
+
+    #[test]
+    fn full_url_keeps_a_relative_uri_on_the_configured_host() {
+        for uri in [
+            "@evil.com/x",
+            ":443@evil.com/x",
+            ".evil.com/x",
+            "\t@evil.com/x",
+        ] {
+            let target = TargetDetails {
+                base_url: "https://api.example.com:443".to_string(),
+                uri: uri.to_string(),
+                ..TargetDetails::default()
+            };
+            let url = url::Url::parse(&target.full_url().unwrap()).unwrap();
+            assert_eq!(url.host_str(), Some("api.example.com"), "{:?}", uri);
+            assert_eq!(url.username(), "", "{:?}", uri);
+        }
+    }
+
+    #[test]
+    fn full_url_does_not_join_a_relative_uri_to_a_base_path_segment() {
+        let url = target_with_uri("Patient").full_url().unwrap();
+        assert_eq!(url, "https://api.example.com/fhir/Patient");
     }
 
     #[test]

@@ -282,8 +282,8 @@ fn map_backend_uri(uri: &str) -> Result<String, Error> {
         return Ok(uri.to_string());
     }
 
-    // Absolute HTTP(S) URLs are accepted verbatim; downstream `full_url()`
-    // already knows how to handle them.
+    // `full_url()` joins these to the base URL as a path, so they stay on the
+    // configured host.
     let lowered = uri.to_ascii_lowercase();
     if lowered.starts_with("http://") || lowered.starts_with("https://") {
         return Ok(uri.to_string());
@@ -302,9 +302,9 @@ fn map_backend_uri(uri: &str) -> Result<String, Error> {
     if let Some(idx) = lowered.find("://") {
         let scheme = &lowered[..idx];
         return Err(Error::from(format!(
-            "JMIX backend received URI with unsupported scheme '{}': {}. \
+            "JMIX backend received URI with unsupported scheme '{}'. \
              Add a mapping in map_backend_uri or fix the pipeline wiring.",
-            scheme, uri
+            scheme
         )));
     }
 

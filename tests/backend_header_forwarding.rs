@@ -759,12 +759,13 @@ async fn http_streaming_rejects_dot_segment_set_by_middleware() {
         serde_json::Value::String(upstream.base_url.clone()),
     );
 
-    let error = open_stream_to_path(options, HashMap::new(), "x/../admin")
-        .await
-        .err()
-        .expect("dot segment rejected");
-
-    assert!(error.contains("dot segment"), "{}", error);
+    for path in ["x/../admin", "x/..?y", "x/.\t./admin"] {
+        let error = open_stream_to_path(options.clone(), HashMap::new(), path)
+            .await
+            .err()
+            .expect("dot segment rejected");
+        assert!(error.contains("dot segment"), "{:?}: {}", path, error);
+    }
     assert!(upstream.recorded.lock().unwrap().is_empty());
 }
 
