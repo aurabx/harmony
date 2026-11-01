@@ -657,6 +657,8 @@ impl HttpEndpoint {
     ) -> Result<(u16, HashMap<String, String>, Vec<u8>), Error> {
         use crate::clients::http3::Http3Client;
 
+        target_details.reject_dot_segment_uri()?;
+
         // Create HTTP/3 client - with custom CA if provided
         let client = if let Some(ref ca_path) = conn.ca_cert_path {
             let ca_pem = std::fs::read_to_string(ca_path).map_err(|e| {
@@ -770,6 +772,33 @@ fn backend_request_path(uri: &str, path_prefix: Option<&str>) -> String {
 mod tests {
     use super::*;
     use crate::models::envelope::envelope::TargetDetails;
+
+    #[tokio::test]
+    async fn http3_request_rejects_dot_segment_uri_before_connecting() {
+        let conn = ConnectionConfig {
+            host: "127.0.0.1".to_string(),
+            port: Some(1),
+            protocol: Some("h3".to_string()),
+            ..ConnectionConfig::default()
+        };
+        let target = TargetDetails {
+            uri: "/../admin".to_string(),
+            ..TargetDetails::default()
+        };
+        let envelope = RequestEnvelope::<Vec<u8>>::builder()
+            .method("GET")
+            .uri("/resource")
+            .original_data(Vec::new())
+            .build()
+            .unwrap();
+
+        let error = HttpEndpoint {}
+            .make_http3_request(&conn, &target, &envelope, &HashMap::new())
+            .await
+            .unwrap_err();
+
+        assert!(error.to_string().contains("dot segment"), "{}", error);
+    }
 
     #[test]
     fn test_backend_request_path_http_path_without_prefix_is_unchanged() {

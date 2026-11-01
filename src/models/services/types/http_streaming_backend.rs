@@ -209,6 +209,11 @@ impl StreamingBackend for HttpStreamingBackend {
             .get("path")
             .map(|p| format!("/{}", p))
             .unwrap_or_default();
+        // Middleware can rewrite this key after the adapter's own check, and
+        // the HTTP client would resolve a dot segment with the credential.
+        if crate::adapters::http::common::has_dot_segment(&path) {
+            return Err(Error::from("request path holds a dot segment"));
+        }
         let url = format!("{}{}{}", base_url, path_prefix, path);
 
         // The request path can hold identifiers such as a patient ID, so
