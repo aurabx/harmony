@@ -15,7 +15,7 @@
 ### Changed
 - (AURA-2546) Building Harmony now requires Rust 1.88 or later.
 - (AURA-2546) Extracted upload files are owner-only: directories 0700 and files 0600. Permissions stored in an upload are ignored.
-- (AURA-2546) `POST /api/jmix` now rejects an archive with more than 10,000 entries, more than 4 GiB of declared uncompressed data, or an entry path over 4,096 bytes.
+- (AURA-2546) `POST /api/jmix` now rejects an archive with more than 1,000,000 entries, more than 256 GiB of declared uncompressed data, or an entry path over 4,096 bytes.
 - (AURA-2546) XML bodies: a bare `&`, an unclosed reference, an unknown entity such as `&foo;` or an invalid character reference now fails the request. Before, the text in that element was silently emptied.
 - (AURA-2391) `dimse::scp::QueryProvider` returns streams. The SCP sends C-GET, C-MOVE and C-FIND results to the client as the pipeline produces them instead of collecting the whole result first.
 - (AURA-2391) dicom-rs crates upgraded from 0.9 to 0.10.

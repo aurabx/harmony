@@ -6,22 +6,33 @@ use std::path::{Component, Path, PathBuf};
 use zip::read::{ExtractOptions, SymlinkExtractAction};
 
 /// Cheap zip-bomb guard for untrusted uploads such as `POST /api/jmix`.
-const MAX_ZIP_ENTRIES: usize = 10_000;
+/// Temporary estimate set above real studies, until AURA-2613 decides the limits.
+const MAX_ZIP_ENTRIES: usize = 1_000_000;
 /// PATH_MAX on Linux. A longer entry path cannot be created there in one call.
 const MAX_ENTRY_PATH_BYTES: usize = 4096;
 /// Declared uncompressed size cap. Checked from central-directory sizes, not after inflate.
-const MAX_UNCOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
+/// Temporary estimate set above real studies, until AURA-2613 decides the limits.
+const MAX_UNCOMPRESSED_BYTES: u64 = 256 * 1024 * 1024 * 1024;
 
 pub fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Error> {
+    extract_zip_with_limits(bytes, dest, MAX_ZIP_ENTRIES, MAX_UNCOMPRESSED_BYTES)
+}
+
+fn extract_zip_with_limits(
+    bytes: &[u8],
+    dest: &Path,
+    max_entries: usize,
+    max_uncompressed_bytes: u64,
+) -> Result<(), Error> {
     let reader = Cursor::new(bytes);
     let mut zip =
         zip::ZipArchive::new(reader).map_err(|e| Error::from(format!("zip open error: {e}")))?;
 
-    if zip.len() > MAX_ZIP_ENTRIES {
+    if zip.len() > max_entries {
         return Err(Error::from(format!(
             "zip rejected: too many entries ({} > {})",
             zip.len(),
-            MAX_ZIP_ENTRIES
+            max_entries
         )));
     }
 
@@ -86,7 +97,7 @@ pub fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Error> {
             file_paths.insert(enclosed);
 
             declared_uncompressed = declared_uncompressed.saturating_add(file.size());
-            if declared_uncompressed > MAX_UNCOMPRESSED_BYTES {
+            if declared_uncompressed > max_uncompressed_bytes {
                 return Err(Error::from(
                     "zip rejected: uncompressed size limit exceeded",
                 ));

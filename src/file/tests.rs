@@ -455,6 +455,32 @@ fn test_extract_zip_rejects_drive_style_file_name() {
 }
 
 #[test]
+fn test_extract_zip_enforces_entry_limit() {
+    let bytes = raw_stored_zip(&[("a", b"1"), ("b", b"2")]);
+    let dest = TempDir::new().unwrap();
+    extract_zip_with_limits(&bytes, dest.path(), 2, 1024).unwrap();
+
+    let dest = TempDir::new().unwrap();
+    let err = extract_zip_with_limits(&bytes, dest.path(), 1, 1024)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("too many entries"), "{err}");
+}
+
+#[test]
+fn test_extract_zip_enforces_total_size_limit() {
+    let bytes = raw_stored_zip(&[("a", b"12"), ("b", b"34")]);
+    let dest = TempDir::new().unwrap();
+    extract_zip_with_limits(&bytes, dest.path(), 10, 4).unwrap();
+
+    let dest = TempDir::new().unwrap();
+    let err = extract_zip_with_limits(&bytes, dest.path(), 10, 3)
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("size limit exceeded"), "{err}");
+}
+
+#[test]
 fn test_extract_zip_rejects_overlong_entry_path() {
     let dest = TempDir::new().unwrap();
     let name = "a/".repeat(2049) + "f";
