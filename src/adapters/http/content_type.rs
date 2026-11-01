@@ -268,14 +268,19 @@ pub fn parse_xml_with_limit(body: &[u8], max_depth: usize) -> Result<Value, Erro
             }
             // quick-xml 0.41 reports `&amp;` and `&#65;` apart from the surrounding text.
             Ok(Event::GeneralRef(e)) => {
-                if let Ok(Some(c)) = e.resolve_char_ref() {
-                    current_text.push(c);
-                } else if let Some(text) = e
+                let name = e
                     .decode()
-                    .ok()
-                    .and_then(|name| resolve_predefined_entity(&name))
-                {
+                    .map_err(|err| Error::from(format!("XML parsing error: {}", err)))?;
+                if let Some(text) = resolve_predefined_entity(&name) {
                     current_text.push_str(text);
+                } else {
+                    let c = e
+                        .resolve_char_ref()
+                        .map_err(|err| Error::from(format!("XML parsing error: {}", err)))?
+                        .ok_or_else(|| {
+                            Error::from(format!("XML parsing error: unknown entity &{};", name))
+                        })?;
+                    current_text.push(c);
                 }
             }
             Ok(Event::Eof) => break,
@@ -542,6 +547,21 @@ mod tests {
     fn test_parse_xml_keeps_entities_in_text() {
         let result = parse_xml(b"<a><b>x &amp; y &#65; &lt;z&gt;</b></a>").unwrap();
         assert_eq!(result["a"]["b"], "x & y A <z>");
+    }
+
+    #[test]
+    fn test_parse_xml_rejects_bare_ampersand() {
+        assert!(parse_xml(b"<a><b>x & y</b></a>").is_err());
+    }
+
+    #[test]
+    fn test_parse_xml_rejects_unknown_and_invalid_references() {
+        for body in [
+            b"<a><b>x &foo; y</b></a>".as_slice(),
+            b"<a><b>x &#xD800; y</b></a>".as_slice(),
+        ] {
+            assert!(parse_xml(body).is_err());
+        }
     }
 
     #[test]

@@ -18,11 +18,6 @@ jobs:
 
     steps:
     - uses: actions/checkout@v4
-    # Ignored advisories need Cargo.toml or toolchain changes, tracked in
-    # Linear AURA-2546: quick-xml (RUSTSEC-2026-0194, -0195), rsa
-    # (RUSTSEC-2023-0071, dev-dependency, no fix), time (RUSTSEC-2026-0009,
-    # fix needs rustc 1.88) and zip (RUSTSEC-2026-0367, -0368, -0369).
-    # Remove each --ignore when its fix lands. Any other advisory fails.
     - name: Install cargo-audit
       run: cargo install cargo-audit --locked
     - name: cargo audit

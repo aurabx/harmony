@@ -410,7 +410,11 @@ fn data_descriptor_zip(name: &str, data: &[u8]) -> Vec<u8> {
 #[test]
 fn test_extract_zip_accepts_data_descriptor_entries() {
     let dest = TempDir::new().unwrap();
-    extract_zip(&data_descriptor_zip("pkg/manifest.json", b"{}"), dest.path()).unwrap();
+    extract_zip(
+        &data_descriptor_zip("pkg/manifest.json", b"{}"),
+        dest.path(),
+    )
+    .unwrap();
     assert_eq!(
         fs::read(dest.path().join("pkg/manifest.json")).unwrap(),
         b"{}"
@@ -450,6 +454,57 @@ fn test_extract_zip_rejects_drive_style_file_name() {
     assert!(err.contains("unsafe path"), "{err}");
 }
 
+#[test]
+fn test_extract_zip_rejects_overlong_entry_path() {
+    let dest = TempDir::new().unwrap();
+    let name = "a/".repeat(2049) + "f";
+    let err = extract_zip(&raw_stored_zip(&[(name.as_str(), b"x")]), dest.path())
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("too long"), "{err}");
+}
+
+#[test]
+fn test_extract_zip_conflict_check_ignores_similar_names() {
+    let dest = TempDir::new().unwrap();
+    let bytes = raw_stored_zip(&[("foo", b"1"), ("foo.txt", b"2"), ("foo2/bar", b"3")]);
+    extract_zip(&bytes, dest.path()).unwrap();
+    assert!(dest.path().join("foo2/bar").is_file());
+}
+
+#[cfg(unix)]
+#[test]
+fn test_extract_zip_keeps_root_mode_against_a_root_entry() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut buffer = Vec::new();
+    {
+        let mut zip = ZipWriter::new(Cursor::new(&mut buffer));
+        let locked = SimpleFileOptions::default().unix_permissions(0o000);
+        zip.add_directory("./", locked).unwrap();
+        zip.start_file("pkg/manifest.json", SimpleFileOptions::default())
+            .unwrap();
+        zip.write_all(b"{}").unwrap();
+        zip.finish().unwrap();
+    }
+    let names: Vec<String> = zip::ZipArchive::new(Cursor::new(&buffer))
+        .unwrap()
+        .file_names()
+        .filter_map(|name| name.ok().map(|n| n.into_owned()))
+        .collect();
+    assert!(names.iter().any(|n| n == "./"), "{names:?}");
+
+    let dest = TempDir::new().unwrap();
+    let root = dest.path().to_path_buf();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
+    extract_zip(&buffer, &root).unwrap();
+
+    let root_mode = fs::metadata(&root).unwrap().permissions().mode();
+    assert_eq!(root_mode & 0o777, 0o700);
+    dest.close().unwrap();
+    assert!(!root.exists());
+}
+
 #[cfg(unix)]
 #[test]
 fn test_extract_zip_ignores_modes_from_the_archive() {
@@ -467,15 +522,22 @@ fn test_extract_zip_ignores_modes_from_the_archive() {
 
     let dest = TempDir::new().unwrap();
     let root = dest.path().to_path_buf();
+    fs::set_permissions(&root, fs::Permissions::from_mode(0o700)).unwrap();
     extract_zip(&buffer, &root).unwrap();
 
-    let dir_mode = fs::metadata(root.join("junk")).unwrap().permissions().mode();
-    assert_eq!(dir_mode & 0o777, 0o755);
+    let root_mode = fs::metadata(&root).unwrap().permissions().mode();
+    assert_eq!(root_mode & 0o777, 0o700);
+
+    let dir_mode = fs::metadata(root.join("junk"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(dir_mode & 0o777, 0o700);
     let file_mode = fs::metadata(root.join("junk/big.bin"))
         .unwrap()
         .permissions()
         .mode();
-    assert_eq!(file_mode & 0o777, 0o644);
+    assert_eq!(file_mode & 0o777, 0o600);
 
     dest.close().unwrap();
     assert!(!root.exists());

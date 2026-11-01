@@ -7,6 +7,8 @@ use zip::read::{ExtractOptions, SymlinkExtractAction};
 
 /// Cheap zip-bomb guard for untrusted uploads such as `POST /api/jmix`.
 const MAX_ZIP_ENTRIES: usize = 10_000;
+/// PATH_MAX on Linux. A longer entry path cannot be created there in one call.
+const MAX_ENTRY_PATH_BYTES: usize = 4096;
 /// Declared uncompressed size cap. Checked from central-directory sizes, not after inflate.
 const MAX_UNCOMPRESSED_BYTES: u64 = 4 * 1024 * 1024 * 1024;
 
@@ -38,6 +40,10 @@ pub fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Error> {
 
         if file.is_symlink() {
             return Err(Error::from("zip rejected: symlink entries are not allowed"));
+        }
+
+        if file.name_raw().len() > MAX_ENTRY_PATH_BYTES {
+            return Err(Error::from("zip rejected: entry path is too long"));
         }
 
         if raw_name_is_absolute(file.name_raw()) {
@@ -88,12 +94,16 @@ pub fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Error> {
         }
     }
 
-    // Checked after the loop so the result does not depend on entry order.
-    for path in &seen_paths {
-        if path.ancestors().skip(1).any(|a| file_paths.contains(a)) {
+    // Checked after the loop so the result does not depend on entry order. Paths sort by
+    // component, so a file sits directly before its children. This avoids hashing every
+    // ancestor, which is quadratic in path length on a hostile archive.
+    let mut sorted_paths: Vec<&PathBuf> = seen_paths.iter().collect();
+    sorted_paths.sort_unstable();
+    for pair in sorted_paths.windows(2) {
+        if file_paths.contains(pair[0]) && pair[1].starts_with(pair[0]) {
             return Err(Error::from(format!(
                 "zip rejected: conflicting entry names ({})",
-                path.display()
+                pair[1].display()
             )));
         }
     }
@@ -104,39 +114,50 @@ pub fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Error> {
         .enforce_header_consistency(true)
         .symlink_action(SymlinkExtractAction::NoExtract);
 
+    let root_permissions = fs::metadata(dest).ok().map(|m| m.permissions());
     let extracted = zip
         .extract_with_options(dest, options)
         .map_err(|e| Error::from(format!("zip extract error: {e}")));
     // Runs on failure too, because a mode 000 directory would defeat temp dir cleanup.
-    let reset = reset_permissions(dest);
+    let reset = reset_permissions(dest, root_permissions);
     extracted?;
     reset
 }
 
 /// Replaces modes taken from the archive, so an upload cannot set server permissions.
-/// Uses the modes a plain file create gives under the usual 022 umask.
+/// Uploads hold PHI, so content is owner-only. `root` goes back to the mode it had before
+/// extraction, because a `./` entry can change it, and that mode protects everything below.
+/// `root_permissions` is `None` when extraction created `root`.
 #[cfg(unix)]
-fn reset_permissions(root: &Path) -> Result<(), Error> {
+fn reset_permissions(root: &Path, root_permissions: Option<fs::Permissions>) -> Result<(), Error> {
     use std::os::unix::fs::PermissionsExt;
 
+    // The path stays in the log, because this error text reaches the client.
     let fail = |path: &Path, e: std::io::Error| {
-        Error::from(format!(
-            "zip permission reset error at {}: {e}",
-            path.display()
-        ))
+        tracing::error!(path = %path.display(), error = %e, "zip permission reset failed");
+        Error::from("zip permission reset error")
     };
+
+    let restored = root_permissions.unwrap_or_else(|| fs::Permissions::from_mode(0o700));
+    match fs::set_permissions(root, restored) {
+        Ok(()) => {}
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(e) => return Err(fail(root, e)),
+    }
 
     let mut pending = vec![root.to_path_buf()];
     while let Some(path) = pending.pop() {
         let metadata = fs::symlink_metadata(&path).map_err(|e| fail(&path, e))?;
         if metadata.is_dir() {
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
-                .map_err(|e| fail(&path, e))?;
+            if path != root {
+                fs::set_permissions(&path, fs::Permissions::from_mode(0o700))
+                    .map_err(|e| fail(&path, e))?;
+            }
             for entry in fs::read_dir(&path).map_err(|e| fail(&path, e))? {
                 pending.push(entry.map_err(|e| fail(&path, e))?.path());
             }
         } else if metadata.is_file() {
-            fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o600))
                 .map_err(|e| fail(&path, e))?;
         }
     }
@@ -144,7 +165,10 @@ fn reset_permissions(root: &Path) -> Result<(), Error> {
 }
 
 #[cfg(not(unix))]
-fn reset_permissions(_root: &Path) -> Result<(), Error> {
+fn reset_permissions(
+    _root: &Path,
+    _root_permissions: Option<fs::Permissions>,
+) -> Result<(), Error> {
     Ok(())
 }
 

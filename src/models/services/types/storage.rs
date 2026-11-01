@@ -8,7 +8,9 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use object_store::buffered::BufWriter;
 use object_store::local::LocalFileSystem;
-use object_store::{path::Path as ObjectStorePath, ObjectStore, ObjectStoreExt, PutMode, PutOptions};
+use object_store::{
+    path::Path as ObjectStorePath, ObjectStore, ObjectStoreExt, PutMode, PutOptions,
+};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -105,9 +107,12 @@ impl StorageBackend {
                 .and_then(|v| v.as_str())
                 .or(self.endpoint.as_deref());
 
+            // Bulk delete is the 0.14 default, and some S3-compatible stores do not support it.
+            // Harmony deletes one object at a time, so a plain DELETE loses nothing.
             let mut builder = AmazonS3Builder::new()
                 .with_region(region)
-                .with_bucket_name(bucket);
+                .with_bucket_name(bucket)
+                .with_disable_bulk_delete(true);
 
             if let (Some(k), Some(s)) = (access_key, secret_key) {
                 builder = builder.with_access_key_id(k).with_secret_access_key(s);
