@@ -547,13 +547,12 @@ async fn build_jmix_package(
 /// Client settings for the JMIX upload.
 ///
 /// The body is a study ZIP, and the headers can hold a credential set by earlier
-/// middleware, so both stay with the configured upstream. A redirect to another
-/// origin, or from https to http, is not followed. The 3xx response then fails
-/// the upload.
+/// middleware, so both stay with the configured upstream. Only a 307 or 308 to
+/// the same origin is followed. Any other 3xx response fails the upload.
 fn upload_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
-        .redirect(crate::models::services::backend_auth::same_origin_redirect_policy())
+        .redirect(crate::models::services::backend_auth::same_origin_upload_redirect_policy())
 }
 
 async fn post_zip_upstream(zip_path: &Path, state: &StudyState) -> Result<(), String> {
@@ -770,6 +769,66 @@ mod tests {
 
         assert!(error.contains("307"), "{}", error);
         assert_eq!(other_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn upload_stops_a_same_origin_chain_that_leaves_the_origin() {
+        use axum::http::StatusCode;
+        use std::sync::atomic::Ordering;
+
+        let (other_origin, other_hits) = start_upload_upstream(StatusCode::OK, None).await;
+        let leave = format!("{}/stolen", other_origin);
+        let app = axum::Router::new()
+            .route(
+                "/api/jmix",
+                axum::routing::post(|| async {
+                    (StatusCode::TEMPORARY_REDIRECT, [("location", "/hop")])
+                }),
+            )
+            .route(
+                "/hop",
+                axum::routing::post(move || {
+                    let leave = leave.clone();
+                    async move { (StatusCode::TEMPORARY_REDIRECT, [("location", leave)]) }
+                }),
+            );
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        let error = upload_to(&base_url, "/api/jmix").await.unwrap_err();
+
+        assert!(error.contains("307"), "{}", error);
+        assert_eq!(other_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn upload_fails_on_a_redirect_that_would_drop_the_body() {
+        use axum::http::StatusCode;
+
+        for status in [
+            StatusCode::MOVED_PERMANENTLY,
+            StatusCode::FOUND,
+            StatusCode::SEE_OTHER,
+        ] {
+            let app = axum::Router::new()
+                .route(
+                    "/api/jmix",
+                    axum::routing::post(move || async move { (status, [("location", "/stored")]) }),
+                )
+                .route("/stored", axum::routing::get(|| async { StatusCode::OK }));
+            let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+            let base_url = format!("http://{}", listener.local_addr().unwrap());
+            tokio::spawn(async move {
+                axum::serve(listener, app).await.unwrap();
+            });
+
+            let error = upload_to(&base_url, "/api/jmix").await.unwrap_err();
+
+            assert!(error.contains(status.as_str()), "{}", error);
+        }
     }
 
     #[tokio::test]

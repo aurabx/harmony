@@ -239,17 +239,20 @@ pub fn has_backend_authentication(options: &HashMap<String, serde_json::Value>) 
 pub fn upstream_redirect_policy(
     options: &HashMap<String, serde_json::Value>,
 ) -> reqwest::redirect::Policy {
-    redirect_policy(has_backend_authentication(options))
+    redirect_policy(has_backend_authentication(options), false)
 }
 
-/// Redirect policy for a request whose body or headers must stay with the
-/// configured upstream, whatever its authentication. A redirect is followed
-/// only to the same origin, so it also never moves from https to http.
-pub fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
-    redirect_policy(true)
+/// Redirect policy for an upload whose body and headers must stay with the
+/// configured upstream, whatever its authentication.
+///
+/// A redirect is followed only to the same origin, so it also never moves from
+/// https to http. Only 307 and 308 are followed, because on 301, 302 and 303 the
+/// client drops the body and sends a GET. A success then would hide a lost upload.
+pub fn same_origin_upload_redirect_policy() -> reqwest::redirect::Policy {
+    redirect_policy(true, true)
 }
 
-fn redirect_policy(same_origin_only: bool) -> reqwest::redirect::Policy {
+fn redirect_policy(same_origin_only: bool, keep_body: bool) -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(move |attempt| {
         let Some(first) = attempt.previous().first() else {
             return attempt.stop();
@@ -257,6 +260,9 @@ fn redirect_policy(same_origin_only: bool) -> reqwest::redirect::Policy {
         let downgrade = first.scheme() == "https" && attempt.url().scheme() != "https";
         let other_origin = first.origin() != attempt.url().origin();
         if downgrade || (same_origin_only && other_origin) {
+            return attempt.stop();
+        }
+        if keep_body && !matches!(attempt.status().as_u16(), 307 | 308) {
             return attempt.stop();
         }
         if attempt.previous().len() > MAX_REDIRECTS {
