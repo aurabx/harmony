@@ -546,13 +546,14 @@ async fn build_jmix_package(
 
 /// Client settings for the JMIX upload.
 ///
-/// The redirect policy stops a move from https to http, which would resend the
-/// study ZIP in clear text. The 3xx response then fails the upload. The options
-/// are empty because this middleware has no `authentication` definition.
+/// The body is a study ZIP, and the headers can hold a credential set by earlier
+/// middleware, so both stay with the configured upstream. A redirect to another
+/// origin, or from https to http, is not followed. The 3xx response then fails
+/// the upload.
 fn upload_client_builder() -> reqwest::ClientBuilder {
     reqwest::Client::builder()
         .timeout(Duration::from_secs(60))
-        .redirect(crate::models::services::backend_auth::upstream_redirect_policy(&HashMap::new()))
+        .redirect(crate::models::services::backend_auth::same_origin_redirect_policy())
 }
 
 async fn post_zip_upstream(zip_path: &Path, state: &StudyState) -> Result<(), String> {
@@ -710,6 +711,84 @@ mod tests {
 
         assert!(error.contains("307"), "{}", error);
         assert_eq!(plain_hits.load(Ordering::SeqCst), 0);
+    }
+
+    /// An upstream that counts requests and answers each with `status` and,
+    /// when given, a `location` header.
+    async fn start_upload_upstream(
+        status: axum::http::StatusCode,
+        location: Option<String>,
+    ) -> (String, Arc<std::sync::atomic::AtomicUsize>) {
+        let hits = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let counter = hits.clone();
+        let app = axum::Router::new().fallback(move || {
+            counter.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let location = location.clone();
+            async move {
+                let headers: Vec<(&str, String)> =
+                    location.into_iter().map(|l| ("location", l)).collect();
+                (status, axum::response::AppendHeaders(headers))
+            }
+        });
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+        (base_url, hits)
+    }
+
+    async fn upload_to(base_url: &str, upstream_path: &str) -> Result<(), String> {
+        let zip_dir = tempfile::tempdir().unwrap();
+        let zip_path = zip_dir.path().join("package.zip");
+        std::fs::write(&zip_path, "zip").unwrap();
+        let state = StudyState {
+            staging_dir: PathBuf::new(),
+            last_touch: Instant::now(),
+            upstream_base_url: base_url.to_string(),
+            upstream_path: upstream_path.to_string(),
+            upstream_headers: HashMap::new(),
+            skip_hashing: false,
+            skip_listing: false,
+        };
+        post_zip_upstream(&zip_path, &state).await
+    }
+
+    #[tokio::test]
+    async fn upload_does_not_follow_a_redirect_to_another_origin() {
+        use axum::http::StatusCode;
+        use std::sync::atomic::Ordering;
+
+        let (other_origin, other_hits) = start_upload_upstream(StatusCode::OK, None).await;
+        let (redirecting, _) = start_upload_upstream(
+            StatusCode::TEMPORARY_REDIRECT,
+            Some(format!("{}/stolen", other_origin)),
+        )
+        .await;
+
+        let error = upload_to(&redirecting, "/api/jmix").await.unwrap_err();
+
+        assert!(error.contains("307"), "{}", error);
+        assert_eq!(other_hits.load(Ordering::SeqCst), 0);
+    }
+
+    #[tokio::test]
+    async fn upload_follows_a_redirect_on_the_same_origin() {
+        use axum::http::StatusCode;
+
+        async fn moved() -> impl axum::response::IntoResponse {
+            (StatusCode::TEMPORARY_REDIRECT, [("location", "/stored")])
+        }
+        let app = axum::Router::new()
+            .route("/api/jmix", axum::routing::post(moved))
+            .route("/stored", axum::routing::post(|| async { StatusCode::OK }));
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let base_url = format!("http://{}", listener.local_addr().unwrap());
+        tokio::spawn(async move {
+            axum::serve(listener, app).await.unwrap();
+        });
+
+        upload_to(&base_url, "/api/jmix").await.expect("uploaded");
     }
 
     fn create_test_storage(prefix: &str) -> Arc<FilesystemStorage> {

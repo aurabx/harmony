@@ -239,14 +239,24 @@ pub fn has_backend_authentication(options: &HashMap<String, serde_json::Value>) 
 pub fn upstream_redirect_policy(
     options: &HashMap<String, serde_json::Value>,
 ) -> reqwest::redirect::Policy {
-    let credentialed = has_backend_authentication(options);
+    redirect_policy(has_backend_authentication(options))
+}
+
+/// Redirect policy for a request whose body or headers must stay with the
+/// configured upstream, whatever its authentication. A redirect is followed
+/// only to the same origin, so it also never moves from https to http.
+pub fn same_origin_redirect_policy() -> reqwest::redirect::Policy {
+    redirect_policy(true)
+}
+
+fn redirect_policy(same_origin_only: bool) -> reqwest::redirect::Policy {
     reqwest::redirect::Policy::custom(move |attempt| {
         let Some(first) = attempt.previous().first() else {
             return attempt.stop();
         };
         let downgrade = first.scheme() == "https" && attempt.url().scheme() != "https";
         let other_origin = first.origin() != attempt.url().origin();
-        if downgrade || (credentialed && other_origin) {
+        if downgrade || (same_origin_only && other_origin) {
             return attempt.stop();
         }
         if attempt.previous().len() > MAX_REDIRECTS {
