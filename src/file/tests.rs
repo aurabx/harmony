@@ -351,3 +351,132 @@ fn test_extract_zip_rejects_symlink() {
     assert!(result.is_err(), "symlink entries must be rejected");
     assert!(!dest.join("link").exists());
 }
+
+/// Stored ZIP with general-purpose flag bit 3 set, as streaming writers produce.
+fn data_descriptor_zip(name: &str, data: &[u8]) -> Vec<u8> {
+    let crc = crc32(data);
+    let size = data.len() as u32;
+    let mut buf = Vec::new();
+
+    buf.extend_from_slice(&[0x50, 0x4b, 0x03, 0x04]);
+    push_u16(&mut buf, 20);
+    push_u16(&mut buf, 0x0008);
+    for _ in 0..3 {
+        push_u16(&mut buf, 0);
+    }
+    for _ in 0..3 {
+        push_u32(&mut buf, 0);
+    }
+    push_u16(&mut buf, name.len() as u16);
+    push_u16(&mut buf, 0);
+    buf.extend_from_slice(name.as_bytes());
+    buf.extend_from_slice(data);
+    buf.extend_from_slice(&[0x50, 0x4b, 0x07, 0x08]);
+    push_u32(&mut buf, crc);
+    push_u32(&mut buf, size);
+    push_u32(&mut buf, size);
+
+    let cd_start = buf.len() as u32;
+    buf.extend_from_slice(&[0x50, 0x4b, 0x01, 0x02]);
+    push_u16(&mut buf, 20);
+    push_u16(&mut buf, 20);
+    push_u16(&mut buf, 0x0008);
+    for _ in 0..3 {
+        push_u16(&mut buf, 0);
+    }
+    push_u32(&mut buf, crc);
+    push_u32(&mut buf, size);
+    push_u32(&mut buf, size);
+    push_u16(&mut buf, name.len() as u16);
+    for _ in 0..4 {
+        push_u16(&mut buf, 0);
+    }
+    push_u32(&mut buf, 0);
+    push_u32(&mut buf, 0);
+    buf.extend_from_slice(name.as_bytes());
+    let cd_size = buf.len() as u32 - cd_start;
+
+    buf.extend_from_slice(&[0x50, 0x4b, 0x05, 0x06]);
+    push_u16(&mut buf, 0);
+    push_u16(&mut buf, 0);
+    push_u16(&mut buf, 1);
+    push_u16(&mut buf, 1);
+    push_u32(&mut buf, cd_size);
+    push_u32(&mut buf, cd_start);
+    push_u16(&mut buf, 0);
+    buf
+}
+
+#[test]
+fn test_extract_zip_accepts_data_descriptor_entries() {
+    let dest = TempDir::new().unwrap();
+    extract_zip(&data_descriptor_zip("pkg/manifest.json", b"{}"), dest.path()).unwrap();
+    assert_eq!(
+        fs::read(dest.path().join("pkg/manifest.json")).unwrap(),
+        b"{}"
+    );
+}
+
+#[test]
+fn test_extract_zip_rejects_child_listed_before_its_parent_file() {
+    let dest = TempDir::new().unwrap();
+    let bytes = raw_stored_zip(&[("foo/bar", b"child"), ("foo", b"parent")]);
+    let err = extract_zip(&bytes, dest.path()).unwrap_err().to_string();
+    assert!(err.contains("conflicting entry names"), "{err}");
+}
+
+#[test]
+fn test_extract_zip_rejects_directory_below_a_file() {
+    let dest = TempDir::new().unwrap();
+    let bytes = raw_stored_zip(&[("foo", b"parent"), ("foo/bar/", b"")]);
+    let err = extract_zip(&bytes, dest.path()).unwrap_err().to_string();
+    assert!(err.contains("conflicting entry names"), "{err}");
+}
+
+#[test]
+fn test_extract_zip_accepts_root_directory_entry() {
+    let dest = TempDir::new().unwrap();
+    let bytes = raw_stored_zip(&[("./", b""), ("./manifest.json", b"{}")]);
+    extract_zip(&bytes, dest.path()).unwrap();
+    assert!(dest.path().join("manifest.json").is_file());
+}
+
+// zip strips `a:` on extract, so accepting this name would silently rename the file.
+#[test]
+fn test_extract_zip_rejects_drive_style_file_name() {
+    let dest = TempDir::new().unwrap();
+    let bytes = raw_stored_zip(&[("a:b.dcm", b"data")]);
+    let err = extract_zip(&bytes, dest.path()).unwrap_err().to_string();
+    assert!(err.contains("unsafe path"), "{err}");
+}
+
+#[cfg(unix)]
+#[test]
+fn test_extract_zip_ignores_modes_from_the_archive() {
+    use std::os::unix::fs::PermissionsExt;
+
+    let mut buffer = Vec::new();
+    {
+        let mut zip = ZipWriter::new(Cursor::new(&mut buffer));
+        let locked = SimpleFileOptions::default().unix_permissions(0o000);
+        zip.add_directory("junk/", locked).unwrap();
+        zip.start_file("junk/big.bin", locked).unwrap();
+        zip.write_all(b"payload").unwrap();
+        zip.finish().unwrap();
+    }
+
+    let dest = TempDir::new().unwrap();
+    let root = dest.path().to_path_buf();
+    extract_zip(&buffer, &root).unwrap();
+
+    let dir_mode = fs::metadata(root.join("junk")).unwrap().permissions().mode();
+    assert_eq!(dir_mode & 0o777, 0o755);
+    let file_mode = fs::metadata(root.join("junk/big.bin"))
+        .unwrap()
+        .permissions()
+        .mode();
+    assert_eq!(file_mode & 0o777, 0o644);
+
+    dest.close().unwrap();
+    assert!(!root.exists());
+}

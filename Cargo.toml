@@ -64,7 +64,7 @@ ipnetwork = "0.20"
 regex = "1.10"
 
 # Multi-content-type parsing support
-quick-xml = { version = "0.31", features = ["serialize"] }
+quick-xml = { version = "0.41", features = ["serialize"] }
 csv = "1.3"
 multer = "3.0"
 encoding_rs = "0.8"
@@ -73,7 +73,7 @@ sha2 = "0.10"
 lazy_static = "1.4"
 bytes = "1.5"
 dirs = "5.0"
-object_store = { version = "0.12.4", features = ["aws", "http"] }
+object_store = { version = "0.14", features = ["aws", "http"] }
 # HTTP/3 (QUIC) stack
 quinn = { version = "0.11", default-features = false, features = ["runtime-tokio", "rustls"] }
 h3 = { version = "0.0.8", default-features = false }

@@ -182,6 +182,7 @@ pub fn parse_xml(body: &[u8]) -> Result<Value, Error> {
 
 /// Parse XML with configurable depth limit
 pub fn parse_xml_with_limit(body: &[u8], max_depth: usize) -> Result<Value, Error> {
+    use quick_xml::escape::resolve_predefined_entity;
     use quick_xml::events::Event;
     use quick_xml::Reader;
 
@@ -263,7 +264,19 @@ pub fn parse_xml_with_limit(body: &[u8], max_depth: usize) -> Result<Value, Erro
                 }
             }
             Ok(Event::Text(e)) => {
-                current_text.push_str(&e.unescape().unwrap_or_default());
+                current_text.push_str(&e.decode().unwrap_or_default());
+            }
+            // quick-xml 0.41 reports `&amp;` and `&#65;` apart from the surrounding text.
+            Ok(Event::GeneralRef(e)) => {
+                if let Ok(Some(c)) = e.resolve_char_ref() {
+                    current_text.push(c);
+                } else if let Some(text) = e
+                    .decode()
+                    .ok()
+                    .and_then(|name| resolve_predefined_entity(&name))
+                {
+                    current_text.push_str(text);
+                }
             }
             Ok(Event::Eof) => break,
             Err(e) => return Err(Error::from(format!("XML parsing error: {}", e))),
@@ -523,6 +536,12 @@ mod tests {
         let person = result["person"].as_object().unwrap();
         assert_eq!(person["name"], "Alice");
         assert_eq!(person["age"], "30");
+    }
+
+    #[test]
+    fn test_parse_xml_keeps_entities_in_text() {
+        let result = parse_xml(b"<a><b>x &amp; y &#65; &lt;z&gt;</b></a>").unwrap();
+        assert_eq!(result["a"]["b"], "x & y A <z>");
     }
 
     #[test]

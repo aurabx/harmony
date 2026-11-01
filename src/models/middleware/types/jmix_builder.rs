@@ -150,7 +150,13 @@ impl Middleware for JmixBuilderMiddleware {
                         // Read and parse ZIP to find manifest.json
                         if let Ok(zip_bytes) = fs::read(&zip_file) {
                             use std::io::Cursor;
-                            if let Ok(mut archive) = zip::ZipArchive::new(Cursor::new(zip_bytes)) {
+                            let archive = zip::ZipArchive::new(Cursor::new(zip_bytes))
+                                .ok()
+                                .and_then(|mut archive| {
+                                    archive.validate_header_consistency().ok()?;
+                                    Some(archive)
+                                });
+                            if let Some(mut archive) = archive {
                                 // Try to find manifest.json in the archive
                                 for i in 0..archive.len() {
                                     if let Ok(mut file) = archive.by_index(i) {

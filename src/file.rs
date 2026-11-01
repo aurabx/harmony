@@ -1,5 +1,6 @@
 use crate::utils::Error;
 use std::collections::HashSet;
+use std::fs;
 use std::io::Cursor;
 use std::path::{Component, Path, PathBuf};
 use zip::read::{ExtractOptions, SymlinkExtractAction};
@@ -52,6 +53,11 @@ pub fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Error> {
             return Err(Error::from(format!("zip rejected: unsafe path {raw:?}")));
         };
 
+        // bsdtar writes a `./` root entry. It creates nothing, so there is nothing to check.
+        if enclosed.as_os_str().is_empty() && file.is_dir() {
+            continue;
+        }
+
         if enclosed.as_os_str().is_empty()
             || enclosed
                 .components()
@@ -71,19 +77,6 @@ pub fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Error> {
         }
 
         if !file.is_dir() {
-            let mut ancestor = enclosed.clone();
-            while let Some(parent) = ancestor.parent() {
-                if parent.as_os_str().is_empty() {
-                    break;
-                }
-                if file_paths.contains(parent) {
-                    return Err(Error::from(format!(
-                        "zip rejected: conflicting entry names ({})",
-                        enclosed.display()
-                    )));
-                }
-                ancestor = parent.to_path_buf();
-            }
             file_paths.insert(enclosed);
 
             declared_uncompressed = declared_uncompressed.saturating_add(file.size());
@@ -95,13 +88,63 @@ pub fn extract_zip(bytes: &[u8], dest: &Path) -> Result<(), Error> {
         }
     }
 
+    // Checked after the loop so the result does not depend on entry order.
+    for path in &seen_paths {
+        if path.ancestors().skip(1).any(|a| file_paths.contains(a)) {
+            return Err(Error::from(format!(
+                "zip rejected: conflicting entry names ({})",
+                path.display()
+            )));
+        }
+    }
+
+    // `with_size_limit` is left off: it rejects every archive that uses data descriptors.
+    // The loop above enforces the same cap, and zip stops each entry at its declared size.
     let options = ExtractOptions::default()
         .enforce_header_consistency(true)
-        .with_size_limit(MAX_UNCOMPRESSED_BYTES)
         .symlink_action(SymlinkExtractAction::NoExtract);
 
-    zip.extract_with_options(dest, options)
-        .map_err(|e| Error::from(format!("zip extract error: {e}")))?;
+    let extracted = zip
+        .extract_with_options(dest, options)
+        .map_err(|e| Error::from(format!("zip extract error: {e}")));
+    // Runs on failure too, because a mode 000 directory would defeat temp dir cleanup.
+    let reset = reset_permissions(dest);
+    extracted?;
+    reset
+}
+
+/// Replaces modes taken from the archive, so an upload cannot set server permissions.
+/// Uses the modes a plain file create gives under the usual 022 umask.
+#[cfg(unix)]
+fn reset_permissions(root: &Path) -> Result<(), Error> {
+    use std::os::unix::fs::PermissionsExt;
+
+    let fail = |path: &Path, e: std::io::Error| {
+        Error::from(format!(
+            "zip permission reset error at {}: {e}",
+            path.display()
+        ))
+    };
+
+    let mut pending = vec![root.to_path_buf()];
+    while let Some(path) = pending.pop() {
+        let metadata = fs::symlink_metadata(&path).map_err(|e| fail(&path, e))?;
+        if metadata.is_dir() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o755))
+                .map_err(|e| fail(&path, e))?;
+            for entry in fs::read_dir(&path).map_err(|e| fail(&path, e))? {
+                pending.push(entry.map_err(|e| fail(&path, e))?.path());
+            }
+        } else if metadata.is_file() {
+            fs::set_permissions(&path, fs::Permissions::from_mode(0o644))
+                .map_err(|e| fail(&path, e))?;
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+fn reset_permissions(_root: &Path) -> Result<(), Error> {
     Ok(())
 }
 
