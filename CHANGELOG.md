@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Security
+- (AURA-2546) Upgrade `zip` to 9.x and `jmix-rs` to 0.3.3 for GHSA-m665-v7pm-7grj / CVE-2026-115905. Also move `quick-xml` to 0.41, `object_store` to 0.14 and `time` to 0.3.55 to clear their RustSec advisories.
+- (AURA-2546) `POST /api/jmix` now rejects archives with symlinks, duplicate or conflicting names, absolute or drive-style paths, or mismatched local and central headers. Before, it stripped absolute paths and wrote symlink entries as plain files.
+
 ### Added
 - (AURA-2391) Native C-GET SCU on dicom-ul 0.10 with SCP/SCU role negotiation. Instances stream out as they are received; without an output directory nothing touches disk.
 - (AURA-2391) `transfer_syntaxes` option on `dicom_scu_streaming` to choose the transfer syntaxes proposed for C-GET storage contexts.
@@ -9,6 +13,10 @@
 - (AURA-2433) `forward_authorization` backend option. Set it to `true` to pass the client's `Authorization` header to the upstream when the backend has no authentication of its own. See docs/configuration/backends.md.
 
 ### Changed
+- (AURA-2546) Building Harmony now requires Rust 1.88 or later.
+- (AURA-2546) Extracted upload files are owner-only: directories 0700 and files 0600. Permissions stored in an upload are ignored.
+- (AURA-2546) `POST /api/jmix` now rejects an archive with more than 1,000,000 entries, more than 256 GiB of declared uncompressed data, or an entry path over 4,096 bytes.
+- (AURA-2546) XML bodies: a bare `&`, an unclosed reference, an unknown entity such as `&foo;` or an invalid character reference now fails the request. Before, the text in that element was silently emptied.
 - (AURA-2391) `dimse::scp::QueryProvider` returns streams. The SCP sends C-GET, C-MOVE and C-FIND results to the client as the pipeline produces them instead of collecting the whole result first.
 - (AURA-2391) dicom-rs crates upgraded from 0.9 to 0.10.
 - DCMTK is now needed only for C-MOVE on the SCU side.

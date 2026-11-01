@@ -8,7 +8,9 @@ use chrono::Utc;
 use futures_util::StreamExt;
 use object_store::buffered::BufWriter;
 use object_store::local::LocalFileSystem;
-use object_store::{path::Path as ObjectStorePath, ObjectStore, PutMode, PutOptions};
+use object_store::{
+    path::Path as ObjectStorePath, ObjectStore, ObjectStoreExt, PutMode, PutOptions,
+};
 use serde::Deserialize;
 use serde_json::Value;
 use std::collections::HashMap;
@@ -105,9 +107,12 @@ impl StorageBackend {
                 .and_then(|v| v.as_str())
                 .or(self.endpoint.as_deref());
 
+            // Bulk delete is the 0.14 default, and some S3-compatible stores do not support it.
+            // Harmony deletes one object at a time, so a plain DELETE loses nothing.
             let mut builder = AmazonS3Builder::new()
                 .with_region(region)
-                .with_bucket_name(bucket);
+                .with_bucket_name(bucket)
+                .with_disable_bulk_delete(true);
 
             if let (Some(k), Some(s)) = (access_key, secret_key) {
                 builder = builder.with_access_key_id(k).with_secret_access_key(s);
@@ -451,7 +456,7 @@ impl StorageBackend {
             object_store::Error::AlreadyExists { .. } => "already exists",
             object_store::Error::PermissionDenied { .. } => "permission denied",
             object_store::Error::Unauthenticated { .. } => "unauthenticated",
-            object_store::Error::NotImplemented => "not supported by this store",
+            object_store::Error::NotImplemented { .. } => "not supported by this store",
             _ => "store error",
         };
         Error::from(format!("Failed to write to storage: {}", kind))
@@ -1241,8 +1246,15 @@ mod tests {
             self.inner.get_opts(location, options).await
         }
 
-        async fn delete(&self, location: &ObjectStorePath) -> object_store::Result<()> {
-            self.inner.delete(location).await
+        fn delete_stream(
+            &self,
+            locations: futures_util::stream::BoxStream<
+                'static,
+                object_store::Result<ObjectStorePath>,
+            >,
+        ) -> futures_util::stream::BoxStream<'static, object_store::Result<ObjectStorePath>>
+        {
+            self.inner.delete_stream(locations)
         }
 
         fn list(
@@ -1260,25 +1272,18 @@ mod tests {
             self.inner.list_with_delimiter(prefix).await
         }
 
-        async fn copy(
+        async fn copy_opts(
             &self,
             from: &ObjectStorePath,
             to: &ObjectStorePath,
+            options: object_store::CopyOptions,
         ) -> object_store::Result<()> {
-            self.inner.copy(from, to).await
-        }
-
-        async fn copy_if_not_exists(
-            &self,
-            from: &ObjectStorePath,
-            to: &ObjectStorePath,
-        ) -> object_store::Result<()> {
-            if !self.conditional_copy {
+            if matches!(options.mode, object_store::CopyMode::Create) && !self.conditional_copy {
                 return Err(object_store::Error::NotSupported {
                     source: "no conditional copy".into(),
                 });
             }
-            self.inner.copy_if_not_exists(from, to).await
+            self.inner.copy_opts(from, to, options).await
         }
     }
 

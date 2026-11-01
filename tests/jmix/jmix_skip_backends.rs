@@ -19,11 +19,11 @@ fn create_test_zip(
     zip_path: &PathBuf,
 ) -> Result<(), Box<dyn std::error::Error>> {
     use std::io::Write;
-    use zip::write::FileOptions;
+    use zip::write::SimpleFileOptions;
 
     let zip_file = std::fs::File::create(zip_path)?;
     let mut zip = zip::ZipWriter::new(zip_file);
-    let options = FileOptions::default().compression_method(zip::CompressionMethod::Stored);
+    let options = SimpleFileOptions::default().compression_method(zip::CompressionMethod::Stored);
 
     // Add manifest.json to zip
     let manifest_path = source_dir.join("manifest.json");
