@@ -9,15 +9,26 @@ use std::collections::HashMap;
 use std::net::SocketAddr;
 
 /// Return true when a request path holds a `.` or `..` segment, percent-encoded
-/// or not.
+/// or not. A query or fragment is ignored, because the HTTP client does not
+/// resolve them.
 ///
 /// The HTTP client resolves these segments when it parses the upstream URL, but
 /// routing and `path_filter` see them unresolved. A client could use one to
 /// leave the backend's base path, with Harmony's credential, or to pass an allow
-/// rule. The URL parser also treats `\\` as `/`, so it splits segments here too.
+/// rule. This reads the path as the URL parser does: `\\` also splits segments,
+/// tab, CR and LF are removed anywhere, and control characters and spaces are
+/// trimmed from the end of the URL.
 pub fn has_dot_segment(path: &str) -> bool {
+    let path = path.split(['?', '#']).next().unwrap_or_default();
     path.split(['/', '\\']).any(|segment| {
-        let decoded = segment.to_ascii_lowercase().replace("%2e", ".");
+        let decoded: String = segment
+            .chars()
+            .filter(|c| !matches!(c, '\t' | '\r' | '\n'))
+            .collect();
+        let decoded = decoded
+            .trim_matches(|c: char| c <= ' ')
+            .to_ascii_lowercase()
+            .replace("%2e", ".");
         decoded == "." || decoded == ".."
     })
 }
@@ -202,6 +213,30 @@ mod tests {
             "/a\\..\\b",
         ] {
             assert!(has_dot_segment(path), "{}", path);
+        }
+    }
+
+    #[test]
+    fn has_dot_segment_reads_the_path_as_the_url_parser_does() {
+        for path in [
+            "/.\t./admin",
+            "/.\n./admin",
+            "/.\r\n./admin",
+            "/a/.. ",
+            "/a/..\u{1}",
+            "x/..?y",
+            "x/..#y",
+        ] {
+            assert!(has_dot_segment(path), "{:?}", path);
+            let url = url::Url::parse(&format!("https://h/base/{}", path)).unwrap();
+            assert!(!url.path().contains(".."), "{:?}", path);
+        }
+    }
+
+    #[test]
+    fn has_dot_segment_ignores_the_query_and_fragment() {
+        for path in ["/a?next=/../b", "/a#/../b"] {
+            assert!(!has_dot_segment(path), "{}", path);
         }
     }
 
